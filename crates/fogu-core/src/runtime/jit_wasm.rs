@@ -34,12 +34,14 @@ pub fn configure(_cfg: JitConfig) {}
 pub enum LoopKind<'a> {
     While { cond: &'a Expr, body: &'a Stmt },
     For { var: &'a str, body: &'a Stmt, lo: i64, hi: i64 },
+    ForList { var: &'a str, body: &'a Stmt, items: &'a [Value] },
 }
 
 #[allow(dead_code)]
 pub enum LoopOutcome {
     Skip,
     Done,
+    Deopt(i64),
     Err(String),
 }
 
