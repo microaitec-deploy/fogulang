@@ -183,7 +183,7 @@ pub fn run() {
     if let Some(embedded) = build::embedded() {
         let code = match embedded {
             // `fogu build --service`: install / start / stop… or run as a service
-            Ok(build::Embedded { entry, service: Some(spec) }) => service::main(&spec, entry, env::args().skip(1).collect()),
+            Ok(build::Embedded { entry, service: Some(spec), .. }) => service::main(&spec, entry, env::args().skip(1).collect()),
             Ok(e) => run_embedded(e.entry, env::args().skip(1).collect()),
             Err(e) => {
                 ui::error(&e);

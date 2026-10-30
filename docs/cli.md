@@ -202,7 +202,8 @@ the first time (`fogu add -g desktop`); `update` installs the latest version.
 ```sh
 fogu desktop create my-app --template react   # vanilla | ts | react | vue | svelte
 fogu desktop dev                              # Vite dev server + window (current folder)
-fogu desktop build --target windows           # dist/my-app.exe
+fogu desktop build --target windows           # dist/my-app.exe: the generic host + the app, in seconds (no Rust)
+fogu desktop build --installer                # compiled in: installers and the app's icon (Rust + Tauri CLI)
 fogu mcu boards                               # board profiles
 fogu mcu build blink.fg --board pico          # .uf2 / .hex / .bin + .elf
 fogu mcu run blink.fg --board uno --port COM5 # build + flash + serial monitor

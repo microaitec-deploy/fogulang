@@ -1030,6 +1030,9 @@ pub fn embedded_entry() -> Option<Result<PathBuf, String>> {
 /// The program embedded in this executable.
 pub struct Embedded {
     pub entry: PathBuf,
+    /// The folder the bundle was extracted to (the project's root: embedded
+    /// files keep their paths relative to it).
+    pub root: PathBuf,
     /// service settings (`fogu build --service`)
     pub service: Option<super::service::ServiceSpec>,
 }
@@ -1044,7 +1047,7 @@ pub fn embedded() -> Option<Result<Embedded, String>> {
 
 #[cfg(target_family = "wasm")]
 pub fn embedded() -> Option<Result<Embedded, String>> {
-    embedded_entry().map(|r| r.map(|entry| Embedded { entry, service: None }))
+    embedded_entry().map(|r| r.map(|entry| Embedded { entry, root: PathBuf::from(crate::runtime::vfs::ROOT), service: None }))
 }
 
 
@@ -1110,7 +1113,7 @@ fn extract(payload: &[u8]) -> Result<Embedded, String> {
         }
         std::fs::write(&done, b"").map_err(|e| e.to_string())?;
     }
-    Ok(Embedded { entry: dir.join(entry), service })
+    Ok(Embedded { entry: dir.join(entry), root: dir, service })
 }
 
 #[cfg(test)]

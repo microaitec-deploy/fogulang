@@ -11,9 +11,9 @@ use crate::pkg;
 const DESKTOP_HELP: &str = "fogu desktop — desktop apps: a Tauri window whose backend is Fogu
 
   fogu desktop create <dir> [--template vanilla|ts|react|vue|svelte] [--install]
-  fogu desktop dev [dir] [--port N] [--target windows|native] [--no-watch]
+  fogu desktop dev [dir] [--port N] [--target windows|native] [--no-watch] [--rebuild-host]
                                          Vite dev server + the window, live reload
-  fogu desktop build [dir] [--target windows|<triple>] [--debug] [--installer]
+  fogu desktop build [dir] [--target windows|<triple>] [--debug] [--installer] [--rebuild-host]
                                          the executable in <dir>/dist/
   fogu desktop update                    install the latest desktop library
   fogu desktop path                      where the library is
@@ -99,6 +99,11 @@ pub fn desktop(args: &[String]) -> i32 {
         argv.insert(0, ".".into());
     }
     crate::native::system::set_script_args(argv);
+    // the scripts run `fogu build --compile` with this very executable
+    if let Ok(exe) = std::env::current_exe() {
+        // SAFETY: set before the program runs; nothing reads the environment concurrently yet
+        unsafe { std::env::set_var("FOGU_BIN", exe) };
+    }
     match cli::run_file(&file.to_string_lossy()) {
         Ok(()) => 0,
         Err(e) => {
