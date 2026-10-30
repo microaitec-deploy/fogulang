@@ -1,0 +1,3 @@
+import { Account } from "./_account.fg"
+const a = new Account("Rui")
+a._audit()

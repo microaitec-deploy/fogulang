@@ -1,0 +1,60 @@
+// fogu:net — TCP and UDP in the same program (the OS buffers the data)
+import net from "fogu:net"
+
+const server = net.tcpListen("127.0.0.1:0")?
+const client = net.tcpConnect(server.addr)?
+const conn = server.accept()?
+client.writeLine("hello server")
+print("server got:", conn.readLine()?)
+conn.writeLine("hello client")
+print("client got:", client.readLine()?)
+
+// two lines in one write: the second is not lost by the first readLine
+client.write("one\r\ntwo\nrest")?
+print(conn.readLine()?, conn.readLine()?)
+print(conn.readExact(4)?.text())
+
+// binary data stays binary
+client.write(bytes([0, 255, 10, 128]))?
+const raw = conn.readExact(4)?
+print(typeof(raw), raw.len(), raw[1], raw.hex())
+
+// end of stream: readLine and read give nil
+client.close()
+print(conn.readLine()?, conn.read()?)
+conn.close()
+
+// accept waits cooperatively: a task connects meanwhile
+fg fn() {
+    const c = net.tcpConnect(server.addr)?
+    c.writeLine("from a task")?
+    c.close()
+}()
+const other = server.accept(2s)?
+print("accepted:", other.readLine()?)
+other.close()
+server.close()
+
+// for conn in listener: accept() in a loop
+const srv2 = net.tcpListen("127.0.0.1:0")?
+fg fn() {
+    const c = net.tcpConnect(srv2.addr)?
+    c.writeLine("loop")?
+    c.close()
+}()
+for conn in srv2 {
+    print("for:", conn.readLine()?)
+    conn.close()
+    break
+}
+srv2.close()
+
+const a = net.udpBind("127.0.0.1:0")?
+const b = net.udpBind("127.0.0.1:0")?
+a.sendTo(b.addr, "ping")?
+const pkt = b.recvFrom()?
+print("udp:", pkt.text, pkt.from == a.addr, typeof(pkt.data), pkt.len)
+b.sendTo(pkt.from, "pong")?
+print("udp:", a.recvFrom()?.text)
+a.close()
+b.close()

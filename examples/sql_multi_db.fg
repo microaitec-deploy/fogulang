@@ -1,0 +1,31 @@
+import sql from "fogu:sql"
+
+// The database is chosen by the URL:
+// - "sqlite://demo.db"                          → SQLite
+// - "postgres://user:pass@localhost/test"       → PostgreSQL
+// - "mysql://user:pass@localhost/test"          → MySQL / MariaDB
+let db = sql.open("sqlite://demo.db")?
+
+print("driver:", db.driver)
+
+db.exec("
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        age INTEGER
+    )
+")
+
+db.run("DELETE FROM users")
+db.begin()
+db.run("INSERT INTO users (id, name, age) VALUES (?, ?, ?)", [1, "John", 30])
+db.run("INSERT INTO users (id, name, age) VALUES (?, ?, ?)", [2, "Mary", 25])
+db.run("INSERT INTO users (id, name, age) VALUES (?, ?, ?)", [3, "Peter", 40])
+db.commit()
+
+for u in db.query("SELECT * FROM users WHERE age > ? ORDER BY age", [26]) {
+    print(" -", u.name, u.age)
+}
+
+db.close()
+print("closed")

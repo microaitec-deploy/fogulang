@@ -1,0 +1,17 @@
+// Run with: fogu test   (from this folder, or: fogu test examples/test)
+import { test, skip, expect } from "fogu:test"
+import { sum, parse } from "./math.fg"
+
+test("adds", () => {
+    expect(sum(1, 2)).toBe(3)
+    expect([1, 2]).not.toContain(3)
+})
+
+test("errors are values", (): error => {
+    const n = parse("42")?            // a returned error fails the test
+    expect(n).toBeGreaterThan(40)
+    expect(parse("-1")[1]).toBeError()
+    return nil
+})
+
+skip("not written yet", () => {})

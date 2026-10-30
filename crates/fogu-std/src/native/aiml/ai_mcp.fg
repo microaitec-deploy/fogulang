@@ -1,0 +1,234 @@
+// The MCP (Model Context Protocol) server of fogu:ai: `ai.mcpServer(options)`.
+// Embedded in the runtime and run by ai_mcp.rs; `safeCall(f, ...args)` is a native
+// helper that turns any error of a handler into an error value. The value of the
+// last line is the factory `ai.mcpServer` calls.
+import json from "fogu:json"
+import system from "fogu:system"
+import web from "fogu:web"
+
+const LATEST = "2025-06-18"
+const SUPPORTED = ["2025-06-18", "2025-03-26", "2024-11-05"]
+
+// `return v, error(...)` → the error; anything else as it is
+const unpair = fn(r) {
+    if typeof(r) == "list" && r.len() == 2 && typeof(r[1]) == "error" { return r[1] }
+    return r
+}
+
+const pick = fn(cond, yes, no) {
+    if cond { return yes }
+    return no
+}
+
+const asText = fn(v) {
+    if typeof(v) == "str" { return v }
+    return json.stringify(v)
+}
+
+const createServer = fn(options) {
+    const opts = options ?? {}
+    const info = { name: opts.name ?? "fogu-mcp", version: opts.version ?? "1.0.0" }
+    if opts.title != nil { info.title = opts.title }
+    const tools = {}
+    const resources = {}
+    const prompts = {}
+    const server = { info: info }
+
+    const ok = (id, result) => ({ jsonrpc: "2.0", id: id, result: result })
+    const fail = (id, code, message) => ({ jsonrpc: "2.0", id: id, error: { code: code, message: message } })
+
+    // tool(ai.tool(...)) · tool(name, description, schema, run)
+    server.tool = fn(t, description, schema, run) {
+        let def = t
+        if typeof(t) == "str" { def = { name: t, description: description, parameters: schema, run: run } }
+        if typeof(def) != "map" || typeof(def.name) != "str" || def.run == nil {
+            return nil, error("mcp: a tool needs a name and a run function (ai.tool(name, description, schema, run))")
+        }
+        tools[def.name] = def
+        return server
+    }
+
+    // resource(uri, { name, description, mimeType }, fn() → text)
+    server.resource = fn(uri, meta, read) {
+        const m = meta ?? {}
+        resources[uri] = { uri: uri, name: m.name ?? uri, description: m.description, mimeType: m.mimeType ?? "text/plain", read: read }
+        return server
+    }
+
+    // prompt(name, { description, arguments: [{ name, description, required }] }, fn(args) → text | [{ role, text }])
+    server.prompt = fn(name, meta, get) {
+        const m = meta ?? {}
+        prompts[name] = { name: name, description: m.description, arguments: m.arguments ?? [], get: get }
+        return server
+    }
+
+    const toolResult = fn(r) {
+        const v = unpair(r)
+        if typeof(v) == "error" {
+            return { content: [{ type: "text", text: v.message }], isError: true }
+        }
+        if typeof(v) == "map" && v.content != nil { return v }      // already MCP content
+        const result = { content: [{ type: "text", text: asText(v) }], isError: false }
+        if typeof(v) == "map" { result.structuredContent = v }
+        return result
+    }
+
+    const methods = {
+        "initialize": fn(params) {
+            let version = LATEST
+            if SUPPORTED.contains(params?.protocolVersion ?? "") { version = params.protocolVersion }
+            const caps = {}
+            if tools.len() > 0 { caps.tools = { listChanged: false } }
+            if resources.len() > 0 { caps.resources = { subscribe: false, listChanged: false } }
+            if prompts.len() > 0 { caps.prompts = { listChanged: false } }
+            const result = { protocolVersion: version, capabilities: caps, serverInfo: info }
+            if opts.instructions != nil { result.instructions = opts.instructions }
+            return result
+        },
+        "ping": fn(params) { return {} },
+        "tools/list": fn(params) {
+            return { tools: tools.values().map(fn(t) {
+                // MCP wants an object schema: `{}` or a missing type becomes { type: "object" }
+                let schema = {}
+                if typeof(t.parameters) == "map" { schema = schema.merge(t.parameters) }
+                if schema.type == nil { schema.type = "object" }
+                if schema.properties == nil { schema.properties = {} }
+                return { name: t.name, description: t.description ?? "", inputSchema: schema }
+            }) }
+        },
+        "tools/call": fn(params) {
+            const t = tools[params?.name ?? ""]
+            if t == nil { return nil, error("unknown tool: " + str(params?.name)) }
+            return toolResult(safeCall(t.run, params.arguments ?? {}))
+        },
+        "resources/list": fn(params) {
+            return { resources: resources.values().map(fn(r) {
+                const out = { uri: r.uri, name: r.name, mimeType: r.mimeType }
+                if r.description != nil { out.description = r.description }
+                return out
+            }) }
+        },
+        "resources/templates/list": fn(params) { return { resourceTemplates: [] } },
+        "resources/read": fn(params) {
+            const r = resources[params?.uri ?? ""]
+            if r == nil { return nil, error("unknown resource: " + str(params?.uri)) }
+            const v = unpair(safeCall(r.read))
+            if typeof(v) == "error" { return nil, v }
+            return { contents: [{ uri: r.uri, mimeType: r.mimeType, text: asText(v) }] }
+        },
+        "prompts/list": fn(params) {
+            return { prompts: prompts.values().map(fn(p) {
+                const out = { name: p.name, arguments: p.arguments }
+                if p.description != nil { out.description = p.description }
+                return out
+            }) }
+        },
+        "prompts/get": fn(params) {
+            const p = prompts[params?.name ?? ""]
+            if p == nil { return nil, error("unknown prompt: " + str(params?.name)) }
+            const args = params.arguments ?? {}
+            for a in p.arguments {
+                if a.required == true && args[a.name] == nil { return nil, error("missing argument: " + a.name) }
+            }
+            const v = unpair(safeCall(p.get, args))
+            if typeof(v) == "error" { return nil, v }
+            let messages = []
+            if typeof(v) == "list" {
+                messages = v.map((m) => ({ role: m.role ?? "user", content: { type: "text", text: asText(m.text ?? m.content ?? "") } }))
+            } else {
+                messages = [{ role: "user", content: { type: "text", text: asText(v) } }]
+            }
+            const result = { messages: messages }
+            if p.description != nil { result.description = p.description }
+            return result
+        },
+    }
+
+    // one JSON-RPC message (a map) → the response map, or nil for a notification
+    const handleOne = fn(msg) {
+        if typeof(msg) != "map" || msg.jsonrpc != "2.0" || typeof(msg.method) != "str" {
+            if typeof(msg) == "map" && msg.id != nil && (msg.result != nil || msg.error != nil) { return nil }   // a response to us
+            return fail(nil, -32600, "invalid request")
+        }
+        const isNotification = !msg.has("id")
+        const m = methods[msg.method]
+        if m == nil {
+            if isNotification { return nil }                     // notifications/initialized, cancelled…
+            return fail(msg.id, -32601, "method not found: " + msg.method)
+        }
+        const r = unpair(safeCall(m, msg.params ?? {}))
+        if isNotification { return nil }
+        if typeof(r) == "error" {
+            const code = pick(r.message.starts_with("unknown ") || r.message.starts_with("missing argument"), -32602, -32603)
+            return fail(msg.id, code, r.message)
+        }
+        return ok(msg.id, r)
+    }
+
+    // handle(message: str | map | list) → response (map, list) or nil
+    server.handle = fn(message) {
+        let msg = message
+        if typeof(message) == "str" {
+            // not `const [v, err] = …`: a JSON array would be destructured itself
+            const parsed = json.parse(message)
+            if typeof(parsed) == "error" { return fail(nil, -32700, "parse error: " + parsed.message) }
+            msg = parsed
+        }
+        if typeof(msg) == "list" {
+            const out = []
+            for m in msg {
+                const r = handleOne(m)
+                if r != nil { out.push(r) }
+            }
+            if out.len() == 0 { return nil }
+            return out
+        }
+        return handleOne(msg)
+    }
+
+    // the stdio transport: one JSON message per line on stdin/stdout (Claude Desktop, Claude Code…)
+    server.serveStdio = fn() {
+        while true {
+            const line = system.readLine()
+            if line == nil { break }                             // the client closed stdin
+            if line.trim() == "" { continue }
+            const r = server.handle(line)
+            if r != nil { print(json.stringify(r)) }
+        }
+        return nil
+    }
+
+    // the Streamable HTTP transport: POST JSON-RPC to `path`, JSON answers
+    server.listen = fn(port, listenOptions) {
+        const lo = listenOptions ?? {}
+        const path = lo.path ?? "/mcp"
+        const token = lo.token
+        const origins = lo.origins ?? []
+        const app = web.app()
+        app.use(fn(ctx) {
+            // DNS-rebinding protection: browsers may only call from the allowed origins
+            const origin = ctx.headers["origin"]
+            if origin != nil && !origins.contains(origin) && !origin.starts_with("http://localhost") && !origin.starts_with("http://127.0.0.1") {
+                return web.json(fail(nil, -32600, "origin not allowed"), { status: 403 })
+            }
+            if token != nil && ctx.headers["authorization"] != "Bearer " + token {
+                return web.json(fail(nil, -32600, "unauthorized"), { status: 401 })
+            }
+            return nil
+        })
+        app.post(path, fn(ctx) {
+            const r = server.handle(ctx.body)
+            if r == nil { return web.text("", { status: 202 }) }
+            return web.json(r)
+        })
+        app.get(path, fn(ctx) { return web.text("this server does not stream; POST JSON-RPC messages", { status: 405 }) })
+        app.delete(path, fn(ctx) { return web.text("", { status: 204 }) })
+        const listening = app.listen(port, { host: lo.host ?? "127.0.0.1", quiet: true })?
+        return listening ?? port
+    }
+
+    server.tools = () => tools.keys()
+    return server
+}
+
+createServer

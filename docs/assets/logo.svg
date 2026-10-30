@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Fogu</title>
+  <defs>
+    <linearGradient id="outer" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fbbf24"/>
+      <stop offset="0.45" stop-color="#f97316"/>
+      <stop offset="1" stop-color="#c2410c"/>
+    </linearGradient>
+    <linearGradient id="inner" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fef3c7"/>
+      <stop offset="1" stop-color="#fb923c"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#outer)" d="M262 16c14 70 64 104 104 156 34 44 58 92 58 150 0 96-74 174-168 174S88 418 88 322c0-58 22-104 58-140 6 38 24 64 52 78-8-62 6-112 34-152 16-24 26-56 30-92z"/>
+  <path fill="url(#inner)" opacity="0.9" d="M268 196c8 40 40 62 62 94 16 22 26 46 26 74 0 56-44 100-100 100s-100-44-100-100c0-30 10-54 28-74 4 22 14 36 30 44-2-38 8-66 26-88 12-14 22-30 28-50z"/>
+  <text x="252" y="412" text-anchor="middle" font-family="'JetBrains Mono', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-weight="700" font-size="112" fill="#7c2d12" letter-spacing="-12">.fg</text>
+</svg>

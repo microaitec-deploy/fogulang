@@ -1,0 +1,83 @@
+import zip from "fogu:zip"
+import protobuf from "fogu:protobuf"
+import fs from "fogu:fs"
+
+// ---------- zip ----------
+fs.mkdir("src.tmp.d/sub")?
+fs.writeText("src.tmp.d/a.txt", "hello zip\n")?
+fs.writeText("src.tmp.d/sub/b.txt", "bee")?
+print(zip.zip("pack.tmp.zip", "src.tmp.d")?)
+for e in zip.list("pack.tmp.zip")? { print(e.name, e.size, e.isDir) }
+print(zip.read("pack.tmp.zip", "src.tmp.d/a.txt")?)
+print(zip.read("pack.tmp.zip", "src.tmp.d/sub/b.txt", { bytes: true })?)
+zip.add("pack.tmp.zip", "notes/c.txt", "added later")?
+print(len(zip.list("pack.tmp.zip")?), zip.read("pack.tmp.zip", "notes/c.txt")?)
+print(zip.unzip("pack.tmp.zip", "out.tmp.d")?)
+print(fs.readText("out.tmp.d/src.tmp.d/sub/b.txt")?)
+print(zip.unzip("pack.tmp.zip", "only.tmp.d", { only: ["notes"] })?)
+zip.write("mem.tmp.zip", { "x.json": "{\"a\": 1}", "bin.dat": [0, 1, 255], "empty/": nil }, { level: 9 })?
+print(len(zip.list("mem.tmp.zip")?), zip.read("mem.tmp.zip", "bin.dat")?)
+zip.zip("secret.tmp.zip", "src.tmp.d/a.txt", { password: "s3cret" })?
+print(zip.list("secret.tmp.zip")?[0].encrypted, zip.read("secret.tmp.zip", "a.txt", { password: "s3cret" })?)
+const [x, e1] = zip.read("secret.tmp.zip", "a.txt")
+print(e1 != nil)
+const [y, e2] = zip.read("pack.tmp.zip", "nope.txt")
+print(e2)
+const [z, e3] = zip.list("missing.tmp.zip")
+print(e3 != nil)
+
+// ---------- tar and gzip ----------
+print(zip.tar("pack.tmp.tar.gz", ["src.tmp.d"])?)
+print(len(zip.listTar("pack.tmp.tar.gz")?) > 2)
+print(zip.untar("pack.tmp.tar.gz", "untar.tmp.d")?)
+const packed = zip.gzip("hello hello hello hello")
+print(packed[0], packed[1], zip.gunzip(packed)?)
+const [g, ge] = zip.gunzip([1, 2, 3])
+print(ge != nil)
+print(zip.gzipFile("src.tmp.d/a.txt", "a.tmp.txt.gz")?, zip.gunzipFile("a.tmp.txt.gz")?)
+print(fs.readText("a.tmp.txt")?)
+
+// ---------- protobuf ----------
+const schema = protobuf.parse("
+syntax = \"proto3\";
+package shop;
+import \"google/protobuf/timestamp.proto\";
+enum Status { UNKNOWN = 0; PAID = 1; SHIPPED = 2; }
+message Item { string sku = 1; int32 qty = 2; double price = 3; }
+message Order {
+  int64 id = 1;
+  string customer_name = 2;
+  repeated Item items = 3;
+  Status status = 4;
+  map<string, string> tags = 5;
+  bytes signature = 6;
+  google.protobuf.Timestamp created = 7;
+}
+service Orders { rpc Get (Order) returns (Order); rpc Watch (Order) returns (stream Order); }
+")?
+print(schema, schema.messages, schema.enums)
+print(schema.services)
+print(schema.fields("shop.Item"))
+print(schema.enumValues("shop.Status"))
+const order = { id: 42, customerName: "Ana", items: [{ sku: "cafe", qty: 2, price: 4.5 }], status: "PAID", tags: { gift: "yes" }, signature: "AQID", created: "2026-10-15T12:00:00Z" }
+const bytes = schema.encode("shop.Order", order)?
+print(len(bytes) > 20)
+print(schema.decode("shop.Order", bytes)?)
+print(schema.decode("shop.Order", bytes, { protoNames: true, enumNumbers: true })?.customer_name)
+print(schema.decode("shop.Item", schema.encode("shop.Item", { sku: "x" })?, { defaults: true })?)
+print(schema.toJson("shop.Item", schema.fromJson("shop.Item", "{\"sku\":\"y\",\"qty\":3}")?)?)
+print(schema.validate("shop.Item", { sku: "ok" })?)
+const [v, ve] = schema.encode("shop.Item", { nope: 1 })
+print(ve)
+const [d, de] = schema.decode("shop.Item", [255, 255, 255])
+print(de != nil)
+const [p, pe] = protobuf.parse("message {")
+print(pe != nil)
+schema.saveDescriptor("shop.tmp.pb")?
+const again = protobuf.loadDescriptor("shop.tmp.pb")?
+print(again.decode("shop.Order", bytes)?.items)
+fs.mkdir("proto.tmp.d")?
+fs.writeText("proto.tmp.d/common.proto", "syntax = \"proto3\"; package common; message Money { int64 cents = 1; string currency = 2; }")?
+fs.writeText("proto.tmp.d/pay.proto", "syntax = \"proto3\"; package pay; import \"common.proto\"; message Payment { common.Money amount = 1; }")?
+const pay = protobuf.load("proto.tmp.d/pay.proto")?
+print(pay.decode("pay.Payment", pay.encode("pay.Payment", { amount: { cents: 990, currency: "EUR" } })?)?)

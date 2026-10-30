@@ -1,0 +1,34 @@
+// Waiting I/O in a task lets the other tasks (and the main program) run.
+import shell from "fogu:shell"
+import sql from "fogu:sql"
+
+const done = chan(1)
+fg fn() {
+    shell.run("sleep 0.1")          // builtin sleep: cooperative
+    print("task: after sleep")
+    done <- true
+}()
+print("main: runs while the task sleeps")
+<-done
+
+// sql: statements of several tasks run concurrently
+const db = sql.open("sqlite::memory:")?
+db.exec("CREATE TABLE t (id INTEGER, who TEXT)")
+const fin = chan(3)
+for w in 0..3 {
+    fg fn() {
+        for i in 0..10 { db.run("INSERT INTO t VALUES (?, ?)", [i, "w" + str(w)]) }
+        fin <- w
+    }()
+}
+for i in 0..3 { <-fin }
+print("rows:", db.one("SELECT count(*) AS n FROM t").n)
+
+// a statement in flight finishes before begin(): it is not rolled back
+fg fn() { db.run("INSERT INTO t VALUES (?, ?)", [99, "other"]); fin <- 1 }()
+db.begin()
+db.run("INSERT INTO t VALUES (?, ?)", [100, "tx"])
+db.rollback()
+<-fin
+print(db.query("SELECT who FROM t WHERE id >= 99"))
+db.close()

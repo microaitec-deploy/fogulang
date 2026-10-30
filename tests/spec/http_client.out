@@ -1,0 +1,9 @@
+[http] server listening on http://127.0.0.1:18431
+200 true {body: {"name":"Ana"}, ct: application/json, q: {page: 2}}
+{body: plain, ct: text/plain, q: {}}
+{body: pass=a+b%26c&user=ana, ct: application/x-www-form-urlencoded, q: {}}
+{avatar: 4, file: up.tmp.txt, tags: [a, b], text: hello file
+, title: report, type: text/plain}
+{auth: Bearer tok, x: 1} application/json
+404 false
+22

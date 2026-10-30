@@ -1,0 +1,56 @@
+// fogu:vm with fg tasks and fogu:sync
+import vm from "fogu:vm"
+import sync from "fogu:sync"
+import time from "fogu:time"
+
+// spawn: each run is its own task; vm.all waits for them in order
+const square = vm.Script("time.delay(20ms)\nn * n", { filename: "square.fg" })?
+const sem = sync.Semaphore(2)
+const tasks = []
+for n in 1..6 { tasks.push(square.spawn({ n: n, time: time }, { semaphore: sem })) }
+print(sem.available, tasks[0].done)
+print(vm.all(tasks)?)
+print(sem.available, tasks[0].done, tasks[0].ok, tasks[0].result)
+
+// a timeout belongs to its task: the others keep running (and keep the JIT)
+const slow = vm.spawn("let i = 0\nwhile true { i += 1\ntime.delay(1ms) }", { time: time }, { timeout: 60ms, filename: "spin.fg" })
+let total = 0
+for i in 0..200000 { total += i }
+time.delay(5ms)
+print(total)
+print(slow.wait())
+print(slow.done, slow.ok, slow.error)
+
+// cancel
+const t = vm.spawn("while true { time.delay(5ms) }", { time: time }, { filename: "loop.fg" })
+time.delay(20ms)
+print(t.cancel(), t.cancel() == false || true)
+print(t.wait())
+print(t.cancel())
+
+// a context runs one script at a time: concurrent increments do not interleave
+const ctx = vm.createContext({ count: 0, time: time })
+const inc = vm.Script("{\nlet c = count\ntime.delay(2ms)\ncount = c + 1\n}")?
+const runs = []
+for i in 0..5 { runs.push(inc.spawn(ctx)) }
+vm.all(runs)?
+print(ctx.sandbox.count)
+
+// the context's lock is a sync.Mutex the program can hold
+ctx.mutex.lock()
+const blocked = ctx.spawn("count += 100")
+time.delay(20ms)
+print(blocked.done, ctx.busy)
+ctx.mutex.unlock()
+blocked.wait()?
+print(ctx.sandbox.count)
+
+// nested runs in the same context do not deadlock
+ctx.sandbox.again = fn() { return ctx.run("count * 2")? }
+print(ctx.run("again()")?)
+
+// errors come back from wait / all
+const bad = vm.spawn("nope + 1", nil, { filename: "bad.fg" })
+print(bad.wait())
+const [_, err] = vm.all([vm.spawn("1"), bad])
+print(err)

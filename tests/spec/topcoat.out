@@ -1,0 +1,33 @@
+<p class="a b" open title="x&quot;y">1 &lt; 2 &amp; <b>bold</b></p>
+<button tc-bind:disabled="n.get() &gt; 3" tc-on:click="n.increment()">+</button>
+<input value="v"> <i>raw</i> &lt;&amp;&gt;
+200 text/html; charset=utf-8
+true
+true true
+true true
+true
+true
+application/x-ndjson swap <ul><li>banana</li></ul>
+<script type="application/json" data-tc-signals>{"clicks":{"t":true,"v":4}}</script><span>clicks=4</span>
+404
+{"ok":42}
+{"error":"n must be an int"}
+snapshot true true
+{location: /, t: redirect}
+/_tc/runtime.js 200 text/javascript; charset=utf-8 true
+/_tc/ui.css 200 text/css; charset=utf-8 true
+/_tc/shadcn.css 200 text/css; charset=utf-8 true
+<button class="tc-btn tc-btn-destructive tc-btn-sm extra" type="button">Save</button>
+<span class="tc-badge tc-badge-success">new</span>
+<div class="tc-table-wrap"><table class="tc-table"><thead><tr><th>name</th><th style="text-align:right">N</th></tr></thead><tbody><tr><td>a</td><td style="text-align:right">1</td></tr></tbody></table></div>
+<button class="btn variant-outline size-md" type="button"><span class="btn-content">Go</span></button>
+<span class="badge variant-secondary">b</span>
+true true true true
+<link rel="stylesheet" href="/app.css">
+true
+true
+true
+true true true
+true
+false
+true

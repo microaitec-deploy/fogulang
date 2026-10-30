@@ -1,0 +1,26 @@
+// Running Fogu code at run time (like node:vm).
+import vm from "fogu:vm"
+
+// an expression evaluated against a sandbox
+print(vm.runInNewContext("price * qty * (1 - discount)", { price: 9.5, qty: 4, discount: 0.1 })?)
+
+// a context keeps its state between runs (a small plugin / rules engine)
+const ctx = vm.createContext({ total: 0 })
+for line in ["total += 10", "total *= 3", "let label = `total: ${total}`"] {
+    vm.runInContext(line, ctx)?
+}
+print(ctx.label, ctx.sandbox.total)
+
+// user rules compiled once, run with different data
+const rule = vm.Script("age >= 18 && country == \"PT\"", { filename: "rule.fg" })?
+for p in [{ age: 20, country: "PT" }, { age: 15, country: "PT" }] {
+    print(p, rule.runInNewContext(p)?)
+}
+
+// functions defined in the sandbox can be called by the program
+const greet = vm.runInNewContext("fn(name) { return `${greeting}, ${name}!` }", { greeting: "Olá" })?
+print(greet("Ana"))
+
+// errors and runaway code come back as error values
+const [_, err] = vm.runInNewContext("while true {}", nil, { timeout: 100ms })
+print(err)

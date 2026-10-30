@@ -1,0 +1,6 @@
+target/
+dist/
+**/node_modules/
+**/fogu_modules/
+.git/
+*.tmp.*

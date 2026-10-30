@@ -1,0 +1,7 @@
+import http from "fogu:http"
+
+// Run examples/http_server.fg first.
+let resp = http.get("http://127.0.0.1:3000/health")?
+print("status:", resp.status)
+print("content-type:", resp.headers["content-type"])
+print("body:", resp.body)

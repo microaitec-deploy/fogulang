@@ -1,0 +1,36 @@
+import events from "fogu:events"
+
+let bus = events.EventEmitter()
+
+// ---- on ----
+bus.on("request", fn(msg) {
+    print("[request] got:", msg)
+})
+
+// ---- once ----
+bus.once("startup", fn() {
+    print("[startup] runs only once")
+})
+
+// ---- emit ----
+bus.emit("request", "hello")
+bus.emit("request", "another message")
+bus.emit("startup")
+bus.emit("startup")   // does not fire
+
+// ---- inspection ----
+print("listeners of 'request':", bus.listeners("request"))
+print("events:", bus.eventNames())
+print("'request' has listeners?", bus.hasListeners("request"))
+
+// ---- off ----
+bus.off("request")
+print("after off, listeners of 'request':", bus.listeners("request"))
+
+// ---- emit without listeners ----
+let r = bus.emit("request", "silence")
+print("emit without listeners returned:", r)
+
+// ---- clear ----
+bus.removeAll()
+print("events after removeAll:", bus.eventNames())

@@ -1,0 +1,6 @@
+fn name(id: int): str {
+    if id == 1 { return "one" }
+    return id
+}
+print(name(1))
+print(name(2))

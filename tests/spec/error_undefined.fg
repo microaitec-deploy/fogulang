@@ -1,0 +1,4 @@
+const user = {name: "Ana"}
+fn show() {
+    print(usr.name)
+}

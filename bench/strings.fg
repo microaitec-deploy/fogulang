@@ -1,0 +1,8 @@
+// strings: build 200k items, join, split and measure
+const parts = []
+for i in 0..200000 { parts.push("item" + str(i)) }
+const text = parts.join(",")
+const back = text.split(",")
+let total = 0
+for p in back { total = total + p.len() }
+print(back.len(), total, text.len())

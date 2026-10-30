@@ -1,0 +1,19 @@
+import ai from "fogu:ai"
+
+// configuration only: no request is made here
+print(ai.providers)
+
+const c = ai.client({ provider: "anthropic", apiKey: "k" })?
+print(c.provider, c.model, c.baseUrl)
+const local = ai.client("ollama/llama3.2")?
+print(local.provider, local.model, local.baseUrl)
+const g = ai.client({ provider: "gemini", apiKey: "k", model: "gemini-2.5-pro", baseUrl: "http://127.0.0.1:9/" })?
+print(g.model, g.baseUrl)
+
+const add = ai.tool("add", "Adds two numbers",
+    { type: "object", properties: { a: { type: "number" }, b: { type: "number" } } },
+    (args) => args.a + args.b)
+print(add.name, add.description, add.parameters.type)
+
+const agent = ai.agent({ client: c, instructions: "Use the tools", tools: [add], memory: true })
+print(agent.model, agent.tools, agent.history)

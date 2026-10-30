@@ -1,0 +1,4 @@
+import bullmq from "fogu:bullmq"
+
+// a programming error (wrong option type) stops the program
+bullmq.queue("jobs", "redis://127.0.0.1:6379")

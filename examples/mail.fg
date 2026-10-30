@@ -1,0 +1,39 @@
+// Sending e-mail with fogu:mail.
+//
+// The provider comes from MAIL_PROVIDER (default "console", which only
+// prints). Examples:
+//   MAIL_PROVIDER=gmail  MAIL_USER=me@gmail.com MAIL_PASSWORD=<app password>
+//   MAIL_PROVIDER=resend RESEND_API_KEY=re_...       (also sendgrid, mailgun,
+//   postmark, brevo, mailersend, mailjet: <PROVIDER>_API_KEY)
+//   MAIL_PROVIDER=mailpit                             (local test server on :1025)
+
+import mail from "fogu:mail"
+
+const provider = Fogu.env.MAIL_PROVIDER ?? "console"
+const mailer = mail.connect({
+    provider: provider,
+    user: Fogu.env.MAIL_USER,
+    password: Fogu.env.MAIL_PASSWORD,
+    domain: Fogu.env.MAILGUN_DOMAIN,            // only mailgun needs it
+    from: Fogu.env.MAIL_FROM ?? "Fogu Shop <shop@example.com>",
+})?
+print("sending with", mailer.provider)
+
+const sent = mailer.send({
+    to: Fogu.env.MAIL_TO ?? "ana@example.com",
+    subject: "Your order #42",
+    text: "Thanks for your order! The invoice is attached.",
+    html: "<h1>Thanks!</h1><p>The invoice is attached.</p><img src=\"cid:logo\">",
+    attachments: [
+        { filename: "invoice.csv", content: "item,price\nbook,10\n" },
+        { filename: "logo.png", content: [137, 80, 78, 71], cid: "logo" },   // inline image
+    ],
+    headers: { "X-Order": "42" },
+})?
+print("sent:", sent.id)
+
+// failures (rejected sender, bad address, server down) are error values
+const [_, err] = mailer.send({ to: "not-an-address", subject: "x", text: "x" })
+if err != nil {
+    print("not sent:", err.message)
+}

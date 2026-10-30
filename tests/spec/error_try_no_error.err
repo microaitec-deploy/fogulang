@@ -1,0 +1,2 @@
+error[E0206]: '?' cannot be used in 'count': its return type int has no error
+error_try_no_error.fg:3

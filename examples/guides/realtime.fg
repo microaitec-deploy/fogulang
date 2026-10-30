@@ -1,0 +1,34 @@
+// Realtime: a WebSocket chat server and two clients, in one program.
+import websocket from "fogu:websocket"
+import time from "fogu:time"
+
+const server = websocket.listen(0)?           // port 0: any free port
+const clients = []
+
+// accept connections; each one gets its own task
+fg fn() {
+    while true {
+        const [ws, err] = server.accept()
+        if err != nil || ws == nil { break }
+        clients.push(ws)
+        fg fn(conn) {
+            while true {
+                const msg = conn.next()
+                if msg == nil { break }              // closed
+                for other in clients {
+                    if other.open { other.send(msg.data) }   // broadcast
+                }
+            }
+        }(ws)
+    }
+}()
+
+const ana = websocket.connect(server.url)?
+const bia = websocket.connect(server.url)?
+time.delay(50ms)
+ana.send("hi from Ana")?
+bia.send("hello Ana!")?
+for i in 0..2 { print("Ana got:", ana.next(1s).data) }
+print("Bia got:", bia.next(1s).data)
+ana.close()
+bia.close()

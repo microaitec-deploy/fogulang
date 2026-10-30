@@ -1,0 +1,34 @@
+import kv from "fogu:kv"
+
+// Open (or create) the database
+let db = kv.open("demo.redb")?
+
+// --- set / get ---
+db.set("name", "Fogu")
+db.set("version", 4)
+db.set("pi", 3.14)
+db.set("active", true)
+db.set("list", [1, 2, 3, "four"])
+
+print("name:", db.get("name"))
+print("version:", db.get("version"))
+print("pi:", db.get("pi"))
+print("active:", db.get("active"))
+print("list:", db.get("list"))
+
+// --- has ---
+print("has 'name'?", db.has("name"))
+print("has 'missing'?", db.has("missing"))
+
+// --- keys / len ---
+print("keys:", db.keys())
+print("total:", db.len())
+
+// --- delete ---
+db.delete("pi")
+print("after delete, pi:", db.get("pi"))
+print("total now:", db.len())
+
+// --- close ---
+db.close()
+print("closed")

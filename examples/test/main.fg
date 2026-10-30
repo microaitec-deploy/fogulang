@@ -1,0 +1,38 @@
+import web from "fogu:web"
+import time from "fogu:time"
+
+let app = web.app()
+
+app.get("/", fn(ctx) {
+    return "<h1>Fogu + web</h1>"
+})
+
+app.get("/ping", fn(ctx) {
+    return "pong"
+})
+
+app.get("/users/:id", fn(ctx) {
+    return web.json({
+        id: ctx.params.id,
+        ok: true
+    })
+})
+
+app.get("/health", fn(ctx) {
+    return web.json({
+        status: "ok",
+        service: "fogu-web"
+    })
+})
+
+print("routes:")
+for r in app.routes() {
+    print("  ", r)
+}
+
+print("server at http://127.0.0.1:3000")
+app.listen(3000)
+
+while true {
+    time.delay(100ms)
+}

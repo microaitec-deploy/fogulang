@@ -1,0 +1,36 @@
+import json from "fogu:json"
+import math from "fogu:math"
+import system from "fogu:system"
+
+// System
+print("OS:", system.info.os)
+print("Architecture:", system.info.arch)
+print("Family:", system.info.family)
+print("Cores:", system.info.cores)
+print("PID:", system.info.pid)
+
+// Methods of the native object
+print("HOME:", system.info.env("HOME"))
+print("Process args:")
+for a in system.info.args() {
+    print("  ", a)
+}
+
+// A short sleep using the native object
+system.info.sleep_ms(50)
+print("slept 50ms")
+
+// Math
+print("sqrt(2) =", math.sqrt(2))
+print("floor(3.7) =", math.floor(3.7))
+print("ceil(3.2) =", math.ceil(3.2))
+print("PI =", math.PI)
+
+// JSON
+let d = json.parse("{\"x\": 1, \"y\": [2, 3]}")
+print("x =", d.x)
+print("y =", d.y)
+print("stringify:", json.stringify(d))
+
+// Time
+print("timestamp =", system.time())

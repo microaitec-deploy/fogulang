@@ -1,0 +1,12 @@
+// Durations (spec §7.7)
+print(500ms, 2s, 5m, 1h, 1d, 1500ms, 90s, 250us, 10ns, 0s, 1.5s)
+print(typeof(2s), 2s == 2000ms, 1m > 59s, 1s < 999ms)
+print(1s + 500ms, 2m - 30s, 2s * 3, 3 * 2s, 10s / 4, 1s * 0.5, 1m / 2s, 7s % 2s, -3s)
+const d = 1500ms
+print(d.ns, d.us, d.ms, d.seconds, 90s.minutes, 30m.hours)
+print(`waiting ${250ms}`)
+import time from "fogu:time"
+const t0 = time.now()
+time.delay(20ms)
+time.sleep(10ms)
+print(time.now() - t0 >= 30)

@@ -1,0 +1,27 @@
+true true false
+ana@fogu.dev 4 16 [ana, fogu.dev] fogu.dev
+[a, b]
+a at x.io b at y.io ? b@y.io
+[a, b, c, d] [a, b-c]
+true 1\+1=2\?
+true [user, host] 2
+true
+ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+900150983cd24fb0d6963f7d28e17f72 a9993e364706816aba3e25717850c26c9cd0d89d
+ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=
+f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8
+b2zDoQ== olá __4
+6869 hi [255, 0]
+true segredo ✓
+error: crypto.decrypt: wrong key or corrupted data
+64 with a raw key
+true true false
+36 8 true false
+true
+INFO  server started host=0.0.0.0 port=3000
+DEBUG now visible note="two words"
+WARN  slow query module=db ms=812
+ERROR failed module=db table=users code=23
+{"level":"info","msg":"as json","list":[1,2],"ok":true}
+ERROR to a file
+off

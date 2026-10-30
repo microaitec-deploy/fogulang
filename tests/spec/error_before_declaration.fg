@@ -1,0 +1,3 @@
+print("does not run")
+print(total)
+let total = 1

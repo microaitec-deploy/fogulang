@@ -1,0 +1,36 @@
+// fogu:http client: bodies, forms, multipart uploads, headers, downloads (against fogu:web)
+import web from "fogu:web"
+import http from "fogu:http"
+import time from "fogu:time"
+import fs from "fogu:fs"
+
+fs.writeText("up.tmp.txt", "hello file\n")?
+
+const app = web.app()
+app.post("/echo", (ctx) => ({ ct: ctx.headers["content-type"].split(";")[0], body: ctx.body, q: ctx.query }))
+app.post("/upload", (ctx) => {
+    const f = ctx.req.form()?
+    return { title: f.title, tags: f.tags, file: f.file.filename, type: f.file.type, text: f.file.text(), avatar: f.avatar.bytes().len() }
+})
+app.get("/hdr", (ctx) => ({ auth: ctx.headers["authorization"], x: ctx.headers["x-a"] }))
+app.listen(18431)
+
+let done = false
+fg fn() {
+    const base = "http://127.0.0.1:18431"
+    let r = http.post(base + "/echo", { name: "Ana" }, { query: { page: 2 } })?
+    print(r.status, r.ok, r.json()?)
+    r = http.post(base + "/echo", "plain")?
+    print(r.json()?)
+    r = http.post(base + "/echo", nil, { form: { user: "ana", pass: "a b&c" } })?
+    print(r.json()?)
+    r = http.post(base + "/upload", nil, { multipart: { title: "report", tags: ["a", "b"], file: http.file("up.tmp.txt"), avatar: { data: [1, 2, 3, 4], filename: "a.png" } } })?
+    print(r.json()?)
+    r = http.get(base + "/hdr", { bearer: "tok", headers: { "x-a": "1" } })?
+    print(r.json()?, r.header("content-type"))
+    r = http.get(base + "/missing")?
+    print(r.status, r.ok)
+    print(http.download(base + "/hdr", "dl.tmp.json")?)
+    done = true
+}()
+while !done { time.delay(10ms) }

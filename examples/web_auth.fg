@@ -1,0 +1,46 @@
+// fogu:web middleware + fogu:jwt authentication.
+//
+//   curl -X POST localhost:3000/login -d '{"user":"ana","password":"fogu"}'
+//   curl localhost:3000/api/me -H "Authorization: Bearer <token>"
+
+import web from "fogu:web"
+import jwt from "fogu:jwt"
+import time from "fogu:time"
+
+const SECRET = Fogu.env.JWT_SECRET ?? "dev-secret-change-me"
+const app = web.app()
+
+app.use(web.logger())                         // GET /api/me 200 0.4ms
+app.use(web.cors({ origin: "*" }))
+app.use("/api", jwt.middleware(SECRET))       // ctx.user = claims, or 401
+
+app.post("/login", (ctx) => {
+    const [body, err] = ctx.req.json()
+    if err != nil || body.password != "fogu" {
+        return web.json({ error: "invalid credentials" }, { status: 401 })
+    }
+    return { token: jwt.sign({ sub: body.user, role: "user" }, SECRET, { expiresIn: 1h }) }
+})
+
+// route middleware: runs only for this route, after the global ones
+const adminOnly = (ctx) => {
+    if ctx.user.role != "admin" {
+        return web.json({ error: "admins only" }, { status: 403 })
+    }
+}
+
+app.get("/api/me", (ctx) => ({ user: ctx.user.sub, expires: ctx.user.exp }))
+app.get("/api/admin", adminOnly, (ctx) => "welcome, admin")
+app.get("/boom", (ctx) => error("something failed"))
+
+app.after((ctx, res) => {
+    ctx.set.headers["x-served-by"] = "fogu"
+})
+app.onError((ctx, err) => web.json({ error: err.message }, { status: 500 }))
+
+print("server at http://127.0.0.1:3000")
+app.listen(3000)
+
+while true {
+    time.delay(100ms)
+}

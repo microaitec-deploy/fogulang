@@ -1,0 +1,13 @@
+// fogu:process (spec §52) — a non-zero exit code is not an error
+import process from "fogu:process"
+
+const r = process.shell("echo hello")
+print(r.ok, r.code, r.stdout.trim(), r.stderr)
+const bad = process.shell("exit 3")
+print(bad.ok, bad.code)
+const [res, err] = process.run("this-command-does-not-exist", ["x"])
+print(res, typeof(err))
+print(typeof(process.pid), typeof(process.env()), process.env("FOGU_SURELY_UNSET_VARIABLE"))
+process.setEnv("FOGU_TEST_VAR", "42")
+print(process.env("FOGU_TEST_VAR"), process.shell("echo %FOGU_TEST_VAR%$FOGU_TEST_VAR").stdout.contains("42"))
+print(typeof(process.cwd()?), typeof(process.args))

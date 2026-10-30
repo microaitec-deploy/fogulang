@@ -1,0 +1,6 @@
+interface Named { name() }
+struct Cat { name() { return "cat" } }
+struct Rock { weight = 1 }
+fn hello(n: Named) { return "hi " + n.name() }
+print(hello(new Cat()))
+print(hello(new Rock()))

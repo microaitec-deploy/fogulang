@@ -1,0 +1,93 @@
+import { create_client } from "./orm.fg"
+
+let db = create_client({
+    schema: {
+        provider: "sqlite",
+        url: "sqlite://demo.db",
+
+        models: {
+            User: {
+                fields: {
+                    id:        { type: "Int",     primary: true, autoincrement: true },
+                    name:      { type: "String",  required: true },
+                    email:     { type: "String",  required: true, unique: true },
+                    age:       { type: "Int",     required: false },
+                    role:      { type: "String",  defaultValue: "user" },
+                    createdAt: { type: "DateTime", defaultValue: "now" }
+                },
+                relations: {
+                    posts: { model: "Post", kind: "one-to-many", foreignKey: "authorId" }
+                }
+            },
+
+            Post: {
+                fields: {
+                    id:        { type: "Int",    primary: true, autoincrement: true },
+                    title:     { type: "String", required: true },
+                    body:      { type: "String", required: false },
+                    published: { type: "Bool",   defaultValue: false },
+                    authorId:  { type: "Int",    required: true }
+                },
+                relations: {
+                    author: {
+                        model: "User",
+                        kind: "many-to-one",
+                        foreignKey: "authorId",
+                        references: "id"
+                    }
+                }
+            }
+        }
+    },
+    migrate: "auto",
+    log: true
+})
+
+// ---------- CREATE ----------
+let john = db.user.create({
+    data: { name: "John", email: "john@x.com", age: 30 }
+})
+let mary = db.user.create({
+    data: { name: "Mary", email: "mary@x.com", age: 25 }
+})
+
+db.post.create({ data: { title: "Hello ORM", body: "...", authorId: john.id, published: true } })
+db.post.create({ data: { title: "Draft",     body: "...", authorId: john.id } })
+db.post.create({ data: { title: "Notas",     body: "...", authorId: mary.id } })
+
+// ---------- INCLUDE one-to-many ----------
+print("--- users com posts ---")
+let users = db.user.findMany({
+    include: { posts: true },
+    orderBy: { id: "asc" }
+})
+for u in users {
+    print(`${u.name} tem ${len(u.posts)} posts:`)
+    for p in u.posts {
+        print(`   - ${p.title}`)
+    }
+}
+
+// ---------- INCLUDE many-to-one ----------
+print("--- posts com author ---")
+let posts = db.post.findMany({
+    include: { author: true },
+    orderBy: { id: "asc" }
+})
+for p in posts {
+    print(`"${p.title}" por ${p.author.name}`)
+}
+
+// ---------- INCLUDE aninhado ----------
+print("--- aninhado ---")
+let nested = db.user.findMany({
+    where: { email: "john@x.com" },
+    include: { posts: { include: { author: true } } }
+})
+for u in nested {
+    for p in u.posts {
+        print(`${p.title} -> ${p.author.name}`)
+    }
+}
+
+db.disconnect()

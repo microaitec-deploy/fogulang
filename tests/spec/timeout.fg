@@ -1,0 +1,18 @@
+// timeout(d) in select (spec §36)
+const c = chan()
+select {
+    case v = <-c: print("received", v)
+    case <-timeout(30ms): print("timed out")
+}
+
+const r = chan(1)
+fg fn() {
+    <-timeout(10ms)
+    r <- "reply"
+}()
+select {
+    case v = <-r: print(v)
+    case <-timeout(2s): print("should not time out")
+}
+<-timeout(5ms)
+print("done")

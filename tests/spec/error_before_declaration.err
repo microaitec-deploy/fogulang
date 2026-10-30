@@ -1,0 +1,2 @@
+error[E0101]: variable 'total' used before its declaration
+--> error_before_declaration.fg:2

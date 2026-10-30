@@ -1,0 +1,16 @@
+[package]
+name = "fogu-pkg"
+version = "0.7.1"
+edition = "2024"
+description = "Package manager of the Fogu language: git/tar/folder sources, semver, global store and fogu.lock"
+authors = ["Edmilson Soares"]
+license = "MIT"
+
+[dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "charset", "system-proxy", "blocking", "multipart", "json"] }

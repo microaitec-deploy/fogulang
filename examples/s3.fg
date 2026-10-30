@@ -1,0 +1,31 @@
+// S3-compatible storage with fogu:s3 (AWS S3, MinIO, Cloudflare R2, B2…).
+//
+//   AWS:   AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... S3_BUCKET=my-bucket fogu run examples/s3.fg
+//   R2:    S3_ENDPOINT=https://<account>.r2.cloudflarestorage.com AWS_REGION=auto ...
+//   MinIO: S3_ENDPOINT=http://127.0.0.1:9000 ...
+
+import s3 from "fogu:s3"
+
+const store = s3.connect({
+    endpoint: Fogu.env.S3_ENDPOINT,          // nil: AWS
+    bucket: Fogu.env.S3_BUCKET ?? "fogu-example",
+})?
+print("bucket", store.bucket, "at", store.endpoint)
+
+if !store.exists("readme.txt")? {
+    store.put("readme.txt", "Stored by Fogu.", { metadata: { app: "fogu" } })?
+}
+store.put("data/report.json", { total: 42, items: ["a", "b"] })?     // maps become JSON
+
+print(store.get("readme.txt")?)
+print(store.head("data/report.json")?.size, "bytes")
+
+for obj in store.list("data/")? {
+    print(" -", obj.key, obj.size, obj.lastModified)
+}
+
+// share a private object for 15 minutes
+print(store.presign("data/report.json", { expires: 15m }))
+
+store.copy("data/report.json", "backup/report.json")?
+store.delete(["data/report.json", "backup/report.json"])?

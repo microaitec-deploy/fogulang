@@ -1,0 +1,26 @@
+import cron from "fogu:cron"
+import time from "fogu:time"
+
+// Schedule a "ping" every 500 ms
+cron.every(500ms, fn() {
+    print("[every 500ms] tick at", time.now())
+})
+
+// Schedule a cron task (every minute)
+cron.schedule("* * * * *", fn() {
+    print("[cron * * * * *] every minute")
+})
+
+// List the registered tasks
+print("tasks:", cron.list())
+
+// Run the scheduler for 2 seconds, processing the jobs
+let end = time.now() + 2000
+while time.now() < end {
+    cron.tick()
+    time.delay(100ms)     // sleep 100 ms between checks
+}
+
+// Clean up and finish
+cron.clear()
+print("done")

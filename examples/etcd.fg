@@ -1,0 +1,64 @@
+import etcd from "fogu:etcd"
+
+// etcd v3 (start one with `etcd`, or set ETCDCTL_ENDPOINTS)
+const db = etcd.connect()?
+print(db.endpoints)                        // [http://127.0.0.1:2379]
+
+// put / get
+db.put("/app/name", "Fogu")?
+print(db.get("/app/name")?.kvs[0].value)   // Fogu
+
+// a range by prefix
+db.put("/app/a", "1")?
+db.put("/app/b", "2")?
+const r = db.get("/app/", { prefix: true })?
+print(r.count)                             // 3
+for kv in r.kvs { print(kv.key, "=", kv.value) }
+
+// count only (cheap: no values)
+print(db.get("/app/", { prefix: true, countOnly: true })?.count)
+
+// delete by prefix
+print(db.delete("/app/", { prefix: true })?.deleted)   // 3
+
+// a lease with a TTL of 30s
+const lease = db.grant(30s)?
+print(lease.id > 0, lease.ttl)
+db.put("/app/token", "xyz", { lease: lease.id })?
+print(db.ttl(lease.id)?.ttl <= 30)
+db.revoke(lease.id)?
+
+// compare-and-set in a transaction
+db.put("/app/name", "Fogu")?
+const t = db.txn({
+    compare: [{ key: "/app/name", op: "=", field: "value", value: "Fogu" }],
+    success: [{ type: "put", key: "/app/name", value: "Fogu2" }],
+    failure: [{ type: "get", key: "/app/name" }],
+})?
+print(t.succeeded)                          // true
+print(db.get("/app/name")?.kvs[0].value)   // Fogu2
+
+// watch: one event at a time
+const w = db.watch("/app/", { prefix: true, prevKv: true })?
+db.put("/app/watched", "1")?
+db.put("/app/watched", "2")?
+for i in 0..2 {
+    const ev = w.next(2s)?
+    print(ev.type, ev.kv.key, ev.kv.value, ev.prevKv?.value)
+}
+w.close()
+
+// cluster status
+print(db.status()?.version)
+print(db.memberList()?.len())
+
+// keepAlive refreshes a lease until it is closed
+const l2 = db.grant(3s)?
+const ka = db.keepAlive(l2.id)?
+for i in 0..2 {
+    print("keepAlive ttl =", ka.next(5s)?.ttl)
+}
+ka.close()
+db.revoke(l2.id)?
+db.delete("/app/", { prefix: true })?
+db.close()

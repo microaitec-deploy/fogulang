@@ -1,0 +1,57 @@
+--- first run
+
+PLAY [deploy] **********************************************************
+
+TASK [folder] **********************************************************
+changed: [app1]
+changed: [app2]
+
+TASK [config] **********************************************************
+changed: [app1]
+changed: [app2]
+
+TASK [users] ***********************************************************
+changed: [app1] => (item=ana)
+changed: [app1] => (item=bob)
+changed: [app2] => (item=ana)
+changed: [app2] => (item=bob)
+
+TASK [setting] *********************************************************
+changed: [app1]
+changed: [app2]
+
+TASK [only app1] *******************************************************
+ok: [app1] => hello from app1
+skipping: [app2]
+
+TASK [set_fact] ********************************************************
+ok: [app1]
+ok: [app2]
+
+TASK [debug] ***********************************************************
+ok: [app1] => total = 2
+ok: [app2] => total = 2
+
+TASK [fails but ignored] ***********************************************
+fatal: [app1]: FAILED! => nope
+...ignoring
+fatal: [app2]: FAILED! => nope
+...ignoring
+
+TASK [handler: restart] ************************************************
+ok: [app1] => restarted app1
+ok: [app2] => restarted app2
+
+PLAY RECAP *************************************************************
+app1 : ok=9    changed=4    unreachable=0    failed=0    skipped=0    ignored=1
+app2 : ok=8    changed=4    unreachable=0    failed=0    skipped=1    ignored=1
+true {changed: 4, failed: 0, ignored: 1, ok: 9, skipped: 0, unreachable: 0}
+env=test
+port=8080 port=8081 BOB
+--- second run: nothing changes
+0 0
+--- check mode, limit and tags
+{app2: {changed: 2, failed: 0, ignored: 1, ok: 8, skipped: 1, unreachable: 0}} port=8081
+--- a failing task stops its host
+false [app1, app2] 1
+ANON: 21

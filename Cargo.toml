@@ -1,0 +1,91 @@
+[package]
+name = "fogu"
+version = "0.7.1"
+edition = "2024"
+description = "Reference implementation of the Fogu language: interpreter, Cranelift JIT, REPL and package manager"
+authors = ["Edmilson Soares"]
+license = "MIT"
+readme = "README.md"
+keywords = ["fogu", "language", "interpreter", "jit", "scripting"]
+categories = ["compilers", "command-line-utilities"]
+exclude = ["examples/**/*.exe", "dist/"]
+
+[lib]
+name = "fogu"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fogu"
+path = "src/main.rs"
+
+[dependencies]
+# hash maps of Fogu values: fast and resistant to collision attacks (random seed)
+ahash = "0.8"
+fogu-core = { path = "crates/fogu-core" }
+fogu-std = { path = "crates/fogu-std", default-features = false }
+fogu-pkg = { path = "crates/fogu-pkg" }
+base64 = "0.22"
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+dotenvy = "0.15.7"
+
+# a faster allocator for the many small objects of Fogu programs (not on Windows:
+# mimalloc's C code needs newer mingw headers than cross toolchains ship)
+[target.'cfg(all(not(windows), not(target_family = "wasm")))'.dependencies]
+mimalloc = { version = "0.1", default-features = false }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+rustyline = "14"
+
+# standalone executables as Windows services (toolkit/service.rs)
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
+
+[features]
+# Standard library areas (crates/fogu-std/src/native/<area>); `base` and `io` are always built.
+# `cargo build --release --no-default-features --features network` builds a small binary.
+default = ["network", "database", "messaging", "ops", "ai", "media", "rpc"]
+network = ["fogu-std/network"]
+database = ["fogu-std/database"]
+messaging = ["fogu-std/messaging"]
+ops = ["fogu-std/ops"]
+ai = ["fogu-std/ai"]
+media = ["fogu-std/media"]
+rpc = ["fogu-std/rpc"]
+vendored-openssl = ["fogu-std/vendored-openssl"]
+
+# debug builds: line tables only (backtraces keep file:line, linking is much faster)
+[profile.dev]
+debug = "line-tables-only"
+
+# dependencies are optimized in debug builds too (crypto, compression, parsers)
+[profile.dev.package."*"]
+opt-level = 2
+
+# `cargo build --release`: no symbols, thin LTO (small binary, still a quick build)
+[profile.release]
+strip = true
+lto = "thin"
+
+# `cargo build --profile dist`: the smallest binary (for the runtimes of
+# `fogu build --compile`); slower to build
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+
+# `cargo build --profile profiling`: release code with symbols, for perf / flamegraphs
+[profile.profiling]
+inherits = "release"
+strip = false
+debug = "line-tables-only"
+
+# ffi/: the C API (libfogu_rt .so/.dll/.dylib): cargo build --release -p fogu-ffi
+# fogu/: the standalone FoguMQ broker crate, not part of this build
+[workspace]
+members = [".", "ffi", "crates/*"]
+# `cargo build` / `cargo test` at the root cover the CLI and the language crates
+default-members = [".", "crates/fogu-core", "crates/fogu-std", "crates/fogu-pkg"]
+exclude = ["fogu"]
+

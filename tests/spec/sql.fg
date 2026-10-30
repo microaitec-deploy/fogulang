@@ -1,0 +1,17 @@
+// fogu:sql — SQLite (the same code works with PostgreSQL/MySQL via the URL)
+import sql from "fogu:sql"
+
+const db = sql.open("sqlite://sql.tmp.db")?
+print(db.driver)
+db.exec("CREATE TABLE IF NOT EXISTS people (id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER)")
+db.run("DELETE FROM people")
+for p in [[1, "Ana", 30], [2, "Rui", 25], [3, "Eva", 41]] {
+    db.run("INSERT INTO people (id, name, age) VALUES (?, ?, ?)", p)
+}
+for p in db.query("SELECT name, age FROM people WHERE age > ? ORDER BY age", [26]) {
+    print(p.name, p.age)
+}
+const eva = db.one("SELECT * FROM people WHERE name = ?", ["Eva"])
+print(eva.id, eva.name)
+print(len(db.query("SELECT * FROM people")))
+db.close()

@@ -1,0 +1,14 @@
+export struct Account {
+    owner = ""
+    _balance = 0
+    new(owner, balance = 0) {
+        this.owner = owner
+        this._balance = balance
+    }
+    balance() { return this._balance }
+    deposit(v) { this._balance += v }
+    _audit() { return "audited" }
+    audit() { return this._audit() }
+}
+
+export fn peek(a) { return a._balance }

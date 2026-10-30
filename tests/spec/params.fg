@@ -1,0 +1,38 @@
+// Default values (spec §20) and variadic functions (spec §22)
+fn connect(host = "localhost", port = 80) {
+    return `${host}:${port}`
+}
+print(connect(), connect("x.io"), connect("x.io", 8080))
+
+fn scale(v, f = v * 2) { return f }
+print(scale(3), scale(3, 1))
+
+fn log(prefix, ...args) {
+    print(prefix, args, len(args))
+}
+log("a")
+log("b", 1)
+log("c", 1, "two", [3])
+
+const total = (...xs) => xs.reduce((a, b) => a + b, 0)
+print(total(), total(1, 2, 3))
+
+struct Account {
+    balance = 0
+    new(initial = 100) { this.balance = initial }
+    deposit(...amounts) {
+        for v in amounts { this.balance += v }
+        return this.balance
+    }
+}
+print(new Account().balance, new Account(5).balance, new Account().deposit(1, 2, 3))
+
+// numeric functions with defaults still give the same result under the JIT
+fn power(b, e = 2) {
+    let r = 1
+    for i in 0..e { r *= b }
+    return r
+}
+let t = 0
+for i in 0..300 { t += power(i % 5) + power(2, 3) }
+print(t)

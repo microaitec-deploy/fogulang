@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="f" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fbbf24"/>
+      <stop offset="0.5" stop-color="#f97316"/>
+      <stop offset="1" stop-color="#c2410c"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#f)" d="M33 1c2 9 8 13 13 20 4 5 8 11 8 19 0 12-10 22-22 22S10 52 10 40c0-7 3-13 7-17 1 5 3 8 7 10-1-8 1-14 4-19 2-3 4-7 5-13z"/>
+  <text x="32" y="53" text-anchor="middle" font-family="'JetBrains Mono', 'DejaVu Sans Mono', Menlo, Consolas, monospace" font-weight="700" font-size="22" fill="#ffffff" letter-spacing="-2.5">.fg</text>
+</svg>

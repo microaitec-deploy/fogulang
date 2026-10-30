@@ -1,0 +1,16 @@
+buffer 6 6 104 111
+héllo 68c3a96c6c6f aMOpbGxv
+<buffer 6 bytes: 68 c3 a9 6c 6c 6f>
+<buffer 3 bytes: 00 00 00> <buffer 0 bytes>
+cafe hi 255
+[1, 2, 255] true true false
+AbCDEFG 7
+bC FG 2 5 false
+true true AbCDEFG! AbCDEFG
+4 c 0
+513 258 -2 255 1.5
+0102fffffffe
+0 104
+1 105
+6
+90

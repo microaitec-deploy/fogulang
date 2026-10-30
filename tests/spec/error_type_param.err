@@ -1,0 +1,2 @@
+error[E0207]: type mismatch: parameter 'b' expects int, got str
+error_type_param.fg:3

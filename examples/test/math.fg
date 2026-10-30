@@ -1,0 +1,7 @@
+export fn sum(a: int, b: int): int { return a + b }
+
+export fn parse(s: str): (int, error) {
+    const n = int(s)
+    if n < 0 { return 0, error("negative number") }
+    return n, nil
+}

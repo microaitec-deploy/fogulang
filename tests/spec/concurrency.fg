@@ -1,0 +1,28 @@
+// fg, chan, select (spec §32-36)
+const c = chan(3)
+fg fn() {
+    for i in 0..3 { c <- i }
+    close(c)
+}()
+for v in c { print("received", v) }
+
+const r = chan()
+fg fn() { r <- "rendezvous" }()
+print(<-r)
+
+const a = chan(1)
+const b = chan(1)
+a <- "only a"
+select {
+    case v = <-a: print(v)
+    case v = <-b: print(v)
+}
+select {
+    case v = <-b: print(v)
+    default: print("nothing ready")
+}
+
+const t = chan<int>(buffer: 2)
+t <- 1
+t <- 2
+print(len(t))

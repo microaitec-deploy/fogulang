@@ -1,0 +1,28 @@
+// fogu:fs and fogu:path (spec §46)
+import fs from "fogu:fs"
+import path from "fogu:path"
+
+const root = "fs.tmp.dir"
+fs.mkdir(path.join(root, "sub"))?
+fs.writeText(path.join(root, "a.txt"), "one\ntwo")?
+fs.append(path.join(root, "a.txt"), "\nthree")?
+fs.writeText(path.join(root, "sub", "b.fg"), "print(1)")?
+print(fs.readLines(path.join(root, "a.txt"))?, fs.readText(path.join(root, "sub/b.fg"))?)
+print(fs.exists(root), fs.isDir(root), fs.isFile(root), fs.list(root)?)
+print(fs.glob("fs.tmp.dir/**/*.fg"), fs.glob("fs.tmp.dir/*.txt"))
+print(fs.stat("fs.tmp.dir/a.txt")?.size, fs.stat("fs.tmp.dir")?.isDir)
+fs.copy(root, "fs.tmp.copy")?
+fs.move("fs.tmp.copy/a.txt", "fs.tmp.copy/c.txt")?
+print(fs.glob("fs.tmp.copy/**"))
+fs.remove("fs.tmp.copy/c.txt")?
+print(fs.list("fs.tmp.copy")?)
+
+const [text, err] = fs.readText("missing.txt")
+print(text, typeof(err), err.message.starts_with("fs.readText: missing.txt"))
+
+print(path.join("a", "b/../c", "d.fg"), path.dirname("a/b/c.fg"), path.dirname("c.fg"))
+print(path.basename("a/b/c.fg"), path.stem("a/b/c.test.fg"), path.extname("x.test.fg"), path.extname("README"))
+print(path.normalize("./a/./b/../c"), path.isAbsolute("a/b"))
+fs.removeAll(root)?
+fs.removeAll("fs.tmp.copy")?
+print(fs.exists(root))

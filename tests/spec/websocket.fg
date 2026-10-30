@@ -1,0 +1,64 @@
+// fogu:websocket — standalone server and client, and app.ws on fogu:web;
+// HTTP handlers run in their own tasks
+import websocket from "fogu:websocket"
+import web from "fogu:web"
+import http from "fogu:http"
+import time from "fogu:time"
+
+const server = websocket.listen(0)?
+fg fn() {
+    const conn = server.accept()?
+    while true {
+        const m = conn.next()?
+        if m == nil { break }
+        if m.type == "binary" { conn.send(m.data.reverse()) } else { conn.send("echo:" + m.data) }
+    }
+}()
+const ws = websocket.connect(server.url + "/room?x=1")?
+ws.send("hi")
+print(ws.next(2s)?.data)
+ws.send(bytes([1, 2, 3]))
+const bin = ws.next(2s)?
+print(bin.type, bin.data.toList(), typeof(bin.data))
+ws.send({ a: 1 })
+print(ws.next(2s)?.data)
+print(ws.next(100ms)?)
+ws.close()
+time.delay(200ms)
+print(ws.open, ws.closeCode)
+
+// fogu:web: the upgraded HTTP connection is the WebSocket
+const app = web.app()
+app.ws("/chat", (conn, ctx) => {
+    while true {
+        const m = conn.next()?
+        if m == nil { break }
+        conn.send("chat:" + m.data)
+    }
+})
+app.get("/slow", (ctx) => {
+    time.delay(300ms)
+    return "slow"
+})
+app.get("/fast", (ctx) => "fast")
+app.listen(18433, { quiet: true })
+const c = websocket.connect("ws://127.0.0.1:18433/chat")?
+c.send("yo")
+print(c.next(2s)?.data)
+c.close()
+
+// a slow handler does not hold the others
+const order = []
+const done = chan(2)
+fg fn() {
+    order.push(http.get("http://127.0.0.1:18433/slow")?.text)
+    done <- 1
+}()
+time.delay(50ms)
+fg fn() {
+    order.push(http.get("http://127.0.0.1:18433/fast")?.text)
+    done <- 1
+}()
+<-done
+<-done
+print(order)

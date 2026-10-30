@@ -1,0 +1,8 @@
+5 4 0 42 123 65
+1024.0 3.0
+true copied 32
+Hi [72, 105, 0]
+true false
+true
+true
+[i8, i16, i32, i64, u8, u16, u32, u64, isize, usize, bool, f32, f64, ptr, str, buffer, void]

@@ -1,0 +1,41 @@
+import mail from "fogu:mail"
+
+const m = mail.connect({ provider: "console", from: "Shop <shop@example.com>" })?
+print(m.provider, m.from)
+
+const r = m.send({
+    to: ["ana@example.com", { name: "Bob", email: "bob@example.com" }],
+    bcc: "audit@example.com",
+    subject: "Your order",
+    text: "Thanks for buying!",
+    headers: { "X-Order": "42" },
+    attachments: [
+        { filename: "invoice.txt", content: "total: 10" },
+        { filename: "logo.png", content: [137, 80, 78, 71], cid: "logo" },
+    ],
+})?
+print(r)
+
+print(m.sendMany([
+    { to: "x@example.com", subject: "one", html: "<p>1</p>" },
+    { from: "Other <o@example.com>", to: "y@example.com", subject: "two", text: "2" },
+])?)
+print(m.sent)
+
+// a bad address is an error value
+const [_, e1] = m.send({ to: "not-an-address", subject: "x", text: "x" })
+print(e1)
+
+// smtp settings from presets and urls (no connection is made by connect)
+const g = mail.connect({ provider: "gmail", user: "me@gmail.com", password: "app-password" })?
+print(g.provider, g.host, g.port, g.secure)
+const y = mail.connect({ provider: "yahoo", user: "me", password: "x" })?
+print(y.host, y.port, y.secure)
+const u = mail.connect("smtps://user:pass@mail.example.com")?
+print(u.host, u.port, u.secure)
+const s = mail.connect({ provider: "ses", region: "eu-west-1", user: "AKIA", password: "x" })?
+print(s.host)
+print(mail.connect({ provider: "resend", apiKey: "re_x" })?.host)
+
+const raw = g.render({ from: "a@b.co", to: "c@d.co", subject: "Olá", text: "hi" })
+print(raw.contains("Subject: =?utf-8?b?"), raw.contains("Message-ID: <"))

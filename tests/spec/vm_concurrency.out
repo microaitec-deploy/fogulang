@@ -1,0 +1,15 @@
+0 false
+[1, 4, 9, 16, 25]
+2 true true 1
+19999900000
+error: spin.fg:3: runtime error: script execution timed out after 60ms
+true false spin.fg:3: runtime error: script execution timed out after 60ms
+true true
+error: loop.fg:1: runtime error: script execution cancelled
+false
+5
+false true
+105
+210
+error: bad.fg: line 1: name error: variable 'nope' is not defined
+error: bad.fg: line 1: name error: variable 'nope' is not defined

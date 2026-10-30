@@ -1,0 +1,10 @@
+export let version = "1.0"
+export let loads = 0
+export fn greet(name) {
+    return "hello " + name
+}
+let count = 0
+export fn next() {
+    count += 1
+    return count
+}

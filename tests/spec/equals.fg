@@ -1,0 +1,17 @@
+// Struct equality: identity, or the equals method (spec §12)
+struct Point {
+    x = 0
+    y = 0
+    new(x, y) {
+        this.x = x
+        this.y = y
+    }
+    equals(other) { return this.x == other.x && this.y == other.y }
+}
+struct Box {
+    v = 0
+}
+const a = new Point(1, 2)
+print(a == new Point(1, 2), a != new Point(1, 2), a == new Point(2, 1))
+const c = new Box()
+print(c == new Box(), c == c)

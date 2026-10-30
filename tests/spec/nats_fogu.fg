@@ -1,0 +1,7 @@
+import nats from "fogu:nats"
+
+// no NATS server in the test suite: an unreachable server is an error value
+// (nats.fogu was tested by hand against nats-server 2.10 with JetStream,
+// and against the same API written with nats.js)
+const [f, err] = nats.fogu("nats://127.0.0.1:1")
+print(f, typeof(err))

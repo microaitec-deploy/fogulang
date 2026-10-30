@@ -1,0 +1,23 @@
+import cli from "fogu:cli"
+
+print(cli.red("plain when piped"), cli.style("x", "bold", "bgBlue"))
+cli.colors(true)
+print(cli.stripAnsi(cli.red("red")) == "red", cli.red("r") != "r", cli.textWidth(cli.bold("abc")))
+cli.colors(false)
+print(typeof(cli.isTTY("stdin")))
+print(cli.table([["ana", 3], ["rui", 15]], { headers: ["name", "jobs"] }))
+print(cli.table([{ b: 2, a: "x" }], { style: "markdown" }))
+const o = cli.parse({
+    name: "deploy", version: "1.0.0",
+    args: [
+        { name: "env", positional: true, required: true, choices: ["dev", "prod"] },
+        { name: "force", short: "f", type: "bool" },
+        { name: "retries", short: "r", type: "int", default: 3 },
+        { name: "tag", type: "str", multiple: true },
+        { name: "verbose", short: "v", type: "count" },
+    ],
+    commands: [{ name: "logs", args: [{ name: "lines", short: "n", type: "int", default: 10 }] }],
+}, ["prod", "-f", "--tag", "a", "--tag", "b", "-vv", "logs", "-n", "5"])
+print(o)
+const [bad, err] = cli.parse({ name: "x", args: [{ name: "n", type: "int" }] }, ["--n", "abc"], { exit: false })
+print(bad, err)

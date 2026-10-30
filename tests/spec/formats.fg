@@ -1,0 +1,63 @@
+import csv from "fogu:csv"
+import excel from "fogu:excel"
+import yaml from "fogu:yaml"
+import toml from "fogu:toml"
+import xml from "fogu:xml"
+import fs from "fogu:fs"
+
+// ---------- CSV ----------
+const text = "name;age;active;code;note\nAna;30;true;007;\"says \"\"hi\"\"; ok\"\nBob;25.5;false;12;\n"
+const people = csv.parse(text)?                     // the delimiter is guessed
+print(people[0], people[1].age, people[1].note)
+print(csv.parse("a,b\n1,2", { header: false })?, csv.parse("x\n1", { types: false })?)
+const out = csv.stringify([{ name: "Ana", city: "Lisboa, PT" }, { name: "Bob", age: 3 }])
+print(out)
+csv.write("people.tmp.csv", people)?
+print(csv.read("people.tmp.csv")? == people)
+print(csv.stringify([[1, "a"], [2, "b"]], { delimiter: "\t" }))
+
+// ---------- Excel ----------
+const rows = [
+    { id: 1, product: "Café", price: 4.5, stock: true },
+    { id: 2, product: "Pão", price: 0.8, stock: false },
+    { id: 3, product: "Leite" },
+]
+excel.write("shop.tmp.xlsx", { Products: rows, Totals: [["total", 5.3]] })?
+print(excel.sheets("shop.tmp.xlsx")?)
+const back = excel.read("shop.tmp.xlsx")?
+print(back[0], back[2].price)
+print(excel.read("shop.tmp.xlsx", { sheet: "Totals", header: false })?)
+print(excel.read("shop.tmp.xlsx", { sheet: "*" })?.Totals)
+const [_, missing] = excel.read("nope.tmp.xlsx")
+print(missing != nil)
+
+// ---------- YAML ----------
+const cfg = yaml.parse("server:\n  host: 0.0.0.0\n  ports: [80, 443]\ndebug: false\nname: ~\n")?
+print(cfg.server.ports, cfg.debug, cfg.name)
+print(yaml.stringify({ app: "fogu", tags: ["a", "b"], nested: { x: 1.5 } }))
+print(yaml.parseAll("a: 1\n---\na: 2\n")?)
+yaml.write("cfg.tmp.yaml", cfg)?
+print(yaml.read("cfg.tmp.yaml")?.server.host)
+const [_, badYaml] = yaml.parse("a: [1, 2")
+print(badYaml != nil)
+
+// ---------- TOML ----------
+const t = toml.parse("title = \"Fogu\"\n[owner]\nname = \"Ana\"\nborn = 1979-05-27\n[[servers]]\nip = \"10.0.0.1\"\n[[servers]]\nip = \"10.0.0.2\"\n")?
+print(t.title, t.owner.born, t.servers.map((s) => s.ip))
+print(toml.stringify({ name: "app", version: 2, skip: nil, db: { url: "sqlite://x.db", pool: 5 } }))
+toml.write("cfg.tmp.toml", t)?
+print(toml.read("cfg.tmp.toml")?.servers[1].ip)
+const [_, badToml] = toml.parse("a = ")
+print(badToml != nil)
+
+// ---------- XML ----------
+const doc = xml.parse("<?xml version=\"1.0\"?><feed lang=\"pt\"><item id=\"1\">Olá &amp; adeus</item><item id=\"2\"/><![CDATA[raw <b>]]></feed>")?
+print(doc.name, doc.attrs, len(doc.children))
+print(doc.children[0].attrs.id, doc.children[0].text, doc.children[1].children, doc.children[2])
+print(xml.stringify({ name: "note", attrs: { to: "Ana & Bob" }, children: [{ name: "body", text: "1 < 2" }] }, { declaration: false, pretty: false }))
+xml.write("doc.tmp.xml", doc)?
+print(xml.read("doc.tmp.xml")?.children[0].text)
+const [_, badXml] = xml.parse("<a><b></a>")
+print(badXml != nil)
+
+for f in ["people.tmp.csv", "shop.tmp.xlsx", "cfg.tmp.yaml", "cfg.tmp.toml", "doc.tmp.xml"] { fs.remove(f)? }

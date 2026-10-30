@@ -1,0 +1,73 @@
+// Type annotations, interfaces and generics (spec §9, §25, §27)
+fn add(a: int, b: int): int { return a + b }
+fn half(x: float): float { return x / 2.0 }
+print(add(2, 3), half(3), half(5.0))          // int is accepted where float is expected
+
+fn find(xs: list<int>, v: int): int? {
+    for i, x in xs { if x == v { return i } }
+    return nil
+}
+print(find([5, 6, 7], 7), find([], 1))
+
+fn parse_age(s: str): (int, error) {
+    const n = int(s)
+    if n < 0 { return 0, error("negative age") }
+    return n, nil
+}
+fn older(s: str): (int, error) {
+    const age = parse_age(s)?
+    return age + 1, nil
+}
+print(older("41"), older("-3")[1].message)
+
+let label: str | nil = nil
+label = "set"
+const ratio: float = 2
+print(label, ratio)
+
+interface Shape {
+    area(): float
+    name(): str
+}
+struct Square {
+    side = 0
+    new(side) { this.side = side }
+    area() { return this.side * this.side }
+    name() { return "square" }
+}
+struct Point {
+    x = 0
+}
+fn describe(s: Shape): str { return `${s.name()} ${s.area()}` }
+print(describe(new Square(3)))
+print(describe({ area: () => 1.5, name: () => "map" }))   // structural: a map of functions
+
+fn first<T>(items: list<T>): T? {
+    if len(items) == 0 { return nil }
+    return items[0]
+}
+print(first([9, 8]), first(["a"]), first([]))
+
+struct Stack<T> {
+    items = []
+    push(v: T) { this.items.push(v) }
+    size(): int { return len(this.items) }
+}
+const st = new Stack<int>()
+st.push(1)
+st.push(2)
+print(st.size())
+
+fn fib(n: int): int {
+    if n < 2 { return n }
+    return fib(n - 1) + fib(n - 2)
+}
+print(fib(22))
+
+fn check(b: bool): str {
+    return match b {
+        true => "yes"
+        false => "no"
+    }
+}
+print(check(true), check(false))

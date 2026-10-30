@@ -1,0 +1,36 @@
+// Storage: SurrealKV (transactions, history) next to CSV/YAML exports.
+import surrealkv from "fogu:surrealkv"
+import csv from "fogu:csv"
+import yaml from "fogu:yaml"
+
+const db = surrealkv.open("shop.tmp.db", { versions: true })?
+db.batch({ set: { "stock:apple": 10, "stock:pear": 4 } })?
+
+// a transaction: both writes or none; a conflicting one is an error value
+fn buy(item, qty) {
+    const tx = db.begin()
+    const have = tx.get("stock:" + item) ?? 0
+    if have < qty {
+        tx.rollback()
+        return nil, error(`only ${have} ${item}(s) left`)
+    }
+    tx.set("stock:" + item, have - qty)
+    tx.set("order:" + item, qty)
+    tx.commit()?
+    return have - qty, nil
+}
+const [left, _] = buy("apple", 3)
+print("apples left:", left)
+const [_, refused] = buy("pear", 9)
+print("refused:", refused.message)
+
+// every version is kept: read the past
+db.set("price:apple", 1.20, { at: 1000 })?
+db.set("price:apple", 1.35, { at: 2000 })?
+print(db.getAt("price:apple", 1500), db.get("price:apple"), db.history("price:apple").len())
+
+// export the stock
+const rows = db.scan({ prefix: "stock:" }).map((r) => ({ item: r.key.replace("stock:", ""), qty: r.value }))
+print(csv.stringify(rows).trim())
+print(yaml.stringify({ stock: rows }).trim())
+db.close()

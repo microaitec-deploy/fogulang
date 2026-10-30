@@ -1,0 +1,471 @@
+// ============================================================
+// orm.fg — ORM clone de Prisma para Fogu
+// ============================================================
+import sql from "fogu:sql"
+
+// ------------------------------------------------------------
+// Helpers
+// ------------------------------------------------------------
+
+fn obj_kv(key, val) {
+    let o = {}
+    o[key] = val
+    return o
+}
+
+fn sql_type(t) {
+    return match t {
+        "Int"      => "INTEGER"
+        "String"   => "TEXT"
+        "Bool"     => "INTEGER"
+        "Float"    => "REAL"
+        "DateTime" => "TEXT"
+        _          => "TEXT"
+    }
+}
+
+fn normalize_type(t) {
+    if t == nil { return "" }
+    return str(t).upper()
+}
+
+fn build_where(where) {
+    if where == nil { return ["", []] }
+    let clauses = []
+    let params  = []
+    for k, v in where {
+        if v == nil {
+            clauses.push(`${k} IS NULL`)
+        } else {
+            clauses.push(`${k} = ?`)
+            params.push(v)
+        }
+    }
+    return [` WHERE ${clauses.join(" AND ")}`, params]
+}
+
+// ------------------------------------------------------------
+// Introspect (SQLite)
+// ------------------------------------------------------------
+
+fn table_columns(db, table) {
+    let rows = db.query(`PRAGMA table_info(${table})`)
+    let cols = {}
+    for r in rows {
+        cols[r.name] = {
+            type:    r.type,
+            notnull: r.notnull == 1,
+            pk:      r.pk == 1,
+            dflt:    r.dflt_value
+        }
+    }
+    return cols
+}
+
+fn list_tables(db) {
+    let rows = db.query(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    )
+    let names = []
+    for r in rows { names.push(r.name) }
+    return names
+}
+
+fn table_exists(db, table) {
+    for t in list_tables(db) {
+        if t == table { return true }
+    }
+    return false
+}
+
+fn table_foreign_keys(db, table) {
+    let rows = db.query(`PRAGMA foreign_key_list(${table})`)
+    let fks = []
+    for r in rows {
+        fks.push({
+            column:    r.from,
+            refTable:  r.table,
+            refColumn: r.to
+        })
+    }
+    return fks
+}
+
+// ------------------------------------------------------------
+// DDL
+// ------------------------------------------------------------
+
+fn build_create_table(model_name, model) {
+    let cols = []
+    for field_name, def in model.fields {
+        let parts = [field_name, sql_type(def.type)]
+        if def.primary       { parts.push("PRIMARY KEY") }
+        if def.autoincrement { parts.push("AUTOINCREMENT") }
+        if def.required      { parts.push("NOT NULL") }
+        if def.unique        { parts.push("UNIQUE") }
+        if def.defaultValue != nil {
+            parts.push(`DEFAULT ${def.defaultValue}`)
+        }
+        cols.push(parts.join(" "))
+    }
+    for rel_name, rel in model.relations {
+        if rel.kind == "many-to-one" {
+            cols.push(
+                `FOREIGN KEY (${rel.foreignKey}) REFERENCES ${rel.model}(${rel.references})`
+            )
+        }
+    }
+    return `CREATE TABLE IF NOT EXISTS ${model_name.lower()} (${cols.join(", ")})`
+}
+
+// ------------------------------------------------------------
+// Migrate
+// ------------------------------------------------------------
+
+fn migrate_diff(db, schema) {
+    let plan = { creates: [], alters: [], warnings: [] }
+
+    for model_name, model in schema.models {
+        let table = model_name.lower()
+
+        if !table_exists(db, table) {
+            plan.creates.push({
+                table: table,
+                sql:   build_create_table(model_name, model)
+            })
+            continue
+        }
+
+        let existing = table_columns(db, table)
+        let expected = model.fields
+
+        for field_name, def in expected {
+            if existing[field_name] == nil {
+                let parts = ["ADD COLUMN", field_name, sql_type(def.type)]
+                if def.required && def.defaultValue == nil {
+                    plan.warnings.push(`${table}.${field_name}: NOT NULL sem default`)
+                } else if def.required {
+                    parts.push("NOT NULL")
+                }
+                if def.unique { parts.push("UNIQUE") }
+                if def.defaultValue != nil {
+                    parts.push(`DEFAULT ${def.defaultValue}`)
+                }
+                plan.alters.push({
+                    table: table,
+                    sql:   `ALTER TABLE ${table} ${parts.join(" ")}`
+                })
+                continue
+            }
+
+            let real_type = normalize_type(existing[field_name].type)
+            let want_type = normalize_type(sql_type(def.type))
+            if real_type != want_type {
+                plan.warnings.push(
+                    `${table}.${field_name}: tipo difere (banco=${real_type}, schema=${want_type})`
+                )
+            }
+        }
+
+        for col_name, unused in existing {
+            if expected[col_name] == nil {
+                plan.warnings.push(`${table}.${col_name}: sobrando (ignorado)`)
+            }
+        }
+
+        let real_fks = table_foreign_keys(db, table)
+        for rel_name, rel in model.relations {
+            if rel.kind != "many-to-one" { continue }
+            let found = false
+            for fk in real_fks {
+                if fk.column == rel.foreignKey { found = true; break }
+            }
+            if !found {
+                plan.warnings.push(
+                    `${table}.${rel.foreignKey}: FK para ${rel.model} ausente`
+                )
+            }
+        }
+    }
+
+    return plan
+}
+
+fn migrate_apply(db, schema, opts = {}) {
+    let plan = migrate_diff(db, schema)
+    let dry  = opts.dryRun ?? false
+    let log  = opts.log    ?? true
+
+    if log {
+        print("[migrate] === plano ===")
+        for c in plan.creates { print(`  CREATE ${c.table}`) }
+        for a in plan.alters  { print(`  ALTER  ${a.table}  ->  ${a.sql}`) }
+        for w in plan.warnings { print(`  WARN   ${w}`) }
+        if len(plan.creates) == 0 && len(plan.alters) == 0 {
+            print("  (nada a fazer — banco em sincronia)")
+        }
+    }
+
+    if dry { return plan }
+
+    for c in plan.creates { db.exec(c.sql)? }
+    for a in plan.alters  { db.exec(a.sql)? }
+
+    if log { print("[migrate] aplicado") }
+    return plan
+}
+
+fn ensure_migrations_table(db) {
+    db.exec("
+        CREATE TABLE IF NOT EXISTS _migrations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            applied_at TEXT NOT NULL,
+            description TEXT NOT NULL
+        )
+    ")?
+}
+
+fn record_migration(db, description) {
+    db.run(
+        "INSERT INTO _migrations (applied_at, description) VALUES (?, ?)",
+        ["now", description]
+    )?
+}
+
+fn migration_history(db) {
+    ensure_migrations_table(db)
+    return db.query("SELECT * FROM _migrations ORDER BY id DESC")
+}
+
+// ------------------------------------------------------------
+// Include
+// ------------------------------------------------------------
+
+fn resolve_includes(client_ref, schema, model_name, rows, include) {
+    if include == nil { return rows }
+    if len(rows) == 0 { return rows }
+
+    let model = schema.models[model_name]
+    if model == nil { return rows }
+
+    for rel_name, rel_opts in include {
+        if rel_opts == false || rel_opts == nil { continue }
+
+        let rel = model.relations[rel_name]
+        if rel == nil {
+            print(`[include] aviso: relação '${rel_name}' não existe em ${model_name}`)
+            continue
+        }
+
+        let sub_opts = rel_opts
+        if rel_opts == true { sub_opts = {} }
+        let sub_include = sub_opts.include ?? nil
+
+        if rel.kind == "one-to-many" {
+            for row in rows {
+                let children = client_ref(nil).model(rel.model).findMany({
+                    where: obj_kv(rel.foreignKey, row.id)
+                })
+                if sub_include != nil {
+                    children = resolve_includes(
+                        client_ref, schema, rel.model, children, sub_include
+                    )
+                }
+                row[rel_name] = children
+            }
+        }
+
+        if rel.kind == "many-to-one" {
+            for row in rows {
+                let fk_val = row[rel.foreignKey]
+                let parent = client_ref(nil).model(rel.model).findUnique({
+                    where: obj_kv(rel.references, fk_val)
+                })
+                if parent != nil && sub_include != nil {
+                    parent = resolve_includes(
+                        client_ref, schema, rel.model, [parent], sub_include
+                    )[0]
+                }
+                row[rel_name] = parent
+            }
+        }
+    }
+
+    return rows
+}
+
+// ------------------------------------------------------------
+// Delegate
+// ------------------------------------------------------------
+
+fn make_delegate(client_ref, schema, db, model_name, model) {
+    const table = model_name.lower()
+
+    let delegate = {
+        create: (args) => {
+            let cols = []
+            let ph   = []
+            let vals = []
+            for field, def in model.fields {
+                if def.autoincrement { continue }
+                if args.data[field] != nil {
+                    cols.push(field); ph.push("?"); vals.push(args.data[field])
+                } else if def.defaultValue != nil {
+                    cols.push(field); ph.push("?"); vals.push(def.defaultValue)
+                }
+            }
+            let r = db.run(
+                `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${ph.join(", ")})`,
+                vals
+            )?
+            let row = db.one(`SELECT * FROM ${table} WHERE id = ?`, [r.lastInsertId])
+            if args.include != nil {
+                resolve_includes(client_ref, schema, model_name, [row], args.include)
+            }
+            return row
+        },
+
+        findMany: (args = {}) => {
+            let q = `SELECT * FROM ${table}`
+            let parts = build_where(args.where)
+            q += parts[0]
+            let params = parts[1]
+            if args.orderBy != nil {
+                let order = []
+                for k, v in args.orderBy { order.push(`${k} ${str(v).upper()}`) }
+                q += ` ORDER BY ${order.join(", ")}`
+            }
+            if args.take != nil { q += ` LIMIT ${args.take}` }
+            if args.skip != nil { q += ` OFFSET ${args.skip}` }
+            let rows = db.query(q, params)
+            if args.include != nil {
+                rows = resolve_includes(client_ref, schema, model_name, rows, args.include)
+            }
+            return rows
+        },
+
+        findUnique: (args) => {
+            let key = nil
+            let val = nil
+            for k, v in args.where { key = k; val = v; break }
+            let row = db.one(`SELECT * FROM ${table} WHERE ${key} = ?`, [val])
+            if row != nil && args.include != nil {
+                resolve_includes(client_ref, schema, model_name, [row], args.include)
+            }
+            return row
+        },
+
+        findFirst: (args = {}) => {
+            let rows = delegate.findMany({
+                where:   args.where,
+                orderBy: args.orderBy,
+                take:    1
+            })
+            let row = rows[0] ?? nil
+            if row != nil && args.include != nil {
+                resolve_includes(client_ref, schema, model_name, [row], args.include)
+            }
+            return row
+        },
+
+        update: (args) => {
+            let sets = []
+            let vals = []
+            for k, v in args.data { sets.push(`${k} = ?`); vals.push(v) }
+            let key = nil
+            let val = nil
+            for k, v in args.where { key = k; val = v; break }
+            vals.push(val)
+            db.run(`UPDATE ${table} SET ${sets.join(", ")} WHERE ${key} = ?`, vals)?
+            let row = db.one(`SELECT * FROM ${table} WHERE ${key} = ?`, [val])
+            if args.include != nil {
+                resolve_includes(client_ref, schema, model_name, [row], args.include)
+            }
+            return row
+        },
+
+        delete: (args) => {
+            let key = nil
+            let val = nil
+            for k, v in args.where { key = k; val = v; break }
+            db.run(`DELETE FROM ${table} WHERE ${key} = ?`, [val])?
+            return { deleted: true }
+        },
+
+        count: (args = {}) => {
+            let parts = build_where(args.where)
+            let row = db.one(`SELECT COUNT(*) as n FROM ${table}${parts[0]}`, parts[1])
+            return row.n
+        }
+    }
+
+    return delegate
+}
+
+// ------------------------------------------------------------
+// Client
+// ------------------------------------------------------------
+
+export fn create_client(opts = {}) {
+    let schema = opts.schema
+    if schema == nil {
+        throw "create_client: parâmetro 'schema' é obrigatório"
+    }
+    if schema.url == nil {
+        throw "create_client: schema.url é obrigatório"
+    }
+
+    let db = sql.open(schema.url)?
+    print(`[orm] connected: ${db.driver} (${schema.url})`)
+
+    ensure_migrations_table(db)
+    let mode = opts.migrate ?? "auto"
+    if mode != "off" {
+        migrate_apply(db, schema, {
+            dryRun: mode == "dry",
+            log:    opts.log ?? true
+        })
+        record_migration(db, "auto-migrate")
+    }
+
+    let delegates = {}
+    for model_name, unused in schema.models {
+        delegates[model_name.lower()] = nil
+    }
+
+    let client = {}
+    const self = (unused) => client
+
+    for model_name, model in schema.models {
+        delegates[model_name.lower()] = make_delegate(self, schema, db, model_name, model)
+    }
+
+    client.raw     = db
+    client.schema  = schema
+    client.model   = (name) => delegates[name.lower()]
+    client.migrate = (o = {}) => migrate_apply(db, schema, o)
+    client.diff    = (unused) => migrate_diff(db, schema)
+    client.history = (unused) => migration_history(db)
+
+    for model_name, unused in schema.models {
+        client[model_name.lower()] = delegates[model_name.lower()]
+    }
+
+    client.transaction = (fn) => {
+        db.exec("BEGIN")?
+        try {
+            fn()
+            db.exec("COMMIT")?
+        } catch e {
+            db.exec("ROLLBACK")?
+            throw e
+        }
+    }
+
+    client.disconnect = (unused) => {
+        db.close()
+        print("[orm] disconnected")
+    }
+
+    return client
+}

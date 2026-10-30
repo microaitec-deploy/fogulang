@@ -1,0 +1,91 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    color-scheme: light;
+  }
+
+  :root.dark {
+    color-scheme: dark;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: #ffffff;
+    color: #1e293b;
+    font-family: var(--font-sans);
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+
+  .dark body {
+    background-color: #0b0d12;
+    color: #e2e8f0;
+  }
+
+  code, pre, kbd {
+    font-family: var(--font-mono);
+  }
+}
+
+/* Syntax Highlighting for Fogu (.fg) */
+.tk-kw { color: #c2410c; font-weight: 600; }
+.tk-str { color: #15803d; }
+.tk-num { color: #7c3aed; }
+.tk-com { color: #6b7280; font-style: italic; }
+.tk-fn { color: #1d4ed8; }
+.tk-bi { color: #0e7490; }
+.tk-op { color: #9a3412; }
+.tk-ty { color: #be185d; }
+
+.dark .tk-kw { color: #fb923c; }
+.dark .tk-str { color: #86efac; }
+.dark .tk-num { color: #c4b5fd; }
+.dark .tk-com { color: #8b93a5; font-style: italic; }
+.dark .tk-fn { color: #93c5fd; }
+.dark .tk-bi { color: #67e8f9; }
+.dark .tk-op { color: #fdba74; }
+.dark .tk-ty { color: #f9a8d4; }
+
+/* Prose formatting */
+.prose-fogu p { margin: 0.75rem 0; line-height: 1.7; }
+.prose-fogu h3 { margin-top: 2rem; }
+.prose-fogu code:not(pre code) {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85em;
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.35rem;
+  background: rgba(249,115,22,0.10);
+  color: #9a3412;
+}
+.dark .prose-fogu code:not(pre code) {
+  background: rgba(251,146,60,0.14);
+  color: #fdba74;
+}
+.prose-fogu ul { list-style: disc; padding-left: 1.4rem; margin: 0.75rem 0; }
+.prose-fogu li { margin: 0.3rem 0; line-height: 1.6; }
+
+nav a.active { color: #ea580c; font-weight: 600; }
+.dark nav a.active { color: #fb923c; }
+
+/* Custom clean scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.5);
+}

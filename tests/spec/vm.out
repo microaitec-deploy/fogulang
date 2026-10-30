@@ -1,0 +1,19 @@
+42
+2 count is 1 true false
+11
+1
+4
+9
+nil error: <vm>:2: runtime error: script execution timed out after 50ms
+error: bad.fg: line 1:4: syntax error: unexpected expression: Eof
+error: <vm>: line 1: name error: variable 'secret' is not defined
+error: div.fg:2: runtime error: division by zero
+43
+10
+5
+15
+81
+{"a":1}
+fn
+610
+error: <vm>:2: runtime error: script execution timed out after 100ms

@@ -1,0 +1,18 @@
+// message passing: 100k round trips between two tasks over channels
+const ping = chan()
+const pong = chan()
+const rounds = 100000
+fg fn() {
+    while true {
+        const n = <-ping
+        if n == nil { break }
+        pong <- n + 1
+    }
+}()
+let total = 0
+for i in 0..rounds {
+    ping <- i
+    total = total + (<-pong) - i
+}
+close(ping)
+print(total)

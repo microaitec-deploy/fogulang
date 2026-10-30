@@ -1,0 +1,202 @@
+// Servers and concurrency: Fogu vs Python vs Bun — HTTP throughput, WebSocket
+// echo, memory per task, concurrent waits and message passing. Writes
+// bench/results_net.json (then `python docs/tools/gen_bench.py`).
+//
+//   fogu bench/run_net.fg            // 3 rounds (the median is kept)
+//   fogu bench/run_net.fg 5 http     // 5 rounds, only HTTP
+//
+// Needs Linux (servers are started with `sh -c`), bun, and the Python venv
+// with aiohttp and websockets (bench/.venv, see docs/benchmarks.md); oha for
+// the HTTP load ($OHA_BIN or `oha` on PATH). $FOGU_BIN, $BUN_BIN pick binaries.
+import process from "fogu:process"
+import fs from "fogu:fs"
+import json from "fogu:json"
+import http from "fogu:http"
+import time from "fogu:time"
+import system from "fogu:system"
+
+const pick = fn(cond, yes, no) {
+    if cond { return yes }
+    return no
+}
+
+// the machine's load average (1 minute), recorded with the results
+const loadavg = fn() {
+    const [text, err] = fs.readText("/proc/loadavg")
+    if err != nil { return nil }
+    return float(text.split(" ")[0])
+}
+const loadStart = loadavg()
+const dir = pick(fs.exists("bench/net/http.fg"), "bench/net", "net")
+const fogu = Fogu.env["FOGU_BIN"] ?? pick(fs.exists("target/release/fogu"), "target/release/fogu", "fogu")
+const bun = Fogu.env["BUN_BIN"] ?? "bun"
+const python = Fogu.env["PYTHON_BIN"] ?? pick(fs.exists("bench/.venv/bin/python"), "bench/.venv/bin/python", "python3")
+const oha = Fogu.env["OHA_BIN"] ?? "oha"
+
+let rounds = 3
+let only = []
+for a in Fogu.args {
+    const n = json.parse(a)
+    if typeof(n) == "int" { rounds = n } else { only.push(a) }
+}
+const want = (name) => only.len() == 0 || only.contains(name)
+
+const median = fn(xs) {
+    if xs.len() == 0 { return nil }
+    const s = xs.sort()
+    return s[s.len() / 2]
+}
+
+// a server in the background: its pid, once it prints "ready" and answers
+let nextPort = 18800
+const start = fn(cmd, args, probe) {
+    nextPort = nextPort + 1
+    const port = nextPort
+    const log = "/tmp/fogu-bench-" + str(port) + ".log"
+    const line = ([cmd].concat(args).concat([str(port)])).map((a) => "'" + a + "'").join(" ")
+    const r = process.run("sh", ["-c", line + " > " + log + " 2>&1 & echo $!"])?
+    const pid = r.stdout.trim()
+    const deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline {
+        const [text, _] = fs.readText(log)
+        if text != nil && text.contains("ready") {
+            if probe == nil { return { pid: pid, port: port } }
+            const [res, err] = http.get(probe.replace("PORT", str(port)), { timeout: 1s })
+            if err == nil && res.status == 200 { return { pid: pid, port: port } }
+        }
+        time.delay(50ms)
+    }
+    process.run("kill", [pid])
+    return nil, error("the server did not start: " + line)
+}
+const stop = fn(s) {
+    process.run("kill", [s.pid])
+    time.delay(300ms)
+}
+
+const results = { rounds: rounds }
+
+// ---------- HTTP ----------
+if want("http") {
+    const impls = [
+        { name: "Fogu", cmd: fogu, args: [dir + "/http.fg"] },
+        { name: "Python (stdlib)", cmd: python, args: ["-I", dir + "/http.py"] },
+        { name: "Python (aiohttp)", cmd: python, args: ["-I", dir + "/http_aiohttp.py"] },
+        { name: "Bun", cmd: bun, args: [dir + "/http.js"] },
+    ]
+    const data = {}
+    for impl in impls { data[impl.name] = { rps: [], p50: [], p99: [], errors: 0 } }
+    for round in 0..rounds {
+        for impl in impls {
+            const s = start(impl.cmd, impl.args, "http://127.0.0.1:PORT/hello")?
+            const r = process.run(oha, ["-z", "5s", "-c", "64", "--no-tui", "--output-format", "json", "http://127.0.0.1:" + str(s.port) + "/hello"])?
+            stop(s)
+            const j = json.parse(r.stdout)
+            if typeof(j) == "error" { print("oha failed for", impl.name, r.stderr); continue }
+            const d = data[impl.name]
+            d.rps.push(j.summary.requestsPerSec)
+            d.p50.push(j.latencyPercentiles.p50 * 1000)
+            d.p99.push(j.latencyPercentiles.p99 * 1000)
+            for code, n in j.statusCodeDistribution { if code != "200" { d.errors = d.errors + n } }
+            print("http ·", impl.name, "·", str(int(j.summary.requestsPerSec)), "req/s")
+        }
+    }
+    results.http = impls.map((i) => ({ name: i.name, rps: median(data[i.name].rps), p50: median(data[i.name].p50), p99: median(data[i.name].p99), errors: data[i.name].errors }))
+}
+
+// ---------- WebSocket ----------
+if want("ws") {
+    const impls = [
+        { name: "Fogu", cmd: fogu, args: [dir + "/ws.fg"] },
+        { name: "Python (websockets)", cmd: python, args: ["-I", dir + "/ws.py"] },
+        { name: "Bun", cmd: bun, args: [dir + "/ws.js"] },
+    ]
+    const data = {}
+    for impl in impls { data[impl.name] = { mps: [], errors: 0 } }
+    for round in 0..rounds {
+        for impl in impls {
+            const s = start(impl.cmd, impl.args, nil)?
+            time.delay(200ms)
+            const r = process.run(bun, [dir + "/ws_load.js", "ws://127.0.0.1:" + str(s.port), "50", "5"])?
+            stop(s)
+            const j = json.parse(r.stdout.trim())
+            if typeof(j) == "error" { print("ws load failed for", impl.name, r.stdout, r.stderr); continue }
+            data[impl.name].mps.push(j.messages / j.seconds)
+            data[impl.name].errors = data[impl.name].errors + j.errors
+            print("ws ·", impl.name, "·", str(int(j.messages / j.seconds)), "msg/s")
+        }
+    }
+    results.ws = impls.map((i) => ({ name: i.name, mps: median(data[i.name].mps), errors: data[i.name].errors }))
+}
+
+// ---------- tasks: memory, concurrent waits, message passing ----------
+const langs = [
+    { name: "Fogu", cmd: fogu, args: [], ext: "fg" },
+    { name: "Python", cmd: python, args: ["-I"], ext: "py" },
+    { name: "Bun", cmd: bun, args: [], ext: "js" },
+]
+// peak memory (KB) of `prog n`, through /usr/bin/time
+const peak = fn(l, n) {
+    const r = process.run("/usr/bin/time", ["-f", "%M"].concat([l.cmd]).concat(l.args).concat([dir + "/tasks." + l.ext, str(n)]))?
+    if !r.ok { return nil, error(r.stderr.trim()) }
+    return int(r.stderr.trim().split("\n")[-1]), nil
+}
+const TASKS = 20000
+if want("tasks") {
+    const per = {}
+    for l in langs { per[l.name] = [] }
+    for round in 0..rounds {
+        for l in langs {
+            const base = peak(l, 0)?
+            const full = peak(l, TASKS)?
+            per[l.name].push((full - base) * 1024 / TASKS)
+            print("tasks ·", l.name, "·", str((full - base) * 1024 / TASKS), "bytes per task")
+        }
+    }
+    results.tasks = { count: TASKS, perTask: langs.map((l) => ({ name: l.name, bytes: median(per[l.name]) })) }
+}
+
+const timed = fn(name) {
+    const per = {}
+    for l in langs { per[l.name] = [] }
+    for round in 0..rounds {
+        for l in langs {
+            const t0 = time.monotonic()
+            const r = process.run(l.cmd, l.args.concat([dir + "/" + name + "." + l.ext]))?
+            if !r.ok { print(name, "failed for", l.name, r.stderr) ; continue }
+            per[l.name].push((time.monotonic() - t0) * 1000)
+        }
+    }
+    const out = langs.map((l) => ({ name: l.name, ms: median(per[l.name]) }))
+    for o in out { print(name, "·", o.name, "·", str(int(o.ms ?? 0)), "ms") }
+    return out
+}
+if want("sleeps") { results.sleeps = timed("sleeps") }
+if want("pingpong") { results.pingpong = timed("pingpong") }
+
+const versions = fn(cmd, args) {
+    const [r, err] = process.run(cmd, args)
+    if err != nil { return "?" }
+    return (r.stdout + r.stderr).trim().split("\n")[0]
+}
+results.date = time.now()
+results.versions = {
+    Fogu: "fogu " + Fogu.version,
+    Python: versions(python, ["--version"]),
+    Bun: "bun " + versions(bun, ["--version"]),
+    oha: versions(oha, ["--version"]),
+}
+results.cores = system.info.cores
+results.load = [loadStart, loadavg()]
+// a partial run (`run_net.fg 5 tasks`) keeps the other sections of the previous results
+const outFile = pick(dir == "net", "results_net.json", "bench/results_net.json")
+if only.len() > 0 && fs.exists(outFile) {
+    const prev = json.parse(fs.readText(outFile)?)
+    if typeof(prev) == "map" {
+        for k in ["http", "ws", "tasks", "sleeps", "pingpong"] {
+            if results[k] == nil && prev[k] != nil { results[k] = prev[k] }
+        }
+    }
+}
+fs.writeText(outFile, json.stringify(results) + "\n")?
+print("wrote results_net.json")

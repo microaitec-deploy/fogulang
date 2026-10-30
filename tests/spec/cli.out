@@ -1,0 +1,16 @@
+plain when piped x
+true true 3
+bool
+╭──────┬──────╮
+│ name ┆ jobs │
+╞══════╪══════╡
+│ ana  ┆    3 │
+│ rui  ┆   15 │
+╰──────┴──────╯
+| a | b |
+|---|---|
+| x | 2 |
+{args: {lines: 5}, command: logs, env: prod, force: true, retries: 3, tag: [a, b], verbose: 2}
+nil error: error: invalid value 'abc' for '--n <n>': invalid digit found in string
+
+For more information, try '--help'.

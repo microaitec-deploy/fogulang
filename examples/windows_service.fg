@@ -1,0 +1,33 @@
+// A program that runs as a Windows service (or a systemd unit on Linux).
+//
+//   fogu build --compile examples/windows_service.fg --target windows --service \
+//        --service-name fogu-demo --display-name "Fogu demo" --description "Fogu HTTP demo"
+//   dist\windows_service-windows-x64.exe              runs here, in the console (Ctrl+C stops it)
+//   dist\windows_service-windows-x64.exe install      (Administrator) registers the service
+//   ... start | status | stop | uninstall
+//
+// As a service, print() goes to fogu-demo.log next to the .exe, and a stop from the
+// service manager arrives as "service-stop" and SIGTERM.
+import http from "fogu:http"
+import system from "fogu:system"
+
+let port = 8089
+const args = system.args
+for i in 0..len(args) {
+    if args[i] == "--port" && i + 1 < len(args) { port = int(args[i + 1]) }
+}
+
+let served = 0
+http.serve(port, fn(req) {
+    served = served + 1
+    if req.path == "/health" {
+        return http.json({ status: "ok", served: served })
+    }
+    return http.text("hello from a Fogu service\n")
+})
+print("listening on http://127.0.0.1:" + str(port))
+
+Fogu.signal.on("service-stop", fn() { print("the service manager asked to stop") })
+// keeps the program (and its server) alive until Ctrl+C / SIGTERM / a service stop
+const sig = Fogu.signal.wait()
+print("stopping on " + sig + " after " + str(served) + " request(s)")

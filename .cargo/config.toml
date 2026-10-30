@@ -1,0 +1,18 @@
+# `fogu build --target wasm`: the interpreter is recursive and runs on the
+# main (only) thread, so the WebAssembly stack must be large.
+[target.wasm32-wasip1]
+rustflags = ["-C", "link-arg=-zstack-size=67108864"]
+
+# `cargo ffi` → target/release/libfogu_rt.so | fogu_rt.dll | libfogu_rt.dylib (see ffi/fogu.h);
+# `cargo ffi --target x86_64-pc-windows-gnu` for the .dll from Linux
+[alias]
+ffi = "build --release -p fogu-ffi"
+
+# cross builds from x86_64 Linux (apt install gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf);
+# OpenSSL is vendored for ARM in Cargo.toml, so no target sysroot is needed
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+
+[target.armv7-unknown-linux-gnueabihf]
+linker = "arm-linux-gnueabihf-gcc"
+

@@ -1,0 +1,24 @@
+import http from "fogu:http"
+import time from "fogu:time"
+
+http.serve(3000, fn(req) {
+    if req.path == "/ping" {
+        return http.text("pong")
+    }
+    if req.path == "/health" {
+        return http.json({
+            status: "ok",
+            service: "fogu-http"
+        })
+    }
+    return http.text("not found", { status: 404 })
+})
+
+print("server at http://127.0.0.1:3000")
+print("Ctrl+C to stop")
+
+// Infinite loop: keeps the process alive; pending HTTP requests are
+// handled while the main program waits.
+while true {
+    time.delay(100ms)
+}

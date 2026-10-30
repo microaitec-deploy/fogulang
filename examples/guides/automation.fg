@@ -1,0 +1,29 @@
+// Automation: run commands, watch their results, schedule jobs, write reports.
+import process from "fogu:process"
+import fs from "fogu:fs"
+import cron from "fogu:cron"
+import time from "fogu:time"
+import log from "fogu:log"
+
+log.setTime(false)
+log.setOutput("stdout")
+
+// run a command and check it
+const r = process.run("git", ["--version"])?
+log.info("git checked", { ok: r.ok, exitCode: r.code })
+
+// a job every 20ms, three times
+let beats = 0
+cron.every(20ms, fn() { beats = beats + 1 })
+while beats < 3 {
+    time.delay(10ms)
+    cron.tick()
+}
+cron.clear()
+log.info("heartbeats", { count: beats })
+
+// a small report on disk
+fs.mkdir("report.tmp")?
+fs.writeText("report.tmp/summary.md", `# Report\n\n- heartbeats: ${beats}\n`)?
+print(fs.readText("report.tmp/summary.md")?.trim())
+fs.removeAll("report.tmp")?

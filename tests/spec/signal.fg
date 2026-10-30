@@ -1,0 +1,29 @@
+// Fogu.signal: the program's events, simulated signals, wait with timeout
+import time from "fogu:time"
+
+print(Fogu.signal.names.contains("SIGINT"))
+const seen = []
+Fogu.signal.on("job.done", fn(d) { seen.push(d.id) })
+Fogu.signal.on("SIGUSR1", fn() { seen.push("usr1") })
+Fogu.signal.emit("job.done", { id: 7 })
+Fogu.signal.emit("SIGUSR1")
+time.delay(10ms)
+print(seen)
+
+print(Fogu.signal.wait("tick", { timeout: 30ms }))
+fg fn() {
+    time.delay(20ms)
+    Fogu.signal.emit("tick", 42)
+}()
+print(Fogu.signal.wait(["tick", "tock"]), Fogu.signal.last)
+
+// waiting for SIGTERM: a simulated one ends the wait instead of the program
+fg fn() {
+    time.delay(20ms)
+    Fogu.signal.emit("SIGTERM")
+}()
+print(Fogu.signal.wait())
+Fogu.signal.off("job.done")
+Fogu.signal.emit("job.done", { id: 8 })
+time.delay(10ms)
+print(seen)

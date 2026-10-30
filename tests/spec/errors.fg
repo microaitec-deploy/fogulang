@@ -1,0 +1,23 @@
+// Errors as values, `?` and destructuring (spec §28-30)
+fn divide(a, b) {
+    if b == 0 {
+        return nil, error("division by zero")
+    }
+    return a / b, nil
+}
+
+fn compute(a, b) {
+    const x = divide(a, b)?
+    return x * 2, nil
+}
+
+const [ok, e1] = compute(10, 2)
+print(ok, e1)
+const [r, e2] = compute(1, 0)
+print(r, e2.message, typeof(e2))
+
+const base = error("base")
+const wrapped = error("wrapper", base)
+print(wrapped.message, wrapped.cause.message)
+const [_, second] = [1, 2]
+print(second)

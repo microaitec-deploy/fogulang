@@ -1,0 +1,3 @@
+import web from "fogu:web"
+
+web.app().listen("::1:8080")

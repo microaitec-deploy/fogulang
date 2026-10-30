@@ -1,0 +1,6 @@
+true
+[7, usr1]
+nil
+tick {data: 42, name: tick}
+SIGTERM
+[7, usr1]

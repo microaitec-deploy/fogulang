@@ -1,0 +1,8 @@
+import mqc from "fogu:foguMQ-client"
+
+// nothing listens on port 1: an error value, not a crash
+const [mq, err] = mqc.connect("fogumq://tok@127.0.0.1:1", { timeout: 500ms })
+print(mq, typeof(err))
+
+// a wrong scheme is a programming error
+mqc.connect("http://127.0.0.1:7222")

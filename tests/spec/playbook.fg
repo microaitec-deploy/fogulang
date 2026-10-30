@@ -1,0 +1,46 @@
+import playbook from "fogu:playbook"
+import fs from "fogu:fs"
+
+const inventory = {
+    vars: { env: "test" },
+    hosts: { app1: { connection: "local", dir: "pb.tmp/app1" }, app2: { connection: "local", dir: "pb.tmp/app2" } },
+    groups: { web: { hosts: ["app1", "app2"], vars: { port: 8080 } } },
+}
+const plays = [{
+    name: "deploy",
+    hosts: "web",
+    gather_facts: false,
+    vars: { users: ["ana", "bob"] },
+    tasks: [
+        { name: "folder", file: { path: "{{ dir }}", state: "directory" } },
+        { name: "config", copy: { content: "env={{ env }}\nport={{ port }}\n", dest: "{{ dir }}/app.conf" }, notify: "restart" },
+        { name: "users", copy: { content: "{{ item | upper }}", dest: "{{ dir }}/{{ item }}.txt" }, loop: "{{ users }}" },
+        { name: "setting", lineinfile: { path: "{{ dir }}/settings.ini", regexp: "^port=", line: "port={{ port + 1 }}", create: true } },
+        { name: "only app1", debug: { msg: "hello from {{ inventory_hostname }}" }, when: "inventory_hostname == 'app1'" },
+        { set_fact: { total: "{{ users | length }}" } },
+        { debug: { var: "total" } },
+        { name: "fails but ignored", fail: { msg: "nope" }, ignore_errors: true },
+    ],
+    handlers: [{ name: "restart", debug: { msg: "restarted {{ inventory_hostname }}" } }],
+}]
+
+print("--- first run")
+const r1 = playbook.run(plays, { inventory: inventory })?
+print(r1.ok, r1.recap.app1)
+print(fs.readText("pb.tmp/app2/app.conf")?.trim(), fs.readText("pb.tmp/app2/settings.ini")?.trim(), fs.readText("pb.tmp/app1/bob.txt")?)
+
+print("--- second run: nothing changes")
+const r2 = playbook.run(plays, { inventory: inventory, quiet: true })?
+print(r2.recap.app1.changed, r2.recap.app2.changed)
+
+print("--- check mode, limit and tags")
+const r3 = playbook.run(plays, { inventory: inventory, quiet: true, check: true, limit: "app2", vars: { port: 9000 } })?
+print(r3.recap, fs.readText("pb.tmp/app2/settings.ini")?.trim())
+
+print("--- a failing task stops its host")
+const bad = [{ hosts: "all", gather_facts: false, tasks: [{ fail: { msg: "broken" } }, { debug: { msg: "not reached" } }] }]
+const r4 = playbook.run(bad, { inventory: inventory, quiet: true })?
+print(r4.ok, r4.failed, r4.recap.app1.failed)
+
+print(playbook.render("{{ name | default('anon') | upper }}: {{ n * 3 }}", { n: 7 }))
+fs.removeAll("pb.tmp")?

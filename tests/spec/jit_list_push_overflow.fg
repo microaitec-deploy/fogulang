@@ -1,0 +1,9 @@
+// an integer overflow inside a loop the JIT compiles (with a list push):
+// the same error, at the same line, as the interpreter
+let big = 9223372036854775000
+const ov = []
+for i in 0..1000 {
+    big = big + 1
+    ov.push(big)
+}
+print("not reached")

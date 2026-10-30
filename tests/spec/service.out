@@ -1,0 +1,59 @@
+microaitec-kv root /etc/systemd/system/microaitec-kv.service
+[Unit]
+Description=microaitec-kv
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/apps/microaitec/kv
+Environment="MODE=prod"
+Environment="RUST_LOG=info"
+ExecStart=/apps/microaitec/kv/one_kv --port 9000 '--data dir'
+Restart=always
+RestartSec=10
+LimitNOFILE=65535
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target
+
+true true true
+true true
+true
+[Unit]
+Description=tiny
+After=network.target
+
+[Service]
+Type=simple
+User=app
+ExecStart=/usr/bin/tiny
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
+/apps/microaitec/kv/one_kv --port 9000 '--data dir' ["MODE=prod", "RUST_LOG=info"] {WantedBy: multi-user.target}
+[Unit]
+Description=microaitec-kv
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/apps/microaitec/kv
+Environment="MODE=prod"
+Environment="RUST_LOG=info"
+ExecStart=/apps/microaitec/kv/one_kv --port 9000 '--data dir'
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65535
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target
+

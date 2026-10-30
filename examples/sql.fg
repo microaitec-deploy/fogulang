@@ -1,0 +1,30 @@
+import sql from "fogu:sql"
+
+// SQLite — creates demo.db in the current folder
+let db = sql.open("sqlite://demo.db")?
+print("driver:", db.driver)
+
+db.exec("
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        age INTEGER
+    )
+")
+db.run("DELETE FROM users")
+
+db.run("INSERT INTO users (id, name, age) VALUES (?, ?, ?)", [1, "John", 30])
+db.run("INSERT INTO users (id, name, age) VALUES (?, ?, ?)", [2, "Mary", 25])
+db.run("INSERT INTO users (id, name, age) VALUES (?, ?, ?)", [3, "Peter", 40])
+
+let everyone = db.query("SELECT * FROM users ORDER BY id")
+print("total:", len(everyone))
+for u in everyone {
+    print(" -", u.name, "is", u.age, "years old")
+}
+
+let mary = db.one("SELECT * FROM users WHERE name = ?", ["Mary"])
+print("Mary:", mary.name, mary.age)
+
+db.close()
+print("closed")

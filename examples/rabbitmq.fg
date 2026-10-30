@@ -1,0 +1,34 @@
+// RabbitMQ with fogu:rabbitmq: a topic exchange feeding a work queue.
+//
+//   docker run -p 5672:5672 rabbitmq:3
+//   AMQP_URL=amqp://guest:guest@127.0.0.1:5672/%2f fogu run examples/rabbitmq.fg
+
+import rabbitmq from "fogu:rabbitmq"
+
+const mq = rabbitmq.connect(Fogu.env.AMQP_URL)?
+
+mq.exchange("shop", "topic", { durable: true })?
+mq.queue("emails", { durable: true, ttl: 1h })?
+mq.bind("emails", "shop", "order.*")?
+
+// publish waits for the broker's confirmation
+for id in 1..4 {
+    mq.publish("shop", "order.created", { order: id, total: id * 10 }, { persistent: true })?
+}
+mq.publish("shop", "stock.low", { sku: "A1" })?     // no queue bound: dropped
+
+const worker = mq.consume("emails", { prefetch: 2 })?
+while true {
+    const msg = worker.next(1s)?
+    if msg == nil { break }
+    const order = msg.json()
+    if order.total > 25 {
+        print("needs review:", order.order)
+        msg.nack({ requeue: false })               // drop (or dead-letter it)
+    } else {
+        print("email sent for order", order.order)
+        msg.ack()
+    }
+}
+worker.cancel()
+mq.close()

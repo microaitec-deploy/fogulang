@@ -1,0 +1,1 @@
+bullmq.queue: options must be a map, got 'str'

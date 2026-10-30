@@ -1,0 +1,27 @@
+import service from "fogu:service"
+import fs from "fogu:fs"
+
+const kv = service.define({
+    name: "microaitec-kv",
+    exec: "/apps/microaitec/kv/one_kv",
+    args: ["--port", "9000", "--data dir"],
+    workdir: "/apps/microaitec/kv",
+    env: { RUST_LOG: "info", MODE: "prod" },
+    restartSec: 10s,
+    extra: { Service: { MemoryMax: "1G" }, Unit: { Wants: "network-online.target" } },
+})
+print(kv.name, kv.user, kv.unitPath)
+print(kv.unit())
+kv.writeScript("svc.tmp.sh")?
+const script = fs.readText("svc.tmp.sh")?
+print(script.starts_with("#!/bin/bash"), script.contains("SERVICE_NAME=microaitec-kv"), script.contains("ExecStart=$BIN_PATH --port 9000 '--data dir'"))
+print(script.contains("WorkingDirectory=$WORKDIR"), script.contains("  logs)"))
+print(fs.stat("svc.tmp.sh")?.size > 500)
+
+const min = service.define({ name: "tiny", exec: "/usr/bin/tiny", limitNofile: nil, user: "app", restart: "on-failure" })
+print(min.unit())
+
+const parsed = service.parseUnit(kv.unit())
+print(parsed.Service.ExecStart, parsed.Service.Environment, parsed.Install)
+parsed.Service.Restart = "on-failure"
+print(service.unitString(parsed))

@@ -1,0 +1,41 @@
+{active: true, age: 30, code: 007, name: Ana, note: says "hi"; ok} 25.5 nil
+[[a, b], [1, 2]] [{x: 1}]
+city,name,age
+"Lisboa, PT",Ana,
+,Bob,3
+
+true
+1	a
+2	b
+
+[Products, Totals]
+{id: 1, price: 4.5, product: Café, stock: true} nil
+[[total, 5.3]]
+[]
+true
+[80, 443] false nil
+app: fogu
+nested:
+  x: 1.5
+tags:
+- a
+- b
+
+[{a: 1}, {a: 2}]
+0.0.0.0
+true
+Fogu 1979-05-27 [10.0.0.1, 10.0.0.2]
+name = "app"
+version = 2
+
+[db]
+pool = 5
+url = "sqlite://x.db"
+
+10.0.0.2
+true
+feed {lang: pt} 3
+1 Olá & adeus [] raw <b>
+<note to="Ana &amp; Bob"><body>1 &lt; 2</body></note>
+Olá & adeus
+true

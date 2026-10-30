@@ -1,0 +1,16 @@
+// for key, value in map / for index, item in list (spec §18.2)
+const map = {b: 2, a: 1, c: 3}
+for key, value in map {
+    print(key, value)
+}
+for i, x in ["x", "y"] {
+    print(i, x)
+}
+for i, c in "ok" { print(i, c) }
+for k, v in {} { print("never") }
+let sum = 0
+for k, v in map {
+    if k == "c" { break }
+    sum += v
+}
+print(sum)

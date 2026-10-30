@@ -1,0 +1,8 @@
+let x = 1
+{
+    let x = 2
+    print("shadowing in an inner block is allowed", x)
+}
+let len = 3
+print("redefining a native function is allowed", len)
+let x = 3

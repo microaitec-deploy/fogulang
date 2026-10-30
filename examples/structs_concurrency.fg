@@ -1,0 +1,75 @@
+// ---------- struct + embed ----------
+
+struct Logger {
+    prefix = "[log]"
+
+    fn log(msg) {
+        print(this.prefix, msg)
+    }
+}
+
+struct Service {
+    embed Logger
+
+    name = "api"
+
+    fn start() {
+        this.log(`service ${this.name} starting`)
+    }
+}
+
+let s = new Service()
+s.start()
+
+// ---------- match ----------
+
+fn classify(n) {
+    return match n {
+        0 => "zero"
+        1 | 2 => "small"
+        x if x < 0 => "negative"
+        _ => "large"
+    }
+}
+
+for n in [-1, 0, 1, 2, 10] {
+    print(n, "→", classify(n))
+}
+
+// ---------- fg / chan / select ----------
+
+let c1 = chan(1)
+let c2 = chan(1)
+
+fg fn() {
+    c1 <- 10
+}()
+
+fg fn() {
+    c2 <- 20
+}()
+
+select {
+    case v = <-c1:
+        print("received from c1:", v)
+    case v = <-c2:
+        print("received from c2:", v)
+    case <-timeout(1s):
+        print("nothing arrived")
+}
+
+// ---------- match on different types ----------
+
+fn describe(x) {
+    return match x {
+        0 => "the number zero"
+        "abc" => "the string abc"
+        true => "boolean true"
+        _ => "something else"
+    }
+}
+
+print(describe(0))
+print(describe("abc"))
+print(describe(true))
+print(describe(42))

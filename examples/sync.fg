@@ -1,0 +1,23 @@
+// fogu:sync — Mutex, WaitGroup, Once and Atomic for fg tasks
+import sync from "fogu:sync"
+
+const mu = sync.Mutex()
+const done = sync.WaitGroup()
+const hits = sync.Atomic(0)
+const setup = sync.Once()
+const order = []
+
+for worker in 1..4 {
+    done.add(1)
+    fg fn() {
+        setup.do(() => print("setup runs once"))
+        mu.lock()                 // waits (cooperatively) while another task holds it
+        order.push(worker)
+        mu.unlock()
+        hits.add(1)
+        done.done()
+    }()
+}
+
+done.wait()                       // waits until every worker called done()
+print("workers:", order, "hits:", hits.get())

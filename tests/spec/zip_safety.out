@@ -1,0 +1,12 @@
+dotdot.tmp.zip error: zip.unzip: unsafe entry name '../escape.txt' (outside the target folder)
+abs.tmp.zip error: zip.unzip: unsafe entry name '/tmp/abs.txt' (outside the target folder)
+linkout.tmp.zip error: zip.unzip: unsafe symlink 'link' -> '../../outside' (outside the target folder)
+linkabs.tmp.zip error: zip.unzip: unsafe symlink 'link' -> '/etc' (outside the target folder)
+chain.tmp.zip error: zip.unzip: unsafe symlink 's/x' -> '../y' (outside the target folder)
+tarout.tmp.tar.gz error: zip.untar: unsafe symlink 'link' -> '../../outside' (outside the target folder)
+tarabs.tmp.tar.gz error: zip.untar: unsafe symlink 'link' -> '/etc' (outside the target folder)
+false false false false
+[ok.tmp.d/dir/real.txt, ok.tmp.d/dir/alias, ok.tmp.d/dir/sub/up, ok.tmp.d/suid.sh]
+real
+ true true
+[tok.tmp.d/d/real.txt]

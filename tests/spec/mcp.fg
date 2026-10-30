@@ -1,0 +1,37 @@
+import ai from "fogu:ai"
+import json from "fogu:json"
+
+const mcp = ai.mcpServer({ name: "spec", version: "0.1.0" })
+mcp.tool(ai.tool("add", "Adds", { type: "object", properties: { a: { type: "number" }, b: { type: "number" } } }, (args) => args.a + args.b))
+mcp.tool("half", "Halves", {}, fn(args) {
+    if args.n % 2 != 0 { return nil, error("odd number") }
+    return { half: args.n / 2 }
+})
+mcp.tool("bug", "Has a bug", nil, (args) => int("x"))
+mcp.resource("mem://a", { name: "A" }, () => "content of A")
+mcp.prompt("hello", { arguments: [{ name: "who", required: true }] }, (args) => [{ role: "user", text: "Hi " + args.who }])
+
+const req = (method, params) => mcp.handle({ jsonrpc: "2.0", id: 7, method: method, params: params })
+const init = req("initialize", { protocolVersion: "2024-11-05", capabilities: {} }).result
+print(init.protocolVersion, init.serverInfo, init.capabilities.tools != nil, init.capabilities.prompts != nil)
+print(req("initialize", { protocolVersion: "1999-01-01" }).result.protocolVersion)
+print(json.stringify(req("tools/list", {}).result.tools.map((t) => [t.name, t.inputSchema.type])))
+print(json.stringify(req("tools/call", { name: "add", arguments: { a: 2, b: 3 } }).result))
+print(json.stringify(req("tools/call", { name: "half", arguments: { n: 8 } }).result))
+print(json.stringify(req("tools/call", { name: "half", arguments: { n: 3 } }).result))
+print(req("tools/call", { name: "bug", arguments: {} }).result.isError)
+print(json.stringify(req("tools/call", { name: "zzz" }).error))
+print(json.stringify(req("resources/list", {}).result))
+print(json.stringify(req("resources/read", { uri: "mem://a" }).result))
+print(json.stringify(req("prompts/get", { name: "hello", arguments: { who: "Ana" } }).result))
+print(json.stringify(req("prompts/get", { name: "hello", arguments: {} }).error))
+print(json.stringify(req("ping", {})), json.stringify(req("x/y", {}).error))
+print(mcp.handle({ jsonrpc: "2.0", method: "notifications/initialized" }))
+print(json.stringify(mcp.handle("[{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"},{\"jsonrpc\":\"2.0\",\"method\":\"notifications/x\"}]")))
+print(json.stringify(mcp.handle("{oops").error.code), json.stringify(mcp.handle({ foo: 1 }).error))
+
+// the client: a program that cannot start, a server that is not there
+const [_, e1] = ai.mcpClient({ command: "fogu-no-such-program-xyz" })
+print(e1 != nil)
+const [_, e2] = ai.mcpClient({ url: "http://127.0.0.1:1/mcp", timeout: 2s })
+print(e2 != nil)

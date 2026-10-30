@@ -1,0 +1,35 @@
+// fogu:fs, fogu:path and fogu:process — plus the global Fogu object
+import fs from "fogu:fs"
+import path from "fogu:path"
+import process from "fogu:process"
+
+// files and folders
+const dir = path.join(fs.tempDir(), "fogu-example")
+fs.mkdir(path.join(dir, "notes"))?
+fs.writeText(path.join(dir, "notes", "todo.txt"), "write docs\nship it")?
+fs.append(path.join(dir, "notes", "todo.txt"), "\ncelebrate")?
+
+for line in fs.readLines(path.join(dir, "notes", "todo.txt"))? {
+    print("todo:", line)
+}
+print("files:", fs.glob(path.join(dir, "**", "*.txt")))
+print("size:", fs.stat(path.join(dir, "notes", "todo.txt"))?.size, "bytes")
+
+// errors are values
+const [_, err] = fs.readText(path.join(dir, "missing.txt"))
+print("missing file ->", err.message)
+
+// paths
+print(path.basename("src/app/main.fg"), path.extname("main.fg"), path.dirname("src/app/main.fg"))
+
+// processes: a non-zero exit code is not an error, check r.ok / r.code
+const r = process.shell("echo hello from the shell")
+print(r.ok, r.code, r.stdout.trim())
+
+// the Fogu object needs no import
+const cfg = Fogu.file(path.join(dir, "config.json"))
+cfg.write("{\"name\": \"demo\", \"port\": 8080}")?
+print("config:", cfg.json()?.port, "| sha256:", Fogu.hash("demo"))
+
+fs.removeAll(dir)?
+print("cleaned up:", !fs.exists(dir))

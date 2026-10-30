@@ -1,0 +1,9 @@
+// sorting 300k pseudo-random integers
+let x = 42
+const xs = []
+for i in 0..300000 {
+    x = (x * 1103515245 + 12345) % 2147483648
+    xs.push(x)
+}
+const s = xs.sort()
+print(s[0], s[150000], s[299999])

@@ -1,0 +1,11 @@
+// Template strings (spec §7.4)
+const name = "Fogu"
+const v = 4
+print(`Hello, ${name}!`)
+print(`version ${v + 0.1} — ${[1, 2]} ${ {a: 1}.a } ${nil}`)
+print(`nested: ${`inner ${name}`}`)
+print(`braces { and } and \${literal} and \`backtick\``)
+print(`multi
+line`)
+print(`${"}"} ${len("abc")}`)
+print(``, typeof(`x`))

@@ -1,0 +1,15 @@
+// concurrency: 10k tasks, each waits 100 ms then adds to a counter
+import sync from "fogu:sync"
+import time from "fogu:time"
+const wg = sync.WaitGroup()
+let done = 0
+for i in 0..10000 {
+    wg.add()
+    fg fn() {
+        time.delay(100ms)
+        done = done + 1
+        wg.done()
+    }()
+}
+wg.wait()
+print(done)

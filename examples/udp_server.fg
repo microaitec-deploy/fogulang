@@ -1,0 +1,15 @@
+import net from "fogu:net"
+
+let srv = net.udpBind("127.0.0.1:9001")?
+print("UDP listening on", srv.addr)
+
+let i = 0
+while i < 3 {
+    let pkt = srv.recvFrom()
+    print("received from", pkt.from, "→", pkt.text)
+
+    srv.sendTo(pkt.from, "echo: " + pkt.text)
+    i += 1
+}
+
+srv.close()

@@ -1,0 +1,58 @@
+import web from "fogu:web"
+
+const app = web.app()
+const log = []
+
+app.use((ctx) => {
+    log.push(`global ${ctx.method} ${ctx.path}`)
+    ctx.set.headers["x-powered-by"] = "fogu"
+})
+app.use(web.cors({ origin: "*" }))
+app.use("/admin", (ctx) => {
+    if ctx.headers["x-key"] != "s3cret" {
+        return web.json({ error: "forbidden" }, { status: 403 })
+    }
+    ctx.user = "root"
+})
+
+const needsId = (ctx) => {
+    if ctx.query.id == nil {
+        return web.text("missing id", { status: 400 })
+    }
+}
+
+app.get("/admin/stats", (ctx) => ({ user: ctx.user }))
+    .get("/items", needsId, (ctx) => ({ id: ctx.query.id, page: ctx.query.page ?? "1" }))
+    .get("/users/:name", (ctx) => `hi ${ctx.params.name}`)
+    .post("/fail", (ctx) => error("boom"))
+    .get("/crash", (ctx) => ctx.nothing.field)
+    .get("/created", (ctx) => {
+        ctx.set.status = 201
+        return { ok: true }
+    })
+
+app.after((ctx, res) => {
+    log.push(`after ${res.status}`)
+})
+app.onError((ctx, err) => web.json({ error: err.message }, { status: 500 }))
+
+const h = app.handler()
+const show = (req) => {
+    const r = h(req)
+    print(r.status, r.body, r.headers["x-powered-by"], r.headers["access-control-allow-origin"])
+    return r
+}
+
+show({ method: "GET", path: "/admin/stats" })
+show({ method: "GET", path: "/admin/stats", headers: { "X-Key": "s3cret" } })
+show({ method: "GET", path: "/items" })
+show({ method: "GET", path: "/items?id=a%20b&page=2" })
+show({ method: "GET", path: "/users/ana" })
+show({ method: "POST", path: "/fail" })
+show({ method: "GET", path: "/crash" })
+show({ method: "GET", path: "/created" })
+show({ method: "GET", path: "/nope" })
+const pre = show({ method: "OPTIONS", path: "/items" })
+print(pre.headers["access-control-allow-methods"])
+print(log)
+print(app.routes())

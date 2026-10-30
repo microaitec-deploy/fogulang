@@ -1,0 +1,4 @@
+import sync from "fogu:sync"
+const mu = sync.Mutex()
+mu.lock()
+mu.lock()

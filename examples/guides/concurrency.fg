@@ -1,0 +1,55 @@
+// Concurrency: fg tasks, channels, select with a timeout, a mutex and a semaphore.
+import time from "fogu:time"
+import sync from "fogu:sync"
+
+// a worker pool: 3 tasks share a channel of jobs
+const jobs = chan(10)
+const results = chan(10)
+for w in 0..3 {
+    fg fn(id) {
+        while true {
+            const n = <-jobs
+            if n == nil { break }                // the channel was closed
+            time.delay(10ms)                     // pretend to work; others run meanwhile
+            results <- { worker: id, square: n * n }
+        }
+    }(w)
+}
+for n in 1..7 { jobs <- n }
+close(jobs)
+let total = 0
+for i in 0..6 { total = total + (<-results).square }
+print("sum of squares:", total)
+
+// select: whichever is ready first, or a timeout
+const slow = chan(1)
+fg fn() { time.delay(200ms); slow <- "late" }()
+select {
+    case v = <-slow: print("got", v)
+    case <-timeout(50ms): print("timed out")
+}
+
+// a mutex around shared state, a semaphore limiting how many run at once
+const lock = sync.Mutex()
+const limit = sync.Semaphore(2)
+const wg = sync.WaitGroup()
+let counter = 0
+let running = 0
+let peak = 0
+for i in 0..5 {
+    wg.add()
+    fg fn() {
+        limit.acquire()
+        running = running + 1
+        if running > peak { peak = running }
+        time.delay(5ms)
+        lock.lock()
+        counter = counter + 1
+        lock.unlock()
+        running = running - 1
+        limit.release()
+        wg.done()
+    }()
+}
+wg.wait()
+print("counter:", counter, "at most", peak, "at once")

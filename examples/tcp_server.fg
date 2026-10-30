@@ -1,0 +1,21 @@
+import net from "fogu:net"
+
+let server = net.tcpListen("127.0.0.1:9000")?
+print("TCP server listening on", server.addr)
+
+let served = 0
+while served < 3 {
+    let conn = server.accept()?
+    print("client connected:", conn.peer)
+
+    let line = conn.readLine()
+    print("received:", line)
+
+    conn.writeLine("echo: " + line)
+    conn.close()
+
+    served += 1
+}
+
+server.close()
+print("server finished")

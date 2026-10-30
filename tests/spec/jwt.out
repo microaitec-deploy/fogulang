@@ -1,0 +1,18 @@
+3
+42 admin fogu 3600
+HS256 JWT admin
+error: jwt: invalid signature
+error: jwt: invalid issuer
+error: jwt: algorithm HS256 not allowed
+error: jwt: malformed token
+error: jwt: token expired
+error: jwt: token not active yet
+1
+1
+[web, app]
+John Doe
+200 {"sub":"42"} nil
+401 {"error":"missing bearer token"} Bearer
+401 {"error":"malformed token"} Bearer
+401 {"error":"invalid signature"} Bearer
+200 open nil

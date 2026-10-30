@@ -1,0 +1,11 @@
+import net from "fogu:net"
+
+// Run examples/tcp_server.fg first.
+let c = net.tcpConnect("127.0.0.1:9000")?
+print("connected to", c.peer)
+
+c.writeLine("hello from the client")
+let reply = c.readLine()
+print("server reply:", reply)
+
+c.close()

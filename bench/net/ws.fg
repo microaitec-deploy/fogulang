@@ -1,0 +1,16 @@
+// WebSocket echo server (fogu:websocket), a task per connection
+import websocket from "fogu:websocket"
+const port = int(Fogu.args.first() ?? "9001")
+const server = websocket.listen(port)?
+print("ready")
+while true {
+    const [ws, err] = server.accept()
+    if err != nil || ws == nil { break }
+    fg fn(conn) {
+        while true {
+            const msg = conn.next()
+            if msg == nil { break }
+            conn.send(msg.data)
+        }
+    }(ws)
+}

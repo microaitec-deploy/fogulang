@@ -1,0 +1,48 @@
+import html from "fogu:html"
+import fs from "fogu:fs"
+
+// ---------- parsing and CSS selectors ----------
+const doc = html.parse("<html><head><title> My  Page </title></head><body><div id='main' class='box big'><ul><li><a href='/a'>A <b>one</b></a></li><li><a href='/b'>B</a></li></ul><p>Tom &amp; Jerry</p></div></body></html>")
+print(doc.title)
+for a in doc.select("li > a") {
+    print(a.text, a.attr("href"), a.tag)
+}
+const main = doc.find("#main")
+print(main.id, main.classes, main.hasClass("big"), main.hasClass("small"))
+print(main.attrs)
+print(main.find("b").closest("li").outerHtml)
+print(main.find("p").html, main.find("p").matches("div > p"))
+print(len(main.children), main.children[0].tag, main.parent.tag)
+print(doc.find(".nope"), doc.find("a").attr("title"))
+print(len(html.select("<p>1</p><p>2</p>", "p")))
+print(html.fragment("<td>cell</td><i>x</i>").find("i").text)
+
+// ---------- escaping and sanitizing ----------
+print(html.escape("<a href=\"x\">'&'</a>"))
+print(html.unescape("&lt;b&gt; &amp;amp; &#65;&#x42; &copy; &bogus; & x"))
+print(html.sanitize("<p onclick='x()'>hi<script>alert(1)</script><a href='javascript:x'>l</a></p>"))
+print(html.sanitize("<p>a <b>b</b> <i>c</i></p>", { tags: ["b"] }))
+
+// ---------- conversions ----------
+print(html.text("<h1>Title</h1><p>Hello   <b>world</b>.<br>Line 2</p><ul><li>a</li><li>b</li></ul><script>x</script>"))
+print("---")
+print(html.toMarkdown("<h2>Hi</h2><p>Some <strong>bold</strong>, <em>it</em> and <a href='https://x.io'>link</a> <code>x</code></p><ol><li>one</li><li>two</li></ol><pre><code class='language-rs'>fn main() {\n}</code></pre><blockquote><p>q</p></blockquote><table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table><img src='i.png' alt='pic'>"))
+print("---")
+print(html.fromMarkdown("# T\n\n- a\n- **b**\n\n~~old~~"))
+
+// ---------- Jinja templates ----------
+print(html.render("<p>{{ name }}</p>{% if n > 1 %}many{% endif %}", { name: "<Ana>", n: 2 })?)
+print(html.render("{% for p in people %}{{ loop.index }}={{ p.name | upper }} {% endfor %}", { people: [{ name: "ana" }, { name: "bob" }] })?)
+const t = html.template("Hi {{ who }} {{ md | markdown }}", { autoescape: false })
+print(t.render({ who: "<b>", md: "*x*" })?)
+fs.mkdir("tpl.tmp.d")?
+fs.writeText("tpl.tmp.d/base.html", "<main>{% block body %}{% endblock %}</main>")?
+fs.writeText("tpl.tmp.d/page.html", "{% extends \"base.html\" %}{% block body %}<h1>{{ title }}</h1>{% endblock %}")?
+const tp = html.templates("tpl.tmp.d")
+print(tp.render("page.html", { title: "T&C" })?)
+print(tp.renderString("{% extends \"base.html\" %}{% block body %}inline{% endblock %}")?)
+print(tp.has("page.html"), tp.has("nope.html"))
+const [r1, e1] = html.render("{% if %}", {})
+print(e1)
+const [r2, e2] = tp.render("missing.html")
+print(e2)

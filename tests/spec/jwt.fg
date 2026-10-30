@@ -1,0 +1,48 @@
+import jwt from "fogu:jwt"
+import web from "fogu:web"
+
+const secret = "s3cret"
+
+const token = jwt.sign({ sub: "42", role: "admin" }, secret, { expiresIn: 1h, issuer: "fogu" })
+print(len(token.split(".")))                                   // 3
+const claims = jwt.verify(token, secret, { issuer: "fogu" })?
+print(claims.sub, claims.role, claims.iss, claims.exp - claims.iat)   // 42 admin fogu 3600
+
+const d = jwt.decode(token)?
+print(d.header.alg, d.header.typ, d.payload.role)              // HS256 JWT admin
+
+// failures are error values
+const show = (r) => print(r)
+show(jwt.verify(token, "wrong"))
+show(jwt.verify(token, secret, { issuer: "other" }))
+show(jwt.verify(token, secret, { algorithms: ["HS512"] }))
+show(jwt.verify("not.a.token", secret))
+show(jwt.verify(jwt.sign({ a: 1 }, secret, { expiresIn: -10 }), secret))
+show(jwt.verify(jwt.sign({ a: 1 }, secret, { notBefore: 1h }), secret))
+print(jwt.verify(jwt.sign({ a: 1 }, secret, { expiresIn: -10 }), secret, { leeway: 1m })?.a)
+print(jwt.verify(jwt.sign({ a: 1 }, secret, { algorithm: "HS512" }), secret)?.a)
+print(jwt.verify(jwt.sign({ aud: ["web", "app"] }, secret), secret, { audience: "app" })?.aud)
+
+// a token from jwt.io (HS256, secret "your-256-bit-secret", no exp)
+const known = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+print(jwt.verify(known, "your-256-bit-secret")?.name)          // John Doe
+
+// fogu:web middleware
+const app = web.app()
+app.use("/api", jwt.middleware(secret))
+app.get("/api/me", (ctx) => ({ sub: ctx.user.sub }))
+app.get("/public", (ctx) => "open")
+const h = app.handler()
+const call = (path, auth) => {
+    const headers = {}
+    if auth != nil {
+        headers.Authorization = auth
+    }
+    const r = h({ method: "GET", path: path, headers: headers })
+    print(r.status, r.body, r.headers["www-authenticate"])
+}
+call("/api/me", `Bearer ${token}`)
+call("/api/me", nil)
+call("/api/me", "Bearer abc.def.ghi")
+call("/api/me", `Bearer ${jwt.sign({ sub: "1" }, "other")}`)
+call("/public", nil)

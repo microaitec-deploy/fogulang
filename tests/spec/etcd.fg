@@ -1,0 +1,7 @@
+import etcd from "fogu:etcd"
+
+// no etcd in the test suite: an unreachable server is an error value
+// (the client was tested by hand against etcd 3.5: examples/etcd.fg)
+print(etcd.defaultEndpoints().len() > 0)
+const db = etcd.connect({ endpoint: "127.0.0.1:1", connectTimeout: 300ms, timeout: 1s })
+print(typeof(db), str(db).contains("127.0.0.1:1"))

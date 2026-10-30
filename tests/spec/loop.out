@@ -1,0 +1,10 @@
+n = 1
+n = 2
+n = 4
+after: 5
+1 2
+2 2
+8 101
+true 500500
+ran 3 times
+true

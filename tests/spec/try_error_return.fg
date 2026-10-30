@@ -1,0 +1,19 @@
+// `?` keeps the declared return type: in `fn f(): error` it returns just the error
+fn check(n: int): (int, error) {
+    if n < 0 { return 0, error("negative") }
+    return n, nil
+}
+fn main(): error {
+    const a = check(1)?
+    const b = check(-1)?
+    print("never", a, b)
+    return nil
+}
+const e = main()
+print(typeof(e), e.message)
+fn pair(): (int, error) {
+    const v = check(-2)?
+    return v, nil
+}
+const [v, err] = pair()
+print(v, err.message)

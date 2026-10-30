@@ -1,0 +1,12 @@
+int 4
+{message: Hello, Ana (ana)}
+nil error: grpc: INVALID_ARGUMENT: name is required
+[{n: 0}, {n: 1}, {n: 2}]
+{total: 42}
+[{n: 7}, {n: 8}]
+stream {n: 0}
+stream {n: 1}
+true 2
+error: grpc: DEADLINE_EXCEEDED: no answer within 50ms
+5 true
+true

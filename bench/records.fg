@@ -1,0 +1,7 @@
+// JSON: stringify and parse 50k records
+import json from "fogu:json"
+const rows = []
+for i in 0..50000 { rows.push({ id: i, name: "user" + str(i), active: i % 2 == 0, tags: ["a", "b"] }) }
+const text = json.stringify(rows)
+const back = json.parse(text)
+print(back.len(), back[49999].name, text.len())

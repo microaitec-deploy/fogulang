@@ -1,0 +1,61 @@
+FROM node:20-alpine AS app
+# runtime image
+WORKDIR /app
+COPY package*.json .
+COPY --from=build --chown=node:node src public ./
+RUN npm ci --omit=dev \
+    && npm cache clean --force
+RUN echo single
+ENV GREETING="hello world"
+ENV NODE_ENV=production
+ARG VERSION
+LABEL org.opencontainers.image.title=shop
+EXPOSE 3000 9229/udp
+VOLUME ["/data"]
+USER node
+HEALTHCHECK --interval=30s --retries=3 CMD ["curl","-f","http://localhost:3000"]
+ENTRYPOINT ["node"]
+CMD ["server.js"]
+
+16 {instruction: FROM, value: node:20-alpine AS app} [2, 3] [4, 5]
+true false
+{instruction: ARG, value: BASE=node} {instruction: ENTRYPOINT, value: ["node"]}
+[{instruction: FROM, value: rust:1 AS build}, {instruction: RUN, value: cargo build \
+    --release}, {instruction: FROM, value: alpine}, {instruction: COPY, value: --from=build /app /app}]
+# build
+FROM rust:1 AS build
+RUN cargo build \
+    --release
+
+FROM alpine
+COPY --from=build /app /app
+
+services:
+  db:
+    image: postgres:17
+    volumes:
+    - data:/var/lib/postgresql/data
+  web:
+    image: nginx:alpine
+    ports:
+    - 8080:80
+    environment:
+      X: '1'
+    depends_on:
+    - db
+volumes:
+  data: {}
+
+services:
+  web:
+    image: nginx:alpine
+    restart: always
+    ports:
+    - 8080:80
+    environment:
+      X: '1'
+    depends_on:
+    - db
+
+<native object ComposeProject> api
+true

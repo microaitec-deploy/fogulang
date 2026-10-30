@@ -1,0 +1,32 @@
+// Structs, constructor, methods and embed (spec §23-24)
+struct Point {
+    x = 0
+    y = 0
+    new(x, y) {
+        this.x = x
+        this.y = y
+    }
+    norm() {
+        return (this.x ** 2 + this.y ** 2) ** 0.5
+    }
+}
+const p = new Point(3, 4)
+print(p.x, p.y, p.norm())
+p.x = 6
+p.y = 8
+print(p.norm())
+
+struct Logger {
+    prefix = "[log]"
+    fn log(msg) { print(this.prefix, msg) }
+}
+struct Service {
+    embed Logger
+    name = "api"
+    fn start() { this.log("service " + this.name) }
+}
+const s = new Service()
+s.start()
+print(s.prefix, typeof(s))
+const a = new Service()
+print(a == s, a == a)

@@ -1,0 +1,2 @@
+error[E0203]: non-exhaustive match
+error_match.fg:2

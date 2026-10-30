@@ -1,0 +1,48 @@
+// Fogu broker client (fogu:fogumq): key/value, channels, pub/sub and RPC.
+//
+//   FOGUMQ_URL="fogu://<token>@host:7222" fogu run examples/fogumq.fg
+
+import fogumq from "fogu:fogumq"
+
+const url = Fogu.env.FOGUMQ_URL ?? "fogu://token@localhost:7222"
+const [mq, err] = fogumq.connect(url)
+if err != nil {
+    print("cannot connect:", err.message)
+    Fogu.exit(1)
+}
+print("connected to", mq.url, "root:", mq.isRoot)
+
+// ---------- key/value ----------
+mq.kv.set("visits", 0)?
+print("visits:", mq.kv.incr("visits")?)
+
+// ---------- channel messages ----------
+const room = mq.channel("chat")
+room.join("fogu-example")?
+const inbox = room.onMessage()
+room.send({ text: "hello" })?
+const msg = inbox.next(2s)                  // nil after 2s without messages
+if msg != nil {
+    print(msg.channel, "->", msg.data.text)
+}
+print("members:", room.members()?)
+
+// ---------- pub/sub (topic "chat/news") ----------
+const sub = room.subscribe("news")?
+room.publish("news", { id: 7 })?
+print("news:", sub.next(2s))
+sub.close()
+
+// ---------- RPC ----------
+// a task answers the calls, the main program makes one
+const svc = room.act("sum")?
+fg fn() {
+    while true {
+        const req = svc.next()
+        req.reply(req.params.reduce((acc, n) => acc + n, 0))
+    }
+}()
+print("sum:", room.call("sum", [1, 2, 3, 4])?)
+
+room.leave()?
+mq.close()

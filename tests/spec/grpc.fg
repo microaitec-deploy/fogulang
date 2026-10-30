@@ -1,0 +1,76 @@
+// fogu:grpc — server and client in the same program (loopback)
+import grpc from "fogu:grpc"
+import protobuf from "fogu:protobuf"
+import time from "fogu:time"
+
+const schema = protobuf.parse("syntax = \"proto3\"; package demo;
+message HelloRequest { string name = 1; }
+message HelloReply { string message = 1; }
+message CountRequest { int32 n = 1; }
+message Num { int32 n = 1; }
+message Sum { int32 total = 1; }
+service Greeter {
+  rpc SayHello (HelloRequest) returns (HelloReply);
+  rpc Count (CountRequest) returns (stream Num);
+  rpc Add (stream Num) returns (Sum);
+  rpc Echo (stream Num) returns (stream Num);
+}")?
+
+const srv = grpc.server(schema)
+srv.handle("demo.Greeter/SayHello", fn(req, call) {
+    if req.name == "" { return nil, grpc.status("INVALID_ARGUMENT", "name is required") }
+    if req.name == "slow" { time.delay(300ms) }
+    return { message: "Hello, " + req.name + " (" + (call.metadata["x-user"] ?? "anon") + ")" }
+})
+srv.handle("Count", fn(req, call) {
+    for i in 0..req.n { call.send({ n: i }) }
+})
+srv.service("demo.Greeter", {
+    Add: fn(nums, call) {
+        let t = 0
+        for x in nums { t = t + x.n }
+        return { total: t }
+    },
+    Echo: fn(nums, call) { return nums },
+})
+const port = srv.listen("127.0.0.1:0")?
+print(typeof(port), srv.methods.len())
+fg srv.serve()
+
+const c = grpc.connect("127.0.0.1:" + str(port), schema, { metadata: { "x-user": "ana" } })?
+print(c.call("SayHello", { name: "Ana" })?)
+const [r, err] = c.call("SayHello", { name: "" })
+print(r, err)
+print(c.call("Count", { n: 3 })?)
+print(c.call("Add", [{ n: 1 }, { n: 2 }, { n: 39 }])?)
+print(c.call("demo.Greeter.Echo", [{ n: 7 }, { n: 8 }])?)
+
+// one message at a time
+const s = c.stream("Count", { n: 2 })?
+let m = s.next()?
+while m != nil {
+    print("stream", m)
+    m = s.next()?
+}
+print(s.done, s.received)
+
+// deadlines
+const [_, late] = c.call("SayHello", { name: "slow" }, { timeout: 50ms })
+print(late)
+
+// handlers run concurrently: five slow calls take about as long as one
+const t0 = clock()
+const results = []
+const done = []
+for i in 0..5 {
+    fg fn() {
+        results.push(c.call("SayHello", { name: "slow" })?.message)
+        done.push(i)
+    }()
+}
+while done.len() < 5 { time.delay(10ms) }
+print(results.len(), clock() - t0 < 1.2)
+
+srv.close()
+const [_, closed] = c.call("SayHello", { name: "x" }, { timeout: 2s })
+print(closed != nil)

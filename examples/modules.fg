@@ -1,0 +1,29 @@
+// Import specific members
+import { sum, factorial, PI } from "./util.fg"
+
+// Import with renaming
+import { sum as add } from "./util.fg"
+
+// Import the whole namespace
+import util from "./util.fg"
+
+// Import built-in modules
+import json from "fogu:json"
+import math from "fogu:math"
+
+print("sum(2,3) =", sum(2, 3))
+print("add(10,20) =", add(10, 20))
+print("factorial(5) =", factorial(5))
+print("PI =", PI)
+
+print("util.sum(7,8) =", util.sum(7, 8))
+print("util.counter =", util.counter)
+
+print("math.sqrt(16) =", math.sqrt(16))
+print("math.PI =", math.PI)
+
+// Built-in JSON
+let data = json.parse("{\"name\":\"Fogu\",\"version\":1}")
+print(data.name)              // Fogu
+print(data.version)           // 1
+print(json.stringify(data))   // {"name":"Fogu","version":1}

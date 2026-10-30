@@ -1,0 +1,6 @@
+import kafka from "fogu:kafka"
+
+// no Kafka in the test suite: an unreachable broker is an error value
+// (the client was tested by hand against Kafka 3.9 in KRaft mode)
+const [k, err] = kafka.connect(["127.0.0.1:1"], { timeout: 2s })
+print(k, typeof(err), str(err).contains("kafka.connect"))

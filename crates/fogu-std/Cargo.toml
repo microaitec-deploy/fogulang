@@ -1,0 +1,118 @@
+[package]
+name = "fogu-std"
+version = "0.7.1"
+edition = "2024"
+description = "Standard library of the Fogu language (fogu:* modules), grouped by area behind cargo features"
+authors = ["Edmilson Soares"]
+license = "MIT"
+
+[dependencies]
+# hash maps of Fogu values: fast and resistant to collision attacks (random seed)
+ahash = "0.8"
+fogu-core = { path = "../fogu-core" }
+fogu-pkg = { path = "../fogu-pkg" }
+bytes = { version = "1", optional = true }
+base64 = "0.22"
+regex = "1"
+futures-lite = { version = "2", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+hmac = "0.12"
+sha1 = "0.10"
+md-5 = "0.10"
+aes-gcm = "0.11"
+argon2 = "0.5"
+getrandom = "0.2"
+csv = "1"
+serde_yaml = "0.9"
+toml = "0.8"
+quick-xml = "0.42"
+calamine = "0.37"
+rust_xlsxwriter = "0.102"
+flate2 = "1"
+tar = "0.4"
+uuid = { version = "1", features = ["v4", "v5", "v7"] }
+async-trait = { version = "0.1", optional = true }
+scraper = { version = "0.29", optional = true }
+ego-tree = { version = "0.11", optional = true }
+minijinja = { version = "2", features = ["loader", "json", "urlencode"], optional = true }
+ammonia = { version = "4", optional = true }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"], optional = true }
+ab_glyph = { version = "0.2", optional = true }
+resvg = { version = "0.48", optional = true }
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2", "aes-crypto"] }
+protox = { version = "0.10", optional = true }
+prost-reflect = { version = "0.16", features = ["serde"], optional = true }
+prost = { version = "0.14", optional = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"], optional = true }
+
+# not available on WebAssembly (networking, TLS, databases, native code, devices):
+# the modules that use them are left out of `fogu build --target wasm`
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+comfy-table = "7"
+clap = { version = "4", features = ["string", "env"] }
+redb = { version = "4.2", optional = true }
+# fogu:surrealkv — versioned LSM key-value store (MVCC transactions, encryption at rest)
+surrealkv = { version = "1", optional = true }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "any", "postgres", "mysql", "sqlite"], optional = true }
+hyper = { version = "1", features = ["server", "http1", "http2"], optional = true }
+http-body-util = { version = "0.1", optional = true }
+hyper-util = { version = "0.1", features = ["tokio"], optional = true }
+# fogu:grpc and fogu:etcd — tonic for the gRPC framing, rustls for TLS servers
+tonic = { version = "0.14", default-features = false, features = ["transport", "codegen", "tls-ring", "tls-native-roots"], optional = true }
+tokio-stream = { version = "0.1", optional = true }
+http = { version = "1", optional = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+rustls-native-certs = { version = "0.8", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "fs", "io-util", "macros", "signal"] }
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "charset", "system-proxy", "blocking", "multipart", "json"] }
+native-tls = "0.2"
+tungstenite = { version = "0.24", features = ["native-tls"] }
+# fogu:websocket and fogu:web WebSockets run as tasks on the shared runtime
+tokio-tungstenite = { version = "0.30", features = ["native-tls"], optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"], optional = true }
+notify = "8"
+libloading = "0.8"
+bullmq-rs = { version = "2.2", optional = true }
+redis = { version = "1", default-features = false, features = ["tokio-comp", "script"], optional = true }
+dialoguer = { version = "0.12", features = ["fuzzy-select"] }
+indicatif = "0.18"
+console = "0.16"
+scylla = { version = "1", optional = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "rayon"], optional = true }
+# fogu:security — certificates, password strength, signatures, IP ranges (DNS: native/dns.rs)
+x509-parser = { version = "0.18.1", optional = true }
+rcgen = { version = "0.14.10", optional = true }
+zxcvbn = { version = "3.1.1", optional = true }
+ed25519-dalek = { version = "3.0.0", optional = true }
+ipnet = { version = "2.12.2", optional = true }
+subtle = { version = "2.6.1", optional = true }
+socketioxide = { version = "0.18.7", optional = true }
+engineioxide = { version = "0.17", optional = true }
+socketioxide-core = { version = "0.19", optional = true }
+rskafka = { version = "0.6.0", features = ["transport-tls"], optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(all(target_os = "linux", any(target_arch = "aarch64", target_arch = "arm")))'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+
+[features]
+# Standard library areas (src/native/<area>); `base` and `io` are always built.
+# `cargo build --release --no-default-features --features network` builds a small binary.
+default = ["network", "database", "messaging", "ops", "ai", "media", "rpc"]
+network = ["dep:ammonia", "dep:ed25519-dalek", "dep:ego-tree", "dep:engineioxide", "dep:futures-lite", "dep:futures-util", "dep:http-body-util", "dep:hyper", "dep:hyper-util", "dep:ipnet", "dep:minijinja", "dep:pulldown-cmark", "dep:rcgen", "dep:scraper", "dep:socketioxide", "dep:socketioxide-core", "dep:tokio-tungstenite", "dep:x509-parser", "dep:zxcvbn", "dep:subtle", "dep:rustls", "dep:rustls-native-certs", "dep:bytes", "dep:http"]
+database = ["rpc", "dep:async-trait", "dep:scylla", "dep:redb", "dep:surrealkv", "dep:sqlx", "dep:tonic", "dep:tokio-stream", "dep:prost-reflect", "dep:http"]
+messaging = ["dep:bullmq-rs", "dep:redis", "dep:rskafka", "dep:redb", "dep:surrealkv", "dep:bytes", "dep:rustls", "dep:rustls-native-certs", "dep:subtle"]
+ops = []
+ai = ["media", "network", "dep:image"]
+media = ["dep:image", "dep:resvg", "dep:ab_glyph"]
+rpc = ["dep:prost", "dep:prost-reflect", "dep:protox", "dep:tokio-rustls", "dep:tokio-stream", "dep:tonic", "dep:hyper", "dep:hyper-util", "dep:bytes", "dep:http", "dep:rustls"]
+# cross builds (`cargo zigbuild --target …`, docker/Dockerfile): OpenSSL compiled from
+# source instead of the target system's libssl
+vendored-openssl = ["native-tls/vendored"]
+
+# debug builds: line tables only (backtraces keep file:line, linking is much faster)

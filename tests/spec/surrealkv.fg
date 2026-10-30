@@ -1,0 +1,69 @@
+import surrealkv from "fogu:surrealkv"
+
+const db = surrealkv.open("surrealkv.tmp.db", { versions: true })?
+db.set("user:1", { name: "Ana", roles: ["admin"] })?
+db.set("user:2", { name: "Bia" })?
+db.set("order:1", 42)?
+print(db.get("user:1"), db.get("nope"), db.has("order:1"))
+print(db.scan({ prefix: "user:" }))
+print(db.keys(), db.count("user:"), db.keys("order:"))
+print(db.scan({ reverse: true, limit: 2, keys: true }))
+
+// versions written for given times (ms)
+db.set("price", 10, { at: 1000 })?
+db.set("price", 12, { at: 2000 })?
+print(db.getAt("price", 500), db.getAt("price", 1500), db.getAt("price", 2500), db.get("price"))
+print(db.history("price"))
+db.delete("user:2")?
+print(db.get("user:2"), db.history("user:2", { deleted: true }).len())
+db.purge("user:2")?
+print(db.history("user:2", { deleted: true }))
+
+db.batch({ set: { a: 1, b: 2 }, delete: ["order:1"] })?
+print(db.keys())
+
+// transactions: snapshot isolation, conflicts are error values
+const tx = db.begin()
+tx.set("a", 10)
+print(tx.get("a"), db.get("a"))
+tx.commit()?
+print(db.get("a"))
+const t1 = db.begin()
+const t2 = db.begin()
+t1.set("c", 1)
+t2.set("c", 2)
+t1.commit()?
+const [_, err] = t2.commit()
+print(err != nil, db.get("c"))
+
+// several tasks writing to the same store
+const done = chan(3)
+for i in 0..3 {
+    fg fn(i) {
+        for j in 0..20 { db.set("k:" + str(i) + ":" + str(j), j) }
+        done <- true
+    }(i)
+}
+for i in 0..3 { <-done }
+print(db.count("k:"))
+db.deletePrefix("k:")?
+print(db.count("k:"))
+
+const [_, locked] = surrealkv.open("surrealkv.tmp.db")
+print(locked != nil)
+db.close()
+print(db.closed)
+const again = surrealkv.open("surrealkv.tmp.db", { versions: true })?
+print(again.keys(), again.getAt("price", 1500))
+again.close()
+
+// encryption at rest
+const key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+const enc = surrealkv.open("surrealkv-enc.tmp.db", { key: key })?
+enc.set("secret", "s3cr3t")?
+enc.close()
+const [_, nokey] = surrealkv.open("surrealkv-enc.tmp.db")
+print(nokey != nil)
+const enc2 = surrealkv.open("surrealkv-enc.tmp.db", { key: key })?
+print(enc2.get("secret"))
+enc2.close()

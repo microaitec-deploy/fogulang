@@ -1,0 +1,18 @@
+2024-11-05 {name: spec, version: 0.1.0} true true
+2025-06-18
+[["add","object"],["bug","object"],["half","object"]]
+{"content":[{"text":"5","type":"text"}],"isError":false}
+{"content":[{"text":"{\"half\":4}","type":"text"}],"isError":false,"structuredContent":{"half":4}}
+{"content":[{"text":"odd number","type":"text"}],"isError":true}
+true
+{"code":-32602,"message":"unknown tool: zzz"}
+{"resources":[{"mimeType":"text/plain","name":"A","uri":"mem://a"}]}
+{"contents":[{"mimeType":"text/plain","text":"content of A","uri":"mem://a"}]}
+{"messages":[{"content":{"text":"Hi Ana","type":"text"},"role":"user"}]}
+{"code":-32602,"message":"missing argument: who"}
+{"id":7,"jsonrpc":"2.0","result":{}} {"code":-32601,"message":"method not found: x/y"}
+nil
+[{"id":1,"jsonrpc":"2.0","result":{}}]
+-32700 {"code":-32600,"message":"invalid request"}
+true
+true

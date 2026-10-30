@@ -1,0 +1,2 @@
+type mismatch: parameter 'n' expects Named, got Rock
+error_interface.fg:6

@@ -1,0 +1,26 @@
+// if / while / for / break / continue / match (spec §17-19)
+let i = 0
+while i < 3 {
+    print("while", i)
+    i += 1
+}
+for j in 0..6 {
+    if j == 1 { continue }
+    if j == 4 { break }
+    print("for", j)
+}
+for k, v in {b: 2, a: 1} { print(k, v) }
+for c in "olé" { print(c) }
+
+fn classify(n) {
+    return match n {
+        0 => "zero"
+        1 | 2 => "small"
+        x if x < 0 => "negative"
+        _ => "large"
+    }
+}
+for n in [-1, 0, 1, 2, 10] { print(n, classify(n)) }
+
+let age = 20
+if age >= 18 { print("adult") } else if age > 12 { print("teen") } else { print("child") }

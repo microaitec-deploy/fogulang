@@ -1,0 +1,34 @@
+// A command-line tool: arguments, files, JSON and colors.
+// Run it as `fogu cli-tool.fg notes.txt --top 3`; here argv is given explicitly.
+import cli from "fogu:cli"
+import fs from "fogu:fs"
+import json from "fogu:json"
+
+const opts = cli.parse({
+    name: "wordcount", version: "1.0.0", about: "Counts the words of a text file",
+    args: [
+        { name: "file", positional: true, required: true, help: "the text to read" },
+        { name: "top", short: "t", type: "int", default: 5, help: "how many words to show" },
+        { name: "json", type: "bool", help: "print JSON instead of a table" },
+    ],
+}, ["notes.tmp.txt", "--top", "3"])
+
+fs.writeText("notes.tmp.txt", "the fox and the dog\nthe end of the story, and the fox")?
+const text = fs.readText(opts.file)?
+
+// count, ignoring case and punctuation
+const counts = {}
+for line in text.lower().lines() {
+    for raw in line.split(" ") {
+        const word = raw.replace(",", "").trim()
+        if word != "" { counts[word] = (counts[word] ?? 0) + 1 }
+    }
+}
+const ranked = counts.entries().sort((a, b) => b[1] - a[1]).slice(0, opts.top)
+
+if opts.json {
+    print(json.stringify(ranked.map((e) => ({ word: e[0], count: e[1] }))))
+} else {
+    for e in ranked { print(cli.bold(e[0].upper()), "→", e[1]) }
+}
+fs.remove("notes.tmp.txt")?

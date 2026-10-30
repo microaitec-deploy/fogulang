@@ -1,0 +1,39 @@
+// Terminal interaction: arguments, prompts, spinners, progress bars, tables.
+//   fogu examples/cli.fg --help
+//   fogu examples/cli.fg greet -n 2
+//   printf 'Ana\n2\ny\n' | fogu examples/cli.fg ask     (prompts read plain lines without a terminal)
+import cli from "fogu:cli"
+import time from "fogu:time"
+
+const opts = cli.parse({
+    name: "cli-demo", version: "1.0.0", about: "fogu:cli demo",
+    args: [{ name: "verbose", short: "v", type: "count", help: "more output" }],
+    commands: [
+        { name: "greet", about: "greets with style", args: [{ name: "times", short: "n", type: "int", default: 1 }] },
+        { name: "ask", about: "asks a few questions" },
+        { name: "work", about: "spinner, progress bar and table" },
+    ],
+})
+
+if opts.command == "greet" {
+    for i in 0..opts.args.times {
+        print(cli.style("hello", "bold", "green"), cli.dim(`(${i + 1})`))
+    }
+} else if opts.command == "ask" {
+    const name = cli.input("Your name", { default: "Ana" })?
+    const lang = cli.select("Favourite language", ["Fogu", "Rust", "Go"])?
+    if cli.confirm(`Save ${name} / ${lang}?`, { default: true })? {
+        print(cli.green("saved"), name, lang)
+    }
+} else {
+    const sp = cli.spinner("Connecting…")
+    time.delay(500ms)
+    sp.succeed("Connected")
+    const bar = cli.progress(20, { message: "files" })
+    for i in 0..20 {
+        time.delay(30ms)
+        bar.inc()
+    }
+    bar.finish("done")
+    print(cli.table([["app.fg", 120, "ok"], ["lib.fg", 48, cli.yellow("warn")]], { headers: ["file", "lines", "status"] }))
+}

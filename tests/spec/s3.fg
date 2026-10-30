@@ -1,0 +1,14 @@
+import s3 from "fogu:s3"
+
+// configuration only: no request is made here
+const aws = s3.connect({ accessKey: "AKIA", secretKey: "secret", region: "eu-west-1", bucket: "photos" })?
+print(aws.bucket, aws.region, aws.endpoint)
+print(aws.url("2024/me at the beach.jpg"))          // virtual-hosted style
+
+const minio = s3.connect({ endpoint: "http://127.0.0.1:9000", accessKey: "a", secretKey: "b" })?
+const docs = minio.withBucket("docs")
+print(minio.bucket, docs.bucket, docs.url("a/b+c.txt"))  // path style
+
+const url = docs.presign("report.pdf", { expires: 10m })
+print(url.starts_with("http://127.0.0.1:9000/docs/report.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256"))
+print(url.contains("X-Amz-Expires=600"), url.contains("X-Amz-Signature="))

@@ -1,0 +1,420 @@
+// The management UI of fogu:broker, started by `b.admin(port, options)`.
+// Runs inside the program with `broker` (the Broker) and `options` defined;
+// built with fogu:web and fogu:topcoat. The value of the last line is what
+// `b.admin` returns.
+import web from "fogu:web"
+import tc from "fogu:topcoat"
+import json from "fogu:json"
+import crypto from "fogu:crypto"
+import time from "fogu:time"
+
+const h = tc.h
+const ui = tc.ui
+const b = broker
+const client = b.client()
+const user = options.user ?? "admin"
+const password = options.password ?? b.token
+const title = options.title ?? "Fogu broker"
+const theme = options.theme ?? "system"
+const sessionTtl = 12 * 3600 * 1000
+
+const pick = fn(cond, yes, no) {
+    if cond { return yes }
+    return no
+}
+
+// 1234567 → "1,234,567"
+const fmt = fn(n) {
+    let s = str(n)
+    let out = ""
+    let count = 0
+    let i = s.len()
+    while i > 0 {
+        if count == 3 && s.slice(i - 1, i) != "-" {
+            out = "," + out
+            count = 0
+        }
+        out = s.slice(i - 1, i) + out
+        count = count + 1
+        i = i - 1
+    }
+    return out
+}
+
+const uptime = fn(started) {
+    let s = (time.now() - started) / 1000
+    if s < 60 { return str(s) + "s" }
+    let m = s / 60
+    if m < 60 { return str(m) + "m " + str(s % 60) + "s" }
+    let hours = m / 60
+    if hours < 24 { return str(hours) + "h " + str(m % 60) + "m" }
+    return str(hours / 24) + "d " + str(hours % 24) + "h"
+}
+
+const preview = fn(v) {
+    let text = json.stringify(v)
+    if text.len() > 96 { text = text.slice(0, 93) + "…" }
+    return h("code", { class: "tc-mono" }, text)
+}
+
+const kind = fn(v) {
+    const t = typeof(v)
+    if t == "str" { return ui.badge("text", { variant: "outline" }) }
+    if t == "int" || t == "float" { return ui.badge("number", { variant: "outline" }) }
+    if t == "bool" { return ui.badge("bool", { variant: "outline" }) }
+    if t == "list" { return ui.badge("list", { variant: "outline" }) }
+    if t == "map" { return ui.badge("object", { variant: "outline" }) }
+    return ui.badge(t, { variant: "outline" })
+}
+
+// ---------- traffic: rates per second from the samples taken on each refresh ----------
+
+const samples = []
+const sample = fn(i) {
+    // refreshes closer than a second apart would give noisy rates
+    if samples.len() > 0 && time.now() - samples[samples.len() - 1].t < 1000 { return nil }
+    samples.push({ t: time.now(), m: i.messages, p: i.publications, c: i.calls })
+    while samples.len() > 40 { samples.shift() }
+}
+// rates ×10 (one decimal) between consecutive samples
+const rates = fn(key) {
+    const out = []
+    let k = 1
+    while k < samples.len() {
+        const a = samples[k - 1]
+        const z = samples[k]
+        const dt = z.t - a.t
+        if dt > 0 { out.push(((z[key] - a[key]) * 10000) / dt) } else { out.push(0) }
+        k = k + 1
+    }
+    return out
+}
+const perSecond = fn(series) {
+    if series.len() == 0 { return "0" }
+    const r = series[series.len() - 1]
+    return fmt(r / 10) + "." + str(r % 10)
+}
+
+// ---------- sessions (a cookie) and HTTP basic auth (for scripts) ----------
+
+const sessions = {}
+
+const cookie = fn(ctx, name) {
+    const raw = ctx.headers["cookie"] ?? ""
+    for part in raw.split(";") {
+        const p = part.trim()
+        const at = p.index_of("=")
+        if at > 0 && p.slice(0, at) == name { return p.slice(at + 1) }
+    }
+    return nil
+}
+
+const signedIn = fn(ctx) {
+    const sid = cookie(ctx, "fogu_admin")
+    if sid != nil && sessions.has(sid) {
+        if sessions[sid] > time.now() { return true }
+        sessions.remove(sid)
+    }
+    const header = ctx.headers["authorization"] ?? ""
+    if header.starts_with("Basic ") {
+        const decoded = crypto.fromBase64(header.slice(6))
+        if typeof(decoded) == "str" {
+            const at = decoded.index_of(":")
+            return at > 0 && crypto.equal(decoded.slice(0, at), user) && crypto.equal(decoded.slice(at + 1), password)
+        }
+    }
+    return false
+}
+
+// ---------- layout ----------
+
+const refresh = "setInterval(() => { if (document.hidden) return; for (const s of document.querySelectorAll('tc-shard[data-name=\"overview\"], tc-shard[data-name=\"channels\"]')) tc.rerun(s) }, 3000)"
+
+const layout = fn(current, heading, content) {
+    const info = b.inspect()
+    const nav = [
+        { group: "Broker" },
+        { label: "Overview", href: "/", icon: "activity", current: current == "/" },
+        { label: "Channels & topics", href: "/channels", icon: "radio", current: current == "/channels" },
+        { group: "Data" },
+        { label: "Key-value", href: "/kv", icon: "database", current: current == "/kv" },
+        { label: "API keys", href: "/keys", icon: "key", current: current == "/keys" },
+    ]
+    const signOut = h("form", { method: "post", action: "/logout", style: "margin:0" },
+        h("button", { class: "tc-btn tc-btn-ghost tc-btn-icon", type: "submit", title: "Sign out", "aria-label": "Sign out" }, ui.icon("logout")))
+    const actions = [
+        ui.live("Live"),
+        ui.badge([ui.icon("server", { size: 12 }), " ", info.node], { variant: "secondary" }),
+        ui.badge(pick(info.persistent, "SurrealKV", "in memory"), { variant: "outline" }),
+        ui.themeToggle(),
+        signOut,
+    ]
+    return tc.page({
+        title: heading + " · " + title,
+        theme: theme,
+        body: [
+            ui.shell({ brand: ui.logo({ text: title }), nav: nav, title: heading, actions: actions, footer: ["Fogu ", Fogu.version, " · ", b.address] }, content),
+            h("script", nil, tc.raw(refresh)),
+        ],
+    })
+}
+
+// ---------- shards ----------
+
+const overview = tc.shard("overview", fn(ctx, props) {
+    const i = b.inspect()
+    sample(i)
+    const msgs = rates("m")
+    const pubs = rates("p")
+    const calls = rates("c")
+    const traffic = ui.grid([
+        ui.stat("Messages / s", perSecond(msgs), { icon: "message", tone: "primary", trend: msgs, hint: fmt(i.messages) + " in total" }),
+        ui.stat("Publications / s", perSecond(pubs), { icon: "send", tone: "info", trend: pubs, hint: fmt(i.publications) + " in total" }),
+        ui.stat("RPC calls / s", perSecond(calls), { icon: "zap", tone: "warning", trend: calls, hint: fmt(i.calls) + " in total · " + str(i.pendingCalls) + " pending" }),
+        ui.stat("Clients", fmt(i.clients), { icon: "users", tone: "success", hint: "connections and inline clients" }),
+    ])
+    const counts = ui.grid([
+        ui.stat("Channels", fmt(i.channels.len()), { icon: "radio" }),
+        ui.stat("Topics", fmt(i.topics.len()), { icon: "hash" }),
+        ui.stat("Keys", fmt(i.keys), { icon: "database" }),
+        ui.stat("API keys", fmt(i.apiKeys), { icon: "key" }),
+        ui.stat("Uptime", uptime(i.started), { icon: "clock" }),
+    ], { min: "170px" })
+    const node = ui.table(["field", "value"], [
+        { field: h("span", { class: "tc-muted" }, "Node"), value: h("b", nil, i.node) },
+        { field: h("span", { class: "tc-muted" }, "Address"), value: h("code", nil, i.address) },
+        { field: h("span", { class: "tc-muted" }, "Client URL"), value: h("code", nil, "fogu://<token>@" + i.address) },
+        { field: h("span", { class: "tc-muted" }, "Storage"), value: pick(i.persistent, ui.badge("SurrealKV · persistent", { variant: "success" }), ui.badge("in memory", { variant: "outline" })) },
+    ], { header: false })
+    const peers = pick(i.peers.len() == 0,
+        ui.empty("Standalone node", { icon: "network", description: "Start other brokers with peers: [\"" + i.address + "\"] to form a cluster." }),
+        ui.table(["node"], i.peers.map(fn(p) { return { node: [ui.icon("server"), " ", h("b", nil, p)] } })))
+    const methods = i.actions.map(fn(a) { return { method: h("code", nil, a), node: ui.badge("local", { variant: "secondary" }) } })
+    for r in i.remoteActions {
+        methods.push({ method: h("code", nil, r.method), node: ui.badge(r.node, { variant: "outline" }) })
+    }
+    const rpc = pick(methods.len() == 0,
+        ui.empty("No RPC methods", { icon: "zap", description: "Methods appear here when a client registers one with channel.act(name)." }),
+        ui.table([{ key: "method", label: "Method" }, { key: "node", label: "Served by" }], methods))
+    return ui.stack([
+        traffic,
+        counts,
+        ui.grid([
+            ui.card(node, { title: "This node", description: "Identity and storage" }),
+            ui.card(peers, { title: "Cluster", description: str(i.peers.len()) + " linked node(s)" }),
+        ], { min: "340px" }),
+        ui.card(rpc, { title: "RPC methods", description: "Callable with channel.call(name, params)" }),
+    ])
+})
+
+const channels = tc.shard("channels", fn(ctx, props) {
+    const i = b.inspect()
+    const rows = i.channels.map(fn(c) {
+        return {
+            channel: [ui.icon("radio"), " ", h("code", nil, c.name)],
+            members: ui.badge(str(c.members.len()), { variant: "secondary" }),
+            who: ui.row(c.members.map(fn(m) { return ui.badge(m, { variant: "outline" }) })),
+        }
+    })
+    const topics = i.topics.map(fn(t) { return { topic: [ui.icon("hash"), " ", h("code", nil, t.pattern)], subscribers: ui.badge(str(t.subscribers), { variant: "secondary" }) } })
+    const chanBody = pick(rows.len() == 0,
+        ui.empty("No channels yet", { icon: "radio", description: "A channel appears when a client joins it: c.channel(\"orders\").join(\"worker-1\")." }),
+        ui.table([{ key: "channel", label: "Channel" }, { key: "members", label: "Members", align: "right" }, { key: "who", label: "Who" }], rows))
+    const topicBody = pick(topics.len() == 0,
+        ui.empty("No subscriptions", { icon: "hash", description: "Topics show up when a client subscribes (wildcards: orders.* and orders.**)." }),
+        ui.table([{ key: "topic", label: "Topic pattern" }, { key: "subscribers", label: "Subscribers", align: "right" }], topics))
+    return ui.stack([
+        ui.card(chanBody, { title: "Channels", description: "Rooms and the clients in them" }),
+        ui.card(topicBody, { title: "Topics", description: "Subscriptions, wildcards included" }),
+    ])
+})
+
+const kvlist = tc.shard("kvlist", fn(ctx, props) {
+    const items = b.keys({ prefix: props.prefix ?? "", limit: 200 })
+    if items.len() == 0 {
+        return ui.empty(pick((props.prefix ?? "") == "", "No keys yet", "Nothing matches"), {
+            icon: "database",
+            description: pick((props.prefix ?? "") == "", "Create one with the form above, or c.kv.set(key, value) from a client.", "No key starts with “" + props.prefix + "”."),
+        })
+    }
+    const rows = items.map(fn(it) {
+        const k = json.stringify(it.key)
+        const del = "if (!(await ask('The key ' + " + k + " + ' will be deleted.', { title: 'Delete key?', confirm: 'Delete', danger: true }))) return; await call('kvDelete', " + k + "); version.increment(); toast('Deleted', { type: 'success' })"
+        const edit = "key.set(" + k + "); value.set(" + json.stringify(json.stringify(it.value)) + "); ttl.set(''); window.scrollTo({ top: 0, behavior: 'smooth' })"
+        return {
+            key: h("code", nil, it.key),
+            type: kind(it.value),
+            value: preview(it.value),
+            ttl: pick(it.ttl == nil, h("span", { class: "tc-muted" }, "—"), ui.badge(str(it.ttl) + "s", { variant: "warning" })),
+            actions: ui.row([
+                ui.button(ui.icon("copy"), { variant: "ghost", size: "icon", title: "Copy value", "@click": "copy(" + json.stringify(json.stringify(it.value)) + ", 'Value copied')" }),
+                ui.button(ui.icon("edit"), { variant: "ghost", size: "icon", title: "Edit", "@click": edit }),
+                ui.button(ui.icon("trash"), { variant: "ghost", size: "icon", title: "Delete", "@click": del }),
+            ]),
+        }
+    })
+    const note = pick(items.len() == 200, "Showing the first 200 keys — narrow the prefix.", fmt(items.len()) + " key(s)")
+    return ui.table(
+        [{ key: "key", label: "Key" }, { key: "type", label: "Type" }, { key: "value", label: "Value" }, { key: "ttl", label: "TTL", align: "right" }, { key: "actions", label: "", align: "right" }],
+        rows,
+        { caption: note },
+    )
+})
+
+const keylist = tc.shard("keylist", fn(ctx, props) {
+    const keys = client.apikeys.list()?
+    if keys.len() == 0 {
+        return ui.empty("No API keys", { icon: "key", description: "Give each service its own key, limited to the channels, keys, topics and methods it needs." })
+    }
+    const rows = keys.map(fn(k) {
+        const perms = []
+        for area in ["channels", "kv", "topics", "rpc"] {
+            for p in k.perms[area] ?? [] { perms.push(ui.badge(area + " " + p, { variant: "outline" })) }
+        }
+        const del = "if (!(await ask('Clients using ' + " + json.stringify(k.name) + " + ' will be refused from now on.', { title: 'Revoke this key?', confirm: 'Revoke', danger: true }))) return; await call('keyDelete', " + json.stringify(k.id) + "); version.increment(); toast('Key revoked', { type: 'success' })"
+        return {
+            name: [ui.icon("key"), " ", h("b", nil, k.name)],
+            id: h("code", { class: "tc-muted" }, k.id.slice(0, 8) + "…"),
+            perms: pick(perms.len() == 0, h("span", { class: "tc-muted" }, "no access"), ui.row(perms)),
+            actions: ui.button([ui.icon("trash"), " Revoke"], { variant: "ghost", size: "sm", "@click": del }),
+        }
+    })
+    return ui.table([{ key: "name", label: "Name" }, { key: "id", label: "Id" }, { key: "perms", label: "Permissions" }, { key: "actions", label: "", align: "right" }], rows)
+})
+
+// ---------- the app ----------
+
+const app = web.app()
+for s in [overview, channels, kvlist, keylist] { app.shard(s) }
+
+// signed in (cookie or basic auth), except the sign-in page itself
+app.use(fn(ctx) {
+    if ctx.path == "/login" || signedIn(ctx) { return nil }
+    if ctx.path.starts_with("/_tc/") || ctx.method != "GET" {
+        return web.text("authentication required", { status: 401 })
+    }
+    return web.redirect("/login")
+})
+
+const loginPage = fn(failed) {
+    const form = h("form", { method: "post", action: "/login", class: "tc-stack" },
+        pick(failed, ui.alert("Wrong user or password", "Check them and try again.", { variant: "destructive" }), nil),
+        ui.field("User", ui.input({ name: "user", value: user, autocomplete: "username", required: true })),
+        ui.field("Password", ui.input({ name: "password", type: "password", autocomplete: "current-password", required: true, autofocus: true })),
+        ui.button([ui.icon("lock"), " Sign in"], { type: "submit", class: "tc-btn-lg", style: "width:100%" }))
+    return tc.page({ title: "Sign in · " + title, theme: theme, body: h("main", { class: "tc-auth" },
+        h("div", { class: "tc-auth-card" },
+            h("div", { class: "tc-auth-head" }, ui.logo({ size: 48 }), h("h1", nil, title), h("p", { class: "tc-muted" }, "Sign in to manage this broker")),
+            ui.card(form),
+            h("p", { class: "tc-auth-foot" }, "Fogu ", Fogu.version, " · node ", b.node))) })
+}
+
+app.get("/login", fn(ctx) { return loginPage(false) })
+app.post("/login", fn(ctx) {
+    const f = ctx.req.form()
+    if crypto.equal(str(f.user ?? ""), user) && crypto.equal(str(f.password ?? ""), password) {
+        const sid = crypto.randomHex(32)
+        sessions[sid] = time.now() + sessionTtl
+        ctx.set.headers["set-cookie"] = "fogu_admin=" + sid + "; Path=/; HttpOnly; SameSite=Strict; Max-Age=" + str(sessionTtl / 1000)
+        return web.redirect("/")
+    }
+    time.delay(400ms)          // slows down guessing
+    ctx.set.status = 401
+    return loginPage(true)
+})
+app.post("/logout", fn(ctx) {
+    const sid = cookie(ctx, "fogu_admin")
+    if sid != nil { sessions.remove(sid) }
+    ctx.set.headers["set-cookie"] = "fogu_admin=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+    return web.redirect("/login")
+})
+
+app.procedure("kvSet", fn(ctx, key, text, ttl) {
+    if typeof(key) != "str" || key.trim() == "" { return nil, error("the key is empty") }
+    // not `const [v, err] = …`: a JSON array would be destructured itself
+    let value = json.parse(text ?? "")
+    if typeof(value) == "error" { value = text }
+    const seconds = json.parse(str(ttl ?? "").trim())
+    if typeof(seconds) == "int" && seconds > 0 {
+        client.kv.set(key.trim(), value, seconds)?
+    } else {
+        client.kv.set(key.trim(), value)?
+    }
+    return true
+})
+app.procedure("kvDelete", fn(ctx, key) {
+    client.kv.del(str(key))?
+    return true
+})
+app.procedure("keyCreate", fn(ctx, name, text) {
+    if typeof(name) != "str" || name.trim() == "" { return nil, error("the name is empty") }
+    let perms = {}
+    if (text ?? "").trim() != "" {
+        const p = json.parse(text)
+        if typeof(p) != "map" { return nil, error("permissions must be a JSON object, e.g. {\"kv\": [\"app.*\"]}") }
+        perms = p
+    }
+    const k = client.apikeys.create(name.trim(), perms)?
+    return { id: k.id, token: k.token }
+})
+app.procedure("keyDelete", fn(ctx, id) {
+    client.apikeys.delete(str(id))?
+    return true
+})
+
+app.get("/", fn(ctx) {
+    return layout("/", "Overview", overview.render(ctx, {}))
+})
+
+app.get("/channels", fn(ctx) {
+    return layout("/channels", "Channels & topics", channels.render(ctx, {}))
+})
+
+app.get("/kv", fn(ctx) {
+    const prefix = tc.signal(ctx, "prefix", ctx.query.prefix ?? "")
+    const version = tc.signal(ctx, "version", 0)
+    const key = tc.signal(ctx, "key", "")
+    const value = tc.signal(ctx, "value", "")
+    const ttl = tc.signal(ctx, "ttl", "")
+    const save = "try { await call('kvSet', key.get(), value.get(), ttl.get()); version.increment(); toast('Saved ' + key.get(), { type: 'success' }); key.set(''); value.set(''); ttl.set('') } catch (err) { toast(err.message, { type: 'error' }) }"
+    const form = ui.card(ui.stack([
+        ui.grid([
+            ui.field("Key", ui.input({ placeholder: "app.config", ":value": key, "@input": "key.set(e.target.value)" })),
+            ui.field("Expires after (seconds)", ui.input({ placeholder: "never", inputmode: "numeric", ":value": ttl, "@input": "ttl.set(e.target.value)" })),
+        ]),
+        ui.field("Value", ui.textarea({ placeholder: "{\"debug\": true}  — JSON, or plain text", rows: 3, class: "tc-mono", ":value": value, "@input": "value.set(e.target.value)" }), { description: "Valid JSON is stored as JSON; anything else as text." }),
+        ui.row([
+            ui.button([ui.icon("check"), " Save"], { ":disabled": "!key.get().trim()", "@click": save }),
+            ui.button("Clear", { variant: "ghost", "@click": "key.set(''); value.set(''); ttl.set('')" }),
+        ]),
+    ]), { title: "Set a key", description: "Create or replace a value" })
+    const search = h("div", { class: "tc-row", style: "margin-bottom:14px" },
+        h("span", { class: "tc-muted" }, ui.icon("search")),
+        h("div", { style: "flex:1" }, ui.input({ placeholder: "Filter by prefix…", ":value": prefix, "@input.debounce.200": "prefix.set(e.target.value)" })))
+    const list = kvlist.render(ctx, { prefix: tc.expr("prefix.get()", prefix.peek()), v: tc.expr("version.get()", 0) })
+    return layout("/kv", "Key-value", [form, ui.card([search, list], { title: "Keys", description: "Live data of this node" })])
+})
+
+app.get("/keys", fn(ctx) {
+    const version = tc.signal(ctx, "version", 0)
+    const name = tc.signal(ctx, "name", "")
+    const perms = tc.signal(ctx, "perms", "")
+    const token = tc.signal(ctx, "token", "")
+    const create = "try { const k = await call('keyCreate', name.get(), perms.get()); token.set(k.token); name.set(''); perms.set(''); version.increment() } catch (err) { toast(err.message, { type: 'error' }) }"
+    const tokenBox = h("div", { ":hidden": "!token.get()", hidden: true },
+        ui.alert("Copy the token now — it is not shown again.",
+            ui.row([h("code", { class: "tc-mono", "data-tc-text": "token.get()" }, ""), ui.button([ui.icon("copy"), " Copy"], { variant: "outline", size: "sm", "@click": "copy(token.get(), 'Token copied')" })])))
+    const form = ui.card(ui.stack([
+        ui.field("Name", ui.input({ placeholder: "billing-service", ":value": name, "@input": "name.set(e.target.value)" })),
+        ui.field("Permissions", ui.textarea({ rows: 3, class: "tc-mono", placeholder: "{\"channels\": [\"orders\"], \"kv\": [\"orders.*\"], \"topics\": [\"orders.**\"], \"rpc\": [\"orders.*\"]}", ":value": perms, "@input": "perms.set(e.target.value)" }), { description: "Patterns per area; leave empty for a key with no access." }),
+        ui.row([ui.button([ui.icon("plus"), " Create key"], { ":disabled": "!name.get().trim()", "@click": create })]),
+        tokenBox,
+    ]), { title: "New API key", description: "Scoped credentials for a service" })
+    const list = keylist.render(ctx, { v: tc.expr("version.get()", 0) })
+    return layout("/keys", "API keys", [form, ui.card(list, { title: "Keys", description: "Who can connect to this broker" })])
+})
+
+const listening = app.listen(options.port, { host: options.host ?? "127.0.0.1", quiet: true })?
+const port = listening ?? options.port
+const result = { url: "http://" + (options.host ?? "127.0.0.1") + ":" + str(port), port: port }
+result

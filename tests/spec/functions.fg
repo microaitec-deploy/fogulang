@@ -1,0 +1,31 @@
+// Functions, closures, recursion (spec §20-21)
+fn sum(a, b) { return a + b }
+print(sum(2, 3))
+
+fn counter() {
+    let n = 0
+    return fn() {
+        n += 1
+        return n
+    }
+}
+const c = counter()
+c()
+c()
+print(c())
+
+fn fib(n) {
+    if n < 2 { return n }
+    return fib(n - 1) + fib(n - 2)
+}
+print(fib(20))
+
+const double = fn(x) { return x * 2 }
+print([1, 2, 3].map(double))
+
+fn is_even(n) { if n == 0 { return true } return is_odd(n - 1) }
+fn is_odd(n) { if n == 0 { return false } return is_even(n - 1) }
+print(is_even(10), is_odd(7))
+
+fn no_return() {}
+print(no_return())

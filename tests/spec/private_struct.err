@@ -1,0 +1,2 @@
+private_struct.fg:17
+'_balance' is private to the module where 'Account' was declared

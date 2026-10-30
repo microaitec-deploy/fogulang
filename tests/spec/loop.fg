@@ -1,0 +1,55 @@
+// `loop { … }`: repeats until `break` (or `return`), like `while true { … }`
+let n = 0
+loop {
+    n += 1
+    if n == 3 { continue }
+    if n >= 5 { break }
+    print("n =", n)
+}
+print("after:", n)
+
+// nested loops: `break` leaves the innermost one
+let outer = 0
+loop {
+    outer += 1
+    let inner = 0
+    loop {
+        inner += 1
+        if inner == 2 { break }
+    }
+    print(outer, inner)
+    if outer == 2 { break }
+}
+
+// `return` leaves a loop inside a function (hot enough for the JIT)
+fn firstSquareAbove(limit) {
+    let i = 0
+    loop {
+        i += 1
+        if i * i > limit { return i }
+    }
+}
+print(firstSquareAbove(50), firstSquareAbove(10000))
+
+// the same as `while true`
+let total = 0
+let k = 0
+while true {
+    k += 1
+    if k > 1000 { break }
+    total += k
+}
+let total2 = 0
+let j = 0
+loop {
+    j += 1
+    if j > 1000 { break }
+    total2 += j
+}
+print(total == total2, total2)
+
+// `loop` is still an ordinary name elsewhere
+const loop = fn(times) { return "ran " + str(times) + " times" }
+print(loop(3))
+const config = { loop: true }
+print(config.loop)

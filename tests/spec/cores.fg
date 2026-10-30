@@ -1,0 +1,4 @@
+// Fogu.cores: how many threads the runtime uses (set before it starts)
+print(typeof(Fogu.cores()), Fogu.cores() >= 1)
+print(Fogu.cores(2), Fogu.cores())
+print(Fogu.cores(1), Fogu.cores())

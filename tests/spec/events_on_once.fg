@@ -1,0 +1,32 @@
+// EventEmitter: `on` listeners stay, `once` listeners run a single time
+// (removed before they run, so emitting again from inside them is safe)
+import events from "fogu:events"
+
+const bus = events.EventEmitter()
+let onCount = 0
+let onceCount = 0
+bus.on("tick", fn() { onCount += 1 })
+bus.once("tick", fn() { onceCount += 1 })
+bus.emit("tick")
+bus.emit("tick")
+bus.emit("tick")
+print("on:", onCount, "once:", onceCount, "left:", bus.listeners("tick"))
+
+// a once listener that emits its own event again runs only once
+let nested = 0
+bus.once("again", fn() {
+    nested += 1
+    bus.emit("again")
+})
+bus.emit("again")
+print("nested:", nested, "left:", bus.listeners("again"))
+
+// arguments, and off() of an on listener
+const seen = []
+const h = fn(a, b) { seen.push(a + b) }
+bus.on("sum", h)
+bus.emit("sum", 1, 2)
+bus.emit("sum", 10, 20)
+bus.off("sum", h)
+bus.emit("sum", 100, 200)
+print(seen, bus.emit("nobody"))

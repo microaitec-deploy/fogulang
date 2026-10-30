@@ -1,0 +1,38 @@
+import vm from "fogu:vm"
+
+print(vm.runInNewContext("x * 2 + y", { x: 20, y: 2 })?)
+const ctx = vm.createContext({ count: 0 })
+vm.runInContext("count += 1; let msg = `count is ${count}`", ctx)?
+vm.runInContext("count += 1", ctx)?
+print(ctx.sandbox.count, ctx.msg, vm.isContext(ctx), vm.isContext({}))
+ctx.sandbox.count = 10
+print(ctx.run("count + 1")?)
+
+const script = vm.Script("n * n", { filename: "square.fg" })?
+for n in 1..4 { print(script.runInNewContext({ n: n })?) }
+
+const [v, err] = vm.runInNewContext("let i = 0\nwhile true { i += 1 }", nil, { timeout: 50ms })
+print(v, err)
+const [v2, e2] = vm.runInNewContext("1 +", nil, "bad.fg")
+print(e2)
+const [v3, e3] = vm.runInNewContext("secret", nil)
+print(e3)
+const [v4, e4] = vm.runInNewContext("let a = 1\nlet b = a / 0", nil, "div.fg")
+print(e4)
+const secret = 42
+print(vm.runInThisContext("secret + 1")?)
+vm.runInThisContext("let shared = 5")?
+print(vm.runInThisContext("shared * 2")?)
+
+const add = vm.compileFunction("return a + b", ["a", "b"])?
+print(add(2, 3))
+const f = vm.runInNewContext("fn(n) { return n * k }", { k: 3 })?
+print(f(5))
+const sq = vm.Script("fn sq(x) { return x * x }\nsq(9)")?
+print(sq.runInNewContext()?)
+print(vm.runInNewContext("import json from \"fogu:json\"\njson.stringify({a: 1})")?)
+print(vm.runInNewContext("typeof(print)")?)
+// nested timeout
+print(vm.runInNewContext("fn fib(n) { if n < 2 { return n }\n return fib(n-1) + fib(n-2) }\nfib(15)", nil, { timeout: 5s })?)
+const [r, e5] = vm.runInNewContext("fn fib(n) { if n < 2 { return n }\n return fib(n-1) + fib(n-2) }\nfib(40)", nil, { timeout: 100ms })
+print(e5)

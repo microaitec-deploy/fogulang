@@ -1,0 +1,56 @@
+// fogu:ai — chat, streaming, tools and agents.
+//
+//   ANTHROPIC_API_KEY=... fogu run examples/ai.fg
+//   AI_PROVIDER=openai OPENAI_API_KEY=... fogu run examples/ai.fg
+//   AI_PROVIDER=ollama AI_MODEL=llama3.2 fogu run examples/ai.fg      (local, no key)
+
+import ai from "fogu:ai"
+
+const [llm, err] = ai.client({ provider: Fogu.env.AI_PROVIDER ?? "anthropic", model: Fogu.env.AI_MODEL })
+if err != nil {
+    print("cannot create the client:", err.message)
+    Fogu.exit(1)
+}
+print("using", llm.provider, llm.model)
+
+// ---------- chat ----------
+const r = llm.chat({ system: "Answer in one sentence.", prompt: "What is the Fogu language?" })?
+print(r.text)
+print("tokens:", r.usage.inputTokens, "in,", r.usage.outputTokens, "out")
+
+// ---------- streaming ----------
+const s = llm.stream("Write a haiku about fire.")?
+while true {
+    const piece = s.next()?
+    if piece == nil { break }
+    Fogu.write(piece)
+}
+print("\n(", len(s.text), "chars )")
+
+// ---------- tools + agent ----------
+const cities = { lisbon: 21, oslo: 4, recife: 30 }
+const weather = ai.tool(
+    "weather",
+    "Current temperature (celsius) of a city",
+    { type: "object", properties: { city: { type: "string" } }, required: ["city"] },
+    (args) => {
+        const t = cities[args.city.lower()]
+        if t == nil { return error(`unknown city ${args.city}`) }   // the model sees the error
+        return { city: args.city, celsius: t }
+    },
+)
+
+const agent = ai.agent({
+    client: llm,
+    instructions: "You are a travel assistant. Use the weather tool before answering.",
+    tools: [weather],
+    maxSteps: 5,
+    onStep: (step) => {
+        for call in step.toolCalls {
+            print(`  [tool] ${call.name}(${call.arguments.city}) -> ${call.result}`)
+        }
+    },
+})
+const answer = agent.run("Should I pack a coat for Oslo or for Recife?")?
+print(answer.text)
+print("steps:", len(answer.steps))

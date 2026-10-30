@@ -1,0 +1,3 @@
+import { divide } from "./_math.fg"
+print(divide(6, 3))
+print(divide(1, 0))

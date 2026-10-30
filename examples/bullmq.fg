@@ -1,0 +1,43 @@
+// BullMQ job queues (compatible with BullMQ for Node.js v5).
+// Needs Redis: docker run -p 6379:6379 redis   (or set REDIS_URL)
+import bullmq from "fogu:bullmq"
+
+const conn = { connection: "redis://127.0.0.1:6379", prefix: "fogu-example" }
+const q = bullmq.queue("emails", conn)?
+const events = bullmq.events("emails", conn)?
+
+// producer
+q.add("welcome", { to: "ana@example.com" }, { attempts: 3, backoff: { type: "exponential", delay: 200ms } })?
+q.add("digest", { to: "rui@example.com" }, { delay: 500ms })?
+q.upsertJobScheduler("report", { every: 1s, limit: 2 }, { name: "report", data: { kind: "daily" } })?
+print("queued:", q.counts()?)
+
+// worker: jobs are handed to the program; failing one retries it with backoff
+const w = bullmq.worker("emails", { connection: conn.connection, prefix: conn.prefix, concurrency: 2 })?
+let attempts = 0
+let done = 0
+while done < 4 {
+    const job = w.next(5s)?
+    if job == nil { break }
+    job.progress(10)
+    job.log(`sending ${job.name}`)
+    if job.name == "welcome" && attempts == 0 {
+        attempts += 1
+        job.fail("smtp temporarily down")      // retried after the backoff
+        continue
+    }
+    job.complete({ sent: true, at: job.attemptsMade })
+    print("done:", job.name, job.data)
+    done += 1
+}
+
+// queue events (from any producer or worker, also Node ones)
+while true {
+    const e = events.next(200ms)?
+    if e == nil { break }
+    if e.event == "completed" { print("event:", e.event, e.jobId, e.returnvalue) }
+}
+
+w.close()
+q.removeJobScheduler("report")?
+q.obliterate({ force: true })?

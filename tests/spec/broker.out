@@ -1,0 +1,12 @@
+n1 true true
+11 11 false
+3
+{data: {id: 1}, topic: chat/news}
+hello 8
+true
+error: fogumq: server error: no kv access to 'other' (status forbidden)
+42
+{data: across, topic: chat/news}
+from n1
+[n2] [chat/add]
+11 1 1

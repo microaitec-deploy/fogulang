@@ -1,0 +1,78 @@
+import image from "fogu:image"
+
+// ---------- creating and drawing ----------
+const img = image.new(40, 30, "#1e293b")
+print(img.width, img.height, img.getPixel(0, 0))
+img.rect(2, 2, 10, 10, { fill: "orange" })
+print(img.getPixel(5, 5))
+img.rect(20, 2, 10, 10, { stroke: "white", width: 2 })
+print(img.getPixel(25, 7), img.getPixel(20, 7))
+img.circle(10, 20, 5, { fill: [0, 255, 0] })
+print(img.getPixel(10, 20))
+img.line(0, 29, 39, 29, { color: "red", width: 2 })
+print(img.getPixel(20, 29))
+img.polygon([[30, 15], [39, 25], [21, 25]], { fill: "#00f" })
+print(img.getPixel(30, 22))
+img.setPixel(39, 0, "rgba(255, 255, 255, 0.5)")
+print(img.getPixel(39, 0))
+img.fill("transparent")
+print(img.getPixel(0, 0))
+
+// ---------- colors ----------
+print(image.color("orange"), image.color("#abc"), image.color("#11223380"), image.color("rgb(1, 2, 3)"))
+
+// ---------- transformations return new images ----------
+const base = image.new(4, 2, "red")
+base.setPixel(0, 0, "blue")
+print(base.flipH().getPixel(3, 0), base.flipV().getPixel(0, 1), base.getPixel(0, 0))
+const r90 = base.rotate(90)
+print(r90.width, r90.height, r90.getPixel(1, 0))
+print(base.resize(8).width, base.resize(8).height, base.resize(nil, 1).width)
+print(base.resize(2, 2, { fit: "cover" }).width, base.thumbnail(2).height)
+print(base.crop(1, 0, 10, 10).width, base.crop(1, 0, 2, 1).height)
+print(base.grayscale().getPixel(1, 1), base.invert().getPixel(1, 1))
+print(base.brightness(-55).getPixel(1, 1), base.opacity(0.5).getPixel(1, 1))
+print(base.saturate(0).getPixel(1, 1), base.hue(120).getPixel(1, 1))
+print(base.rotate(45).width > 4, base.blur(1).width)
+
+// ---------- composing ----------
+const top = image.new(2, 2, "white")
+const canvas = image.new(4, 4, "black")
+canvas.paste(top, 1, 1)
+print(canvas.getPixel(0, 0), canvas.getPixel(1, 1))
+canvas.paste(top, 2, 2, { opacity: 0.5 })
+print(canvas.getPixel(3, 3))
+
+// ---------- SVG ----------
+const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='5'><rect width='10' height='5' fill='#ff0000'/><rect x='5' width='5' height='5' fill='#0000ff'/></svg>"
+const s = image.fromSvg(svg, { width: 20 })
+print(s.width, s.height, s.getPixel(2, 2), s.getPixel(18, 8))
+print(image.fromSvg(svg, { scale: 3 }).width)
+const [bad, be] = image.fromSvg("<svg")
+print(be)
+
+// ---------- encoding ----------
+s.save("pic.tmp.png")?
+print(image.info("pic.tmp.png")?)
+const back = image.open("pic.tmp.png")?
+print(back.width, back.getPixel(18, 8))
+s.save("pic.tmp.jpg", { quality: 90 })?
+print(image.info("pic.tmp.jpg")?.format)
+const url = s.toDataUrl()
+print(url.slice(0, 22), image.decode(url)?.width)
+print(image.decode(s.encode("bmp"))?.height, image.decode(s.toBase64("webp"))?.width)
+const [o, oe] = image.open("missing.tmp.png")
+print(oe)
+const [f, fe] = s.encode("xyz")
+print(fe)
+
+// ---------- animated GIF ----------
+const frames = []
+for i in 0..3 {
+    frames.push(image.new(8, 8, ["red", "lime", "blue"][i]))
+}
+image.writeGif("anim.tmp.gif", frames, { delay: 50ms })?
+const fr = image.frames("anim.tmp.gif")?
+print(len(fr), fr[0].delay, fr[2].image.getPixel(4, 4))
+const slow = image.gif([{ image: frames[0], delay: 1s }, frames[1]])
+print(image.frames(slow)?[0].delay, image.frames(slow)?[1].delay)

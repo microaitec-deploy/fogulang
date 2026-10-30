@@ -1,0 +1,13 @@
+403 {"error":"forbidden"} fogu *
+200 {"user":"root"} fogu *
+400 missing id fogu *
+200 {"id":"a b","page":"2"} fogu *
+200 hi ana fogu *
+500 {"error":"boom"} fogu *
+500 {"error":"access '.field' not applicable to 'nil'"} fogu *
+201 {"ok":true} fogu *
+404 not found fogu *
+204  fogu *
+GET, POST, PUT, PATCH, DELETE, OPTIONS
+[global GET /admin/stats, after 403, global GET /admin/stats, after 200, global GET /items, after 400, global GET /items, after 200, global GET /users/ana, after 200, global POST /fail, after 500, global GET /crash, after 500, global GET /created, after 201, global GET /nope, after 404, global OPTIONS /items, after 204]
+[GET /admin/stats, GET /items, GET /users/:name, POST /fail, GET /crash, GET /created]

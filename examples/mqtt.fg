@@ -1,0 +1,37 @@
+// MQTT with fogu:mqtt: sensors publish, a monitor listens.
+//
+//   docker run -p 1883:1883 eclipse-mosquitto:2 mosquitto -c /mosquitto-no-auth.conf
+//   MQTT_URL=mqtt://127.0.0.1:1883 fogu run examples/mqtt.fg
+
+import mqtt from "fogu:mqtt"
+
+const url = Fogu.env.MQTT_URL ?? "mqtt://127.0.0.1:1883"
+const monitor = mqtt.connect(url, {
+    clientId: "monitor",
+    will: { topic: "status/monitor", payload: "offline", retain: true },   // sent if we vanish
+})?
+monitor.publish("status/monitor", "online", { retain: true })?
+monitor.subscribe(["home/+/temperature", "alerts/#"], { qos: 1 })?
+
+// a "sensor" in a task
+const sensor = mqtt.connect(url, { clientId: "sensor-kitchen" })?
+fg fn() {
+    for reading in [21.5, 22.0, 31.2] {
+        sensor.publish("home/kitchen/temperature", str(reading), { qos: 1 })
+        if reading > 30 {
+            sensor.publish("alerts/kitchen", { reading: reading, level: "high" }, { qos: 1 })
+        }
+    }
+}()
+
+while true {
+    const msg = monitor.next(1s)?
+    if msg == nil { break }
+    if msg.matches("alerts/#") {
+        print("ALERT", msg.topic, msg.json().reading)
+    } else {
+        print(msg.topic, "=", msg.data)
+    }
+}
+sensor.close()
+monitor.close()

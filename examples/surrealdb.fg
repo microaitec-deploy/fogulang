@@ -1,0 +1,34 @@
+import surrealdb from "fogu:surrealdb"
+
+// SurrealDB (start one with `surreal start --user root --pass root memory`).
+// ws:// keeps a session and supports live queries; http:// is stateless.
+const db = surrealdb.connect("ws://127.0.0.1:8000", {
+    namespace: "shop", database: "main",
+    user: "root", pass: "root",
+    define: true,                       // DEFINE NAMESPACE/DATABASE IF NOT EXISTS (SurrealDB 3)
+})?
+print(db.version()?)
+
+db.query("REMOVE TABLE IF EXISTS person")?
+db.create("person:ana", { name: "Ana", age: 30 })?
+db.insert("person", [{ id: "bia", name: "Bia", age: 17 }, { id: "caio", name: "Caio", age: 41 }])?
+
+// one result per statement; $vars are bound safely
+const [adults, total] = db.query("SELECT name FROM person WHERE age >= $min ORDER BY name; RETURN count(SELECT * FROM person)", { min: 18 })?
+print(adults, total)                    // [{name: Ana}, {name: Caio}] 3
+
+db.merge("person:ana", { city: "Luanda" })?
+db.relate("person:ana", "knows", "person:caio", { since: 2020 })?
+print(db.query("SELECT ->knows->person.name AS friends FROM person:ana")?[0])
+
+// a statement that fails is an error value
+const [_, err] = db.query("THROW \"no stock\"")
+print(err)
+
+// live queries: one event at a time
+const live = db.live("person")?
+db.update("person:bia", { name: "Bia", age: 18 })?
+const ev = live.next(2s)?
+print(ev.action, ev.record, ev.result.age)  // UPDATE person:bia 18
+live.kill()?
+db.close()

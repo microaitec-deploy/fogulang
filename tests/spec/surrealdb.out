@@ -1,0 +1,6 @@
+true
+true
+http http://127.0.0.1:1/rpc app main nil
+true
+other db2
+error: surrealdb.live: live queries need a ws:// connection

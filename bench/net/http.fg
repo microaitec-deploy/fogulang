@@ -1,0 +1,8 @@
+// HTTP: GET /hello → a small JSON body (fogu:web)
+import web from "fogu:web"
+const port = int(Fogu.args.first() ?? "8001")
+const app = web.app()
+app.get("/hello", (ctx) => ({ message: "hello", path: ctx.path }))
+app.listen(port, { quiet: true })?
+print("ready")
+Fogu.signal.wait()

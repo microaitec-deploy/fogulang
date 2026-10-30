@@ -1,0 +1,36 @@
+// Cases the static name check must accept (spec §13.1)
+fn even(n) { if n == 0 { return true } return odd(n - 1) }   // odd comes later
+fn odd(n) { if n == 0 { return false } return even(n - 1) }
+print(even(4))
+
+const show = () => print("config:", config.name)   // config comes later,
+const config = {name: "x"}                           // but is only used when called
+show()
+
+const x = 1
+{
+    const x = x + 1    // the x on the right is the outer one
+    print(x)
+}
+
+struct Stack {
+    items = []
+    push(v) { this.items.push(v) return size(this) }
+}
+fn size(s) { return len(s.items) }
+print(new Stack().push(1))
+
+const r = match 5 {
+    n if n > 3 => n * 2
+    _ => 0
+}
+print(r)
+
+const c = chan(1)
+c <- 7
+select {
+    case v = <-c: print("v =", v)
+}
+for k, v in {a: 1} { print(k, v) }
+fn f(a, b = a * 10) { return b }
+print(f(2))

@@ -1,0 +1,18 @@
+fn collatz_len(n) {
+    let steps = 0
+    while n != 1 {
+        if n % 2 == 0 { n = n / 2 } else { n = 3 * n + 1 }
+        steps += 1
+    }
+    return steps
+}
+let t0 = clock()
+let best = 0
+let arg = 0
+for n in 1..300000 {
+    let l = collatz_len(n)
+    if l > best { best = l
+        arg = n }
+}
+print("longest sequence:", arg, "with", best, "steps")
+print("time:", clock() - t0, "s")

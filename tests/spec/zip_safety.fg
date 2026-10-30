@@ -1,0 +1,42 @@
+// fogu:zip extraction safety: crafted archives (entries escaping the target
+// folder, absolute names, symlinks pointing outside, links chained through links)
+import zip from "fogu:zip"
+import fs from "fogu:fs"
+import crypto from "fogu:crypto"
+
+// writes a binary file: the archive travels inside a carrier zip, unzip drops it
+fn drop(name, b64) {
+  const m = {}
+  m[name] = crypto.fromBase64(b64, { bytes: true })
+  zip.write("carrier.tmp.zip", m)?
+  zip.unzip("carrier.tmp.zip", ".", { only: [name] })?
+}
+
+const archives = {
+  "dotdot.tmp.zip": "UEsDBBQAAAAAAAAAIVyDFtyMAQAAAAEAAAANAAAALi4vZXNjYXBlLnR4dHhQSwECFAMUAAAAAAAAACFcgxbcjAEAAAABAAAADQAAAAAAAAAAAAAApIEAAAAALi4vZXNjYXBlLnR4dFBLBQYAAAAAAQABADsAAAAsAAAAAAA=",
+  "abs.tmp.zip": "UEsDBBQAAAAAAAAAIVyDFtyMAQAAAAEAAAAMAAAAL3RtcC9hYnMudHh0eFBLAQIUAxQAAAAAAAAAIVyDFtyMAQAAAAEAAAAMAAAAAAAAAAAAAACkgQAAAAAvdG1wL2Ficy50eHRQSwUGAAAAAAEAAQA6AAAAKwAAAAAA",
+  "linkout.tmp.zip": "UEsDBBQAAAAAAAAAIVxASv+xDQAAAA0AAAAEAAAAbGluay4uLy4uL291dHNpZGVQSwECFAMUAAAAAAAAACFcQEr/sQ0AAAANAAAABAAAAAAAAAAAAAAA/6EAAAAAbGlua1BLBQYAAAAAAQABADIAAAAvAAAAAAA=",
+  "linkabs.tmp.zip": "UEsDBBQAAAAAAAAAIVyv5eEIBAAAAAQAAAAEAAAAbGluay9ldGNQSwECFAMUAAAAAAAAACFcr+XhCAQAAAAEAAAABAAAAAAAAAAAAAAA/6EAAAAAbGlua1BLBQYAAAAAAQABADIAAAAmAAAAAAA=",
+  "chain.tmp.zip": "UEsDBBQAAAAAAAAAIVxC4tQOAQAAAAEAAAABAAAAcy5QSwMEFAAAAAAAAAAhXA6dv2gEAAAABAAAAAMAAABzL3guLi95UEsBAhQDFAAAAAAAAAAhXELi1A4BAAAAAQAAAAEAAAAAAAAAAAAAAP+hAAAAAHNQSwECFAMUAAAAAAAAACFcDp2/aAQAAAAEAAAAAwAAAAAAAAAAAAAA/6EgAAAAcy94UEsFBgAAAAACAAIAYAAAAEUAAAAAAA==",
+  "tarout.tmp.tar.gz": "H4sIAAAAAAAC/+3OOQqAUAwFwH8UT+CGeB9BC1EUXO5vsNTaQpgh8F4RSOZxmdLHytA2zZ3hme9exXqZsjrPi5j1PPaxHz567tyPbovzCQAAAAAAAAAAAP7jAmtPDu8AKAAA",
+  "tarabs.tmp.tar.gz": "H4sIAAAAAAAC/+3OuwmAMAAE0IziBooGM4+IhSgWfvY3WIptCuG95q67W+dtCYU1WR/jk9k7P3rqUhOqtp7OsfS56ziHPU8GAAAAAAAAAAAA+I8bsupCrgAoAAA=",
+}
+for name, b64 in archives { drop(name, b64) }
+
+// every one of them is refused, and nothing lands outside the target folder
+for name in ["dotdot.tmp.zip", "abs.tmp.zip", "linkout.tmp.zip", "linkabs.tmp.zip", "chain.tmp.zip"] {
+  const [_, err] = zip.unzip(name, "unz.tmp.d")
+  print(name, err)
+}
+for name in ["tarout.tmp.tar.gz", "tarabs.tmp.tar.gz"] {
+  const [_, err] = zip.untar(name, "unt.tmp.d")
+  print(name, err)
+}
+print(fs.exists("escape.txt"), fs.exists("../escape.txt"), fs.exists("unz.tmp.d/link"), fs.exists("unt.tmp.d/link"))
+
+// links that stay inside are fine (a real link on Unix, a file holding the target elsewhere)
+drop("okln.tmp.zip", "UEsDBBQAAAAAAAAAIVwhL0ApBQAAAAUAAAAMAAAAZGlyL3JlYWwudHh0cmVhbApQSwMEFAAAAAAAAAAhXC8yKG4IAAAACAAAAAkAAABkaXIvYWxpYXNyZWFsLnR4dFBLAwQUAAAAAAAAACFcaoa7uAsAAAALAAAACgAAAGRpci9zdWIvdXAuLi9yZWFsLnR4dFBLAwQUAAAAAAAAACFcHZ37BAoAAAAKAAAABwAAAHN1aWQuc2gjIS9iaW4vc2gKUEsBAhQDFAAAAAAAAAAhXCEvQCkFAAAABQAAAAwAAAAAAAAAAAAAAKSBAAAAAGRpci9yZWFsLnR4dFBLAQIUAxQAAAAAAAAAIVwvMihuCAAAAAgAAAAJAAAAAAAAAAAAAAD/oS8AAABkaXIvYWxpYXNQSwECFAMUAAAAAAAAACFcaoa7uAsAAAALAAAACgAAAAAAAAAAAAAA/6FeAAAAZGlyL3N1Yi91cFBLAQIUAxQAAAAAAAAAIVwdnfsECgAAAAoAAAAHAAAAAAAAAAAAAADtiZEAAABzdWlkLnNoUEsFBgAAAAAEAAQA3gAAAMAAAAAAAA==")
+print(zip.unzip("okln.tmp.zip", "ok.tmp.d")?)
+print(fs.readText("ok.tmp.d/dir/real.txt")?, fs.exists("ok.tmp.d/dir/alias"), fs.exists("ok.tmp.d/dir/sub/up"))
+drop("tarok.tmp.tar.gz", "H4sIAAAAAAAC/+3UPQqAMAyG4cyewhNolf6cp6CD4GQreHyrk3RxqiB9n+ULWTKEZOq32a9dPKIUoxKr9Z1Jnol51FffWe2kVfKBPUS/pZFSp2v7jaBWU+/XxYeiM97vP6sHZY2Vdiz/mqq/fwAAAAAAAAAAAAAAAPzbCV4oZXIAKAAA")
+print(zip.untar("tarok.tmp.tar.gz", "tok.tmp.d")?)

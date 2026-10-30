@@ -1,0 +1,8 @@
+Hello, Fogu!
+version 4.1 — [1, 2] 1 nil
+nested: inner Fogu
+braces { and } and ${literal} and `backtick`
+multi
+line
+} 3
+ str

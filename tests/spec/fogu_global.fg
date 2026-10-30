@@ -1,0 +1,20 @@
+// The global Fogu object (spec §45)
+const f = Fogu.file("global.tmp.json")
+print(f.exists(), f.name, f.ext)
+f.write("{\"port\": 8080, \"tags\": [\"a\"]}")?
+const cfg = f.json()?
+print(cfg.port, cfg.tags, f.size()?, f.exists())
+f.append("\n")?
+print(len(f.lines()?))
+f.remove()?
+const [_, err] = f.text()
+print(typeof(err))
+
+print(Fogu.hash("abc"))
+print(len(Fogu.hash("abc", "sha512")))
+print(typeof(Fogu.env), typeof(Fogu.args), typeof(Fogu.version), typeof(Fogu.os))
+print(Fogu.glob("fogu_glob*.fg"))
+print(typeof(Fogu.run("this-command-does-not-exist")))
+Fogu.sleep(5ms)
+const db = Fogu.sql("sqlite::memory:")?
+print(db.driver)

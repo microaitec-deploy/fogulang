@@ -1,0 +1,58 @@
+// fogu:security — offline checks plus a local TLS server and port scan
+import security from "fogu:security"
+import grpc from "fogu:grpc"
+import protobuf from "fogu:protobuf"
+import fs from "fogu:fs"
+
+// certificates
+const pair = security.selfSigned(["localhost", "127.0.0.1"], { days: 30 })
+const info = security.parseCert(pair.cert)?
+print(info.commonName, info.names, info.daysLeft, info.selfSigned, info.expired, info.sha256.len())
+
+// TLS inspection against a local server using that certificate
+fs.writeText("sec.tmp.crt", pair.cert)?
+fs.writeText("sec.tmp.key", pair.key)?
+const schema = protobuf.parse("syntax = \"proto3\"; message E {} service S { rpc P (E) returns (E); }")?
+const srv = grpc.server(schema)
+srv.handle("S/P", fn(req, call) { return {} })
+const port = srv.listen("127.0.0.1:0", { cert: "sec.tmp.crt", key: "sec.tmp.key" })?
+fg srv.serve()
+const t = security.tls("127.0.0.1", { port: port, sni: "localhost", alpn: ["h2"] })?
+print(t.valid, t.protocol, t.alpn, t.chain.len(), t.chain[0].commonName, t.daysLeft)
+print(t.error != nil)
+const trusted = security.tls("127.0.0.1", { port: port, sni: "localhost", ca: "sec.tmp.crt" })?
+print(trusted.valid, trusted.error)
+
+// port scan: the server's port is open, a closed one is not reported
+const open = security.scan("127.0.0.1", [port, 1], { timeout: 300ms })?
+print(open.len(), open[0].port == port)
+srv.close()
+
+// passwords
+const weak = security.passwordStrength("password123")
+const strong = security.passwordStrength("correct horse battery staple 9!")
+print(weak.score, strong.score >= 3, weak.warning != nil)
+
+// TOTP (RFC 6238 test secret "12345678901234567890" in base32)
+const secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+print(security.totp(secret, { time: 59, digits: 8 }))
+print(security.verifyTotp(secret, "287082", { time: 59 }), security.verifyTotp(secret, "000000", { time: 59 }))
+print(security.totpSecret().len(), security.otpauthUrl(secret, "ana@example.com", { issuer: "Fogu App" }))
+
+// secret scanning
+for s in security.scanSecrets("ok = 1\naws_key = \"AKIAIOSFODNN7EXAMPLE\"\n-----BEGIN RSA PRIVATE KEY-----") { print(s) }
+
+// Ed25519
+const k = security.keypair()
+const sig = security.sign(k.privateKey, "hello")
+print(security.verify(k.publicKey, "hello", sig), security.verify(k.publicKey, "hellO", sig))
+print(security.constantTimeEq("abc", "abc"), security.constantTimeEq("abc", "abd"))
+
+// IP ranges
+print(security.cidr("192.168.1.77/24"))
+print(security.inCidr("10.1.2.3", ["172.16.0.0/12", "10.0.0.0/8"]), security.isPrivate("8.8.8.8"), security.isPrivate("100.64.1.1"))
+print(security.hosts("10.0.0.0/30"))
+
+// rate limiting
+const rl = security.rateLimiter(1, 3)
+print(rl.allow("ip"), rl.allow("ip"), rl.allow("ip"), rl.allow("ip"), rl.allow("other"), rl.remaining("ip"))

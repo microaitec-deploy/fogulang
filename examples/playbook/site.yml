@@ -1,0 +1,46 @@
+# fogu play examples/playbook/site.yml -i examples/playbook/inventory.yml
+# fogu play examples/playbook/site.yml -i examples/playbook/inventory.yml --check -e port=9090
+
+- name: Web servers
+  hosts: web
+  become: true
+  vars:
+    app: shop
+    port: 8080
+    packages: [curl, nginx]
+  tasks:
+    - name: Packages
+      package: { name: "{{ packages }}", state: present, update_cache: true }
+      when: facts.os == 'linux'
+
+    - name: App folder
+      file: { path: "/srv/{{ app }}", state: directory, mode: "0755" }
+
+    - name: Config
+      template: { src: templates/app.conf, dest: "/srv/{{ app }}/app.conf", mode: "0644" }
+      notify: restart nginx
+
+    - name: No debug mode
+      lineinfile: { path: /etc/environment, regexp: "^APP_DEBUG=", line: "APP_DEBUG=false" }
+
+    - name: Is nginx answering?
+      shell: "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/"
+      register: http
+      changed_when: false
+      check_mode: false
+      ignore_errors: true
+
+    - debug: { msg: "nginx answered {{ http.stdout | default('nothing') }}" }
+
+  handlers:
+    - name: restart nginx
+      service: { name: nginx, state: restarted, enabled: true }
+
+- name: This machine
+  hosts: local
+  gather_facts: false
+  tasks:
+    - name: A report
+      copy:
+        content: "deployed {{ groups.web | join(', ') }}\n"
+        dest: deploy-report.txt

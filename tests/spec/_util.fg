@@ -1,0 +1,4 @@
+export fn sum(a, b) { return a + b }
+export const PI = 3.14
+export let counter = 0
+fn _private() { return 1 }

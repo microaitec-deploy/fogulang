@@ -1,0 +1,10 @@
+server got: hello server
+client got: hello client
+one two
+rest
+buffer 4 255 00ff0a80
+nil nil
+accepted: from a task
+for: loop
+udp: ping true buffer 4
+udp: pong

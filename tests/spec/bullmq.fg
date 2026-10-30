@@ -1,0 +1,5 @@
+import bullmq from "fogu:bullmq"
+
+// no Redis in the test suite: only an unreachable server (an error value)
+const [q, err] = bullmq.queue("jobs", { connection: "redis://127.0.0.1:1" })
+print(q, typeof(err), str(err).contains("bullmq: 127.0.0.1:1:"))

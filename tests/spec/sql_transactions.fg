@@ -1,0 +1,17 @@
+// fogu:sql — in-memory database and transactions on a single connection
+import sql from "fogu:sql"
+
+const db = sql.open("sqlite::memory:")?
+db.exec("CREATE TABLE t (id INTEGER)")
+
+db.begin()
+db.run("INSERT INTO t VALUES (?)", [1])
+db.rollback()
+print("after rollback:", len(db.query("SELECT * FROM t")))
+
+db.begin()
+db.run("INSERT INTO t VALUES (?)", [2])
+db.commit()
+print("after commit:", len(db.query("SELECT * FROM t")), db.one("SELECT * FROM t").id)
+print(db.one("SELECT * FROM t WHERE id = ?", [9]))
+db.close()

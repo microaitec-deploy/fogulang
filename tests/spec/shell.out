@@ -1,0 +1,21 @@
+true
+apple
+banana
+cherry
+[a.log, b.log]
+2
+cherry
+1:banana
+Ana's list has 3 fruits
+hi $X hi!
+ok
+true 0 no kiwi
+false 1 cat: nope.txt: No such file or directory
+127
+[c.log, fruits.txt, renamed.log]
+APP
+BAN
+CHE
+42
+error: shell.text: exit code 1: cat: missing.txt: No such file or directory
+true

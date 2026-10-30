@@ -1,0 +1,33 @@
+// Errors are values: return them, check them, propagate them with `?`.
+import json from "fogu:json"
+
+fn parsePort(text) {
+    const [n, err] = json.parse(text)
+    if err != nil || typeof(n) != "int" {
+        return nil, error(`not a number: ${text}`)
+    }
+    if n < 1 || n > 65535 {
+        return nil, error(`out of range: ${n}`)
+    }
+    return n, nil
+}
+
+// `?` hands the error to our caller, with the context we add
+fn loadConfig(text) {
+    const cfg = json.parse(text)?
+    const port = parsePort(str(cfg.port ?? ""))?
+    return { host: cfg.host ?? "127.0.0.1", port: port }, nil
+}
+
+for input in ["{\"port\": 8080}", "{\"port\": 70000}", "{\"port\": \"x\"}", "{oops"] {
+    const [cfg, err] = loadConfig(input)
+    if err != nil {
+        print("✗", err.message)
+    } else {
+        print("✓", cfg.host + ":" + str(cfg.port))
+    }
+}
+
+// defaults with ?? and safe navigation with ?.
+const settings = { db: { url: nil } }
+print(settings.db?.url ?? "sqlite::memory:", settings.cache?.ttl ?? 60)

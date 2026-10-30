@@ -1,0 +1,6 @@
+{
+  "name": "Fôgu Docs & Enterprise Architect",
+  "description": "Documentação oficial e interativa da linguagem Fôgu (.fg): sintaxe, biblioteca padrão, funções de automação, mensageria distribuída, persistência e arquiteturas de escalabilidade empresarial.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

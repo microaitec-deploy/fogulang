@@ -1,0 +1,16 @@
+import surrealdb from "fogu:surrealdb"
+// no server here: the errors are values
+const [_, down] = surrealdb.connect("ws://127.0.0.1:1", { timeout: 500ms })
+print(down != nil)
+const [_, down2] = surrealdb.connect("http://127.0.0.1:1", { user: "root", pass: "root", timeout: 500ms })
+print(down2 != nil)
+// over HTTP nothing is sent until the first call
+const db = surrealdb.connect("http://127.0.0.1:1", { namespace: "app", database: "main", timeout: 500ms })?
+print(db.transport, db.url, db.namespace, db.database, db.token)
+const [_, e] = db.version()
+print(e != nil)
+db.use("other", "db2")?
+db.set("x", 1)?
+print(db.namespace, db.database)
+const [_, live] = db.live("t")
+print(live)

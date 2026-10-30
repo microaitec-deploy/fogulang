@@ -1,0 +1,26 @@
+import ffi from "fogu:ffi"
+
+// functions of the C runtime, present on every platform
+const libc = ffi.open("c")?
+const strlen = libc.func("strlen", ["str"], "usize")?
+const abs = libc.func("abs", ["i32"], "i32")?
+const atoi = libc.func("atoi", ["str"], "i32")?
+const toupper = libc.func("toupper", ["i32"], "i32")?
+print(strlen("hello"), strlen("olá"), strlen(""), abs(-42), atoi("123abc"), toupper(97))
+
+const pow = ffi.open("m")?.func("pow", ["f64", "f64"], "f64")?
+print(pow(2.0, 10), pow(9, 0.5))
+
+// strcpy(dst, src) writes into a buffer and returns the same pointer
+const strcpy = libc.func("strcpy", ["buffer", "str"], "ptr")?
+const buf = ffi.alloc(32)
+print(strcpy(buf, "copied") == buf.address, buf.text(), buf.size)
+buf.write(0, [72, 105, 0])
+print(buf.text(), buf.bytes(0, 3))
+
+print(libc.has("strlen"), libc.has("no_such_function_xyz"))
+const [_, e1] = ffi.open("no-such-library-xyz")
+print(e1 != nil)
+const [_, e2] = libc.func("no_such_function_xyz", [], "void")
+print(e2 != nil)
+print(ffi.types)

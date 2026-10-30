@@ -1,0 +1,22 @@
+// Lists, maps and strings
+let xs = [5, 3, 8]
+xs.push(1)
+print(xs, len(xs), xs[0], xs[-1])
+print(xs.sort(), xs.reverse(), xs.contains(8), xs.index_of(8))
+print(xs.map(fn(x) { return x * 2 }), xs.filter(fn(x) { return x > 3 }))
+print(xs.reduce(fn(a, b) { return a + b }, 0), xs.join("-"))
+print(xs.first(), xs.last(), xs.slice(1, 3))
+print(push([1], 2))
+xs[0] = 100
+print(xs)
+
+let m = {name: "Fogu", version: 1}
+m.year = 2026
+m["kind"] = "language"
+print(m.name, m["version"], m.missing)
+print(m.keys(), m.has("year"), m.has("x"), len(m))
+
+let s = "  Héllo, World  "
+print(s.trim(), s.trim().upper(), s.trim().lower())
+print("a,b,c".split(","), "abc".starts_with("ab"), "abc".ends_with("bc"))
+print("ab".repeat(3), "fogu".replace("u", "o"), "fogu"[0], len("olé"))

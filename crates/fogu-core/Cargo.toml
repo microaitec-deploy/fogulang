@@ -1,0 +1,27 @@
+[package]
+name = "fogu-core"
+version = "0.7.1"
+edition = "2024"
+description = "Core of the Fogu language: lexer, parser, resolver, interpreter, Cranelift JIT and the fg task scheduler"
+authors = ["Edmilson Soares"]
+license = "MIT"
+
+[dependencies]
+# hash maps of Fogu values: fast and resistant to collision attacks (random seed)
+ahash = "0.8"
+fogu-pkg = { path = "../fogu-pkg" }
+base64 = "0.22"
+rustc-hash = "2"
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "fs", "io-util", "macros", "signal"] }
+cranelift-codegen = "0.136.2"
+cranelift-frontend = "0.136.2"
+cranelift-jit = "0.136.2"
+cranelift-module = "0.136.2"
+cranelift-native = "0.136.2"
+corosensei = "0.3.4"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

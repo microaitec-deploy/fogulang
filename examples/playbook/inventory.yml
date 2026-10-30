@@ -1,0 +1,23 @@
+# Hosts reached over SSH (the system's OpenSSH client) or locally.
+vars:
+  env: production
+
+hosts:
+  web1:
+    host: 192.0.2.10
+    user: deploy
+    key: ~/.ssh/id_ed25519
+  web2:
+    host: 192.0.2.11
+    user: deploy
+    port: 2222
+    become_password: change-me      # for sudo; or configure passwordless sudo
+  laptop:
+    connection: local
+
+groups:
+  web:
+    hosts: [web1, web2]
+    vars:
+      port: 8080
+  local: [laptop]

@@ -1,0 +1,43 @@
+import shell from "fogu:shell"
+
+// a scratch folder (removed at the end)
+shell.run("rm -rf sh.tmp && mkdir -p sh.tmp/sub")?
+shell.cd("sh.tmp")?
+print(shell.cwd().ends_with("sh.tmp"))
+
+// redirections, globs and pipes
+shell.run("echo banana > fruits.txt && echo apple >> fruits.txt && echo cherry >> fruits.txt")?
+shell.run("printf_is_not_needed=1; echo one > a.log; echo two > b.log; touch sub/c.log")?
+print(shell.text("cat fruits.txt | sort")?)
+print(shell.lines("ls *.log")?)
+print(shell.text("cat *.log | wc -l")?)
+print(shell.text("sort -r < fruits.txt | head -n 1")?)
+print(shell.text("grep -n an fruits.txt")?)
+
+// variables, substitution, quoting
+print(shell.text("echo \"$WHO has $(cat fruits.txt | wc -l) fruits\"", { env: { WHO: "Ana's list" } })?)
+print(shell.text("X=hi; echo $X '$X' \"${X}!\""))
+const name = "file with spaces.txt"
+shell.run(`echo ok > ${shell.quote(name)}`)?
+print(shell.text(`cat ${shell.quote(name)}`)?)
+
+// && || and exit codes
+const r = shell.run("grep kiwi fruits.txt || echo 'no kiwi'")?
+print(r.ok, r.code, r.stdout.trim())
+const miss = shell.run("cat nope.txt")?
+print(miss.ok, miss.code, miss.stderr.trim())
+print(shell.run("no-such-command-xyz")?.code)
+
+// files
+shell.run("cp fruits.txt sub/ && mv a.log sub/renamed.log && rm b.log")?
+print(shell.lines("ls sub")?)
+print(shell.text("cut -c 1-3 fruits.txt | tr a-z A-Z | sort | uniq")?)
+print(shell.json("echo '{\"n\": 42}'")?.n)
+
+// a failing command is an error value for text/lines/json
+const [_, err] = shell.text("cat missing.txt")
+print(err)
+
+shell.cd("..")?
+shell.run("rm -r sh.tmp")?
+print(shell.run("ls sh.tmp")?.code != 0)

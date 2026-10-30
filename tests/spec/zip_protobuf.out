@@ -1,0 +1,41 @@
+2
+src.tmp.d/ 0 true
+src.tmp.d/a.txt 10 false
+src.tmp.d/sub/ 0 true
+src.tmp.d/sub/b.txt 3 false
+hello zip
+
+<buffer 3 bytes: 62 65 65>
+5 added later
+[out.tmp.d/src.tmp.d/a.txt, out.tmp.d/src.tmp.d/sub/b.txt, out.tmp.d/notes/c.txt]
+bee
+[only.tmp.d/notes/c.txt]
+3 <buffer 3 bytes: 00 01 ff>
+true hello zip
+
+true
+error: zip.read: no entry 'nope.txt' in pack.tmp.zip
+true
+1
+true
+[untar.tmp.d/src.tmp.d/a.txt, untar.tmp.d/src.tmp.d/sub/b.txt]
+31 139 hello hello hello hello
+true
+a.tmp.txt.gz a.tmp.txt
+hello zip
+
+<ProtoSchema messages=3> [shop.Item, shop.Order, shop.Order.TagsEntry] [shop.Status]
+[{methods: [{clientStreaming: false, input: shop.Order, name: Get, output: shop.Order, serverStreaming: false}, {clientStreaming: false, input: shop.Order, name: Watch, output: shop.Order, serverStreaming: true}], name: shop.Orders}]
+[{jsonName: sku, map: false, name: sku, number: 1, repeated: false, type: string}, {jsonName: qty, map: false, name: qty, number: 2, repeated: false, type: int32}, {jsonName: price, map: false, name: price, number: 3, repeated: false, type: double}]
+{PAID: 1, SHIPPED: 2, UNKNOWN: 0}
+true
+{created: 2026-10-15T12:00:00Z, customerName: Ana, id: 42, items: [{price: 4.5, qty: 2, sku: cafe}], signature: AQID, status: PAID, tags: {gift: yes}}
+Ana
+{price: 0.0, qty: 0, sku: x}
+{"sku":"y","qty":3}
+true
+error: protobuf: unrecognized field name 'nope' at line 1 column 7
+true
+true
+[{price: 4.5, qty: 2, sku: cafe}]
+{amount: {cents: 990, currency: EUR}}

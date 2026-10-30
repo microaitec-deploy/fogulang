@@ -1,0 +1,39 @@
+// Redis with fogu:redis: cache, counters, hashes, sorted sets, pub/sub.
+//
+//   REDIS_URL=redis://127.0.0.1:6379 fogu run examples/redis.fg
+
+import redis from "fogu:redis"
+
+const r = redis.connect(Fogu.env.REDIS_URL ?? "redis://127.0.0.1:6379")?
+
+// cache with expiration; set returns false when { nx } finds the key
+r.set("greeting", "hello", { ex: 1m })?
+print(r.get("greeting")?, r.ttl("greeting")?)
+print("created:", r.set("lock:job", "me", { nx: true, ex: 30 })?)
+
+// counters and hashes
+print("visits:", r.incr("visits")?)
+r.hset("user:42", { name: "Ana", plan: "pro" })?
+print(r.hgetall("user:42")?)
+
+// a leaderboard
+r.zadd("scores", [120, "ana", 95, "bob", 140, "cid"])?
+for e in r.zrange("scores", 0, 2, { withScores: true, rev: true })? {
+    print(` ${e.member}: ${e.score}`)
+}
+
+// JSON values, pipelines and transactions
+r.setJson("settings", { theme: "dark", lang: "pt" })?
+print(r.getJson("settings")?.theme)
+print(r.pipeline([["INCR", "a"], ["INCR", "a"], ["GET", "a"]])?)
+print(r.transaction([["SET", "balance", 100], ["DECRBY", "balance", 30]])?)
+
+// any command works as a method, or through command()
+print(r.dbsize()?, r.command("PING")?)
+
+// pub/sub: the subscription has its own connection
+const sub = r.subscribe("chat")?
+fg fn() { r.publish("chat", "hi from a task") }()
+print(sub.next(2s)?)
+sub.close()
+r.close()

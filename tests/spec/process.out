@@ -1,0 +1,6 @@
+true 0 hello 
+false 3
+nil error
+int map nil
+42 true
+str list

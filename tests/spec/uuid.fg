@@ -1,0 +1,28 @@
+// UUID v4, v5 and v7 in fogu:crypto
+import crypto from "fogu:crypto"
+import regex from "fogu:regex"
+
+const shape = "^[0-9a-f]{8}-[0-9a-f]{4}-([0-9a-f])[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+fn version(id) { return id.slice(14, 15) }
+
+// v4: random
+const r = crypto.uuidv4()
+print(regex.test(r, shape), version(r), version(crypto.uuid()), version(crypto.uuid(4)), r != crypto.uuidv4())
+
+// v5: deterministic (RFC 9562 test vector for dns / example.com)
+print(crypto.uuidv5("dns", "example.com"))
+print(crypto.uuidv5("url", "https://fogu.dev") == crypto.uuidv5("6ba7b811-9dad-11d1-80b4-00c04fd430c8", "https://fogu.dev"))
+print(crypto.uuid(5, "oid", "1.3.6.1") == crypto.uuidv5("OID", "1.3.6.1"), version(crypto.uuidv5("x500", "cn=fogu")))
+print(crypto.uuidv5("dns", bytes("example.com")) == crypto.uuidv5("dns", "example.com"))
+
+// v7: time-ordered, also within the same millisecond
+const ids = []
+for i in 0..500 { ids.push(crypto.uuidv7()) }
+print(ids == ids.sort(), version(ids[0]), regex.test(ids[0], shape), version(crypto.uuid(7)))
+
+// uuidInfo
+const info = crypto.uuidInfo(ids[0])?
+print(info.version, info.variant, info.time > 1700000000000, crypto.uuidInfo(r)?.time)
+print(crypto.uuidInfo("CFBFF0D1-9375-5685-968C-48CE8B15AE17")?.version)
+const [none, err] = crypto.uuidInfo("not-a-uuid")
+print(none, err != nil)

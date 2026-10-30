@@ -1,0 +1,50 @@
+// fogu:socketio — server and client in one program, standalone and on a fogu:web app
+import socketio from "fogu:socketio"
+import web from "fogu:web"
+import time from "fogu:time"
+
+const log = []
+const io = socketio.server()
+io.on("connection", fn(socket) {
+    log.push("conn " + str(socket.auth))
+    socket.join("lobby")
+    socket.on("chat", fn(msg, ack) {
+        log.push("chat " + str(msg))
+        io.to("lobby").emit("chat", "echo:" + str(msg))
+        if ack != nil { ack({ ok: true, got: msg }) }
+    })
+    socket.on("pair", fn(a, b) { log.push("pair " + str(a) + " " + str(b)) })
+    socket.on("disconnect", fn(reason) { log.push("bye " + reason) })
+    socket.emit("welcome", { id: len(socket.id) > 0 })
+})
+const port = io.listen("127.0.0.1:0")
+print("listening", port > 0)
+
+const got = []
+const c = socketio.connect("http://127.0.0.1:" + str(port), { auth: { token: "t1" } })?
+c.on("welcome", fn(w) { got.push("welcome " + str(w)) })
+c.on("chat", fn(m) { got.push("client got " + m) })
+time.delay(200ms)
+c.emit("chat", "hi")
+c.emit("pair", 1, "two")
+print(c.emitWithAck("chat", "ack-me", { timeout: 2s })?)
+time.delay(300ms)
+c.disconnect()
+time.delay(300ms)
+print(got)
+print(log)
+
+// on a fogu:web app, same port
+const io2 = socketio.server()
+io2.on("connection", fn(s) { s.on("ping", fn(x, ack) { ack("pong " + str(x)) }) })
+const app = web.app()
+app.get("/", (ctx) => "home")
+app.listen(18432, { socketio: io2, quiet: true })
+const c2 = socketio.connect("http://127.0.0.1:18432")?
+print(c2.emitWithAck("ping", 7)?)
+const ws = socketio.connect("http://127.0.0.1:18432", { transport: "websocket" })?
+print(ws.emitWithAck("ping", "ws")?)
+c2.disconnect()
+ws.disconnect()
+io.close()
+io2.close()

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fogu Documentation</title>
+    <meta name="description" content="Official documentation of the Fogu language (.fg): syntax, types, standard library, CLI, packages, standalone executables and JIT." />
+    <meta property="og:title" content="Fogu Documentation" />
+    <meta property="og:description" content="Official documentation of the Fogu language (.fg): syntax, types, standard library, CLI, packages, standalone executables and JIT." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0Ij48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9ImYiIHgxPSIwIiB5MT0iMCIgeDI9IjAiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNmYmJmMjQiLz48c3RvcCBvZmZzZXQ9IjAuNSIgc3RvcC1jb2xvcj0iI2Y5NzMxNiIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI2MyNDEwYyIvPjwvbGluZWFyR3JhZGllbnQ+PC9kZWZzPjxwYXRoIGZpbGw9InVybCgjZikiIGQ9Ik0zMyAxYzIgOSA4IDEzIDEzIDIwIDQgNSA4IDExIDggMTkgMCAxMi0xMCAyMi0yMiAyMlMxMCA1MiAxMCA0MGMwLTcgMy0xMyA3LTE3IDEgNSAzIDggNyAxMC0xLTggMS0xNCA0LTE5IDItMyA0LTcgNS0xM3oiLz48dGV4dCB4PSIzMiIgeT0iNTMiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSInSmV0QnJhaW5zIE1vbm8nLCAnRGVqYVZ1IFNhbnMgTW9ubycsIE1lbmxvLCBDb25zb2xhcywgbW9ub3NwYWNlIiBmb250LXdlaWdodD0iNzAwIiBmb250LXNpemU9IjIyIiBmaWxsPSIjZmZmZmZmIiBsZXR0ZXItc3BhY2luZz0iLTIuNSI+LmZnPC90ZXh0Pjwvc3ZnPg==">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+      (function () {
+        let t = null;
+        try { t = localStorage.getItem('fogu-theme'); } catch (e) {}
+        if (t === 'dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+      })();
+    </script>
+  </head>
+  <body class="font-sans text-slate-800 dark:text-slate-200 antialiased selection:bg-orange-500/20 selection:text-orange-600 dark:selection:text-orange-300">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

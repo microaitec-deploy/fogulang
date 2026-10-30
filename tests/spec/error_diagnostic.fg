@@ -1,0 +1,5 @@
+fn mean(xs) {
+    return xs.reduce((a, b) => a + b, 0) / len(xs)
+}
+print(mean([1, 2, 3]))
+print(mean([]))

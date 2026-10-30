@@ -1,0 +1,96 @@
+// The native Prisma-style ORM (fogu:orm). Same schema as main.fg, which uses
+// the ORM written in Fogu (orm.fg).
+//
+// Swap the url for "postgres://user:pass@host/db" (provider "postgresql") or
+// "mysql://user:pass@host/db" (provider "mysql") — the program stays the same.
+
+import { create_client } from "fogu:orm"
+
+const db = create_client({
+    schema: {
+        provider: "sqlite",
+        url: "sqlite::memory:",
+
+        models: {
+            User: {
+                fields: {
+                    id:        { type: "Int",      primary: true, autoincrement: true },
+                    name:      { type: "String",   required: true },
+                    email:     { type: "String",   required: true, unique: true },
+                    age:       { type: "Int",      required: false },
+                    role:      { type: "String",   defaultValue: "user" },
+                    createdAt: { type: "DateTime", defaultValue: "now" }
+                },
+                relations: {
+                    posts: { model: "Post", kind: "one-to-many", foreignKey: "authorId" }
+                }
+            },
+
+            Post: {
+                fields: {
+                    id:        { type: "Int",    primary: true, autoincrement: true },
+                    title:     { type: "String", required: true },
+                    body:      { type: "String", required: false },
+                    published: { type: "Bool",   defaultValue: false },
+                    authorId:  { type: "Int",    required: true }
+                },
+                relations: {
+                    author: { model: "User", kind: "many-to-one", foreignKey: "authorId", references: "id" }
+                }
+            }
+        }
+    },
+    migrate: "auto",   // CREATE TABLE IF NOT EXISTS + new columns
+    log: false         // true prints every SQL statement
+})?
+
+// ---------- create ----------
+const john = db.user.create({ data: { name: "John", email: "john@x.com", age: 30 } })?
+const mary = db.user.create({ data: { name: "Mary", email: "mary@x.com", age: 25 } })?
+print(john.name, john.role, typeof(john.createdAt))   // John user str
+
+db.post.create({ data: { title: "Hello ORM", body: "...", authorId: john.id, published: true } })?
+db.post.create({ data: { title: "Draft",     body: "...", authorId: john.id } })?
+db.post.create({ data: { title: "Notes",     body: "...", authorId: mary.id } })?
+
+// errors are values: a duplicated unique email
+const [_, dup] = db.user.create({ data: { name: "Again", email: "john@x.com" } })
+print("duplicate:", dup != nil)
+
+// ---------- include one-to-many ----------
+print("--- users with posts ---")
+for u in db.user.findMany({ include: { posts: true }, orderBy: { id: "asc" } })? {
+    print(`${u.name} has ${len(u.posts)} posts:`)
+    for p in u.posts {
+        print(`   - ${p.title}`)
+    }
+}
+
+// ---------- include many-to-one ----------
+print("--- posts with author ---")
+for p in db.post.findMany({ include: { author: true }, orderBy: { id: "asc" } })? {
+    print(`"${p.title}" by ${p.author.name} (published: ${p.published})`)
+}
+
+// ---------- nested include ----------
+print("--- nested ---")
+for u in db.user.findMany({ where: { email: "john@x.com" }, include: { posts: { include: { author: true } } } })? {
+    for p in u.posts {
+        print(`${p.title} -> ${p.author.name}`)
+    }
+}
+
+// ---------- filters, update, count, delete ----------
+print("--- queries ---")
+const adults = db.user.findMany({ where: { age: { gte: 26 } }, select: { name: true } })?
+print("age >= 26:", adults)
+print("published or by Mary:", db.post.count({ where: { OR: [{ published: true }, { authorId: mary.id }] } })?)
+
+const older = db.user.update({ where: { id: mary.id }, data: { age: { increment: 1 }, role: "admin" } })?
+print(older.name, older.age, older.role)              // Mary 26 admin
+
+print(db.post.updateMany({ where: { published: false }, data: { published: true } })?)   // {count: 2}
+print(db.post.deleteMany({ where: { title: { startsWith: "Dr" } } })?)                    // {count: 1}
+print("posts left:", db.post.count()?)
+
+db.disconnect()

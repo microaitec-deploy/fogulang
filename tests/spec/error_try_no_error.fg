@@ -1,0 +1,5 @@
+import json from "fogu:json"
+fn count(text: str): int {
+    const xs = json.parse(text)?
+    return len(xs)
+}

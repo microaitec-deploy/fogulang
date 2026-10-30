@@ -1,0 +1,60 @@
+// fogu:broker (alias fogu:mq) — embedded broker, inline client, API keys, cluster, persistence
+import broker from "fogu:broker"
+import mq from "fogu:mq"
+import fogumq from "fogu:fogumq"
+import time from "fogu:time"
+
+const b = broker.start("127.0.0.1:0", { token: "root1", db: "broker.tmp.db", node: "n1" })?
+print(b.node, b.port > 0, b.url.contains("fogu://root1@127.0.0.1:"))
+
+// inline client
+const c = b.client()
+c.kv.set("visits", 10)?
+print(c.kv.incr("visits")?, c.kv.get("visits")?, c.kv.exists("nope")?)
+const room = c.channel("chat")
+const svc = room.act("add")?
+fg fn() {
+    while true {
+        const [r, err] = svc.next()
+        if err != nil { break }       // the broker closed
+        r.reply(r.params.a + r.params.b)
+    }
+}()
+print(room.call("add", { a: 1, b: 2 })?)
+const sub = room.sub("news")?
+room.pub("news", { id: 1 })?
+print(sub.next(1s))
+room.join("ana")?
+const inbox = room.onMessage()
+room.send("hello")?
+const m = inbox.next(1s)
+print(m.data, m.alias.len())
+
+// TCP client with an API key limited to kv "app.*"
+const key = c.apikeys.create("app", { kv: ["app.*"] })?
+const t = fogumq.connect("fogu://" + key.token + "@127.0.0.1:" + str(b.port))?
+print(t.kv.set("app.x", 1)?)
+const [_, denied] = t.kv.set("other", 1)
+print(denied)
+
+// cluster: n2 links to n1
+const b2 = mq.broker("127.0.0.1:0", { token: "root1", node: "n2", peers: [b.address] })?
+time.delay(400ms)
+const c2 = b2.client()
+print(c2.channel("chat").call("add", { a: 20, b: 22 })?)       // served on n1
+const sub2 = c2.channel("chat").subscribe("news")?
+time.delay(100ms)
+room.publish("news", "across")?
+print(sub2.next(1s))
+c.kv.set("shared", "from n1")?
+time.delay(100ms)
+print(c2.kv.get("shared")?)
+print(b.stats().peers, b2.stats().remoteActions)
+b2.close()
+b.close()
+
+// the db keeps the KV and the API keys
+const again = broker.start("127.0.0.1:0", { token: "root1", db: "broker.tmp.db" })?
+const c3 = again.client()
+print(c3.kv.get("visits")?, c3.kv.get("app.x")?, c3.apikeys.list()?.len())
+again.close()

@@ -1,0 +1,57 @@
+import regex from "fogu:regex"
+import crypto from "fogu:crypto"
+import log from "fogu:log"
+import fs from "fogu:fs"
+
+// ---------- regex ----------
+const re = regex.compile("(?P<user>\\w+)@(?P<host>[\\w.]+)")?
+print(re.test("write to ana@fogu.dev"), re.matches("ana@fogu.dev"), re.matches("x ana@fogu.dev"))
+const m = re.find("olá ana@fogu.dev!")
+print(m.text, m.start, m.end, m.groups, m.named.host)
+print(re.findAll("a@x.io, b@y.io").map((x) => x.named.user))
+print(re.replaceAll("a@x.io b@y.io", "${user} at ${host}"), re.replace("a@x.io b@y.io", "?"))
+print(regex.split("a, b;c ;d", "\\s*[,;]\\s*"), regex.split("a-b-c", "-", 2))
+print(regex.compile("HELLO", { ignoreCase: true })?.test("hello"), regex.escape("1+1=2?"))
+print(regex.test("2026-10-10", "^\\d{4}-\\d{2}-\\d{2}$"), re.names, re.groups)
+const [_, bad] = regex.compile("(unclosed")
+print(bad != nil)
+
+// ---------- crypto ----------
+print(crypto.hash("sha256", "abc"))
+print(crypto.hash("md5", "abc"), crypto.hash("sha1", "abc"))
+print(crypto.hash("sha256", "abc", { base64: true }))
+print(crypto.hmac("sha256", "key", "The quick brown fox jumps over the lazy dog"))
+print(crypto.base64("olá"), crypto.fromBase64("b2zDoQ=="), crypto.base64([255, 254], { url: true }))
+print(crypto.hex("hi"), crypto.fromHex("6869"), crypto.fromHex("ff00", { bytes: true }))
+const box = crypto.encrypt("segredo ✓", "senha forte")
+print(box != crypto.encrypt("segredo ✓", "senha forte"), crypto.decrypt(box, "senha forte")?)
+const [_, wrong] = crypto.decrypt(box, "outra")
+print(wrong)
+const key = crypto.randomHex(32)
+print(len(key), crypto.decrypt(crypto.encrypt("with a raw key", key), key)?)
+const h = crypto.hashPassword("hunter2")
+print(h.starts_with("$argon2id$"), crypto.verifyPassword("hunter2", h), crypto.verifyPassword("hunter3", h))
+print(len(crypto.uuid()), len(crypto.randomBytes(8)), crypto.equal("abc", "abc"), crypto.equal("abc", "abd"))
+const r = crypto.randomInt(1, 6)
+print(r >= 1 && r <= 6)
+
+// ---------- log ----------
+log.setOutput("stdout")
+log.setTime(false)
+log.info("server started", { port: 3000, host: "0.0.0.0" })
+log.debug("hidden at info level")
+log.setLevel("debug")
+log.debug("now visible", { note: "two words" })
+const db = log.child({ module: "db" })
+db.warn("slow query", { ms: 812 })
+db.child({ table: "users" }).error("failed", { code: 23 })
+log.setFormat("json")
+log.info("as json", { list: [1, 2], ok: true })
+log.setFormat("text")
+log.setOutput("log.tmp.txt")
+log.error("to a file")
+log.setOutput("stdout")
+print(fs.readText("log.tmp.txt")?.trim())
+log.setLevel("off")
+log.error("silent")
+print(log.level())

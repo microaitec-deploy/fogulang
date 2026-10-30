@@ -1,0 +1,6 @@
+fn sign(n) {
+    return match n {
+        0 => "zero"
+        x if x > 0 => "positive"
+    }
+}

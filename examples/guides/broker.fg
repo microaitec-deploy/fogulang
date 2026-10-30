@@ -1,0 +1,31 @@
+// The embedded broker: KV, pub/sub, RPC and live stats — no external server.
+import broker from "fogu:broker"
+
+const b = broker.start("127.0.0.1:0", { token: "s3cret", node: "n1" })?
+const c = b.client()                      // inline client: same API as a remote one
+
+c.kv.set("visits", 0)?
+for i in 0..3 { c.kv.incr("visits")? }
+print("visits:", c.kv.get("visits")?)
+
+// RPC: a service answers `add` on the "math" channel
+const room = c.channel("math")
+const svc = room.act("add")?
+fg fn() {
+    while true {
+        const [r, err] = svc.next()
+        if err != nil { break }
+        r.reply(r.params.a + r.params.b)
+    }
+}()
+print("2 + 3 =", room.call("add", { a: 2, b: 3 })?)
+
+// pub/sub with wildcards
+const sub = room.sub("orders.*")?
+room.pub("orders.created", { id: 7 })?
+print("event:", sub.next(1s)?.data)
+
+const i = b.inspect()
+print("node", i.node, "· keys", i.keys, "· calls", i.calls, "· publications", i.publications)
+// b.admin(8080, { password: "…" }) opens the web console
+b.close()

@@ -1,0 +1,11 @@
+// Modules (spec §38-39)
+import { sum, PI } from "./_util.fg"
+import { sum as add } from "./_util.fg"
+import util from "./_util.fg"
+import math from "fogu:math"
+import json from "fogu:json"
+
+print(sum(1, 2), add(3, 4), PI, util.sum(5, 6), util.counter)
+print(math.sqrt(16), math.floor(3.7), math.abs(-2))
+const d = json.parse("{\"x\": 1, \"y\": [2, 3]}")
+print(d.x, d.y, json.stringify(d))

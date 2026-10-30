@@ -1,0 +1,5 @@
+// loads its sibling with a path relative to this file, not to the program
+export fn helper() {
+    const b = import("./b.fg")?
+    return b.name
+}

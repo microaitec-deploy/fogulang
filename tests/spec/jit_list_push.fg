@@ -1,0 +1,47 @@
+// `xs.push(number)` inside hot loops: the JIT compiles it (lists live in loop
+// slots); every other use of the list keeps the loop in the interpreter.
+// The spec runner checks the same output with and without the JIT.
+
+// ints, computed in the loop (the `sort` benchmark's shape)
+let x = 42
+const xs = []
+for i in 0..3000 {
+    x = (x * 1103515245 + 12345) % 2147483648
+    xs.push(x)
+}
+print(len(xs), xs[0], xs[2999], typeof(xs[0]))
+
+// floats and bools, several arguments in one push
+const fs = []
+const bs = []
+for i in 0..500 {
+    fs.push(i * 0.5, i + 0.25)
+    bs.push(i % 3 == 0)
+}
+print(len(fs), fs[0], fs[999], typeof(fs[1]), len(bs), bs[0], bs[1], typeof(bs[0]))
+
+// a list local to a function, in a while loop
+fn squares(n) {
+    const out = []
+    let i = 0
+    while i < n {
+        out.push(i * i)
+        i += 1
+    }
+    return out
+}
+const sq = squares(1000)
+print(len(sq), sq[999], sq.slice(0, 5))
+
+// uses the JIT does not compile: the loop stays interpreted, same results
+const names = []
+for i in 0..300 { names.push("n" + str(i)) }
+const copy = []
+for i in 0..300 { copy.push(xs[i]) }
+const total = []
+for i in 0..300 { total.push(len(copy)) }
+print(len(names), names[299], copy[0] == xs[0], total[299])
+
+// the list is the same object afterwards
+xs.push(-1)
+print(len(xs), xs[-1])

@@ -1,0 +1,24 @@
+# Fogu
+
+> Fogu is a scripting language (`.fg` files) with errors as values, optional
+> runtime-checked type annotations, cooperative concurrency (`fg`, `chan`,
+> `select`) and a large standard library (`fogu:*`: files, HTTP/web, SQL, Redis,
+> queues, LLMs, CLI tools…). One binary, `fogu`, runs, checks, tests, formats and
+> compiles programs to standalone executables for Linux, Windows, macOS and
+> Raspberry Pi.
+
+Fogu looks like JavaScript/Go but is neither: there is no `var`, no
+`try`/`catch`, no spread, and `int / int` is integer division. Read the agent
+guide before writing Fogu code, and check code with `fogu check file.fg`.
+
+## Docs for agents
+
+- [Agent guide (skill)](skills/fogu/SKILL.md): rules, syntax, errors, concurrency, workflow, common mistakes
+- [Standard library](skills/fogu/stdlib.md): every `fogu:*` function with its signature and a tested example
+
+## Docs for people
+
+- [README](README.md): overview, language tour, CLI, packages
+- [CLI](docs/cli.md): every command and option
+- [Packages](docs/packages.md): fogu.json, git dependencies, fogu.lock
+- [Specification](docs/spec.md): the language design (partly aspirational; see CHECKLIST.md)

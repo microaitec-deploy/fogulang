@@ -1,0 +1,110 @@
+// Variables
+let counter = 0
+const name = "Fogu"
+
+print("Hello,", name)
+print(`Hello, ${name}!`)        // template string
+
+// Basic types
+print(typeof(42))          // int
+print(typeof(3.14))        // float
+print(typeof("text"))      // str
+print(typeof(true))        // bool
+print(typeof(nil))         // nil
+print(typeof(500ms))       // duration
+
+// Arithmetic
+print(2 + 3)          // 5
+print(10 - 4)         // 6
+print(6 * 7)          // 42
+print(20 / 4)         // 5
+print(2 ** 10)        // 1024
+print(17 % 5)         // 2
+print(1 + 2.5)        // 3.5
+
+// Comparisons and logic
+print(3 < 5)          // true
+print(3 >= 5)         // false
+print("abc" == "abc") // true
+print(true && false)  // false
+print(true || false)  // true
+print(!false)         // true
+
+// If / else
+if counter == 0 {
+    print("counter is zero")
+} else {
+    print("counter is not zero")
+}
+
+// While
+while counter < 3 {
+    print("counter =", counter)
+    counter += 1
+}
+
+// For over a range (with break/continue)
+for i in 0..5 {
+    if i == 2 {
+        continue
+    }
+    if i == 4 {
+        break
+    }
+    print("i =", i)
+}
+
+// Lists
+let list = [1, 2, 3, 4]
+print(list)               // [1, 2, 3, 4]
+print(len(list))          // 4
+print(list[0])            // 1
+print(list[-1])           // 4
+for index, item in list {
+    print("item", index, "=", item)
+}
+
+// Maps
+let user = {
+    name: "John",
+    age: 30,
+    city: "Lisbon"
+}
+print(user.name)             // John
+print(user["age"])           // 30
+print(user.country)          // nil (missing key)
+print(user?.address?.street ?? "no address")
+for key, value in user {
+    print(key, "=", value)
+}
+
+// Functions
+fn sum(a, b) {
+    return a + b
+}
+
+fn factorial(n) {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+const double = (x) => x * 2
+fn greet(who = "world") { return `hello, ${who}` }
+
+print(sum(10, 20))        // 30
+print(factorial(5))       // 120
+print(double(21))         // 42
+print(greet())            // hello, world
+
+// Scope
+{
+    let x = 100
+    print("x inside:", x)
+}
+
+// Conversions
+print(int("123") + 1)     // 124
+print(float(10))          // 10.0
+print(str(42))            // 42

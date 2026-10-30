@@ -1,0 +1,41 @@
+import docker from "fogu:docker"
+import fs from "fogu:fs"
+
+// ---------- Dockerfiles ----------
+const df = docker.dockerfile("node:20-alpine", { as: "app" })
+df.comment("runtime image")
+df.workdir("/app")
+df.copy("package*.json", ".")
+df.copy(["src", "public"], "./", { from: "build", chown: "node:node" })
+df.run(["npm ci --omit=dev", "npm cache clean --force"])
+df.run("echo single")
+df.env({ NODE_ENV: "production", GREETING: "hello world" })
+df.arg("VERSION")
+df.label("org.opencontainers.image.title", "shop")
+df.expose(3000, "9229/udp")
+df.volume("/data")
+df.user("node")
+df.healthcheck(["curl", "-f", "http://localhost:3000"], { interval: "30s", retries: 3 })
+df.entrypoint(["node"])
+df.cmd(["server.js"])
+print(df.toString())
+df.save("Dockerfile.tmp.txt")?
+const p = docker.readDockerfile("Dockerfile.tmp.txt")?
+print(len(p.instructions), p.instructions[0], p.find("COPY"), p.find("RUN"))
+print(p.replace("WORKDIR", "/srv"), p.replace("ONBUILD", "x"))
+p.insert(0, "ARG", "BASE=node")
+p.remove(len(p.instructions) - 1)
+print(p.instructions[0], p.instructions[len(p.instructions) - 1])
+const q = docker.parseDockerfile("# build\nFROM rust:1 AS build\nRUN cargo build \\\n    --release\n\nfrom alpine\ncopy --from=build /app /app\n")
+print(q.instructions)
+print(q.text)
+
+// ---------- compose files ----------
+docker.writeCompose("compose.tmp.yaml", { volumes: { data: {} }, services: { web: { ports: ["8080:80"], image: "nginx:alpine", environment: { X: "1" }, depends_on: ["db"] }, db: { image: "postgres:17", volumes: ["data:/var/lib/postgresql/data"] } } })?
+print(fs.readText("compose.tmp.yaml")?)
+const c = docker.readCompose("compose.tmp.yaml")?
+c.services.web.restart = "always"
+print(docker.composeString({ services: { web: c.services.web } }))
+print(docker.compose("compose.tmp.yaml", { project: "shop" }), docker.service("api").name)
+const [r, e] = docker.readCompose("missing.tmp.yaml")
+print(e != nil)

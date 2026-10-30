@@ -1,0 +1,13 @@
+/target
+
+# data created by the examples and tests
+*.redb
+*.db
+tests/spec/*.tmp.*
+
+# binaries copied into example projects
+examples/**/*.exe
+
+build.md
+copy.md
+bench/.venv/

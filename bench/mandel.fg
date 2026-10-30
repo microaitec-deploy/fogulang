@@ -1,0 +1,19 @@
+// floating point: points of a 300×300 Mandelbrot grid (50 iterations)
+let inside = 0
+for y in 0..300 {
+    for x in 0..300 {
+        const cr = x * 3.0 / 300 - 2.0
+        const ci = y * 2.0 / 300 - 1.0
+        let zr = 0.0
+        let zi = 0.0
+        let n = 0
+        while n < 50 && zr * zr + zi * zi <= 4.0 {
+            const t = zr * zr - zi * zi + cr
+            zi = 2.0 * zr * zi + ci
+            zr = t
+            n = n + 1
+        }
+        if n == 50 { inside = inside + 1 }
+    }
+}
+print(inside)

@@ -1,0 +1,36 @@
+console Shop <shop@example.com>
+--- mail ---
+From: Shop <shop@example.com>
+To: ana@example.com, Bob <bob@example.com>
+Bcc: audit@example.com
+Subject: Your order
+X-Order: 42
+Attachment: invoice.txt (text/plain, 9 bytes)
+Attachment: logo.png (image/png, 4 bytes, inline cid:logo)
+
+Thanks for buying!
+---
+{id: console-1, provider: console}
+--- mail ---
+From: Shop <shop@example.com>
+To: x@example.com
+Subject: one
+
+<p>1</p>
+---
+--- mail ---
+From: Other <o@example.com>
+To: y@example.com
+Subject: two
+
+2
+---
+[{id: console-2, provider: console}, {id: console-3, provider: console}]
+3
+error: mail: invalid address 'not-an-address' in 'to'
+gmail smtp.gmail.com 587 starttls
+smtp.mail.yahoo.com 465 tls
+mail.example.com 465 tls
+email-smtp.eu-west-1.amazonaws.com
+https://api.resend.com
+true true

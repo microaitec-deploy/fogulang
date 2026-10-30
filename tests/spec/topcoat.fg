@@ -1,0 +1,93 @@
+import web from "fogu:web"
+import tc from "fogu:topcoat"
+import json from "fogu:json"
+const h = tc.h
+const ui = tc.ui
+
+// markup: escaping, attributes, @event / :bind sugar, void elements
+print(h("p", { class: ["a", nil, "b"], title: "x\"y", hidden: false, open: true }, "1 < 2 & ", h("b", nil, "bold")).html)
+print(h("button", { "@click": "n.increment()", ":disabled": "n.get() > 3" }, "+").html)
+print(h("input", { value: "v" }, "ignored").html, tc.raw("<i>raw</i>").html, tc.escape("<&>"))
+
+const fruits = ["apple", "banana", "cherry"]
+const results = tc.shard("results", fn(ctx, props) {
+    const q = props.query ?? ""
+    return h("ul", nil, fruits.filter(fn(f) { return f.contains(q) }).map(fn(f) { return h("li", nil, f) }))
+})
+const counter = tc.shard("counter", fn(ctx, props) {
+    const n = tc.signal(ctx, "clicks", 0)
+    return h("span", nil, "clicks=", str(n.value))
+})
+
+const app = web.app()
+app.procedure("double", fn(ctx, n) {
+    if typeof(n) != "int" { return nil, error("n must be an int") }
+    return n * 2
+})
+app.get("/", fn(ctx) {
+    const count = tc.signal(ctx, "count", 1)
+    const query = tc.signal(ctx, "query", "")
+    return tc.page({ title: "T", body: [
+        h("p", nil, "count: ", count, " double: ", tc.expr("count.get() * 2", count.peek() * 2)),
+        results.render(ctx, { query: tc.expr("query.get()", query.peek()), fixed: 7 }),
+        counter.render(ctx, {}),
+    ]})
+})
+app.get("/tracked", fn(ctx) {
+    const page = tc.signal(ctx, "page", 1)
+    if page.value > 2 { return web.redirect("/") }
+    return tc.page({ body: h("p", nil, "page " + str(page.value)) })
+})
+const call = app.handler()
+
+const home = call({ method: "GET", path: "/" })
+print(home.status, home.headers["content-type"])
+const body = home.body
+print(body.contains("<link rel=\"stylesheet\" href=\"/_tc/ui.css\"><script src=\"/_tc/runtime.js\" defer></script>"))
+print(body.contains("<span data-tc-text=\"count.get()\">1</span>"), body.contains("<span data-tc-text=\"count.get() * 2\">2</span>"))
+print(body.contains("<tc-shard data-name=\"results\""), body.contains("<li>banana</li>"))
+print(body.contains("data-tc-signals>{\"count\":{\"t\":false,\"v\":1},\"query\":{\"t\":false,\"v\":\"\"}}</script></body>"))
+print(body.contains("{\"clicks\":{\"t\":true,\"v\":0}}"))
+
+// a shard request: its own signals, frames as JSON lines
+const s = call({ method: "POST", path: "/_tc/s/results", headers: { "x-topcoat": "shard" }, body: json.stringify({ props: { query: "an" }, signals: {} }) })
+print(s.headers["content-type"], json.parse(s.body).t, json.parse(s.body).html)
+const c = call({ method: "POST", path: "/_tc/s/counter", body: json.stringify({ props: {}, signals: { clicks: 4 } }) })
+print(json.parse(c.body).html)
+print(call({ method: "POST", path: "/_tc/s/nope", body: "{}" }).status)
+
+// procedures: values and error values
+print(call({ method: "POST", path: "/_tc/p/double", body: "[21]" }).body)
+print(call({ method: "POST", path: "/_tc/p/double", body: "[\"x\"]" }).body)
+
+// a rerun posts the signals and gets a snapshot (or a redirect) frame
+const r = call({ method: "POST", path: "/tracked", headers: { "x-topcoat": "rerun" }, body: "{\"signals\":{\"page\":2}}" })
+const f = json.parse(r.body)
+print(f.t, f.html.contains("<p>page 2</p>"), f.html.contains("{\"page\":{\"t\":true,\"v\":2}}"))
+print(json.parse(call({ method: "POST", path: "/tracked", headers: { "x-topcoat": "rerun" }, body: "{\"signals\":{\"page\":3}}" }).body))
+
+// the browser runtime and the stylesheets
+for p in ["/_tc/runtime.js", "/_tc/ui.css", "/_tc/shadcn.css"] {
+    const a = call({ method: "GET", path: p })
+    print(p, a.status, a.headers["content-type"], a.body.len() > 1000)
+}
+
+// the UI kits
+print(ui.button("Save", { variant: "destructive", size: "sm", class: "extra" }).html)
+print(ui.badge("new", { variant: "success" }).html)
+print(ui.table(["name", { key: "n", label: "N", align: "right" }], [{ name: "a", n: 1 }]).html)
+print(tc.shadcn.button("Go", { variant: "outline" }).html)
+print(tc.shadcn.badge("b", { variant: "secondary" }).html)
+const page2 = tc.page({ ui: "shadcn", tailwind: true, dark: true }).html
+print(page2.contains("/_tc/shadcn.css"), page2.contains("@tailwindcss/browser@4"), page2.contains("<html lang=\"en\" data-theme=\"dark\" class=\"dark\">"), page2.contains("rel=\"icon\""))
+print(tc.tailwind("/app.css").html)
+
+// the kit: icons, logo, sparklines, stats with a trend, empty states
+print(ui.icon("check").html.contains("<path d=\"M5 12.5l4.5 4.5L19 7\"/>"))
+print(ui.sparkline([1, 3, 2], { width: 60, height: 20 }).html.contains("<polyline points=\"0.0,18.0 30.0,2.0 60.0,10.0\""))
+print(ui.sparkline([0, 0]).html.contains("stroke-dasharray"))
+const st = ui.stat("Msgs", "1.5", { icon: "zap", tone: "success", trend: [1, 2] }).html
+print(st.contains("tc-tone-success"), st.contains("tc-stat-icon"), st.contains("tc-sparkline"))
+print(ui.empty("Nothing", { description: "yet" }).html.contains("tc-empty-title\">Nothing"))
+print(ui.table(["a"], [{ a: 1 }], { header: false }).html.contains("<thead>"))
+print(tc.page({ theme: "system" }).html.contains("data-theme=\"system\""))

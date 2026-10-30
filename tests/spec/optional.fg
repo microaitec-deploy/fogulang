@@ -1,0 +1,11 @@
+// Optional access ?. (spec §15) and coalescing ?? (spec §16)
+const u = {name: "Ana", address: {city: "Porto"}}
+const nobody = nil
+print(u?.address?.city)
+print(u?.phone?.number)
+print(nobody?.address?.city)
+print(nobody?.address?.city ?? "unknown")
+print(nobody?.name.upper())
+print(u?.name.upper())
+fn f() { print("should not be called") return 1 }
+print(nobody?.method(f()))

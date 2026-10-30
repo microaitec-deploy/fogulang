@@ -1,0 +1,7 @@
+echo:hi
+binary [3, 2, 1] buffer
+echo:{"a":1}
+nil
+false 1000
+chat:yo
+[fast, slow]

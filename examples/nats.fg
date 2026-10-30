@@ -1,0 +1,43 @@
+// NATS with fogu:nats: pub/sub, request/reply and JetStream.
+//
+//   docker run -p 4222:4222 nats -js
+//   NATS_URL=nats://127.0.0.1:4222 fogu run examples/nats.fg
+
+import nats from "fogu:nats"
+
+const nc = nats.connect(Fogu.env.NATS_URL ?? "nats://127.0.0.1:4222")?
+print("connected to", nc.server.name, nc.server.version)
+
+// ---------- pub/sub ----------
+const sub = nc.subscribe("greet.*")
+nc.publish("greet.pt", "olá")
+nc.publish("greet.en", { text: "hello" })
+for i in 0..2 {
+    const m = sub.next(1s)?
+    print(m.subject, m.data)
+}
+sub.unsubscribe()
+
+// ---------- request/reply (a service in a task) ----------
+const svc = nc.subscribe("time.now", { queue: "clock" })
+fg fn() {
+    while true {
+        const req = svc.next()?
+        req.respond({ now: clock(), asked: req.data })
+    }
+}()
+print(nc.request("time.now", "hi", { timeout: 2s })?.json())
+
+// ---------- JetStream: durable work queue ----------
+const js = nc.jetstream()
+js.addStream({ name: "TASKS", subjects: ["tasks.>"], storage: "file" })?
+for name in ["resize", "upload", "notify"] {
+    const ack = js.publish(`tasks.${name}`, { name: name }, { msgId: name })?
+    print("stored", name, "as #", ack.seq, "duplicate:", ack.duplicate)
+}
+const worker = js.consumer("TASKS", { durable: "workers", ackWait: 30s })?
+for msg in worker.fetch(10, 1s)? {
+    print("working on", msg.json().name, "(delivery", msg.delivered, ")")
+    msg.ack()                                  // or msg.nak(5s) / msg.term()
+}
+nc.close()

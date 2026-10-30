@@ -1,0 +1,44 @@
+// fogu:sync (spec §37) — cooperative primitives for fg tasks
+import sync from "fogu:sync"
+
+const mu = sync.Mutex()
+const wg = sync.WaitGroup()
+const go = chan()
+const log = []
+wg.add(2)
+fg fn() {
+    mu.lock()
+    log.push("A locked")
+    <-go                       // keeps the lock while it waits
+    log.push("A unlocks")
+    mu.unlock()
+    wg.done()
+}()
+fg fn() {
+    mu.lock()                  // waits for A
+    log.push("B locked")
+    mu.unlock()
+    wg.done()
+}()
+print(mu.locked, wg.count, mu.tryLock())
+go <- 1
+wg.wait()
+print(log, mu.locked, wg.count)
+
+const once = sync.Once()
+let runs = 0
+for i in 0..3 { once.do(() => { runs += 1 }) }
+print(runs, once.done)
+
+const n = sync.Atomic(5)
+print(n.add(2), n.add(), n.get(), n.compareAndSwap(8, 0), n.compareAndSwap(8, 1), n.get())
+
+// a counter shared by many tasks
+const total = sync.Atomic(0)
+const all = sync.WaitGroup()
+for i in 0..10 {
+    all.add(1)
+    fg fn() { total.add(i); all.done() }()
+}
+all.wait()
+print(total.get())

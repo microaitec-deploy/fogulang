@@ -1,0 +1,2 @@
+error_variadic.fg:1:12
+error[E0002]: the variadic parameter '...' must be the last one

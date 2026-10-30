@@ -1,0 +1,5 @@
+photos eu-west-1 https://s3.eu-west-1.amazonaws.com
+https://photos.s3.eu-west-1.amazonaws.com/2024/me%20at%20the%20beach.jpg
+nil docs http://127.0.0.1:9000/docs/a/b%2Bc.txt
+true
+true true

@@ -1,0 +1,75 @@
+// A full-stack app with fogu:web: a React/Vue/Svelte build (SPA), a JSON
+// API, file uploads/downloads, Server-Sent Events and a WebSocket chat.
+//
+//   npm run build            # in your frontend: creates dist/
+//   fogu run examples/web_fullstack.fg
+//
+// Without a dist/ folder a tiny page is created so the example runs.
+
+import web from "fogu:web"
+import fs from "fogu:fs"
+import time from "fogu:time"
+
+if !fs.exists("dist/index.html") {
+    fs.mkdir("dist")?
+    fs.writeText("dist/index.html", "<!doctype html><title>Fogu</title><h1>SPA served by Fogu</h1>")?
+}
+
+const app = web.app()
+app.use(web.logger())
+app.use(web.cors())
+
+// ---------- API ----------
+app.get("/api/time", (ctx) => ({ now: clock() }))
+
+// multipart upload: <form enctype="multipart/form-data"> or fetch(FormData)
+app.post("/api/upload", (ctx) => {
+    const form = ctx.req.form()?
+    if form.file == nil {
+        return web.json({ error: "send a 'file' field" }, { status: 400 })
+    }
+    const path = form.file.save("uploads/")?          // keeps a safe file name
+    return { saved: path, size: form.file.size, type: form.file.contentType }
+})
+
+// downloads are streamed by the server thread
+app.get("/api/files/:name", (ctx) => web.file(`uploads/${ctx.params.name}`, { download: ctx.params.name }))
+
+// ---------- Server-Sent Events ----------
+app.get("/api/clock", (ctx) => {
+    const stream = web.sse({ retry: 2000 })
+    fg fn() {
+        while stream.open {
+            stream.send({ now: clock() }, { event: "tick" })
+            time.delay(1s)
+        }
+    }()
+    return stream
+})
+
+// ---------- WebSocket chat ----------
+const rooms = {}
+app.ws("/ws/:room", (ws, ctx) => {
+    const room = ctx.params.room
+    rooms[room] = (rooms[room] ?? []).concat([ws])
+    ws.send(`joined ${room}`)
+    while true {
+        const msg = ws.next()?
+        if msg == nil { break }                        // the client left
+        for peer in rooms[room] {
+            if peer.open { peer.send(msg.data) }
+        }
+    }
+    rooms[room] = rooms[room].filter((p) => p.open)
+})
+
+// ---------- the frontend build ----------
+// existing files are served directly (cached for a year: Vite/CRA assets have
+// hashes); unknown HTML routes such as /dashboard fall back to index.html
+app.static("/", "dist", { spa: true, maxAge: 365d })
+
+app.listen(3000, { host: "127.0.0.1", maxBody: 50 * 1024 * 1024 })?
+print("open http://127.0.0.1:3000")
+while true {
+    time.delay(50ms)
+}

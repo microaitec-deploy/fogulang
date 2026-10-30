@@ -1,0 +1,44 @@
+// import("path") loads a module at run time and returns it
+import json from "fogu:json"
+import fixed from "./_dyn_app.fg"
+
+const app = import("./_dyn_app.fg")
+print(app.version, app.greet("fogu"))
+
+// the same module is loaded once: dynamic and static imports share it
+print(app.next(), app.next(), fixed.next())
+
+// a path computed at run time
+const name = "app"
+const again = import(`./_dyn_${name}.fg`)
+print(again.next())
+
+// built-in modules too
+const j = import("fogu:json")
+print(j.stringify({ a: 1 }) == json.stringify({ a: 1 }))
+
+// relative paths are resolved from the file that calls import()
+const a = import("./_dyn/a.fg")
+print(a.helper())
+
+// a module that cannot be loaded is an error value
+const [missing, err] = import("./_dyn_missing.fg")
+print(missing, err != nil, err.message.contains("_dyn_missing"))
+const bad = import("./_dyn_bad.fg")
+print(typeof(bad), bad.message.starts_with("import(\"./_dyn_bad.fg\")"))
+
+// and propagates with ?
+fn load(path) {
+    const m = import(path)?
+    return m.version
+}
+const [v, e] = load("./_dyn_nope.fg")
+print(v, e != nil)
+print(load("./_dyn_app.fg")?)
+
+// in a loop (the JIT leaves it to the interpreter)
+let total = 0
+for i in 0..300 {
+    total += import("./_dyn_app.fg").greet("x").len()
+}
+print(total)

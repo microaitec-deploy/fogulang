@@ -1,0 +1,34 @@
+// `xs.push(…)` of texts, lists and maps in hot loops: the JIT builds them
+// (literals, `str(number)`, templates, `+` of texts, nested list/map literals);
+// anything else keeps the loop in the interpreter. Same output either way.
+
+const names = []
+for i in 0..400 { names.push("item" + str(i)) }
+print(len(names), names[0], names[399], typeof(names[7]))
+
+const mixed = []
+for i in 0..300 {
+    mixed.push(`n=${i} half=${i / 2.0} even=${i % 2 == 0}`, str(i * 1.5), "a" + "b" + str(i))
+}
+print(len(mixed), mixed[0], mixed[1], mixed[2], mixed[897], mixed[898], mixed[899])
+
+// the records benchmark's shape: maps with numbers, texts, bools and a nested list
+const rows = []
+for i in 0..500 {
+    rows.push({ id: i, name: "user" + str(i), active: i % 2 == 0, score: i * 0.5, tags: ["a", "b", [i, i + 1]] })
+}
+print(len(rows), rows[499].name, rows[499].active, rows[499].score, rows[499].tags, rows[0])
+print(rows[3] == { id: 3, name: "user3", active: false, score: 1.5, tags: ["a", "b", [3, 4]] })
+
+// lists of lists
+const pairs = []
+for i in 0..300 { pairs.push([i, i * i], []) }
+print(len(pairs), pairs[598], pairs[599])
+
+// forms the JIT leaves to the interpreter: same results
+const prefix = "p"
+const viaVar = []
+for i in 0..300 { viaVar.push(prefix + str(i)) }
+const withNil = []
+for i in 0..300 { withNil.push({ v: nil, i: i }) }
+print(viaVar[299], withNil[299])

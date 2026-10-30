@@ -1,0 +1,2 @@
+error[E0208]: unknown type 'integer'
+did you mean 'int'?

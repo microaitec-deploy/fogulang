@@ -1,0 +1,19 @@
+{name: Ana, roles: [admin]} nil true
+[{key: user:1, value: {name: Ana, roles: [admin]}}, {key: user:2, value: {name: Bia}}]
+[order:1, user:1, user:2] 2 [order:1]
+[user:2, user:1]
+nil 10 12 12
+[{at: 2000, deleted: false, value: 12}, {at: 1000, deleted: false, value: 10}]
+nil 2
+[]
+[a, b, price, user:1]
+10 1
+10
+true 1
+60
+0
+true
+true
+[a, b, c, price, user:1] 10
+true
+s3cr3t

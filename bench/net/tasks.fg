@@ -1,0 +1,16 @@
+// memory per task: N tasks blocked on a channel, then all released
+import sync from "fogu:sync"
+const n = int(Fogu.args.first() ?? "100000")
+const gate = chan()
+const wg = sync.WaitGroup()
+for i in 0..n {
+    wg.add()
+    fg fn() {
+        <-gate
+        wg.done()
+    }()
+}
+Fogu.sleep(50ms)             // every task is now parked on the channel
+close(gate)
+wg.wait()
+print(n)

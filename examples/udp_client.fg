@@ -1,0 +1,11 @@
+import net from "fogu:net"
+
+// Run examples/udp_server.fg first.
+let cli = net.udpBind("127.0.0.1:0")?
+print("local socket at", cli.addr)
+
+cli.sendTo("127.0.0.1:9001", "ping 1")
+let r = cli.recvFrom()
+print("reply:", r.text, "(from", r.from, ")")
+
+cli.close()

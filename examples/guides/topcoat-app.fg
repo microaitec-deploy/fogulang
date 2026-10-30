@@ -1,0 +1,49 @@
+// An interactive page with fogu:topcoat: signals, a shard and a procedure.
+import web from "fogu:web"
+import tc from "fogu:topcoat"
+import json from "fogu:json"
+const h = tc.h
+const ui = tc.ui
+
+const products = ["Keyboard", "Mouse", "Monitor", "Microphone", "Mug"]
+
+// re-rendered on the server whenever `query` changes in the browser
+const results = tc.shard("results", fn(ctx, props) {
+    const q = (props.query ?? "").lower()
+    const found = products.filter((p) => p.lower().contains(q))
+    if found.len() == 0 { return ui.empty("Nothing found", { icon: "search" }) }
+    return ui.table(["product"], found.map((p) => ({ product: p })))
+})
+
+const app = web.app()
+app.procedure("checkout", fn(ctx, items) {
+    if typeof(items) != "int" || items < 1 { return nil, error("the cart is empty") }
+    return "order #" + str(1000 + items)
+})
+app.get("/", fn(ctx) {
+    const query = tc.signal(ctx, "query", "")
+    const cart = tc.signal(ctx, "cart", 0)
+    return tc.page({ title: "Shop", theme: "system", body: ui.container(ui.stack([
+        h("h1", nil, ui.logo({ text: "Fogu shop" })),
+        ui.card(ui.stack([
+            ui.input({ placeholder: "Search…", ":value": query, "@input.debounce.150": "query.set(e.target.value)" }),
+            results.render(ctx, { query: tc.expr("query.get()", query.peek()) }),
+        ]), { title: "Products" }),
+        ui.row([
+            ui.button([ui.icon("plus"), " Add to cart"], { "@click": "cart.increment()" }),
+            h("span", nil, "Items: ", cart),
+            ui.button("Checkout", { variant: "outline", ":disabled": "cart.get() == 0",
+                "@click": "try { toast(await call('checkout', cart.get()), { type: 'success' }); cart.set(0) } catch (e) { toast(e.message, { type: 'error' }) }" }),
+        ]),
+    ]))})
+})
+
+// what the browser does, without a network
+const call = app.handler()
+const page = call({ method: "GET", path: "/" }).body
+print(page.contains("data-tc-text=\"cart.get()\""), page.contains("<tc-shard data-name=\"results\""))
+const swap = json.parse(call({ method: "POST", path: "/_tc/s/results", body: "{\"props\":{\"query\":\"mo\"}}" }).body)
+print(swap.t, swap.html.contains("Mouse"), swap.html.contains("Monitor"), swap.html.contains("Mug"))
+print(call({ method: "POST", path: "/_tc/p/checkout", body: "[2]" }).body)
+print(call({ method: "POST", path: "/_tc/p/checkout", body: "[0]" }).body)
+// app.listen(3000) and Fogu.signal.wait() to open it in a browser

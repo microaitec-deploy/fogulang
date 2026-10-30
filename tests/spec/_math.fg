@@ -1,0 +1,4 @@
+export fn divide(a, b) {
+    // line 2
+    return a / b
+}

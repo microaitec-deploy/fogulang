@@ -1,0 +1,17 @@
+localhost [localhost, 127.0.0.1] 29 true false 64
+false TLSv1.3 h2 1 localhost 29
+true
+true nil
+1 true
+0 true true
+94287082
+true false
+32 otpauth://totp/Fogu%20App:ana%40example.com?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=Fogu%20App
+{column: 12, line: 2, match: AKIA…LE, rule: aws-access-key}
+{column: 1, line: 3, match: ----…--, rule: private-key}
+true false
+true false
+{broadcast: 192.168.1.255, cidr: 192.168.1.0/24, first: 192.168.1.1, last: 192.168.1.254, netmask: 255.255.255.0, network: 192.168.1.0, prefix: 24, size: 256, version: 4}
+true false true
+[10.0.0.1, 10.0.0.2]
+true true true false true 0

@@ -1,0 +1,6 @@
+// an integer loop: 20 million iterations
+let sum = 0
+for i in 0..20000000 {
+    sum = sum + (i % 7) * 3
+}
+print(sum)

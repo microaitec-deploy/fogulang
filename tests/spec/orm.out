@@ -1,0 +1,14 @@
+36 0.0 dev
+Ana none ana.dev
+{name: Ana}
+[Bob, Dan]
+[carla, Dan]
+[carla]
+[carla]
+[Bob, Dan, carla]
+nil
+1.0 3.0 true
+Dan 4
+error: author.delete: record not found
+true
+[{n: 1}]

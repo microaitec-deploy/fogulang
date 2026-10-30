@@ -1,0 +1,6 @@
+listening true
+{got: ack-me, ok: true}
+[welcome {id: true}, client got echo:hi, client got echo:ack-me]
+[conn {token: t1}, chat hi, pair 1 two, chat ack-me, bye client has manually disconnected the socket from the namespace]
+pong 7
+pong ws

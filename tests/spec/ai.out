@@ -1,0 +1,6 @@
+[openai, anthropic, gemini, groq, openrouter, deepseek, mistral, xai, together, fireworks, perplexity, ollama, lmstudio, compatible]
+anthropic claude-sonnet-5-5 https://api.anthropic.com
+ollama llama3.2 http://127.0.0.1:11434/v1
+gemini-2.5-pro http://127.0.0.1:9
+add Adds two numbers object
+claude-sonnet-5-5 [add] []

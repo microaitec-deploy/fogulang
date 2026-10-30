@@ -1,0 +1,17 @@
+// `_x` fields and methods of structs are private to the module (spec §26)
+import { Account, peek } from "./_account.fg"
+
+const a = new Account("Ana", 10)
+a.deposit(5)
+print(a.owner, a.balance(), a.audit(), peek(a))
+
+// local structs: the module itself may use the private fields
+struct Local {
+    _x = 1
+}
+const l = new Local()
+l._x = 2
+print(l._x)
+
+fg fn() { print("task:", a.balance()) }()
+print(a._balance)

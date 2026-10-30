@@ -1,0 +1,24 @@
+// Floating-point Mandelbrot: counts the points inside the set
+fn mandel(cr, ci) {
+    let zr = 0.0
+    let zi = 0.0
+    let k = 0
+    while k < 100 {
+        let t = zr * zr - zi * zi + cr
+        zi = 2.0 * zr * zi + ci
+        zr = t
+        if zr * zr + zi * zi > 4.0 { return k }
+        k += 1
+    }
+    return 100
+}
+let t0 = clock()
+let inside = 0
+for y in 0..300 {
+    for x in 0..300 {
+        let r = mandel(x * 3.0 / 300.0 - 2.0, y * 2.0 / 300.0 - 1.0)
+        if r == 100 { inside += 1 }
+    }
+}
+print("inside:", inside)
+print("time:", clock() - t0, "s")

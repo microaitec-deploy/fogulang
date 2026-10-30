@@ -1,0 +1,10 @@
+// hot top-level loop — loop JIT (on-stack replacement)
+let s = 0
+let i = 0
+let t0 = clock()
+while i < 50000000 {
+    s += i % 7
+    i += 1
+}
+print("sum =", s)
+print("time:", clock() - t0, "s")

@@ -1,0 +1,162 @@
+// Fogu vs Bun vs Go vs Python: runs each benchmark in every language, checks
+// that they print the same thing, and writes bench/results.json and bench/RESULTS.md.
+// Bun is the primary rival (a scripting runtime); Go is the performance ceiling.
+//
+//   fogu bench/run.fg                 // 5 runs per case (the median is kept)
+//   fogu bench/run.fg 3 fib loop      // 3 runs, only fib and loop
+//
+// Needs python3, bun and go (the Go programs are compiled once into bench/.bin
+// before measuring, so compile time is not counted). The Fogu measured is $FOGU_BIN, else target/release/fogu
+// (in this repository), else `fogu` from PATH; $PYTHON_BIN and $BUN_BIN pick other
+// Python and Bun binaries and $GO_BIN the Go toolchain (default: from PATH).
+import process from "fogu:process"
+import system from "fogu:system"
+import time from "fogu:time"
+import fs from "fogu:fs"
+import json from "fogu:json"
+import path from "fogu:path"
+
+const pick = fn(cond, yes, no) {
+    if cond { return yes }
+    return no
+}
+
+// the machine's load average (1 minute), recorded with the results
+const loadavg = fn() {
+    const [text, err] = fs.readText("/proc/loadavg")
+    if err != nil { return nil }
+    return float(text.split(" ")[0])
+}
+const loadStart = loadavg()
+
+const dir = pick(fs.exists("bench/fib.fg"), "bench", ".")
+const all = ["startup", "fib", "loop", "mandel", "strings", "maps", "records", "sort"]
+let runs = 5
+let only = []
+for a in Fogu.args {
+    const [n, err] = json.parse(a)
+    if err == nil && typeof(n) == "int" { runs = n } else { only.push(a) }
+}
+const benches = all.filter(fn(b) { return only.len() == 0 || only.contains(b) })
+const fogu = Fogu.env["FOGU_BIN"] ?? pick(fs.exists("target/release/fogu"), "target/release/fogu", "fogu")
+
+const python = Fogu.env["PYTHON_BIN"] ?? "python3"
+const bun = Fogu.env["BUN_BIN"] ?? "bun"
+const gobin = Fogu.env["GO_BIN"] ?? "go"
+
+// compile the Go programs once; a missing toolchain only drops the Go column
+const bindir = path.join(dir, ".bin")
+let haveGo = true
+fs.mkdir(bindir)?
+for b in benches {
+    const [r, err] = process.run(gobin, ["build", "-o", path.join(bindir, b), path.join(dir, b + ".go")])
+    if err != nil || !r.ok {
+        print("go build failed, skipping Go:", err ?? r.stderr)
+        haveGo = false
+        break
+    }
+}
+
+const langs = [
+    { name: "Fogu", cmd: fogu, args: [], ext: "fg" },
+    { name: "Fogu (no JIT)", cmd: fogu, args: ["--no-jit"], ext: "fg" },
+    { name: "Bun", cmd: bun, args: [], ext: "js" },
+    { name: "Go", cmd: nil, args: [], ext: "go" },
+    { name: "Python", cmd: python, args: ["-I"], ext: "py" },
+].filter(fn(l) { return l.ext != "go" || haveGo })
+
+const version = fn(cmd, args) {
+    const [r, err] = process.run(cmd, args)
+    if err != nil { return "?" }
+    return (r.stdout + r.stderr).trim().split("\n")[0]
+}
+
+const median = fn(xs) {
+    const s = xs.sort()
+    return s[s.len() / 2]
+}
+
+const cpu = fn() {
+    const [text, err] = fs.readText("/proc/cpuinfo")
+    if err != nil { return system.info.os + " " + system.info.arch }
+    for line in text.split("\n") {
+        if line.starts_with("model name") { return line.split(":")[1].trim() }
+    }
+    return Fogu.os
+}
+
+// languages are interleaved (each repetition runs every language once), so a
+// change in the machine's load affects all of them alike
+const results = []
+for b in benches {
+    const row = { bench: b, times: {} }
+    const times = {}
+    const outs = {}
+    const broken = {}
+    for l in langs { times[l.name] = [] }
+    for i in 0..runs {
+        for l in langs {
+            if broken[l.name] != nil { continue }
+            // Go runs its prebuilt binary; the others run the source file
+            let cmd = l.cmd
+            let args = l.args.concat([path.join(dir, b + "." + l.ext)])
+            if l.ext == "go" {
+                cmd = path.join(bindir, b)
+                args = []
+            }
+            const t0 = time.monotonic()
+            const [r, err] = process.run(cmd, args)
+            const ms = (time.monotonic() - t0) * 1000
+            if err != nil || !r.ok {
+                print("failed:", l.name, b, err ?? r.stderr)
+                broken[l.name] = true
+                continue
+            }
+            outs[l.name] = r.stdout.trim()
+            times[l.name].push(ms)
+        }
+    }
+    const expected = outs[langs[0].name]
+    for l in langs {
+        if broken[l.name] != nil { continue }
+        if outs[l.name] != expected {
+            print("different output:", l.name, b, outs[l.name], "≠", expected)
+            continue
+        }
+        row.times[l.name] = median(times[l.name])
+        print(b, "·", l.name, "·", str(int(median(times[l.name]))) + " ms")
+    }
+    results.push(row)
+}
+
+const info = {
+    date: time.now(),
+    cpu: cpu(),
+    cores: system.info.cores,
+    os: system.info.os + " " + system.info.arch,
+    runs: runs,
+    load: [loadStart, loadavg()],
+    versions: {
+        "Fogu": "fogu " + Fogu.version,
+        "Python": version(python, ["--version"]),
+        "Bun": "bun " + version(bun, ["--version"]),
+        "Go": pick(haveGo, version(gobin, ["version"]), "?"),
+    },
+    results: results,
+}
+fs.writeText(path.join(dir, "results.json"), json.stringify(info) + "\n")?
+
+// a Markdown table (ms, median; lower is better)
+const names = langs.map(fn(l) { return l.name })
+let md = "| benchmark | " + names.join(" | ") + " |\n|---|" + names.map(fn(n) { return "---:" }).join("|") + "|\n"
+for r in results {
+    const cells = names.map(fn(n) {
+        const t = r.times[n]
+        if t == nil { return "—" }
+        return str(int(t))
+    })
+    md = md + "| " + r.bench + " | " + cells.join(" | ") + " |\n"
+}
+fs.writeText(path.join(dir, "RESULTS.md"), "# Fogu vs Bun vs Go vs Python\n\n" + info.cpu + " · " + info.os + " · median of " + str(runs) + " runs, in ms (lower is better)\n\n" + md)?
+print("")
+print(md)

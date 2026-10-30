@@ -1,0 +1,23 @@
+// Errors as values, `?`, destructuring and list/map/string methods.
+fn divide(a, b) {
+    if b == 0 {
+        return nil, error("division by zero")
+    }
+    return a / b, nil
+}
+
+fn compute(a, b) {
+    const x = divide(a, b)?         // propagates the error to the caller
+    return x * 2, nil
+}
+
+const [ok, e1] = compute(10, 2)
+print(ok, e1)                        // 10 nil
+
+const [_, e2] = compute(1, 0)
+print(e2.message, e2.trace)          // division by zero [file:line]
+
+let xs = [5, 3, 8]
+xs.push(1)
+print(xs.sort(), xs.map((x) => x * 2).join(","))
+print({b: 1, a: 2}.keys(), "a,b".split(","), "fogu".upper())

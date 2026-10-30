@@ -1,0 +1,3 @@
+// A panic in a task does not stop the others by default (spec §31)
+fg fn() { panic("the task failed") }()
+print("the program goes on")

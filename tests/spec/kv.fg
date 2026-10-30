@@ -1,0 +1,20 @@
+// fogu:kv — embedded key-value store (redb)
+import kv from "fogu:kv"
+
+const db = kv.open("kv.tmp.redb")?
+db.clear()
+db.set("name", "Fogu")
+db.set("version", 3)
+db.set("pi", 3.5)
+db.set("active", true)
+db.set("list", [1, "two", 3])
+print(db.get("name"), db.get("version"), db.get("pi"), db.get("active"), db.get("list"))
+print(db.has("name"), db.has("nothing"), db.get("nothing"))
+print(db.keys(), db.len())
+db.delete("pi")
+print(db.len(), db.get("pi"))
+db.close()
+
+const other = kv.open("kv.tmp.redb")?
+print("persisted:", other.get("name"))
+other.close()

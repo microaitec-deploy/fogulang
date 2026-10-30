@@ -1,0 +1,55 @@
+// A REST API: routes, validation, SQLite, JWT auth and tests without a network.
+import web from "fogu:web"
+import sql from "fogu:sql"
+import jwt from "fogu:jwt"
+import json from "fogu:json"
+
+const db = sql.open("sqlite::memory:")?
+db.exec("CREATE TABLE todos (id INTEGER PRIMARY KEY, title TEXT NOT NULL, done INTEGER DEFAULT 0)")?
+const secret = "change-me"
+
+const app = web.app()
+app.onError((ctx, err) => web.json({ error: err.message }, { status: 400 }))
+
+// sign in → a token valid for one hour
+app.post("/login", (ctx) => {
+    const body = ctx.req.json()?
+    if body.user != "ana" || body.password != "s3cret" {
+        return web.json({ error: "wrong credentials" }, { status: 401 })
+    }
+    return { token: jwt.sign({ sub: body.user }, secret, { expiresIn: 1h }) }
+})
+
+// everything under /todos needs `Authorization: Bearer <token>`
+app.use("/todos", jwt.middleware(secret))
+
+app.get("/todos", (ctx) => db.query("SELECT id, title, done FROM todos ORDER BY id")?)
+app.post("/todos", (ctx) => {
+    const body = ctx.req.json()?
+    if typeof(body.title) != "str" || body.title.trim() == "" {
+        return nil, error("title is required")
+    }
+    db.run("INSERT INTO todos (title) VALUES (?)", [body.title.trim()])?
+    ctx.set.status = 201
+    return db.one("SELECT id, title, done FROM todos ORDER BY id DESC LIMIT 1")?
+})
+app.patch("/todos/:id", (ctx) => {
+    db.run("UPDATE todos SET done = 1 WHERE id = ?", [int(ctx.params.id)])?
+    return db.one("SELECT id, title, done FROM todos WHERE id = ?", [int(ctx.params.id)])?
+})
+
+// the same requests a client would send, through app.handler()
+const call = app.handler()
+const send = (method, path, body, token) => {
+    const headers = { "content-type": "application/json" }
+    if token != nil { headers["authorization"] = "Bearer " + token }
+    return call({ method: method, path: path, headers: headers, body: json.stringify(body) })
+}
+print(send("GET", "/todos", nil, nil).status)                       // no token
+const token = json.parse(send("POST", "/login", { user: "ana", password: "s3cret" }, nil).body).token
+print(send("POST", "/todos", { title: "write docs" }, token).body)
+print(send("POST", "/todos", { title: "  " }, token).body)
+send("POST", "/todos", { title: "ship it" }, token)
+print(send("PATCH", "/todos/1", nil, token).body)
+print(send("GET", "/todos", nil, token).body)
+// app.listen(3000) and Fogu.signal.wait() serve it for real

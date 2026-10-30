@@ -1,0 +1,6 @@
+// maps: insert 300k keys, then read them back
+const m = {}
+for i in 0..300000 { m["k" + str(i)] = i }
+let sum = 0
+for i in 0..300000 { sum = sum + m["k" + str(i)] }
+print(m.len(), sum)

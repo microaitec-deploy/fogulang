@@ -1,0 +1,29 @@
+// Operational errors of native functions are `error` values (spec §28-30)
+import json from "fogu:json"
+import net from "fogu:net"
+import kv from "fogu:kv"
+
+const [data, e1] = json.parse("{invalid")
+print(data, typeof(e1), e1.message.starts_with("json.parse:"))
+
+fn read(text) {
+    const d = json.parse(text)?           // propagates the error to the caller
+    return d.x, nil
+}
+print(read("{\"x\": 5}"))
+const [v, e2] = read("[1,")
+print(v, e2 != nil)
+
+const [conn, e3] = net.tcpConnect("127.0.0.1:99999")
+print(conn, typeof(e3))
+
+const [db, e4] = kv.open("folder/that/does/not/exist/x.tmp.redb")
+print(db, typeof(e4))
+
+// success: the value is returned directly (with lists, use `?`:
+// `const [a, b] = list` destructures the list itself)
+const ok = json.parse("[1, 2]")
+print(ok, typeof(ok))
+
+// programming errors still stop the program
+json.parse(42)

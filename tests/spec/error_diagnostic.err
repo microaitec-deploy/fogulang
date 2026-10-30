@@ -1,0 +1,4 @@
+error[E0201]: division by zero
+--> error_diagnostic.fg:2
+ 2 |     return xs.reduce
+= help: check the divisor before dividing

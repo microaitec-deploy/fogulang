@@ -1,0 +1,68 @@
+import { create_client } from "fogu:orm"
+
+const url = "sqlite://orm.tmp.db"
+
+fn schema(withBio) {
+    const fields = {
+        id:    { type: "String", primary: true, defaultValue: "uuid" },
+        name:  { type: "String", required: true },
+        score: { type: "Float",  defaultValue: 0 },
+        tags:  { type: "Json" },
+    }
+    if withBio {
+        fields.bio = { type: "String", defaultValue: "none" }
+    }
+    return {
+        provider: "sqlite",
+        url: url,
+        models: {
+            Author: {
+                fields: fields,
+                relations: { profile: { model: "Profile", kind: "one-to-one", foreignKey: "authorId" } }
+            },
+            Profile: {
+                fields: {
+                    id:       { type: "Int", primary: true, autoincrement: true },
+                    site:     { type: "String" },
+                    authorId: { type: "String", required: true, unique: true },
+                },
+                relations: { author: { model: "Author", kind: "many-to-one", foreignKey: "authorId" } }
+            }
+        }
+    }
+}
+
+// first version of the schema
+let db = create_client({ schema: schema(false), migrate: "auto" })?
+const ana = db.author.create({ data: { name: "Ana", tags: ["admin", "dev"] } })?
+print(len(ana.id), ana.score, ana.tags[1])                  // 36 0.0 dev
+db.author.createMany({ data: [{ name: "Bob", score: 2.5 }, { name: "carla", score: 9 }, { name: "Dan" }] })?
+db.profile.create({ data: { site: "ana.dev", authorId: ana.id } })?
+db.disconnect()
+
+// second version: a new column is added to the existing table
+db = create_client({ schema: schema(true), migrate: "auto" })?
+const a = db.author.findUnique({ where: { id: ana.id }, include: { profile: true } })?
+print(a.name, a.bio, a.profile.site)                        // Ana none ana.dev
+print(db.profile.findFirst({ include: { author: { select: { name: true } } } })?.author)
+
+const names = (opts) => db.author.findMany(opts)?.map((x) => x.name)
+print(names({ orderBy: { name: "asc" }, take: 2, skip: 1 }))
+print(names({ where: { name: { notIn: ["Ana", "Bob"] } }, orderBy: [{ score: "desc" }] }))
+print(names({ where: { name: { contains: "CAR", mode: "insensitive" } } }))
+print(names({ where: { NOT: { score: { lt: 5 } } } }))
+print(names({ where: { tags: nil }, orderBy: { name: "asc" } }))
+print(db.author.findFirst({ where: { name: "nobody" } })?)
+
+const up1 = db.author.upsert({ where: { name: "Eve" }, create: { name: "Eve", score: 1 }, update: { score: 7 } })?
+const up2 = db.author.upsert({ where: { name: "Eve" }, create: { name: "Eve", score: 1 }, update: { score: { multiply: 3 } } })?
+print(up1.score, up2.score, up1.id == up2.id)               // 1.0 3.0 true
+
+const gone = db.author.delete({ where: { name: "Dan" } })?
+print(gone.name, db.author.count()?)                        // Dan 4
+const [_, err] = db.author.delete({ where: { name: "Dan" } })
+print(err)
+const [_, dup] = db.profile.create({ data: { authorId: ana.id } })
+print(dup != nil)
+print(db.query("SELECT COUNT(*) AS n FROM \"Profile\"")?)
+db.disconnect()
