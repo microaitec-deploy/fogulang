@@ -10,7 +10,8 @@ use super::module::ModuleCache;
 use super::ops;
 use super::sched;
 use crate::native::NativeObjectRef;
-use super::value::{
+use super::symbol::Sym;
+use super::value::{param_syms, 
     BoundMethodValue, ChanValue, ErrorValue, FnValue, ModuleValue, NativeFnValue, Str, StructBoundMethodValue,
     StructInstance, StructTypeValue, Value,
     ERR_VALUE_PREFIX,
@@ -157,10 +158,10 @@ impl Interpreter {
     ) -> Result<(), String> {
         let mut e = env.borrow_mut();
         if self.redeclare_ok.get() {
-            e.define(name.to_string(), value, mutable);
+            e.define(name, value, mutable);
             Ok(())
         } else {
-            e.declare(name.to_string(), value, mutable)
+            e.declare(name, value, mutable)
         }
     }
 
@@ -339,7 +340,7 @@ impl Interpreter {
 
     /// Defines (or replaces) a global variable.
     pub fn set_global(&self, name: &str, v: Value) {
-        self.globals.borrow_mut().define(name.to_string(), v, true);
+        self.globals.borrow_mut().define(name, v, true);
     }
 
     /// The global scope (calls made by an embedding host run in it).
@@ -560,6 +561,7 @@ impl Interpreter {
                     let f = Value::Fn(Rc::new(FnValue {
                         name: name.clone(),
                         params: params.clone(),
+                        param_syms: param_syms(params),
                         body: Rc::clone(body),
                         closure: Some(Rc::clone(&env)),
                         module: env.borrow().module_name(),
@@ -763,6 +765,7 @@ impl Interpreter {
         let f = Value::Fn(Rc::new(FnValue {
             name: name.to_string(),
             params: params.to_vec(),
+            param_syms: param_syms(params),
             body: Rc::clone(body),
             closure: Some(Rc::clone(&env)),
             module: env.borrow().module_name(),
@@ -1312,6 +1315,7 @@ impl Interpreter {
         Ok(Value::Fn(Rc::new(FnValue {
             name: "<anonymous>".into(),
             params: params.to_vec(),
+            param_syms: param_syms(params),
             body: Rc::clone(body),
             closure: Some(Rc::clone(&env)),
             module: env.borrow().module_name(),
@@ -1903,7 +1907,7 @@ impl Interpreter {
 
         let parent = f.closure.clone().unwrap_or_else(|| self.globals.clone());
         let fn_env = Environment::with_parent(parent);
-        bind_params(&mut fn_env.borrow_mut(), &f.params, arg_vals);
+        bind_params(&mut fn_env.borrow_mut(), &f.params, &f.param_syms, arg_vals);
         let r = self.run_body(&f.name, &f.body, fn_env);
         if r.is_ok() {
             self.leave(saved);
@@ -1978,8 +1982,8 @@ impl Interpreter {
         );
         {
             let mut e = fn_env.borrow_mut();
-            e.define("this".into(), Value::Struct(Rc::clone(&receiver)), false);
-            bind_params(&mut e, &f.params, arg_vals);
+            e.define("this", Value::Struct(Rc::clone(&receiver)), false);
+            bind_params(&mut e, &f.params, &f.param_syms, arg_vals);
         }
         let r = self.run_body(&f.name, &f.body, fn_env);
         if r.is_ok() {
@@ -2232,6 +2236,7 @@ impl Interpreter {
                 Rc::new(FnValue {
                     name: format!("{}.{}", decl.name, mname),
                     params: params.clone(),
+                    param_syms: param_syms(params),
                     body: Rc::clone(body),
                     closure: Some(Rc::clone(denv)),
                     module: denv.borrow().module_name(),
@@ -2260,8 +2265,8 @@ impl Interpreter {
                 let ctor_env = Environment::with_parent(denv.clone());
                 {
                     let mut e = ctor_env.borrow_mut();
-                    e.define("this".into(), Value::Struct(Rc::clone(&inst)), false);
-                    bind_params(&mut e, params, args);
+                    e.define("this", Value::Struct(Rc::clone(&inst)), false);
+                    bind_params(&mut e, params, &[], args);
                 }
                 for stmt in body.iter() {
                     match self.exec(stmt, ctor_env.clone())? {
@@ -2392,16 +2397,23 @@ fn check_arity(what: &str, name: &str, params: &[String], n: usize) -> Result<()
 }
 
 /// Binds the arguments to the parameters; `...rest` receives the list of the rest.
-fn bind_params(e: &mut Environment, params: &[String], mut args: Vec<Value>) {
+/// Binds the arguments to the parameters; `syms` are the parameters' interned
+/// names when the function has them (a constructor binds by text).
+fn bind_params(e: &mut Environment, params: &[String], syms: &[Sym], mut args: Vec<Value>) {
     let rest = rest_param(params);
     let fixed = if rest.is_some() { params.len() - 1 } else { params.len() };
     let extra = if args.len() > fixed { args.split_off(fixed) } else { Vec::new() };
-    for (i, p) in params[..fixed].iter().enumerate() {
-        let v = args.get(i).cloned().unwrap_or(Value::Nil);
-        e.define(p.clone(), v, true);
+    // the common case: exactly the fixed parameters, moved into the scope
+    let mut it = args.into_iter();
+    for (i, _) in params[..fixed].iter().enumerate() {
+        let v = it.next().unwrap_or(Value::Nil);
+        match syms.get(i) {
+            Some(s) => e.define_sym(*s, v, true),
+            None => e.define(&params[i], v, true),
+        }
     }
     if let Some(r) = rest {
-        e.define(r.to_string(), Value::List(Rc::new(RefCell::new(extra))), true);
+        e.define(r, Value::List(Rc::new(RefCell::new(extra))), true);
     }
 }
 

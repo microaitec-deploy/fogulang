@@ -24,6 +24,13 @@ be incompatible changes (spec §75).
 
 ### Changed
 
+- Interpreter: block and call scopes keep their bindings in a small vector searched linearly
+  (the hash map stays for globals, modules and scopes with more than 16 names); parameters are
+  bound by their interned names (`FnValue::param_syms`) and declarations no longer allocate a
+  `String` per execution. Measured (1M iterations, no JIT): locals 242 → 225 ms, block scopes
+  450 → 415, calls 543 → 495.
+- `cargo build --profile profiling --features pprof` + `FOGU_PPROF=1`: an in-process sampling
+  profiler (no root) prints the hottest functions at exit.
 - `fogu add`: when `git ls-remote` fails because a repository is missing or private (git only
   says "could not read Username" / "terminal prompts disabled"), the error now says so and what
   to do (check `user/repo` and the host prefix, log in, use a token or an SSH key).

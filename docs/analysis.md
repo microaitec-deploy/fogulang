@@ -250,6 +250,18 @@
   arbitrary for a hash map: a map with mixed value types may bail with "would change
   type" (correct, slower) depending on which value comes first.
 
+## Fourteenth round (interpreter scopes, profile)
+
+- Profile of a plain `while` loop and of calls (`FOGU_PPROF=1`, no JIT), self time: the
+  `?` plumbing of `Result<Value, String>` 15%, `get_sym` (walk up the scopes, clone) 13%,
+  `eval_binary` 12%, `eval_assign` 6%, `Value::clone` 5%, `ok_or_else` of `Expr::Ident` 5%,
+  `assign_sym` 5%, `eval` dispatch 5%. Variable access is about a quarter of the time,
+  the `Result` moves a fifth, dispatch a sixth: the tree-walker is near its structural
+  limit (≈ 240 ns per simple loop iteration, 500 ns per call, 10× a bytecode VM).
+- Small scopes in a vector and parameters bound by interned symbols: 5–9% on locals, block
+  scopes and calls. The next real step is Phase 4 (the bytecode VM with slots resolved at
+  compile time), not more tuning of the tree-walker.
+
 ## Known gaps
 
 - `fogu:foguMQ-client` (FlowMQ v6) is tested against an in-process mock broker only (Rust unit

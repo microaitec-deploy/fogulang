@@ -53,7 +53,7 @@ fn create(args: &[Value], interp: &Interpreter) -> Result<Value, String> {
             let tokens = Lexer::new(SOURCE).tokenize().map_err(|e| format!("{}: {}", file, e))?;
             let program = Parser::new(tokens).parse_program().map_err(|e| format!("{}: {}", file, e))?;
             let env = interp.vm_env(false, file);
-            env.borrow_mut().define("safeCall".into(), native(SAFE_CALL), false);
+            env.borrow_mut().define("safeCall", native(SAFE_CALL), false);
             let f = interp.vm_run(&program, env, file, None)?;
             FACTORY_FN.with(|c| *c.borrow_mut() = Some(f.clone()));
             f

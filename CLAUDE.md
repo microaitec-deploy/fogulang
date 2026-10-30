@@ -27,6 +27,7 @@ cargo run --                          # REPL
 cargo test --release                  # unit tests of every crate + tests/spec (with and without JIT)
 cargo build --release --no-default-features --features network   # a smaller binary (features below)
 cargo build --release --target aarch64-unknown-linux-gnu        # ARM64 from x86_64 (OpenSSL vendored)
+cargo build --profile profiling --features pprof && FOGU_PPROF=1 target/profiling/fogu --no-jit x.fg   # hottest functions at exit (no root)
 FOGU_BLESS=1 cargo test --release     # regenerate the .out files (review the diff!)
 ```
 

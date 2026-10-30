@@ -19,6 +19,8 @@ name = "fogu"
 path = "src/main.rs"
 
 [dependencies]
+pprof = { version = "0.14", optional = true }
+libc = { version = "0.2", optional = true }
 # hash maps of Fogu values: fast and resistant to collision attacks (random seed)
 ahash = "0.8"
 fogu-core = { path = "crates/fogu-core" }
@@ -54,6 +56,9 @@ ai = ["fogu-std/ai"]
 media = ["fogu-std/media"]
 rpc = ["fogu-std/rpc"]
 vendored-openssl = ["fogu-std/vendored-openssl"]
+# `cargo build --profile profiling --features pprof`, then `FOGU_PPROF=1 fogu …`:
+# an in-process sampling profiler (no root needed) prints the hottest functions at exit
+pprof = ["dep:pprof", "dep:libc"]
 
 # debug builds: line tables only (backtraces keep file:line, linking is much faster)
 [profile.dev]

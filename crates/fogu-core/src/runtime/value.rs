@@ -41,6 +41,11 @@ pub enum Value {
     Error(Rc<ErrorValue>),
 }
 
+/// The interned names of a parameter list (for [`FnValue::param_syms`]).
+pub fn param_syms(params: &[String]) -> Vec<super::symbol::Sym> {
+    params.iter().map(|p| super::symbol::intern(p)).collect()
+}
+
 pub struct BoundMethodValue {
     pub receiver: NativeObjectRef,
     pub method: String,
@@ -76,6 +81,8 @@ pub struct ErrorValue {
 pub struct FnValue {
     pub name: String,
     pub params: Vec<String>,
+    /// The parameters' interned names: a call binds them without hashing text.
+    pub param_syms: Vec<super::symbol::Sym>,
     pub body: Block,
     pub closure: Option<Rc<RefCell<Environment>>>,
     /// File (module) where the function was defined — used in errors.

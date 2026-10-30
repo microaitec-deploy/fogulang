@@ -42,8 +42,8 @@ fn start(broker: Value, args: &[Value], interp: &Interpreter) -> Result<Value, S
     let tokens = Lexer::new(SOURCE).tokenize().map_err(|e| format!("{}: {}", file, e))?;
     let program = Parser::new(tokens).parse_program().map_err(|e| format!("{}: {}", file, e))?;
     let env: Rc<RefCell<Environment>> = interp.vm_env(false, file);
-    env.borrow_mut().define("broker".into(), broker, false);
-    env.borrow_mut().define("options".into(), Value::Map(Rc::new(RefCell::new(opts))), false);
+    env.borrow_mut().define("broker", broker, false);
+    env.borrow_mut().define("options", Value::Map(Rc::new(RefCell::new(opts))), false);
     // the route handlers keep `env` (and their bodies) alive after the run
     interp.vm_run(&program, env, file, None)
 }
