@@ -183,6 +183,7 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
   and more **do not exist yet**. The real status is in `CHECKLIST.md`; check the
   code before assuming anything.
 - `docs/cli.md`, `docs/packages.md`, `docs/jit.md` — reflect the current state.
+- `docs/bytecode.md` — the design of the bytecode VM (Phase 4): read it before touching `runtime/vm/`.
 - `docs/analysis.md` — history of fixes and **known gaps**; `CHANGELOG.md` —
   changes per version. Update both.
 - `docs/docs.html` — official user documentation (HTML + Tailwind); keep its
