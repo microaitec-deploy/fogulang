@@ -68,7 +68,7 @@ export const DocHeader: React.FC<DocHeaderProps> = ({
           <span>Fogu</span>
         </a>
         <span className="hidden sm:inline text-xs rounded-full border border-amber-200 dark:border-amber-900 text-amber-700 dark:text-amber-400 px-2 py-0.5">
-          v0.7.0
+          v0.7.2
         </span>
 
         {/* Quick Nav Anchors for Enterprise & Automation */}

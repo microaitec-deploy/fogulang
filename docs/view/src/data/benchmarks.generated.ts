@@ -7,7 +7,7 @@ export const BENCHMARKS = {
   "runs": 5,
   "versions": {
     "Bun": "bun 1.4.2",
-    "Fogu": "fogu 0.7.1",
+    "Fogu": "fogu 0.7.2",
     "Go": "go version go1.26.0 linux/amd64",
     "Python": "Python 3.10.12"
   },
@@ -23,11 +23,11 @@ export const BENCHMARKS = {
       "bench": "startup",
       "about": "Start the runtime and print one line.",
       "times": {
-        "Bun": 5.5,
-        "Fogu": 8.4,
-        "Fogu (no JIT)": 7.5,
-        "Go": 2.9,
-        "Python": 17.9
+        "Bun": 7.9,
+        "Fogu": 10.6,
+        "Fogu (no JIT)": 10.9,
+        "Go": 3.8,
+        "Python": 29.6
       },
       "before": 7.6
     },
@@ -35,11 +35,11 @@ export const BENCHMARKS = {
       "bench": "fib",
       "about": "Recursive calls: fib(32).",
       "times": {
-        "Bun": 21.9,
-        "Fogu": 42.0,
-        "Fogu (no JIT)": 2410.8,
-        "Go": 13.7,
-        "Python": 578.9
+        "Bun": 49.9,
+        "Fogu": 75.4,
+        "Fogu (no JIT)": 4890.2,
+        "Go": 29.8,
+        "Python": 1279.7
       },
       "before": 37.3
     },
@@ -47,11 +47,11 @@ export const BENCHMARKS = {
       "bench": "loop",
       "about": "An integer loop: 20 million iterations.",
       "times": {
-        "Bun": 42.4,
-        "Fogu": 39.7,
-        "Fogu (no JIT)": 3366.7,
-        "Go": 22.5,
-        "Python": 1909.1
+        "Bun": 89.6,
+        "Fogu": 88.3,
+        "Fogu (no JIT)": 8355.2,
+        "Go": 51.2,
+        "Python": 4053.4
       },
       "before": 37.6
     },
@@ -59,11 +59,11 @@ export const BENCHMARKS = {
       "bench": "mandel",
       "about": "Floating point: a 300×300 Mandelbrot grid, 50 iterations.",
       "times": {
-        "Bun": 16.3,
-        "Fogu": 47.5,
-        "Fogu (no JIT)": 1240.8,
-        "Go": 7.7,
-        "Python": 661.2
+        "Bun": 27.4,
+        "Fogu": 41.1,
+        "Fogu (no JIT)": 2860.8,
+        "Go": 13.1,
+        "Python": 1434.3
       },
       "before": 52.4
     },
@@ -71,11 +71,11 @@ export const BENCHMARKS = {
       "bench": "strings",
       "about": "Build 200k strings, join, split and measure them.",
       "times": {
-        "Bun": 68.6,
-        "Fogu": 86.1,
-        "Fogu (no JIT)": 149.7,
-        "Go": 46.5,
-        "Python": 131.0
+        "Bun": 111.0,
+        "Fogu": 135.3,
+        "Fogu (no JIT)": 286.7,
+        "Go": 89.0,
+        "Python": 231.5
       },
       "before": 264.7
     },
@@ -83,11 +83,11 @@ export const BENCHMARKS = {
       "bench": "maps",
       "about": "Insert 300k keys in a map, then read them back.",
       "times": {
-        "Bun": 298.3,
-        "Fogu": 228.9,
-        "Fogu (no JIT)": 355.7,
-        "Go": 203.6,
-        "Python": 298.4
+        "Bun": 561.1,
+        "Fogu": 308.7,
+        "Fogu (no JIT)": 744.9,
+        "Go": 323.5,
+        "Python": 578.2
       },
       "before": 653.8
     },
@@ -95,11 +95,11 @@ export const BENCHMARKS = {
       "bench": "records",
       "about": "JSON: stringify and parse 50k records.",
       "times": {
-        "Bun": 55.9,
-        "Fogu": 131.6,
-        "Fogu (no JIT)": 133.6,
-        "Go": 152.6,
-        "Python": 252.4
+        "Bun": 109.5,
+        "Fogu": 318.5,
+        "Fogu (no JIT)": 239.4,
+        "Go": 332.5,
+        "Python": 419.5
       },
       "before": 233.0
     },
@@ -107,11 +107,11 @@ export const BENCHMARKS = {
       "bench": "sort",
       "about": "Generate and sort 300k pseudo-random integers.",
       "times": {
-        "Bun": 21.4,
-        "Fogu": 35.1,
-        "Fogu (no JIT)": 116.4,
-        "Go": 38.3,
-        "Python": 219.4
+        "Bun": 44.6,
+        "Fogu": 101.7,
+        "Fogu (no JIT)": 246.8,
+        "Go": 86.4,
+        "Python": 466.8
       },
       "before": 221.6
     }
@@ -151,8 +151,8 @@ export const BENCHMARKS = {
     }
   ],
   "load": [
-    8.9,
-    4.1
+    1.06,
+    1.34
   ],
   "net": {
     "date": "2026-10-23",

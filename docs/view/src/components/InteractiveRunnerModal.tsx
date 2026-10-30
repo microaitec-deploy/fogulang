@@ -69,7 +69,7 @@ export const InteractiveRunnerModal: React.FC<InteractiveRunnerModalProps> = ({
               <Terminal className="w-4 h-4" />
             </span>
             <span className="font-semibold text-sm text-slate-900 dark:text-white">Fogu Interactive Playground</span>
-            <span className="text-xs text-slate-400 font-mono">(v0.7.0 runtime)</span>
+            <span className="text-xs text-slate-400 font-mono">(v0.7.2 runtime)</span>
           </div>
           <button
             onClick={onClose}

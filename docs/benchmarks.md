@@ -3,7 +3,7 @@
 Generated from `bench/results.json` by `docs/tools/gen_bench.py` — do not edit by hand.
 
 Machine: AMD Ryzen 7 5700U with Radeon Graphics (16 logical CPUs), linux x86_64. Date: 2026-10-30.
-Versions: bun 1.4.2, fogu 0.7.1, go version go1.26.0 linux/amd64, Python 3.10.12. Machine load (1-minute average): 8.9 at the start, 4.1 at the end.
+Versions: bun 1.4.2, fogu 0.7.2, go version go1.26.0 linux/amd64, Python 3.10.12. Machine load (1-minute average): 1.1 at the start, 1.3 at the end.
 Each number is the **median of 5 runs**, in milliseconds, of the whole process
 (start-up included). Lower is better. The languages are interleaved (each repetition runs
 every language once), so changes in the machine's load affect all of them alike. Every
@@ -11,14 +11,14 @@ program prints the same result in every language; the runner checks it. Bun is t
 
 | benchmark | what it measures | Fogu | Fogu (no JIT) | Bun | Go | Python |
 |---|---|---:|---:|---:|---:|---:|
-| startup | Start the runtime and print one line. | 8 | 8 | 6 | 3 | 18 |
-| fib | Recursive calls: fib(32). | 42 | 2,411 | 22 | 14 | 579 |
-| loop | An integer loop: 20 million iterations. | 40 | 3,367 | 42 | 22 | 1,909 |
-| mandel | Floating point: a 300×300 Mandelbrot grid, 50 iterations. | 48 | 1,241 | 16 | 8 | 661 |
-| strings | Build 200k strings, join, split and measure them. | 86 | 150 | 69 | 46 | 131 |
-| maps | Insert 300k keys in a map, then read them back. | 229 | 356 | 298 | 204 | 298 |
-| records | JSON: stringify and parse 50k records. | 132 | 134 | 56 | 153 | 252 |
-| sort | Generate and sort 300k pseudo-random integers. | 35 | 116 | 21 | 38 | 219 |
+| startup | Start the runtime and print one line. | 11 | 11 | 8 | 4 | 30 |
+| fib | Recursive calls: fib(32). | 75 | 4,890 | 50 | 30 | 1,280 |
+| loop | An integer loop: 20 million iterations. | 88 | 8,355 | 90 | 51 | 4,053 |
+| mandel | Floating point: a 300×300 Mandelbrot grid, 50 iterations. | 41 | 2,861 | 27 | 13 | 1,434 |
+| strings | Build 200k strings, join, split and measure them. | 135 | 287 | 111 | 89 | 232 |
+| maps | Insert 300k keys in a map, then read them back. | 309 | 745 | 561 | 324 | 578 |
+| records | JSON: stringify and parse 50k records. | 318 | 239 | 110 | 332 | 420 |
+| sort | Generate and sort 300k pseudo-random integers. | 102 | 247 | 45 | 86 | 467 |
 
 ## Before and after the optimizations
 
@@ -28,14 +28,14 @@ differences of a few percent are noise.
 
 | benchmark | before | now | change |
 |---|---:|---:|---:|
-| startup | 8 | 8 | +11% |
-| fib | 37 | 42 | +13% |
-| loop | 38 | 40 | +6% |
-| mandel | 52 | 48 | -9% |
-| strings | 265 | 86 | -67% |
-| maps | 654 | 229 | -65% |
-| records | 233 | 132 | -44% |
-| sort | 222 | 35 | -84% |
+| startup | 8 | 11 | +39% |
+| fib | 37 | 75 | +102% |
+| loop | 38 | 88 | +135% |
+| mandel | 52 | 41 | -22% |
+| strings | 265 | 135 | -49% |
+| maps | 654 | 309 | -53% |
+| records | 233 | 318 | +37% |
+| sort | 222 | 102 | -54% |
 
 ## Optimizations made
 

@@ -106,7 +106,7 @@ export default function App() {
           <BenchmarksSection />
 
           <footer className="mt-20 border-t border-slate-200 dark:border-slate-800 pt-6 pb-10 text-sm text-slate-500">
-            Fogu v0.7.0 · MIT License · © 2026 Edmilson Soares · Documentation for the Rust reference implementation.
+            Fogu v0.7.2 · MIT License · © 2026 Edmilson Soares · Documentation for the Rust reference implementation.
           </footer>
         </main>
       </div>

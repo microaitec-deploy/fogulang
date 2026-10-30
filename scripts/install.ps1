@@ -2,7 +2,7 @@
 # a folder and adds that folder to the PATH.
 #
 #   powershell -c "iex (irm @FOGU_SERVER@/install.ps1)"          # from cmd or PowerShell
-#   $env:FOGU_VERSION = "0.7.1"; iex (irm @FOGU_SERVER@/install.ps1)   # a specific version
+#   $env:FOGU_VERSION = "0.7.2"; iex (irm @FOGU_SERVER@/install.ps1)   # a specific version
 #   .\scripts\install.ps1                      # %LOCALAPPDATA%\Fogu\bin, the user's PATH
 #   .\scripts\install.ps1 -System              # %ProgramFiles%\Fogu, the system PATH (run as administrator)
 #   .\scripts\install.ps1 -From target\release\fogu.exe   # copy a local build instead of downloading

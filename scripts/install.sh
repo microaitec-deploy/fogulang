@@ -3,7 +3,7 @@
 # one), puts it in a folder and adds that folder to the PATH.
 #
 #   curl -fsSL @FOGU_SERVER@/install.sh | sh
-#   curl -fsSL @FOGU_SERVER@/install.sh | FOGU_VERSION=0.7.1 sh   # a specific version
+#   curl -fsSL @FOGU_SERVER@/install.sh | FOGU_VERSION=0.7.2 sh   # a specific version
 #   sh scripts/install.sh                        # ~/.fogu/bin, added to your shell's PATH
 #   sh scripts/install.sh --system               # /usr/local/bin (for every user; asks for sudo)
 #   sh scripts/install.sh --from target/release/fogu   # copy a local build instead of downloading

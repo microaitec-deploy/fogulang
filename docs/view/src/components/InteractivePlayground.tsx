@@ -247,7 +247,7 @@ export const InteractivePlayground: React.FC = () => {
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" />
                 <span>stdout / stderr (fogu run)</span>
               </div>
-              <span className="text-[11px] text-slate-500">v0.7.0 (Rust)</span>
+              <span className="text-[11px] text-slate-500">v0.7.2 (Rust)</span>
             </div>
 
             <div className="p-4 flex-1 font-mono text-xs leading-relaxed overflow-y-auto space-y-2">
