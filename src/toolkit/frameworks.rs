@@ -25,7 +25,7 @@ const MCU_HELP: &str = "fogu mcu — microcontroller firmware in Fogu
 
   fogu mcu boards                        board profiles and chips
   fogu mcu ports                         serial ports and boot drives
-  fogu mcu build <app.fg> [--board B] [-o out]
+  fogu mcu build <app.fg> [--board B] [--console usb|uart] [-o out]
   fogu mcu flash <file|app.fg> [--board B] [--port COM5] [--drive E:]
   fogu mcu run <app.fg> [--board B] [--port COM3]   build + flash + monitor
   fogu mcu monitor [--port COM3] [--seconds N]

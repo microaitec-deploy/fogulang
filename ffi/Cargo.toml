@@ -1,6 +1,6 @@
 [package]
 name = "fogu-ffi"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2024"
 description = "C API of the Fogu runtime: libfogu_rt (.so / .dll / .dylib) to embed Fogu in other programs"
 license = "MIT"

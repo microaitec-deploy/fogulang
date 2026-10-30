@@ -1,0 +1,27 @@
+// A library installed from GitHub. `fogu install` reads fogu.json (and the
+// lock, when present) and fetches the package into ~/.fogu/fogu_modules;
+// `fogu add microaitec-deploy/fogulang_module` is how the dependency was added.
+//
+//   fogu install && fogu main.fg
+//
+// Every source form `fogu add` accepts (the first two are the same repository):
+//   fogu add microaitec-deploy/fogulang_module                     GitHub shorthand
+//   fogu add github:microaitec-deploy/fogulang_module              with the host prefix
+//   fogu add microaitec-deploy/fogulang_module#main                a branch, tag or commit
+//   fogu add microaitec-deploy/fogulang_module@^0.1.0              the highest matching vX.Y.Z tag
+//   fogu add https://github.com/microaitec-deploy/fogulang_module  a URL (.git optional)
+//   fogu add git@github.com:microaitec-deploy/fogulang_module.git  over SSH (your key)
+//   fogu add gitlab:group/repo · bitbucket:user/repo · codeberg:user/repo
+//   fogu add greet@github:microaitec-deploy/fogulang_module        import it as "greet"
+//   fogu add ./folder · https://host/pkg.tar.gz · mcu              a folder, an archive, the Fogu server
+
+import mod from "fogulang_module"
+import { Counter } from "fogulang_module"
+
+print("fogulang_module", mod.version)
+print(mod.greet("Ana"))
+print(mod.greet("Ana", "pt"))
+print(mod.slug("Hello World  Fogu"))
+print(mod.sum([1, 2, 3]))
+const c = new Counter(5)
+print(c.next(), c.next())

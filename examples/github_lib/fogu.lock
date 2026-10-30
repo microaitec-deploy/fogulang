@@ -1,0 +1,12 @@
+{
+  "lockfileVersion": 1,
+  "packages": {
+    "fogulang_module": {
+      "spec": "github:microaitec-deploy/fogulang_module",
+      "resolved": "https://github.com/microaitec-deploy/fogulang_module.git",
+      "commit": "62699136b8f7ae7f00af6d519ea141df3f4f95ac",
+      "version": "0.1.0",
+      "integrity": "sha256-81b2e78f931d5b70280bca11fe4502c550a2d581c58cf8a69b75aa794666ce03"
+    }
+  }
+}

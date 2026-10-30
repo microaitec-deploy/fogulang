@@ -1,6 +1,6 @@
 [package]
 name = "fogu-pkg"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2024"
 description = "Package manager of the Fogu language: git/tar/folder sources, semver, global store and fogu.lock"
 authors = ["Edmilson Soares"]

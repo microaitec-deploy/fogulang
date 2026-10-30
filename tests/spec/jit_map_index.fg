@@ -1,0 +1,59 @@
+// Maps inside hot loops: `m[key] = value` and `m[key]` with a text key the
+// JIT builds, `m.len()`. Reads speculate the value type from the map's
+// first value; a missing key or another type deopts (the interpreter redoes
+// the iteration). Same output with and without the JIT.
+
+// insert and read back (the `maps` benchmark's shape)
+const m = {}
+for i in 0..3000 { m["k" + str(i)] = i }
+let sum = 0
+for i in 0..3000 { sum = sum + m["k" + str(i)] }
+print(m.len(), sum)
+
+// values of every kind, keys from templates
+const kinds = {}
+for i in 0..200 {
+    kinds[`int${i}`] = i
+    kinds[`float${i}`] = i * 0.5
+    kinds[`bool${i}`] = i % 2 == 0
+    kinds[`text${i}`] = "t" + str(i)
+    kinds[`list${i}`] = [i, i + 1]
+    kinds[`map${i}`] = { v: i }
+}
+print(kinds.len(), kinds["int7"], kinds["float7"], kinds["bool7"], kinds["text7"], kinds["list7"], kinds["map7"].v)
+
+// the value type changes inside the loop (ints, then a float at v25): the
+// read speculated int, deopts there, and the interpreter finishes the loop
+const mix = {}
+for i in 0..50 { mix["v" + str(i)] = i }
+mix["v25"] = 25.5
+let total = 0
+for i in 0..50 { total = total + mix["v" + str(i)] }
+print(total)
+
+// a missing key: the JIT deopts, the interpreter sees `nil` and uses `??`
+const sparse = {}
+for i in 0..100 { if i % 2 == 0 { sparse["k" + str(i)] = i } }
+let hits = 0
+for i in 0..100 { hits = hits + (sparse["k" + str(i)] ?? 0) }
+print(hits)
+
+// a map local to a function, in a while loop; floats
+fn histogram(n) {
+    const h = {}
+    let i = 0
+    while i < n {
+        h["b" + str(i % 7)] = i * 1.5
+        i += 1
+    }
+    return h
+}
+const h = histogram(700)
+print(h.len(), h["b0"], h["b6"])
+
+// counting with a read followed by a write of the same key
+const counts = { x: 0 }
+for i in 0..1000 {
+    counts["x"] = counts["x"] + 1
+}
+print(counts["x"])

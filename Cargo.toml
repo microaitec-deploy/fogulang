@@ -1,6 +1,6 @@
 [package]
 name = "fogu"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2024"
 description = "Reference implementation of the Fogu language: interpreter, Cranelift JIT, REPL and package manager"
 authors = ["Edmilson Soares"]

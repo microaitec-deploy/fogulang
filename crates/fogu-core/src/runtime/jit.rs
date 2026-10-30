@@ -101,15 +101,21 @@ enum Ty {
     /// Result of `print(...)` (nil). Never stored in variables.
     Unit,
     /// A list held by a loop variable (a pointer to its `RefCell<Vec<Value>>`,
-    /// kept alive by the environment). Only `xs.push(number)` compiles; any
-    /// other use bails, and the variable can't be reassigned in the loop.
+    /// kept alive by the environment): `xs.push(…)`, `xs.len()` and, with a
+    /// speculated element type, `xs[i]`. The variable can't be reassigned.
     List,
+    /// A map held by a loop variable (a pointer to its `RefCell<HashMap>`):
+    /// `m[k] = v`, `m.len()` and, with a speculated value type, `m[k]`.
+    Map,
+    /// A text that native code only reads: a pointer to a `Value::Str` owned
+    /// by the list a `for x in list` loop walks (a snapshot, never modified).
+    Str,
 }
 
 impl Ty {
     fn clif(self) -> ir::Type {
         match self {
-            Ty::Int | Ty::List => types::I64,
+            Ty::Int | Ty::List | Ty::Map | Ty::Str => types::I64,
             Ty::Float => types::F64,
             Ty::Bool | Ty::Unit => types::I8,
         }
@@ -119,8 +125,8 @@ impl Ty {
             Ty::Int => 1,
             Ty::Float => 2,
             Ty::Bool => 3,
-            // never part of a function key: lists only live in loop slots
-            Ty::Unit | Ty::List => 0,
+            // never part of a function key: these only live in loop slots
+            Ty::Unit | Ty::List | Ty::Map | Ty::Str => 0,
         }
     }
     fn from_code(c: u64) -> Ty {
@@ -175,8 +181,16 @@ struct JitCtx {
     depth: i64,
     depth_limit: i64,
     line: i64,
+    /// Set by a helper whose speculation failed (wrong type, missing key,
+    /// index out of range): the loop leaves and the interpreter redoes the
+    /// iteration (`LoopOutcome::Deopt`).
+    deopt: i64,
+    /// Where the interpreter resumes: the index of the iteration being redone.
+    resume: i64,
 }
 const OFF_LINE: i32 = 24;
+const OFF_DEOPT: i32 = 32;
+const OFF_RESUME: i32 = 40;
 const OFF_ERR: i32 = 0;
 const OFF_DEPTH: i32 = 8;
 const OFF_LIMIT: i32 = 16;
@@ -310,6 +324,185 @@ extern "C" fn h_print_nl() {
     println!();
 }
 
+// ---- speculation: lists, maps and texts inside loops ----
+//
+// A helper that reads a value the loop assumed a type for checks it; when the
+// assumption fails it sets `ctx.deopt` and the loop leaves before any side
+// effect of the iteration, so the interpreter redoes that iteration exactly.
+
+fn deopt(ctx: *mut JitCtx) {
+    unsafe { (*ctx).deopt = 1 };
+}
+fn sval<'a>(p: i64) -> &'a Value {
+    // SAFETY: `p` points into a list snapshot owned by the loop (never modified)
+    unsafe { &*(p as *const Value) }
+}
+/// Appends the text of a `Ty::Str` value to a builder.
+extern "C" fn h_sb_str(b: i64, p: i64) {
+    if let Value::Str(s) = sval(p) {
+        sb(b).push_str(s.as_str());
+    }
+}
+extern "C" fn h_print_sv(p: i64) {
+    if let Value::Str(s) = sval(p) {
+        print!("{}", s.as_str());
+    }
+}
+extern "C" fn h_str_len(p: i64) -> i64 {
+    match sval(p) {
+        Value::Str(s) => s.char_len() as i64,
+        _ => 0,
+    }
+}
+extern "C" fn h_list_len(list: i64) -> i64 {
+    let l = unsafe { &*(list as *const RefCell<Vec<Value>>) };
+    l.borrow().len() as i64
+}
+extern "C" fn h_map_len(map: i64) -> i64 {
+    let m = unsafe { &*(map as *const RefCell<HashMap<String, Value>>) };
+    m.borrow().len() as i64
+}
+/// Element `idx` of the snapshot `items` (a `*const Value` array), typed.
+fn elem<'a>(items: i64, idx: i64) -> &'a Value {
+    // SAFETY: the loop runs 0..len over a snapshot the caller keeps alive
+    unsafe { &*(items as *const Value).add(idx as usize) }
+}
+extern "C" fn h_elem_i64(ctx: *mut JitCtx, items: i64, idx: i64) -> i64 {
+    match elem(items, idx) {
+        Value::Int(n) => *n,
+        _ => {
+            deopt(ctx);
+            0
+        }
+    }
+}
+extern "C" fn h_elem_f64(ctx: *mut JitCtx, items: i64, idx: i64) -> f64 {
+    match elem(items, idx) {
+        Value::Float(x) => *x,
+        _ => {
+            deopt(ctx);
+            0.0
+        }
+    }
+}
+extern "C" fn h_elem_bool(ctx: *mut JitCtx, items: i64, idx: i64) -> i64 {
+    match elem(items, idx) {
+        Value::Bool(b) => *b as i64,
+        _ => {
+            deopt(ctx);
+            0
+        }
+    }
+}
+extern "C" fn h_elem_str(ctx: *mut JitCtx, items: i64, idx: i64) -> i64 {
+    let v = elem(items, idx);
+    match v {
+        Value::Str(_) => v as *const Value as i64,
+        _ => {
+            deopt(ctx);
+            0
+        }
+    }
+}
+/// `xs[i]` with the interpreter's index rules; anything unexpected deopts
+/// (the interpreter then raises its own error or returns the real value).
+fn list_at(list: i64, i: i64) -> Option<Value> {
+    let l = unsafe { &*(list as *const RefCell<Vec<Value>>) };
+    let v = l.borrow();
+    let len = v.len() as i64;
+    let idx = if i < 0 { i + len } else { i };
+    if idx < 0 || idx >= len {
+        return None;
+    }
+    Some(v[idx as usize].clone())
+}
+extern "C" fn h_list_get_i64(ctx: *mut JitCtx, list: i64, i: i64) -> i64 {
+    match list_at(list, i) {
+        Some(Value::Int(n)) => n,
+        _ => {
+            deopt(ctx);
+            0
+        }
+    }
+}
+extern "C" fn h_list_get_f64(ctx: *mut JitCtx, list: i64, i: i64) -> f64 {
+    match list_at(list, i) {
+        Some(Value::Float(x)) => x,
+        _ => {
+            deopt(ctx);
+            0.0
+        }
+    }
+}
+extern "C" fn h_list_get_bool(ctx: *mut JitCtx, list: i64, i: i64) -> i64 {
+    match list_at(list, i) {
+        Some(Value::Bool(b)) => b as i64,
+        _ => {
+            deopt(ctx);
+            0
+        }
+    }
+}
+/// `m[key]`: the key is a builder (consumed); a missing key or another type deopts.
+fn map_at(map: i64, b: i64) -> Option<Value> {
+    // SAFETY: `b` comes from `h_sb_new` and is consumed exactly once here
+    let key = unsafe { Box::from_raw(b as *mut String) };
+    let m = unsafe { &*(map as *const RefCell<HashMap<String, Value>>) };
+    let r = m.borrow().get(key.as_str()).cloned();
+    r
+}
+extern "C" fn h_map_get_i64(ctx: *mut JitCtx, map: i64, b: i64) -> i64 {
+    match map_at(map, b) {
+        Some(Value::Int(n)) => n,
+        _ => {
+            deopt(ctx);
+            0
+        }
+    }
+}
+extern "C" fn h_map_get_f64(ctx: *mut JitCtx, map: i64, b: i64) -> f64 {
+    match map_at(map, b) {
+        Some(Value::Float(x)) => x,
+        _ => {
+            deopt(ctx);
+            0.0
+        }
+    }
+}
+extern "C" fn h_map_get_bool(ctx: *mut JitCtx, map: i64, b: i64) -> i64 {
+    match map_at(map, b) {
+        Some(Value::Bool(x)) => x as i64,
+        _ => {
+            deopt(ctx);
+            0
+        }
+    }
+}
+/// `m[key] = v`: the key is a builder (consumed).
+fn map_set(map: i64, b: i64, v: Value) {
+    // SAFETY: `b` comes from `h_sb_new` and is consumed exactly once here
+    let key = unsafe { Box::from_raw(b as *mut String) };
+    let m = unsafe { &*(map as *const RefCell<HashMap<String, Value>>) };
+    m.borrow_mut().insert(*key, v);
+}
+extern "C" fn h_map_set_i64(map: i64, b: i64, v: i64) {
+    map_set(map, b, Value::Int(v));
+}
+extern "C" fn h_map_set_f64(map: i64, b: i64, v: f64) {
+    map_set(map, b, Value::Float(v));
+}
+extern "C" fn h_map_set_bool(map: i64, b: i64, v: i64) {
+    map_set(map, b, Value::Bool(v & 0xff != 0));
+}
+extern "C" fn h_map_set_sb(map: i64, b: i64, text: i64) {
+    // SAFETY: `text` comes from `h_sb_new` and is consumed exactly once here
+    let t = unsafe { Box::from_raw(text as *mut String) };
+    map_set(map, b, Value::Str((*t).into()));
+}
+extern "C" fn h_map_set_v(map: i64, b: i64, v: i64) {
+    map_set(map, b, vtake(v));
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Helper {
     Ipow,
@@ -339,10 +532,30 @@ enum Helper {
     VMap,
     VMapSet,
     ListPushV,
+    SbStr,
+    PrintSv,
+    StrLen,
+    ListLen,
+    MapLen,
+    ElemI64,
+    ElemF64,
+    ElemBool,
+    ElemStr,
+    ListGetI64,
+    ListGetF64,
+    ListGetBool,
+    MapGetI64,
+    MapGetF64,
+    MapGetBool,
+    MapSetI64,
+    MapSetF64,
+    MapSetBool,
+    MapSetSb,
+    MapSetV,
 }
 
 impl Helper {
-    const ALL: [Helper; 27] = [
+    const ALL: &[Helper] = &[
         Helper::Ipow,
         Helper::Fpow,
         Helper::Fmod,
@@ -370,6 +583,26 @@ impl Helper {
         Helper::VMap,
         Helper::VMapSet,
         Helper::ListPushV,
+        Helper::SbStr,
+        Helper::PrintSv,
+        Helper::StrLen,
+        Helper::ListLen,
+        Helper::MapLen,
+        Helper::ElemI64,
+        Helper::ElemF64,
+        Helper::ElemBool,
+        Helper::ElemStr,
+        Helper::ListGetI64,
+        Helper::ListGetF64,
+        Helper::ListGetBool,
+        Helper::MapGetI64,
+        Helper::MapGetF64,
+        Helper::MapGetBool,
+        Helper::MapSetI64,
+        Helper::MapSetF64,
+        Helper::MapSetBool,
+        Helper::MapSetSb,
+        Helper::MapSetV,
     ];
     fn name(self) -> &'static str {
         match self {
@@ -400,6 +633,26 @@ impl Helper {
             Helper::VMap => "fogu_v_map",
             Helper::VMapSet => "fogu_v_map_set",
             Helper::ListPushV => "fogu_list_push_v",
+            Helper::SbStr => "fogu_sb_str",
+            Helper::PrintSv => "fogu_print_sv",
+            Helper::StrLen => "fogu_str_len",
+            Helper::ListLen => "fogu_list_len",
+            Helper::MapLen => "fogu_map_len",
+            Helper::ElemI64 => "fogu_elem_i64",
+            Helper::ElemF64 => "fogu_elem_f64",
+            Helper::ElemBool => "fogu_elem_bool",
+            Helper::ElemStr => "fogu_elem_str",
+            Helper::ListGetI64 => "fogu_list_get_i64",
+            Helper::ListGetF64 => "fogu_list_get_f64",
+            Helper::ListGetBool => "fogu_list_get_bool",
+            Helper::MapGetI64 => "fogu_map_get_i64",
+            Helper::MapGetF64 => "fogu_map_get_f64",
+            Helper::MapGetBool => "fogu_map_get_bool",
+            Helper::MapSetI64 => "fogu_map_set_i64",
+            Helper::MapSetF64 => "fogu_map_set_f64",
+            Helper::MapSetBool => "fogu_map_set_bool",
+            Helper::MapSetSb => "fogu_map_set_sb",
+            Helper::MapSetV => "fogu_map_set_v",
         }
     }
     fn addr(self) -> *const u8 {
@@ -431,6 +684,26 @@ impl Helper {
             Helper::VMap => h_v_map as *const u8,
             Helper::VMapSet => h_v_map_set as *const u8,
             Helper::ListPushV => h_list_push_v as *const u8,
+            Helper::SbStr => h_sb_str as *const u8,
+            Helper::PrintSv => h_print_sv as *const u8,
+            Helper::StrLen => h_str_len as *const u8,
+            Helper::ListLen => h_list_len as *const u8,
+            Helper::MapLen => h_map_len as *const u8,
+            Helper::ElemI64 => h_elem_i64 as *const u8,
+            Helper::ElemF64 => h_elem_f64 as *const u8,
+            Helper::ElemBool => h_elem_bool as *const u8,
+            Helper::ElemStr => h_elem_str as *const u8,
+            Helper::ListGetI64 => h_list_get_i64 as *const u8,
+            Helper::ListGetF64 => h_list_get_f64 as *const u8,
+            Helper::ListGetBool => h_list_get_bool as *const u8,
+            Helper::MapGetI64 => h_map_get_i64 as *const u8,
+            Helper::MapGetF64 => h_map_get_f64 as *const u8,
+            Helper::MapGetBool => h_map_get_bool as *const u8,
+            Helper::MapSetI64 => h_map_set_i64 as *const u8,
+            Helper::MapSetF64 => h_map_set_f64 as *const u8,
+            Helper::MapSetBool => h_map_set_bool as *const u8,
+            Helper::MapSetSb => h_map_set_sb as *const u8,
+            Helper::MapSetV => h_map_set_v as *const u8,
         }
     }
     fn params_ret(self) -> (Vec<ir::Type>, Option<ir::Type>) {
@@ -452,6 +725,15 @@ impl Helper {
             Helper::VFloat => (vec![F64], Some(I64)),
             Helper::VListAdd | Helper::ListPushV => (vec![I64, I64], None),
             Helper::VMapSet => (vec![I64, I64, I64, I64], None),
+            Helper::SbStr => (vec![I64, I64], None),
+            Helper::PrintSv => (vec![I64], None),
+            Helper::StrLen | Helper::ListLen | Helper::MapLen => (vec![I64], Some(I64)),
+            Helper::ElemI64 | Helper::ElemBool | Helper::ElemStr => (vec![I64, I64, I64], Some(I64)),
+            Helper::ElemF64 => (vec![I64, I64, I64], Some(F64)),
+            Helper::ListGetI64 | Helper::ListGetBool | Helper::MapGetI64 | Helper::MapGetBool => (vec![I64, I64, I64], Some(I64)),
+            Helper::ListGetF64 | Helper::MapGetF64 => (vec![I64, I64, I64], Some(F64)),
+            Helper::MapSetI64 | Helper::MapSetBool | Helper::MapSetSb | Helper::MapSetV => (vec![I64, I64, I64], None),
+            Helper::MapSetF64 => (vec![I64, I64, F64], None),
         }
     }
 }
@@ -486,8 +768,13 @@ enum Spec {
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct LoopKey {
     id: u32,
-    is_for: bool,
+    /// 0 `while`, 1 `for a..b`, 2 `for x in list`
+    kind: u8,
     slots: Vec<(String, Ty, bool)>,
+    /// Speculated element type of each list slot / value type of each map slot.
+    spec: Vec<(String, Ty)>,
+    /// Speculated element type of the list a `for x in list` loop walks.
+    elem: Option<Ty>,
 }
 
 enum LoopEntry {
@@ -503,6 +790,8 @@ struct Stats {
     compile_time_us: u128,
     native_calls: u64,
     native_loops: u64,
+    /// Loops that left early because a speculation failed.
+    deopts: u64,
 }
 
 // ======================================================================
@@ -540,13 +829,13 @@ impl Inner {
             .finish(settings::Flags::new(flags))
             .map_err(|e| e.to_string())?;
         let mut jb = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
-        for h in Helper::ALL {
+        for &h in Helper::ALL {
             jb.symbol(h.name(), h.addr());
         }
         let mut module = JITModule::new(jb);
 
         let mut helper_ids = HashMap::new();
-        for h in Helper::ALL {
+        for &h in Helper::ALL {
             let (ps, r) = h.params_ret();
             let mut sig = module.make_signature();
             for p in ps {
@@ -577,7 +866,7 @@ impl Inner {
             tent: HashMap::new(),
             guess_fails: HashMap::new(),
             loops: HashMap::new(),
-            ctx: Box::new(JitCtx { err: 0, depth: 0, depth_limit: 0, line: 0 }),
+            ctx: Box::new(JitCtx { err: 0, depth: 0, depth_limit: 0, line: 0, deopt: 0, resume: 0 }),
             epoch: redefine_epoch(),
             counter: 0,
             debug,
@@ -884,8 +1173,9 @@ impl Inner {
         &mut self,
         kind: &LoopKind,
         env: &Rc<RefCell<Environment>>,
-        slots: &[(String, Ty, bool)],
+        key: &LoopKey,
     ) -> R<(usize, Vec<bool>)> {
+        let slots = &key.slots;
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::I64)); // ctx
         sig.params.push(AbiParam::new(types::I64)); // slots*
@@ -905,6 +1195,8 @@ impl Inner {
         {
             let b = FunctionBuilder::new(&mut ctx.func, &mut fbc);
             let mut g = Gen::new(self, b, Rc::clone(env), None, None);
+            g.spec = key.spec.iter().cloned().collect();
+            g.elem = key.elem;
             let slots_ptr = g.prologue_loop(slots)?;
             match kind {
                 LoopKind::While { cond, body } => g.gen_while(cond, body)?,
@@ -913,6 +1205,12 @@ impl Inner {
                     let lo = g.b.ins().load(types::I64, MemFlagsData::trusted(), slots_ptr, (8 * n) as i32);
                     let hi = g.b.ins().load(types::I64, MemFlagsData::trusted(), slots_ptr, (8 * (n + 1)) as i32);
                     g.gen_for_range(var, lo, hi, body)?;
+                }
+                LoopKind::ForList { var, body, .. } => {
+                    let n = slots.len();
+                    let items = g.b.ins().load(types::I64, MemFlagsData::trusted(), slots_ptr, (8 * n) as i32);
+                    let len = g.b.ins().load(types::I64, MemFlagsData::trusted(), slots_ptr, (8 * (n + 1)) as i32);
+                    g.gen_for_list(var, items, len, body)?;
                 }
             }
             g.epilogue_loop(slots_ptr, slots);
@@ -1095,6 +1393,26 @@ struct Gen<'a, 'f> {
     slots_assigned: Vec<bool>,
     /// For loops: slot pointer and which ones to also save on error.
     wb: Option<(ir::Value, Vec<(usize, String)>)>,
+    // ---- speculation (loops only) ----
+    /// Speculated element type per list slot / value type per map slot.
+    spec: HashMap<String, Ty>,
+    /// Speculated element type of a `for x in list` loop.
+    elem: Option<Ty>,
+    /// The slot array (loops).
+    slots_ptr: Option<ir::Value>,
+    /// Mutable slots: (slot, its variable, its value at the start of the
+    /// current iteration of the compiled loop) — restored on deopt.
+    commits: Vec<(usize, Variable, Variable)>,
+    /// The iteration the interpreter resumes at after a deopt.
+    resume_var: Option<Variable>,
+    deopt_block: Option<ir::Block>,
+    /// The next loop compiled is the loop itself (not one nested in its body).
+    top_loop: bool,
+    /// A side effect of the current iteration was emitted (push, map set,
+    /// print, a call): from here on no speculation may fail.
+    effects: bool,
+    /// Guards emitted so far.
+    guards: usize,
 }
 
 impl<'a, 'f> Gen<'a, 'f> {
@@ -1124,6 +1442,15 @@ impl<'a, 'f> Gen<'a, 'f> {
             dead: false,
             slots_assigned: Vec::new(),
             wb: None,
+            spec: HashMap::new(),
+            elem: None,
+            slots_ptr: None,
+            commits: Vec::new(),
+            resume_var: None,
+            deopt_block: None,
+            top_loop: false,
+            effects: false,
+            guards: 0,
         }
     }
 
@@ -1160,8 +1487,83 @@ impl<'a, 'f> Gen<'a, 'f> {
                 name.clone(),
                 Local { var, ty: *ty, mutable: *mutable, slot: Some(i) },
             );
+            if *mutable {
+                let c = self.b.declare_var(ty.clif());
+                self.b.def_var(c, v);
+                self.commits.push((i, var, c));
+            }
         }
+        let r = self.b.declare_var(types::I64);
+        let z = self.b.ins().iconst(types::I64, 0);
+        self.b.def_var(r, z);
+        self.resume_var = Some(r);
+        self.slots_ptr = Some(slots_ptr);
+        self.top_loop = true;
         Ok(slots_ptr)
+    }
+
+    /// Start of an iteration of the compiled loop: remembers the variables
+    /// (a deopt restores them) and where the interpreter would resume.
+    fn iteration_start(&mut self, idx: Option<ir::Value>) {
+        if !self.top_loop {
+            return;
+        }
+        self.top_loop = false;
+        for (_, var, c) in self.commits.clone() {
+            let v = self.b.use_var(var);
+            self.b.def_var(c, v);
+        }
+        if let Some(r) = self.resume_var {
+            let i = match idx {
+                Some(i) => i,
+                None => self.b.ins().iconst(types::I64, 0),
+            };
+            self.b.def_var(r, i);
+        }
+    }
+
+    /// A nested loop's body ran side effects *and* guards: a guard of a later
+    /// nested iteration would run after effects of an earlier one.
+    fn nested_loop_check(&self, effects_before: bool, guards_before: usize) -> R<()> {
+        if !effects_before && self.effects && self.guards > guards_before {
+            return bail("speculation inside a nested loop with side effects");
+        }
+        Ok(())
+    }
+
+    /// Something observable happened in this iteration.
+    fn effect(&mut self) {
+        self.effects = true;
+    }
+
+    /// A helper that may fail its speculation is about to run: allowed only
+    /// in a loop and before any side effect of the iteration.
+    fn guard_ok(&self) -> R<()> {
+        if self.resume_var.is_none() {
+            return bail("speculation outside a compiled loop");
+        }
+        if self.effects {
+            return bail("speculation after a side effect in the iteration");
+        }
+        Ok(())
+    }
+
+    /// After such a helper: leave the loop when it deopted.
+    fn guard_branch(&mut self) {
+        self.guards += 1;
+        let blk = match self.deopt_block {
+            Some(b) => b,
+            None => {
+                let b = self.b.create_block();
+                self.b.set_cold_block(b);
+                self.deopt_block = Some(b);
+                b
+            }
+        };
+        let d = self.b.ins().load(types::I64, MemFlagsData::trusted(), self.ctx_ptr, OFF_DEOPT);
+        let cont = self.b.create_block();
+        self.b.ins().brif(d, blk, &[], cont, &[]);
+        self.b.switch_to_block(cont);
     }
 
     fn epilogue_loop(&mut self, slots_ptr: ir::Value, slots: &[(String, Ty, bool)]) {
@@ -1222,6 +1624,22 @@ impl<'a, 'f> Gen<'a, 'f> {
             self.write_back();
             let z = self.zero_ret();
             self.b.ins().return_(&[z]);
+        }
+        if let Some(blk) = self.deopt_block {
+            // the variables as they were when the iteration started, and where to resume
+            self.b.switch_to_block(blk);
+            if let Some(ptr) = self.slots_ptr {
+                for (i, _, c) in self.commits.clone() {
+                    let v = self.b.use_var(c);
+                    self.b.ins().store(MemFlagsData::trusted(), v, ptr, (8 * i) as i32);
+                }
+            }
+            if let Some(r) = self.resume_var {
+                let v = self.b.use_var(r);
+                self.b.ins().store(MemFlagsData::trusted(), v, self.ctx_ptr, OFF_RESUME);
+            }
+            let one = self.b.ins().iconst(types::I64, 1);
+            self.b.ins().return_(&[one]);
         }
         self.b.seal_all_blocks();
         self.b.finalize(cfg);
@@ -1345,7 +1763,7 @@ impl<'a, 'f> Gen<'a, 'f> {
                 _ => bail(format!("return type does not match the annotation {}", ty)),
             },
             Stmt::Expr(e) => {
-                if self.list_push(e)? {
+                if self.map_set(e)? || self.list_push(e)? {
                     return Ok(());
                 }
                 self.expr(e)?;
@@ -1455,10 +1873,16 @@ impl<'a, 'f> Gen<'a, 'f> {
         self.b.ins().brif(c, body_b, &[], exit, &[]);
 
         self.b.switch_to_block(body_b);
+        let nested = !self.top_loop;
+        let (eb, gb) = (self.effects, self.guards);
+        self.iteration_start(None);
         self.loops.push((header, exit));
         let r = self.stmt(body);
         self.loops.pop();
         r?;
+        if nested {
+            self.nested_loop_check(eb, gb)?;
+        }
         if !self.dead {
             self.b.ins().jump(header, &[]);
         }
@@ -1485,12 +1909,84 @@ impl<'a, 'f> Gen<'a, 'f> {
         self.dead = false;
         self.scopes.push(HashMap::new());
         let cur = self.b.use_var(idx);
+        let nested = !self.top_loop;
+        let (eb, gb) = (self.effects, self.guards);
+        self.iteration_start(Some(cur));
         self.declare_local(var, Ty::Int, false, cur)?;
         self.loops.push((incr, exit));
         let r = self.stmt(body);
         self.loops.pop();
         self.scopes.pop();
         r?;
+        if nested {
+            self.nested_loop_check(eb, gb)?;
+        }
+        if !self.dead {
+            self.b.ins().jump(incr, &[]);
+        }
+
+        self.b.switch_to_block(incr);
+        let i = self.b.use_var(idx);
+        let n = self.b.ins().iadd_imm_s(i, 1);
+        self.b.def_var(idx, n);
+        self.b.ins().jump(header, &[]);
+
+        self.b.switch_to_block(exit);
+        self.dead = false;
+        Ok(())
+    }
+
+    /// `for var in list` over the snapshot `items[0..len]`; each element is
+    /// checked against the speculated type (a mismatch deopts).
+    fn gen_for_list(&mut self, var: &str, items: ir::Value, len: ir::Value, body: &Stmt) -> R<()> {
+        let Some(elem) = self.elem else {
+            return bail("no speculated element type");
+        };
+        let idx = self.b.declare_var(types::I64);
+        let z = self.b.ins().iconst(types::I64, 0);
+        self.b.def_var(idx, z);
+        let header = self.b.create_block();
+        let body_b = self.b.create_block();
+        let incr = self.b.create_block();
+        let exit = self.b.create_block();
+        self.b.ins().jump(header, &[]);
+
+        self.b.switch_to_block(header);
+        let i = self.b.use_var(idx);
+        let c = self.b.ins().icmp(IntCC::SignedLessThan, i, len);
+        self.b.ins().brif(c, body_b, &[], exit, &[]);
+
+        self.b.switch_to_block(body_b);
+        self.dead = false;
+        self.scopes.push(HashMap::new());
+        let cur = self.b.use_var(idx);
+        let nested = !self.top_loop;
+        let (eb, gb) = (self.effects, self.guards);
+        self.iteration_start(Some(cur));
+        let h = match elem {
+            Ty::Int => Helper::ElemI64,
+            Ty::Float => Helper::ElemF64,
+            Ty::Bool => Helper::ElemBool,
+            Ty::Str => Helper::ElemStr,
+            _ => return bail("element type the JIT does not compile"),
+        };
+        self.guard_ok()?;
+        let fr = self.helper(h);
+        let call = self.b.ins().call(fr, &[self.ctx_ptr, items, cur]);
+        let mut v = self.b.inst_results(call)[0];
+        self.guard_branch();
+        if elem == Ty::Bool {
+            v = self.b.ins().ireduce(types::I8, v);
+        }
+        self.declare_local(var, elem, false, v)?;
+        self.loops.push((incr, exit));
+        let r = self.stmt(body);
+        self.loops.pop();
+        self.scopes.pop();
+        r?;
+        if nested {
+            self.nested_loop_check(eb, gb)?;
+        }
         if !self.dead {
             self.b.ins().jump(incr, &[]);
         }
@@ -1522,6 +2018,9 @@ impl<'a, 'f> Gen<'a, 'f> {
                 self.b.ins().fcmp(FloatCC::Equal, a, b)
             }
             (Ty::Unit, _) | (_, Ty::Unit) => return bail("comparison with nil"),
+            (Ty::Str | Ty::List | Ty::Map, _) | (_, Ty::Str | Ty::List | Ty::Map) => {
+                return bail("comparison of texts, lists or maps is not compiled")
+            }
             // different types (bool vs number): never equal
             _ => self.b.ins().iconst(types::I8, 0),
         })
@@ -1529,6 +2028,9 @@ impl<'a, 'f> Gen<'a, 'f> {
 
     fn gen_match(&mut self, subject: &Expr, arms: &[MatchArm], want_value: bool) -> R<(ir::Value, Ty)> {
         let (sv, st) = self.expr(subject)?;
+        if matches!(st, Ty::Str | Ty::List | Ty::Map) {
+            return bail("match on a text, list or map is not compiled");
+        }
         let done = self.b.create_block();
         let mut result: Option<(Variable, Ty)> = None;
 
@@ -1756,6 +2258,8 @@ impl<'a, 'f> Gen<'a, 'f> {
 
             Expr::Call { callee, args } => self.call(callee, args),
 
+            Expr::Index { target, index } => self.index_read(target, index),
+
             Expr::Match { subject, arms } => self.gen_match(subject, arms, true),
 
             other => bail(format!("unsupported expression: {}", expr_name(other))),
@@ -1811,12 +2315,150 @@ impl<'a, 'f> Gen<'a, 'f> {
                     self.b.ins().call(fr, &[list, v]);
                     continue;
                 }
-                Ty::Unit | Ty::List => return bail("push of a value the JIT does not compile"),
+                Ty::Unit | Ty::List | Ty::Map | Ty::Str => return bail("push of a value the JIT does not compile"),
             };
             let fr = self.helper(h);
             self.b.ins().call(fr, &[list, v]);
         }
+        self.effect();
         Ok(true)
+    }
+
+    /// `m[key] = value` as a statement, `m` a map loop variable and the key
+    /// a text: calls the runtime. `false` = not this form.
+    fn map_set(&mut self, e: &Expr) -> R<bool> {
+        let Expr::Assign { target, op, value } = e else { return Ok(false) };
+        let Expr::Index { target: t, index } = &**target else { return Ok(false) };
+        let Expr::Ident(name) = &**t else { return Ok(false) };
+        let Some(l) = self.lookup_local(name) else { return Ok(false) };
+        if l.ty != Ty::Map {
+            return Ok(false);
+        }
+        if op.is_some() {
+            return bail("compound assignment to a map entry");
+        }
+        let map = self.b.use_var(l.var);
+        // the value first (its guards may deopt; the key builder would leak)
+        enum V {
+            Boxed(ir::Value),
+            Text(ir::Value),
+            Num(ir::Value, Ty),
+        }
+        let val = if matches!(&**value, Expr::List(_) | Expr::Map(_)) {
+            V::Boxed(self.value_box(value)?)
+        } else if self.is_stringish(value) {
+            let b = self.new_builder();
+            self.str_parts(value, b)?;
+            V::Text(b)
+        } else {
+            let (v, t) = self.expr(value)?;
+            V::Num(v, t)
+        };
+        let key = self.key_builder(index)?;
+        match val {
+            V::Boxed(v) => {
+                let fr = self.helper(Helper::MapSetV);
+                self.b.ins().call(fr, &[map, key, v]);
+            }
+            V::Text(b) => {
+                let fr = self.helper(Helper::MapSetSb);
+                self.b.ins().call(fr, &[map, key, b]);
+            }
+            V::Num(v, t) => {
+                let (h, v) = match t {
+                    Ty::Int => (Helper::MapSetI64, v),
+                    Ty::Float => (Helper::MapSetF64, v),
+                    Ty::Bool => (Helper::MapSetBool, self.b.ins().uextend(types::I64, v)),
+                    _ => return bail("map value the JIT does not compile"),
+                };
+                let fr = self.helper(h);
+                self.b.ins().call(fr, &[map, key, v]);
+            }
+        }
+        self.effect();
+        Ok(true)
+    }
+
+    fn new_builder(&mut self) -> ir::Value {
+        let fr = self.helper(Helper::SbNew);
+        let call = self.b.ins().call(fr, &[]);
+        self.b.inst_results(call)[0]
+    }
+
+    /// A map key as a text builder (consumed by the map helpers).
+    fn key_builder(&mut self, e: &Expr) -> R<ir::Value> {
+        if !self.is_stringish(e) {
+            return bail("map key is not a text the JIT builds");
+        }
+        let b = self.new_builder();
+        self.str_parts(e, b)?;
+        Ok(b)
+    }
+
+    /// `xs[i]` / `m[k]` on a loop variable, with the speculated type of its
+    /// elements; the helper deopts when the value is not of that type.
+    fn index_read(&mut self, target: &Expr, index: &Expr) -> R<(ir::Value, Ty)> {
+        let Expr::Ident(name) = target else {
+            return bail("index of an expression is not supported");
+        };
+        let Some(l) = self.lookup_local(name) else {
+            return bail("index of a non-local value is not supported");
+        };
+        let want = match self.spec.get(name.text.as_str()) {
+            Some(t) => *t,
+            None => return bail(format!("no speculated element type for '{}'", name)),
+        };
+        let (h, args) = match l.ty {
+            Ty::List => {
+                let (i, it) = self.expr(index)?;
+                if it != Ty::Int {
+                    return bail("list index must be an int");
+                }
+                let list = self.b.use_var(l.var);
+                let h = match want {
+                    Ty::Int => Helper::ListGetI64,
+                    Ty::Float => Helper::ListGetF64,
+                    Ty::Bool => Helper::ListGetBool,
+                    _ => return bail("element type the JIT does not compile"),
+                };
+                (h, vec![self.ctx_ptr, list, i])
+            }
+            Ty::Map => {
+                let key = self.key_builder(index)?;
+                let map = self.b.use_var(l.var);
+                let h = match want {
+                    Ty::Int => Helper::MapGetI64,
+                    Ty::Float => Helper::MapGetF64,
+                    Ty::Bool => Helper::MapGetBool,
+                    _ => return bail("value type the JIT does not compile"),
+                };
+                (h, vec![self.ctx_ptr, map, key])
+            }
+            _ => return bail("index of a value the JIT does not compile"),
+        };
+        self.guard_ok()?;
+        let fr = self.helper(h);
+        let call = self.b.ins().call(fr, &args);
+        let mut v = self.b.inst_results(call)[0];
+        self.guard_branch();
+        if want == Ty::Bool {
+            v = self.b.ins().ireduce(types::I8, v);
+        }
+        Ok((v, want))
+    }
+
+    /// `xs.len()`, `m.len()`, `s.len()` on a loop variable.
+    fn local_method(&mut self, l: Local, name: &str, method: &str, args: &[Expr]) -> R<(ir::Value, Ty)> {
+        let h = match (l.ty, method, args.len()) {
+            (Ty::List, "len", 0) => Helper::ListLen,
+            (Ty::Map, "len", 0) => Helper::MapLen,
+            (Ty::Str, "len", 0) => Helper::StrLen,
+            _ => return bail(format!("'{}.{}' on a loop variable is not compiled", name, method)),
+        };
+        let v = self.b.use_var(l.var);
+        let fr = self.helper(h);
+        let call = self.b.ins().call(fr, &[v]);
+        Ok((self.b.inst_results(call)[0], Ty::Int))
     }
 
     /// Does `e` produce text (so `push` must build a string)? Literals,
@@ -1824,6 +2466,7 @@ impl<'a, 'f> Gen<'a, 'f> {
     fn is_stringish(&self, e: &Expr) -> bool {
         match e {
             Expr::Str(_) | Expr::Template(_) => true,
+            Expr::Ident(n) => matches!(self.lookup_local(n), Some(l) if l.ty == Ty::Str),
             Expr::Call { callee, .. } => self.is_str_builtin(callee),
             Expr::Binary { op: BinaryOp::Add, left, right } => self.is_stringish(left) || self.is_stringish(right),
             _ => false,
@@ -1859,9 +2502,15 @@ impl<'a, 'f> Gen<'a, 'f> {
                 self.str_parts(left, b)?;
                 self.str_parts(right, b)
             }
+            Expr::Ident(n) if matches!(self.lookup_local(n), Some(l) if l.ty == Ty::Str) => {
+                let (p, _) = self.ident(n)?;
+                let fr = self.helper(Helper::SbStr);
+                self.b.ins().call(fr, &[b, p]);
+                Ok(())
+            }
             Expr::Template(parts) => {
                 for p in parts {
-                    if matches!(p, Expr::Str(_)) {
+                    if matches!(p, Expr::Str(_)) || self.is_stringish(p) {
                         self.str_parts(p, b)?;
                     } else {
                         self.number_text(p, b)?;
@@ -1925,7 +2574,7 @@ impl<'a, 'f> Gen<'a, 'f> {
                         let v = self.b.ins().uextend(types::I64, v);
                         Ok(call1(self, Helper::VBool, &[v]))
                     }
-                    Ty::Unit | Ty::List => bail("value the JIT does not compile"),
+                    Ty::Unit | Ty::List | Ty::Map | Ty::Str => bail("value the JIT does not compile"),
                 }
             }
         }
@@ -1938,7 +2587,7 @@ impl<'a, 'f> Gen<'a, 'f> {
             Ty::Int => (Helper::SbI64, v),
             Ty::Float => (Helper::SbF64, v),
             Ty::Bool => (Helper::SbBool, self.b.ins().uextend(types::I64, v)),
-            Ty::Unit | Ty::List => return bail("text of a value the JIT does not compile"),
+            Ty::Unit | Ty::List | Ty::Map | Ty::Str => return bail("text of a value the JIT does not compile"),
         };
         let fr = self.helper(h);
         self.b.ins().call(fr, &[b, v]);
@@ -1947,8 +2596,8 @@ impl<'a, 'f> Gen<'a, 'f> {
 
     fn ident(&mut self, name: &str) -> R<(ir::Value, Ty)> {
         if let Some(l) = self.lookup_local(name) {
-            if l.ty == Ty::List {
-                return bail(format!("list '{}' used as a value (only push is compiled)", name));
+            if matches!(l.ty, Ty::List | Ty::Map) {
+                return bail(format!("'{}' (a list or map) used as a value", name));
             }
             return Ok((self.b.use_var(l.var), l.ty));
         }
@@ -2148,6 +2797,13 @@ impl<'a, 'f> Gen<'a, 'f> {
     }
 
     fn call(&mut self, callee: &Expr, args: &[Expr]) -> R<(ir::Value, Ty)> {
+        if let Expr::Access { target, field } = callee {
+            if let Expr::Ident(n) = &**target {
+                if let Some(l) = self.lookup_local(n) {
+                    return self.local_method(l, n, field, args);
+                }
+            }
+        }
         let c = self.resolve_callee(callee)?;
         match c {
             Callee::Print => self.gen_print(args),
@@ -2162,7 +2818,7 @@ impl<'a, 'f> Gen<'a, 'f> {
                         Ty::Float => Ok((self.b.ins().fcvt_to_sint_sat(types::I64, v), Ty::Int)),
                         Ty::Bool => Ok((self.b.ins().uextend(types::I64, v), Ty::Int)),
                         Ty::Unit => bail("int(nil)"),
-                        Ty::List => bail("int(list)"),
+                        Ty::List | Ty::Map | Ty::Str => bail("int() of a value the JIT does not compile"),
                     }
                 } else {
                     match t {
@@ -2201,6 +2857,8 @@ impl<'a, 'f> Gen<'a, 'f> {
                 let key = FnKey { ptr: Rc::as_ptr(&f.body) as usize, mask, n: args.len() as u8 };
                 let (id, ret) = self.inner.specialize(&f, key, self.me)?;
                 let fr = self.inner.module.declare_func_in_func(id, self.b.func);
+                // the callee may print: no speculation may fail after it
+                self.effect();
                 let inst = self.b.ins().call(fr, &vals);
                 let r = self.b.inst_results(inst)[0];
                 self.check_err();
@@ -2288,12 +2946,17 @@ impl<'a, 'f> Gen<'a, 'f> {
                     let fr = self.helper(Helper::PrintBool);
                     self.b.ins().call(fr, &[w]);
                 }
+                Ty::Str => {
+                    let fr = self.helper(Helper::PrintSv);
+                    self.b.ins().call(fr, &[v]);
+                }
                 Ty::Unit => return bail("print of nil"),
-                Ty::List => return bail("print of a list"),
+                Ty::List | Ty::Map => return bail("print of a list or map"),
             }
         }
         let fr = self.helper(Helper::PrintNl);
         self.b.ins().call(fr, &[]);
+        self.effect();
         Ok((self.b.ins().iconst(types::I8, 0), Ty::Unit))
     }
 }
@@ -2363,6 +3026,8 @@ fn expr_name(e: &Expr) -> &'static str {
 pub enum LoopKind<'a> {
     While { cond: &'a Expr, body: &'a Stmt },
     For { var: &'a str, body: &'a Stmt, lo: i64, hi: i64 },
+    /// `for var in list`, over the interpreter's snapshot of the list.
+    ForList { var: &'a str, body: &'a Stmt, items: &'a [Value] },
 }
 
 pub enum LoopOutcome {
@@ -2370,6 +3035,10 @@ pub enum LoopOutcome {
     Skip,
     /// The loop ran to completion in native code.
     Done,
+    /// A speculation failed before any side effect of iteration `n` (the
+    /// range value or the list index; 0 for `while`): the variables are
+    /// written back and the interpreter continues from that iteration.
+    Deopt(i64),
     Err(String),
 }
 
@@ -2432,6 +3101,8 @@ impl Jit {
 
     fn set_limits(inner: &mut Inner) {
         inner.ctx.err = 0;
+        inner.ctx.deopt = 0;
+        inner.ctx.resume = 0;
         inner.ctx.depth = 0;
         let rem = sched::stack_remaining() as i64;
         inner.ctx.depth_limit = (rem / 1024).min(50_000_000);
@@ -2512,8 +3183,8 @@ impl Jit {
             Ty::Int => Value::Int(out as i64),
             Ty::Float => Value::Float(f64::from_bits(out)),
             Ty::Bool => Value::Bool(out & 0xff != 0),
-            // functions never return lists (they are only loop slots)
-            Ty::Unit | Ty::List => Value::Nil,
+            // functions never return lists, maps or texts (they are only loop slots)
+            Ty::Unit | Ty::List | Ty::Map | Ty::Str => Value::Nil,
         }))
     }
 
@@ -2537,7 +3208,7 @@ impl Jit {
                         collect_names(&mut set, &tmp);
                         collect_names(&mut set, body);
                     }
-                    LoopKind::For { body, .. } => collect_names(&mut set, body),
+                    LoopKind::For { body, .. } | LoopKind::ForList { body, .. } => collect_names(&mut set, body),
                 }
                 let mut v: Vec<String> = set.into_iter().collect();
                 v.sort();
@@ -2550,12 +3221,25 @@ impl Jit {
         // free numeric variables that must go through slots
         let mut slots: Vec<(String, Ty, bool)> = Vec::new();
         let mut init: Vec<u64> = Vec::new();
+        let mut spec: Vec<(String, Ty)> = Vec::new();
         for n in names.iter() {
             if let Some(b) = env.borrow().lookup(n) {
-                // a list: its pointer, for `xs.push(n)` (the environment keeps it alive)
+                // a list or map: its pointer (the environment keeps it alive); the
+                // type of its first element/value is what the loop speculates
                 if let Value::List(l) = &b.value {
                     slots.push((n.clone(), Ty::List, false));
                     init.push(Rc::as_ptr(l) as u64);
+                    if let Some(t) = l.borrow().first().and_then(Ty::of_value) {
+                        spec.push((n.clone(), t));
+                    }
+                    continue;
+                }
+                if let Value::Map(m) = &b.value {
+                    slots.push((n.clone(), Ty::Map, false));
+                    init.push(Rc::as_ptr(m) as u64);
+                    if let Some(t) = m.borrow().values().next().and_then(Ty::of_value) {
+                        spec.push((n.clone(), t));
+                    }
                     continue;
                 }
                 if let Some(t) = Ty::of_value(&b.value) {
@@ -2571,15 +3255,37 @@ impl Jit {
                 }
             }
         }
-        if let LoopKind::For { lo, hi, .. } = &kind {
-            init.push(*lo as u64);
-            init.push(*hi as u64);
+        let mut elem = None;
+        match &kind {
+            LoopKind::For { lo, hi, .. } => {
+                init.push(*lo as u64);
+                init.push(*hi as u64);
+            }
+            LoopKind::ForList { items, .. } => {
+                elem = match items.first() {
+                    Some(Value::Str(_)) => Some(Ty::Str),
+                    Some(v) => Ty::of_value(v),
+                    None => None,
+                };
+                if elem.is_none() {
+                    return LoopOutcome::Skip;
+                }
+                init.push(items.as_ptr() as u64);
+                init.push(items.len() as u64);
+            }
+            LoopKind::While { .. } => {}
         }
 
         let key = LoopKey {
             id,
-            is_for: matches!(kind, LoopKind::For { .. }),
+            kind: match kind {
+                LoopKind::While { .. } => 0,
+                LoopKind::For { .. } => 1,
+                LoopKind::ForList { .. } => 2,
+            },
             slots: slots.clone(),
+            spec,
+            elem,
         };
 
         let Some(inner) = self.inner() else {
@@ -2588,7 +3294,7 @@ impl Jit {
 
         if !inner.loops.contains_key(&key) {
             let t0 = Instant::now();
-            let entry = match inner.compile_loop(&kind, env, &slots) {
+            let entry = match inner.compile_loop(&kind, env, &key) {
                 Ok((addr, assigned)) => {
                     let us = t0.elapsed().as_micros();
                     inner.stats.loops_compiled += 1;
@@ -2614,10 +3320,10 @@ impl Jit {
         Self::set_limits(inner);
         inner.stats.native_loops += 1;
         let f: extern "C" fn(*mut JitCtx, *mut u64) -> i64 = unsafe { std::mem::transmute(addr) };
-        f(&mut *inner.ctx, init.as_mut_ptr());
+        let rc = f(&mut *inner.ctx, init.as_mut_ptr());
 
-        // On error the modified variables are also written back (the native
-        // code already wrote them to the slots before leaving).
+        // On error (and on deopt) the modified variables are also written back
+        // (the native code already wrote them to the slots before leaving).
         let failed = (inner.ctx.err != 0).then(|| ops::code_message(inner.ctx.err).to_string());
         for (i, (name, ty, _)) in slots.iter().enumerate() {
             if assigned[i] {
@@ -2625,18 +3331,24 @@ impl Jit {
                     Ty::Int => Value::Int(init[i] as i64),
                     Ty::Float => Value::Float(f64::from_bits(init[i])),
                     Ty::Bool => Value::Bool(init[i] & 0xff != 0),
-                    // list slots are never assigned (they can't be reassigned in the loop)
-                    Ty::Unit | Ty::List => Value::Nil,
+                    // list/map slots are never assigned (they can't be reassigned in the loop)
+                    Ty::Unit | Ty::List | Ty::Map | Ty::Str => Value::Nil,
                 };
                 if let Err(e) = env.borrow_mut().assign(name, v) {
                     return LoopOutcome::Err(e);
                 }
             }
         }
-        match failed {
-            Some(e) => LoopOutcome::Err(e),
-            None => LoopOutcome::Done,
+        if let Some(e) = failed {
+            return LoopOutcome::Err(e);
         }
+        if rc == 1 {
+            let at = inner.ctx.resume;
+            inner.stats.deopts += 1;
+            inner.log(format!("loop #{} left native code at iteration {} (speculation failed)", id, at));
+            return LoopOutcome::Deopt(at);
+        }
+        LoopOutcome::Done
     }
 
     pub fn report(&self) -> String {
@@ -2645,11 +3357,12 @@ impl Jit {
         };
         let s = &i.stats;
         let mut out = format!(
-            "[jit] compiled functions: {} | compiled loops: {} | native calls: {} | native loops: {} | compile time: {:.2} ms",
+            "[jit] compiled functions: {} | compiled loops: {} | native calls: {} | native loops: {} | deopts: {} | compile time: {:.2} ms",
             s.fns_compiled,
             s.loops_compiled,
             s.native_calls,
             s.native_loops,
+            s.deopts,
             s.compile_time_us as f64 / 1000.0
         );
         let mut seen = HashSet::new();

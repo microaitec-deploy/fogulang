@@ -1,0 +1,9 @@
+{
+  "name": "github_lib",
+  "version": "0.1.0",
+  "description": "Uses a library published on GitHub (fogu add microaitec-deploy/fogulang_module)",
+  "entry": "main.fg",
+  "dependencies": {
+    "fogulang_module": "github:microaitec-deploy/fogulang_module"
+  }
+}

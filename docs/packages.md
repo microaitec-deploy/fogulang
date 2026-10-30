@@ -70,6 +70,71 @@ Resolution order: `<project>/fogu_modules/<name>` (optional vendoring) → the
 project lock → the global lock → the most recent version in the store.
 `fogu build --compile` embeds the packages a program uses.
 
+## Creating and publishing a library
+
+A library is an ordinary Fogu project: a `fogu.json` with a `name`, a `version`
+and an `entry` file whose `export`s are the library's API. Publish it on any git
+host and others install it with `fogu add`. The repository
+[microaitec-deploy/fogulang_module](https://github.com/microaitec-deploy/fogulang_module)
+is a complete example (and the test of this feature).
+
+```text
+fogulang_module/
+  fogu.json        { "name": "fogulang_module", "version": "0.1.0", "entry": "main.fg", "license": "MIT" }
+  main.fg          export fn greet(name, lang = "en") { … }   export struct Counter { … }
+  main.test.fg     tests with fogu:test — `fogu test`
+  readme.md        shown on GitHub; what is exported and how to use it
+  LICENSE
+```
+
+```fogu
+// main.fg of the library
+export const version = "0.1.0"
+
+export fn greet(name: str, lang = "en") {
+    return match lang {
+        "pt" => `Olá, ${name}!`
+        _ => `Hello, ${name}!`
+    }
+}
+
+export struct Counter {
+    value: int
+    step: int
+    new(step = 1) { this.value = 0; this.step = step }
+    fn next() { this.value = this.value + this.step; return this.value }
+}
+```
+
+Rules worth following: names without `export` stay private; return errors as
+values (`return nil, error("…")`) instead of `panic`; no global state at the top
+level (it runs once, when the library is first imported); put extra files next to
+the entry (`import extra from "fogulang_module/extra"` works for any file of the
+package); tag releases `v0.1.0`, `v0.2.0`… so `fogu add user/repo@^0.1.0` resolves.
+
+Publishing is a `git push`; using it from another project:
+
+```bash
+fogu add microaitec-deploy/fogulang_module        # GitHub shorthand (also github:…, gitlab:…, a URL)
+fogu add microaitec-deploy/fogulang_module@^0.1.0 # the highest matching vX.Y.Z tag
+```
+
+```fogu
+import mod from "fogulang_module"
+import { Counter } from "fogulang_module"
+
+print(mod.greet("Ana", "pt"))        // Olá, Ana!
+const c = new Counter(5)
+print(c.next(), c.next())            // 5 10
+```
+
+`fogu add` writes the dependency to `fogu.json` and the exact commit and
+checksum to `fogu.lock`; `fogu install --frozen` reproduces it in CI, `fogu update`
+moves to the latest commit or tag. A library with native parts (a `cdylib` loaded
+through `fogu:ffi`, like `datascience` or `mqtt-broker`) or with a tool
+(`mcu`) is published on the Fogu server instead, where the prebuilt files travel
+inside the package: see [Libraries on the server](../../docs.md#libraries-on-the-server).
+
 ## Limitations
 
 No central registry: `"^1.2.0"` alone does not resolve, always use a source.

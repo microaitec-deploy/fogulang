@@ -231,6 +231,8 @@ Fogu.signal.wait()                      // serve until Ctrl+C / SIGTERM
 fogu init -y                 # fogu.json (name, entry, scripts, dependencies), main.fg
 fogu run                     # run "entry"; `fogu <script>` runs a script of fogu.json
 fogu add user/repo@^1.2.0    # dependency from git (also gitlab:, tar.gz, ./folder)
+# a library is a project whose entry file `export`s its API (fogu.json: name, version, entry);
+# push it to git and others `fogu add user/repo` it — e.g. github.com/microaitec-deploy/fogulang_module
 fogu test [-t name]          # run *.test.fg
 fogu fmt --check             # formatting check for CI
 fogu build --compile         # standalone executable in dist/ (no Fogu needed to run it)

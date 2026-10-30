@@ -1,0 +1,93 @@
+// `for x in list` and `xs[i]`, `xs.len()`, `s.len()` inside hot loops: the
+// JIT speculates the element type from the first element and checks every
+// element; when the speculation fails it leaves native code before any side
+// effect of that iteration and the interpreter redoes it ("deopt").
+// The spec runner checks the same output with and without the JIT.
+
+// ints: sum and count
+const xs = []
+for i in 0..2000 { xs.push(i * 3) }
+let sum = 0
+let n = 0
+for x in xs {
+    sum = sum + x
+    n = n + 1
+}
+print(sum, n)
+
+// texts: `len()` and building new texts from an element
+const names = []
+for i in 0..500 { names.push("item" + str(i)) }
+let total = 0
+const tagged = []
+for p in names {
+    total = total + p.len()
+    tagged.push("<" + p + ">")
+}
+print(total, tagged[0], tagged[499], tagged.len())
+
+// floats and bools
+const fs = [0.5, 1.5, 2.5, 3.5, 4.5]
+let fsum = 0.0
+for f in fs { fsum = fsum + f }
+const bs = [true, false, true, true]
+let trues = 0
+for b in bs { if b { trues = trues + 1 } }
+print(fsum, trues)
+
+// a mixed list: the speculation (int) fails at 2.5; the loop leaves native
+// code before that iteration's effects and the interpreter continues from
+// it (the sum becomes a float, as always)
+const mixed = [1, 2, 3, 2.5, 4, 5]
+let seen = 0
+let msum = 0
+for v in mixed {
+    seen = seen + 1
+    msum = msum + v
+}
+print(seen, msum)
+
+// the same with a side effect before the failing element: the push of the
+// iteration that deopts happens exactly once
+const out = []
+for v in mixed {
+    if v > 2 { out.push(v * 2) }
+}
+print(out)
+
+// the list changes inside the loop: a snapshot is walked, as the interpreter does
+const grow = [1, 2, 3]
+let visited = 0
+for v in grow {
+    grow.push(v * 10)
+    visited = visited + 1
+}
+print(visited, grow.len(), grow[-1])
+
+// indexes: forwards and backwards, `len()` on the list
+const data = []
+for i in 0..1000 { data.push(i) }
+let acc = 0
+for i in 0..data.len() {
+    acc = acc + data[i] + data[-1 - i]
+}
+print(acc)
+
+// a wrong speculation on `xs[i]` (a float in an int list) deopts and the
+// interpreter finishes the loop
+const ints2 = [10, 20, 30.5, 40]
+let s2 = 0
+for i in 0..4 { s2 = s2 + ints2[i] }
+print(s2)
+
+// `break` and `continue` in a list loop
+let firstBig = -1
+let odd = 0
+for x in xs {
+    if x % 2 == 1 { odd = odd + 1 }
+    if x > 100 {
+        firstBig = x
+        break
+    }
+}
+print(firstBig, odd)

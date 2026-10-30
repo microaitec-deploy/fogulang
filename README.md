@@ -658,7 +658,10 @@ the interpreter with identical results and error messages.
 
 - **Functions**: after N calls, a specialization for the argument types
   (int/float/bool) is compiled. Direct and mutual recursion are supported.
-- **Loops (OSR)**: hot `while` loops are compiled mid-execution; long `for a..b` right away.
+- **Loops (OSR)**: hot `while` loops are compiled mid-execution; long `for a..b` and `for x in list` right away.
+- **Lists, maps and texts in loops**: `xs.push(…)`, `xs[i]`, `m[k]`, `m[k] = v`, `.len()` and the texts used as
+  keys or pushed. Element and value types are *speculated* from the first one and checked on every read; a failed
+  check leaves native code before any side effect of that iteration and the interpreter redoes it (deopt).
 - **Errors** identical to the interpreter's, with the correct line number.
 
 | Benchmark (release) | Interpreter | JIT |

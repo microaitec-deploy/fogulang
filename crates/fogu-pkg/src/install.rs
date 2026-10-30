@@ -61,7 +61,24 @@ fn git(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
             .map(|l| l.trim_start_matches("fatal:").trim_start_matches("error:"))
             .or_else(|| err.lines().rev().find(|l| !l.trim().is_empty()))
             .unwrap_or("unknown error");
-        return Err(format!("git {}: {}", args.first().unwrap_or(&""), line.trim()));
+        let line = line.trim();
+        // git's own words for a missing or private repository are about
+        // prompts and keys: say what the user can do instead
+        let hint = if line.contains("could not read Username") || line.contains("terminal prompts disabled") {
+            "the repository was not found or is private: check the name (user/repo, the host prefix) or log in with `git credential`, a token in the URL, or an SSH key (`git@host:user/repo.git`)"
+        } else if line.contains("Could not read from remote repository") || line.contains("Permission denied (publickey") {
+            "the SSH key is not accepted (or the repository does not exist): add your key to the host or use the https URL"
+        } else if line.contains("not found") || line.contains("does not appear to be a git repository") {
+            "the repository does not exist: check the name and the host prefix (github:, gitlab:, bitbucket:, codeberg:, or a full URL)"
+        } else {
+            ""
+        };
+        let args0 = args.first().unwrap_or(&"");
+        return Err(if hint.is_empty() {
+            format!("git {}: {}", args0, line)
+        } else {
+            format!("git {}: {}\n  {}", args0, line, hint)
+        });
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }

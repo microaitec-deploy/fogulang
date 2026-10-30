@@ -833,7 +833,9 @@ impl Interpreter {
                             self.sync_jit_line();
                             return Err(e);
                         }
-                        LoopOutcome::Skip => {}
+                        // a speculation failed before any effect of the
+                        // iteration: it is simply re-run here
+                        LoopOutcome::Skip | LoopOutcome::Deopt(_) => {}
                     }
                 }
             }
@@ -886,6 +888,7 @@ impl Interpreter {
 
         match iterable {
             Value::Range(start, end) => {
+                let mut resume = start;
                 if self.jit_enabled
                     && self.no_deadline()
                     && end.saturating_sub(start) >= self.jit_loop_threshold as i64
@@ -907,9 +910,12 @@ impl Interpreter {
                             return Err(e);
                         }
                         LoopOutcome::Skip => {}
+                        // the native code stopped before any effect of
+                        // iteration `at`: continue from it
+                        LoopOutcome::Deopt(at) => resume = at,
                     }
                 }
-                let mut i = start;
+                let mut i = if resume > start { resume } else { start };
                 while i < end {
                     if let Some(f) = run_body!(Value::Int(i)) {
                         return Ok(f);
@@ -922,7 +928,24 @@ impl Interpreter {
             Value::List(list) => {
                 // a snapshot: the body may modify the list (values are Rc clones, cheap)
                 let snapshot: Vec<Value> = list.borrow().clone();
-                for item in snapshot {
+                let mut from = 0usize;
+                if self.jit_enabled && self.no_deadline() && snapshot.len() >= self.jit_loop_threshold as usize {
+                    let out = self.jit.borrow_mut().run_loop(
+                        id,
+                        LoopKind::ForList { var, body, items: &snapshot },
+                        &env,
+                    );
+                    match out {
+                        LoopOutcome::Done => return Ok(Flow::Normal),
+                        LoopOutcome::Err(e) => {
+                            self.sync_jit_line();
+                            return Err(e);
+                        }
+                        LoopOutcome::Skip => {}
+                        LoopOutcome::Deopt(at) => from = at.max(0) as usize,
+                    }
+                }
+                for item in snapshot.into_iter().skip(from) {
                     if let Some(f) = run_body!(item) {
                         return Ok(f);
                     }

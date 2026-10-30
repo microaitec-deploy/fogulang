@@ -228,6 +228,28 @@
   md-5, hmac) pins it. ttf-parser (ab_glyph), unsafe-libyaml (serde_yaml) and paste
   (in the lock only, not built) are unmaintained with no drop-in replacement.
 
+## Thirteenth round (JIT speculation, 0.7.2)
+
+- The JIT only compiled numeric loops; `strings` and `maps` spent 60–80% of their time
+  in the interpreter walking lists and maps (`for p in back { total + p.len() }`,
+  `m["k" + str(i)] = i`, `sum + m[k]`). Lists, maps and text elements now live in loop
+  slots as pointers; reads *speculate* the type of the first element/value and every
+  helper checks it. A failed check sets `ctx.deopt`: the loop restores the variables as
+  they were at the start of that iteration (committed copies in the prologue of every
+  iteration of the compiled loop, a few register moves), returns the iteration index and
+  the interpreter redoes it. Soundness rule: a guard may only run before any side effect
+  of the iteration (push, map write, print, call), otherwise the loop bails at compile
+  time; a nested loop whose body has both guards and effects bails too (its later
+  iterations would guard after effects of earlier ones). A loop that deopts finishes in
+  the interpreter: it is not recompiled with another speculation.
+- Measured (median of 11, wall ms): maps 357 → 189 (Bun 275, Go 177), strings 88 → 68
+  (Bun 52, Go 39); the other benchmarks unchanged. Of what remains in `strings`, the
+  split/join and the pushes are native; in `maps` the hashing and growth of a 300k-entry
+  `HashMap<String, Value>` dominate.
+- The map value speculation uses the map's first value in iteration order, which is
+  arbitrary for a hash map: a map with mixed value types may bail with "would change
+  type" (correct, slower) depending on which value comes first.
+
 ## Known gaps
 
 - `fogu:foguMQ-client` (FlowMQ v6) is tested against an in-process mock broker only (Rust unit

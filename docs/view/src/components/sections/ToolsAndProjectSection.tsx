@@ -173,6 +173,50 @@ fogu update && fogu list`}
   "dependencies": { "greet": "github:user/greet#semver:^1.2.0" }
 }`}
         />
+        <h3 className="mt-8 text-xl font-semibold">Creating and publishing a library</h3>
+        <p>
+          A library is an ordinary project: a <code>fogu.json</code> with a <code>name</code>, a <code>version</code> and
+          an <code>entry</code> file whose <code>export</code>s are its API. Push it to any git host; others install it
+          with <code>fogu add user/repo</code> (tag releases <code>v0.1.0</code>… so <code>@^0.1.0</code> resolves). Names
+          without <code>export</code> stay private; return errors as values; no global state at the top level. A complete
+          example is{" "}
+          <a className="underline" href="https://github.com/microaitec-deploy/fogulang_module">
+            microaitec-deploy/fogulang_module
+          </a>
+          .
+        </p>
+        <DocCodeBlock
+          title="main.fg (the library)"
+          code={`export const version = "0.1.0"
+
+export fn greet(name: str, lang = "en") {
+    return match lang {
+        "pt" => \`Olá, \${name}!\`
+        _ => \`Hello, \${name}!\`
+    }
+}
+
+export struct Counter {
+    value: int
+    step: int
+    new(step = 1) { this.value = 0; this.step = step }
+    fn next() { this.value = this.value + this.step; return this.value }
+}`}
+        />
+        <DocCodeBlock lang="bash" code={`fogu add microaitec-deploy/fogulang_module      # writes fogu.json and fogu.lock (commit + sha256)`} />
+        <DocCodeBlock
+          title="main.fg (an app using it)"
+          code={`import mod from "fogulang_module"
+import { Counter } from "fogulang_module"
+
+print(mod.greet("Ana", "pt"))        // Olá, Ana!
+const c = new Counter(5)
+print(c.next(), c.next())            // 5 10`}
+        />
+        <p>
+          Libraries with native parts (a <code>cdylib</code> through <code>fogu:ffi</code>) or tools are published on the
+          Fogu server instead, where the prebuilt files travel inside the package.
+        </p>
       </section>
 
       {/* ================= STANDALONE EXECUTABLES ================= */}

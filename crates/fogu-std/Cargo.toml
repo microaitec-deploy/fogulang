@@ -1,6 +1,6 @@
 [package]
 name = "fogu-std"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2024"
 description = "Standard library of the Fogu language (fogu:* modules), grouped by area behind cargo features"
 authors = ["Edmilson Soares"]

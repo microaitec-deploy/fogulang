@@ -6,7 +6,27 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-30
+
 ### Added
+
+- JIT: loops over lists, maps and texts. `for x in list`, `xs[i]`, `m[k]`, `m[k] = v`, `xs.len()`,
+  `m.len()` and `s.len()` of a text element compile inside hot loops; the element or value type
+  is speculated from the first one and checked on every read. A failed check (another type, a
+  missing key, an index out of range) leaves native code *before any side effect of that
+  iteration*, restores the loop's variables and the interpreter redoes the iteration
+  (`LoopOutcome::Deopt`); guards after a side effect, or inside a nested loop with side
+  effects, make the loop bail instead (`tests/spec/jit_for_list.fg`, `jit_map_index.fg`,
+  `docs/jit.md`). `--jit-stats` counts the deopts.
+- Docs: how to create and publish a library (`docs/packages.md`, the guide, docs.html, the docs
+  site, the skill), with the GitHub example `microaitec-deploy/fogulang_module` and the project
+  `examples/github_lib` that installs it with `fogu add user/repo`.
+
+### Changed
+
+- `fogu add`: when `git ls-remote` fails because a repository is missing or private (git only
+  says "could not read Username" / "terminal prompts disabled"), the error now says so and what
+  to do (check `user/repo` and the host prefix, log in, use a token or an SSH key).
 
 - `import(path)` expression: loads a module at run time and returns it (computed paths, plugins);
   resolved from the calling file, shared with static imports, an `error` value when the module
@@ -243,7 +263,8 @@ be incompatible changes (spec §75).
 - `tc.ui` kit: 35 icons, the Fogu logo and favicon, sparklines, stat cards with an icon, a
   tone and a trend line, empty states, a live indicator, a light/dark switch remembered per
   browser (`page({ theme })`, applied before the first paint); `ask()` confirmation dialogs and
-  `copy()` in the browser; icons and a footer in `shell`, `grid({ min })`, `table({ header })`.
+  `copy()` in the browser; icons and a footer in `shell`, `grid({ min })`, `table({ header })`.
+
 - `fogu:broker`: `b.admin(port, { user, password })` — a web management UI built with
   fogu:web + fogu:topcoat: a sign-in page with a session cookie (basic auth for scripts), a
   live overview with traffic per second and trend lines, channels and topics, a key-value
@@ -316,7 +337,8 @@ be incompatible changes (spec §75).
   programs live in `examples/guides/` and are run by `docs/tools/gen_guides.py`.
 - Native modules are built on their first import instead of at startup: running a script
   went from ~50 ms to ~9 ms (Python 3.10: ~20 ms, Bun: ~19 ms on the same machine), and the
-  spec suite from 26 s to 16 s.
+  spec suite from 26 s to 16 s.
+
 - Dependency versions aligned so the tree no longer carries two copies of the same crates:
   `scraper` 0.29 (one html5ever with `ammonia`), `aes-gcm` 0.11 (shared with SurrealKV),
   `ndarray` 0.17 (shared with tract), `resvg` 0.48 (the image codecs of `image`): 616 → 599
