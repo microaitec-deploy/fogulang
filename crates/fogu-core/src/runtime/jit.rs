@@ -212,6 +212,85 @@ extern "C" fn h_fpow(a: f64, b: f64) -> f64 {
 extern "C" fn h_fmod(a: f64, b: f64) -> f64 {
     a % b
 }
+
+/// The `fogu:math` functions the JIT compiles (see `gen_math`).
+const JIT_MATH: &[&str] = &[
+    "sqrt", "abs", "floor", "ceil", "trunc", "round", "pow", "min", "max", "lerp", "random", "cbrt", "sin", "cos",
+    "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "exp", "exp2", "expm1",
+    "log", "log2", "log10", "log1p", "hypot", "fract", "degrees", "radians",
+];
+
+macro_rules! math_fns {
+    ($($f:ident => $e:expr),* $(,)?) => {$(
+        extern "C" fn $f(x: f64) -> f64 {
+            ($e)(x)
+        }
+    )*};
+}
+
+math_fns!(
+    m_cbrt => f64::cbrt, m_sin => f64::sin, m_cos => f64::cos, m_tan => f64::tan, m_asin => f64::asin,
+    m_acos => f64::acos, m_atan => f64::atan, m_sinh => f64::sinh, m_cosh => f64::cosh, m_tanh => f64::tanh,
+    m_asinh => f64::asinh, m_acosh => f64::acosh, m_atanh => f64::atanh, m_exp => f64::exp, m_exp2 => f64::exp2,
+    m_expm1 => f64::exp_m1, m_ln => f64::ln, m_log2 => f64::log2, m_log10 => f64::log10, m_log1p => f64::ln_1p,
+    m_fract => f64::fract, m_degrees => f64::to_degrees, m_radians => f64::to_radians, m_round => f64::round,
+);
+
+extern "C" fn m_pow(x: f64, y: f64) -> f64 {
+    x.powf(y)
+}
+extern "C" fn m_atan2(y: f64, x: f64) -> f64 {
+    y.atan2(x)
+}
+extern "C" fn m_hypot(x: f64, y: f64) -> f64 {
+    x.hypot(y)
+}
+extern "C" fn m_logb(x: f64, b: f64) -> f64 {
+    x.log(b)
+}
+extern "C" fn m_random() -> f64 {
+    crate::native::math::next_f64()
+}
+
+/// The one-float math function `name` called with `n` arguments.
+fn math_unary(name: &str, n: usize) -> Option<extern "C" fn(f64) -> f64> {
+    Some(match name {
+        "cbrt" => m_cbrt,
+        "sin" => m_sin,
+        "cos" => m_cos,
+        "tan" => m_tan,
+        "asin" => m_asin,
+        "acos" => m_acos,
+        "atan" => m_atan,
+        "sinh" => m_sinh,
+        "cosh" => m_cosh,
+        "tanh" => m_tanh,
+        "asinh" => m_asinh,
+        "acosh" => m_acosh,
+        "atanh" => m_atanh,
+        "exp" => m_exp,
+        "exp2" => m_exp2,
+        "expm1" => m_expm1,
+        "log" if n == 1 => m_ln,
+        "log2" => m_log2,
+        "log10" => m_log10,
+        "log1p" => m_log1p,
+        "fract" => m_fract,
+        "degrees" => m_degrees,
+        "radians" => m_radians,
+        _ => return None,
+    })
+}
+
+fn math_binary(name: &str) -> Option<extern "C" fn(f64, f64) -> f64> {
+    Some(match name {
+        "pow" => m_pow,
+        "atan2" => m_atan2,
+        "hypot" => m_hypot,
+        "log" => m_logb,
+        _ => return None,
+    })
+}
 extern "C" fn h_print_i64(v: i64) {
     print!("{}", v);
 }
@@ -852,8 +931,14 @@ impl Inner {
 
         let mut math_fns = HashMap::new();
         let m = crate::native::math::build();
-        for name in ["sqrt", "abs", "floor", "ceil", "pow"] {
+        let mut seen = HashSet::new();
+        for &name in JIT_MATH {
             if let Some(Value::NativeFn(nf)) = m.exports.borrow().get(name) {
+                // two functions folded into one address by the linker can't be told apart
+                if !seen.insert(nf.func as usize) {
+                    math_fns.remove(&(nf.func as usize));
+                    continue;
+                }
                 math_fns.insert(nf.func as usize, name);
             }
         }
@@ -2867,51 +2952,104 @@ impl<'a, 'f> Gen<'a, 'f> {
         }
     }
 
+    /// A number as a float (ints are converted), or a bail.
+    fn math_f64(&mut self, name: &str, e: &Expr) -> R<ir::Value> {
+        let (v, t) = self.expr(e)?;
+        match t {
+            Ty::Int => Ok(self.to_f64(v)),
+            Ty::Float => Ok(v),
+            _ => bail(format!("math.{} requires numbers", name)),
+        }
+    }
+
+    /// Calls a Rust `extern "C" fn(f64...) -> f64` by address.
+    fn call_f64(&mut self, addr: usize, args: &[ir::Value]) -> ir::Value {
+        let mut sig = self.inner.module.make_signature();
+        for _ in args {
+            sig.params.push(AbiParam::new(types::F64));
+        }
+        sig.returns.push(AbiParam::new(types::F64));
+        let sr = self.b.import_signature(sig);
+        let f = self.b.ins().iconst(types::I64, addr as i64);
+        let inst = self.b.ins().call_indirect(sr, f, args);
+        self.b.inst_results(inst)[0]
+    }
+
     fn gen_math(&mut self, name: &str, args: &[Expr]) -> R<(ir::Value, Ty)> {
-        let want = if name == "pow" { 2 } else { 1 };
+        let want = match name {
+            "random" => 0,
+            "pow" | "atan2" | "hypot" | "min" | "max" => 2,
+            "lerp" => 3,
+            "log" | "round" => args.len().clamp(1, 2),
+            _ => 1,
+        };
         if args.len() != want {
             return bail(format!("math.{} expects {} argument(s)", name, want));
         }
-        let (a, at) = self.expr(&args[0])?;
+        if let Some(f) = math_unary(name, args.len()) {
+            let x = self.math_f64(name, &args[0])?;
+            return Ok((self.call_f64(f as usize, &[x]), Ty::Float));
+        }
+        if let Some(f) = math_binary(name) {
+            let x = self.math_f64(name, &args[0])?;
+            let y = self.math_f64(name, &args[1])?;
+            return Ok((self.call_f64(f as usize, &[x, y]), Ty::Float));
+        }
         match name {
             "sqrt" => {
-                let f = match at {
-                    Ty::Int => self.to_f64(a),
-                    Ty::Float => a,
-                    _ => return bail("sqrt requires a number"),
-                };
+                let f = self.math_f64(name, &args[0])?;
                 Ok((self.b.ins().sqrt(f), Ty::Float))
             }
-            "abs" => match at {
-                Ty::Int => {
-                    let is_min = self.b.ins().icmp_imm_s(IntCC::Equal, a, i64::MIN);
-                    self.trap_if(is_min, ops::CODE_OVERFLOW);
-                    Ok((self.b.ins().iabs(a), Ty::Int))
+            "abs" => {
+                let (a, at) = self.expr(&args[0])?;
+                match at {
+                    Ty::Int => {
+                        let is_min = self.b.ins().icmp_imm_s(IntCC::Equal, a, i64::MIN);
+                        self.trap_if(is_min, ops::CODE_OVERFLOW);
+                        Ok((self.b.ins().iabs(a), Ty::Int))
+                    }
+                    Ty::Float => Ok((self.b.ins().fabs(a), Ty::Float)),
+                    _ => bail("abs requires a number"),
                 }
-                Ty::Float => Ok((self.b.ins().fabs(a), Ty::Float)),
-                _ => bail("abs requires a number"),
-            },
-            "floor" | "ceil" => match at {
-                Ty::Int => Ok((a, Ty::Int)),
-                Ty::Float => {
-                    let r = if name == "floor" { self.b.ins().floor(a) } else { self.b.ins().ceil(a) };
-                    Ok((self.b.ins().fcvt_to_sint_sat(types::I64, r), Ty::Int))
+            }
+            "floor" | "ceil" | "trunc" | "round" => {
+                let (a, at) = self.expr(&args[0])?;
+                match at {
+                    Ty::Int => Ok((a, Ty::Int)),
+                    Ty::Float => {
+                        let r = match name {
+                            "floor" => self.b.ins().floor(a),
+                            "ceil" => self.b.ins().ceil(a),
+                            "trunc" => self.b.ins().trunc(a),
+                            // halves away from zero, like f64::round (`nearest` rounds to even)
+                            _ => self.call_f64(m_round as extern "C" fn(f64) -> f64 as usize, &[a]),
+                        };
+                        Ok((self.b.ins().fcvt_to_sint_sat(types::I64, r), Ty::Int))
+                    }
+                    _ => bail("floor/ceil/trunc/round require a number"),
                 }
-                _ => bail("floor/ceil require a number"),
-            },
-            "pow" => {
+            }
+            "min" | "max" => {
+                let (a, at) = self.expr(&args[0])?;
                 let (b, bt) = self.expr(&args[1])?;
-                let x = match at {
-                    Ty::Int => self.to_f64(a),
-                    Ty::Float => a,
-                    _ => return bail("pow requires numbers"),
-                };
-                let y = match bt {
-                    Ty::Int => self.to_f64(b),
-                    Ty::Float => b,
-                    _ => return bail("pow requires numbers"),
-                };
-                Ok((self.float_arith(BinaryOp::Pow, x, y), Ty::Float))
+                if (at, bt) != (Ty::Int, Ty::Int) {
+                    return bail("math.min/max: only ints are compiled");
+                }
+                let r = if name == "min" { self.b.ins().smin(a, b) } else { self.b.ins().smax(a, b) };
+                Ok((r, Ty::Int))
+            }
+            "lerp" => {
+                let x = self.math_f64(name, &args[0])?;
+                let y = self.math_f64(name, &args[1])?;
+                let t = self.math_f64(name, &args[2])?;
+                let d = self.b.ins().fsub(y, x);
+                let m = self.b.ins().fmul(d, t);
+                Ok((self.b.ins().fadd(x, m), Ty::Float))
+            }
+            "random" => {
+                // the generator's state changes: an iteration can't be redone after it
+                self.effect();
+                Ok((self.call_f64(m_random as extern "C" fn() -> f64 as usize, &[]), Ty::Float))
             }
             _ => bail("unknown math function"),
         }

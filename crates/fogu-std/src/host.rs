@@ -19,6 +19,13 @@ impl Host for Std {
 
     fn intercept(&self, callee: &Value, args: &[Value], it: &Interpreter, env: &Rc<RefCell<Environment>>) -> Option<Handled> {
         let _ = env;
+        // a C function of fogu:ffi (its signature lives in the ffi module); first: calls are hot
+        #[cfg(not(target_family = "wasm"))]
+        if let Value::NativeFn(f) = callee {
+            if let Some(id) = crate::native::ffi::ffi_id(&f.name) {
+                return Some(Handled::Native(crate::native::ffi::call_ffi(id, args, it, env)));
+            }
+        }
         // `fogu:vm` runs Fogu code with this interpreter
         if let Some(r) = crate::native::vm::intercept(callee, args, it) {
             return Some(Handled::Native(r));
@@ -54,11 +61,6 @@ impl Host for Std {
             return Some(Handled::Native(r));
         }
         if let Value::NativeFn(f) = callee {
-            // a C function of fogu:ffi (its signature lives in the ffi module)
-            #[cfg(not(target_family = "wasm"))]
-            if let Some(id) = crate::native::ffi::ffi_id(&f.name) {
-                return Some(Handled::Native(crate::native::ffi::call_ffi(id, args)));
-            }
             #[cfg(all(feature = "network", not(target_family = "wasm")))]
             if crate::native::web::is_dispatch(&f.name) {
                 let r = match args.first() {

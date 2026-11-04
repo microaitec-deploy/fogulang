@@ -2,6 +2,8 @@
 
 pub mod ast;
 pub mod environment;
+#[cfg(not(target_family = "wasm"))]
+pub mod ffi_stub;
 pub mod fstr;
 pub mod interpreter;
 #[cfg(not(target_family = "wasm"))]

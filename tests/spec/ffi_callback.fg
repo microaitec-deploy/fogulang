@@ -1,0 +1,39 @@
+import ffi from "fogu:ffi"
+
+const libc = ffi.open("c")?
+const libm = ffi.open("m")?
+
+// qsort calls a Fogu comparator through a C function pointer
+const qsort = libc.func("qsort", ["buffer", "usize", "usize", "ptr"])?
+const nums = [42, -7, 19, 3, 0, 88, -1]
+const buf = ffi.alloc(4 * nums.len())
+for i in 0..nums.len() { buf.set("i32", 4 * i, nums[i]) }
+let calls = 0
+const cmp = ffi.callback(fn(a, b) {
+    calls = calls + 1
+    return ffi.read(a, "i32") - ffi.read(b, "i32")
+}, ["ptr", "ptr"], "i32")
+qsort(buf, nums.len(), 4, cmp)
+const sorted = []
+for i in 0..nums.len() { sorted.push(buf.get("i32", 4 * i)) }
+print(sorted, calls > 0)
+print(typeof(cmp.address), cmp.closed)
+
+// f32 arguments and results, many mixed arguments
+const powf = libm.func("powf", ["f32", "f32"], "f32")?
+print(powf(2.0, 10.0))
+const fma = libm.func("fma", ["f64", "f64", "f64"], "f64")?
+print(fma(2, 3, 4))
+
+// raw memory and strings
+const s = ffi.cstring("hello")
+const strlen = libc.func("strlen", ["ptr"], "usize")?
+print(strlen(s), ffi.string(s.ptr()), ffi.string(s.ptr(1), 3))
+print(ffi.sizeof("i32"), ffi.sizeof("f64"), ffi.sizeof("ptr"), ffi.NULL)
+const m = ffi.alloc(16)
+m.set("f64", 0, 1.5)
+ffi.write(m.address, "u16", 65535, 8)
+print(m.get("f64"), ffi.read(m, "u16", 8), m.u16(8), ffi.bytes(m.ptr(8), 2))
+
+cmp.close()
+print(cmp.closed)

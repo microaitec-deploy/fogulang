@@ -1,0 +1,8 @@
+import ffi from "fogu:ffi"
+
+// an error inside a callback stops the C call that ran it (C gets 0 meanwhile)
+const qsort = ffi.open("c")?.func("qsort", ["buffer", "usize", "usize", "ptr"])?
+const buf = ffi.alloc(16)
+const bad = ffi.callback(fn(a, b) { return 1 / 0 }, ["ptr", "ptr"], "i32")
+qsort(buf, 4, 4, bad)
+print("not reached")
