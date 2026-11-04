@@ -1,0 +1,29 @@
+import json5 from "fogu:json5"
+import fs from "fogu:fs"
+
+// ---------- parse: comments, trailing commas, unquoted keys, hex, Infinity ----------
+const text = "// app config\n{\n  name: 'demo',\n  port: 0x1F90,\n  ratio: .5,\n  big: +1e3,\n  tags: ['a', \"b\",],\n  'quoted key': \"multi\\\n line\",\n  nested: { on: true, off: null, },\n  /* block */ low: -Infinity,\n}\n"
+const cfg = json5.parse(text)?
+print(cfg.name, cfg.port, cfg.ratio, cfg.big, cfg.tags)
+print(cfg["quoted key"], cfg.nested, cfg.low)
+print(typeof(json5.parse("[NaN]")?[0]), json5.parse("'\\x41\\u00e9\\t|'")?, json5.parse("5.")?)
+
+// ---------- stringify: identifier keys unquoted, sorted ----------
+print(json5.stringify({ name: "x", "a-b": 1, list: [1, 2.0, nil], s: "it's" }))
+print(json5.stringify({ a: [1, { b: "say \"hi\"" }], e: [], f: cfg.low }, 2))
+print(json5.parse(json5.stringify(cfg))? == cfg)
+
+// ---------- errors: line:column ----------
+const [v, e1] = json5.parse("{\n  a: 1,\n  b: x\n}")
+print(v, e1.message)
+const [v2, e2] = json5.parse("[1, 2")
+print(v2, e2.message)
+const [v3, e3] = json5.parse("{ a: 'x\n' }")
+print(v3, e3.message)
+const [v4, e4] = json5.parse("[1,,2]")
+print(v4, e4.message)
+
+// ---------- files ----------
+json5.write("cfg.tmp.json5", { b: 2, a: [true] })?
+print(fs.readText("cfg.tmp.json5")?)
+print(json5.read("cfg.tmp.json5")?)

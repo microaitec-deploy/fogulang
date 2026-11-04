@@ -405,7 +405,8 @@ Each module is evaluated once; cycles are a load error.
 | `fogu:rabbitmq` | AMQP 0-9-1: `exchange queue bind publish consume get`, acks | [rabbitmq.fg](examples/rabbitmq.fg) |
 | `fogu:mqtt` | MQTT 3.1.1: `publish subscribe next`, QoS, retain, last will | [mqtt.fg](examples/mqtt.fg) |
 | `fogu:regex` · `fogu:crypto` · `fogu:log` | regular expressions · hashes, HMAC, AES-GCM, argon2, random · structured logging | — |
-| `fogu:csv` · `fogu:excel` · `fogu:yaml` · `fogu:toml` · `fogu:xml` | `parse stringify read write` (Excel: `read sheets write`) | — |
+| `fogu:csv` · `fogu:excel` · `fogu:yaml` · `fogu:toml` · `fogu:xml` · `fogu:json5` | `parse stringify read write` (Excel: `read sheets write`) | — |
+| `fogu:markdown` | `toHtml toText parse headings toc slug frontmatter` | — |
 | `fogu:html` | parse + CSS selectors, Jinja templates, `sanitize`, HTML ↔ Markdown/text | — |
 | `fogu:webview` | headless Chrome/Edge: `launch open goto eval click type screenshot pdf`, `render(url)` | — |
 | `fogu:grpc` · `fogu:socketio` | gRPC servers/clients from `.proto` schemas · Socket.IO v5 servers (also on a `fogu:web` port) and clients | [grpc.fg](tests/spec/grpc.fg) |

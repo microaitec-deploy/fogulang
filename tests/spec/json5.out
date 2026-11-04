@@ -1,0 +1,27 @@
+demo 8080 0.5 1000.0 [a, b]
+multi line {off: nil, on: true} -inf
+float Aé	| 5.0
+{"a-b":1,list:[1,2.0,null],name:"x",s:"it's"}
+{
+  a: [
+    1,
+    {
+      b: 'say "hi"'
+    }
+  ],
+  e: [],
+  f: -Infinity
+}
+true
+nil json5.parse: line 3:6: unexpected identifier 'x'
+nil json5.parse: line 1:6: unexpected end of input
+nil json5.parse: line 1:8: line break in a string (escape it, or end the line with \)
+nil json5.parse: line 1:4: unexpected character ','
+{
+  a: [
+    true
+  ],
+  b: 2
+}
+
+{a: [true], b: 2}

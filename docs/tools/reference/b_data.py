@@ -131,6 +131,75 @@ print(xml.stringify({ name: "note", attrs: { to: "Ana" }, children: [{ name: "bo
             }
         ],
     },
+    {
+        "id": "mod-json5",
+        "group": D,
+        "title": "fogu:json5",
+        "import": 'import json5 from "fogu:json5"',
+        "intro": "<a href=\"https://json5.org\">JSON5</a>, JSON for humans: <code>//</code> and <code>/* */</code> comments, "
+        "trailing commas, unquoted keys, single-quoted and multi-line strings (<code>\\</code> at the end of a line), hex numbers, "
+        "<code>.5</code> / <code>5.</code> / <code>+1</code>, <code>Infinity</code> and <code>NaN</code>. Invalid input is an "
+        "error value whose message has the <code>line:column</code>. Map keys are written sorted.",
+        "blocks": [
+            {
+                "api": [
+                    ("json5.parse(text)", "value · error", "JSON5 (or plain JSON) → maps, lists, str, int, float, bool, nil."),
+                    ("json5.stringify(value, indent?)", "str", "JSON5: identifier keys unquoted, <code>NaN</code>/<code>Infinity</code> kept; "
+                     "<code>indent</code> is a number of spaces or a string (compact without it)."),
+                    ("json5.read(path) · json5.write(path, value, indent = 2)", "value · nil", "The same, from/to a file."),
+                ],
+                "example": r'''
+import json5 from "fogu:json5"
+const cfg = json5.parse("{\n  // the server\n  host: 'localhost',\n  port: 0x1F90,\n  tags: ['web', 'api',],\n}")?
+print(cfg.host, cfg.port, cfg.tags)
+print(json5.stringify({ name: "fogu", "dash-key": 1, ratio: 0.5 }))
+const [_, err] = json5.parse("{ a: 1,\n  b: }")
+print(err.message)
+''',
+                "run": True,
+            }
+        ],
+    },
+    {
+        "id": "mod-markdown",
+        "group": D,
+        "title": "fogu:markdown",
+        "import": 'import markdown from "fogu:markdown"',
+        "intro": "CommonMark plus the GitHub extensions (tables, strikethrough, task lists, footnotes, <code>&gt; [!NOTE]</code> alerts), "
+        "with pulldown-cmark. Front matter (<code>---</code> YAML or <code>+++</code> TOML on the first line) is skipped by every function; "
+        "<code>frontmatter</code> returns it.",
+        "blocks": [
+            {
+                "api": [
+                    ("markdown.toHtml(text, { gfm = true, sanitize = false, headingIds = false, smart = false })", "str",
+                     "HTML. <code>sanitize</code> escapes raw HTML and turns <code>javascript:</code>/<code>vbscript:</code>/<code>file:</code>/non-image "
+                     "<code>data:</code> links into <code>#</code> (for untrusted text); <code>headingIds</code> gives headings their slug as <code>id</code>; "
+                     "<code>smart</code>: curly quotes and dashes."),
+                    ("markdown.toText(text)", "str", "Plain text: no markup, blocks separated by blank lines, list items with <code>- </code> / <code>1. </code>, table cells joined by <code> | </code>."),
+                    ("markdown.parse(text)", "list", "The block nodes as maps <code>{ type, … }</code>: <code>heading</code> (level, id), <code>paragraph</code>, "
+                     "<code>list</code> (ordered, start) of <code>item</code> (checked), <code>codeBlock</code> (lang, text), <code>blockquote</code> (kind), "
+                     "<code>table</code> (align) of <code>row</code> (header) of <code>cell</code>, <code>html</code>, <code>rule</code>, <code>footnote</code> (label); "
+                     "inline: <code>text</code>, <code>code</code>, <code>emphasis</code>, <code>strong</code>, <code>strikethrough</code>, <code>link</code> (url, title), "
+                     "<code>image</code> (url, title, alt), <code>footnoteRef</code>, <code>break</code>. Containers have <code>children</code>."),
+                    ("markdown.headings(text)", "list", "<code>{ level, text, id }</code> for every heading; <code>id</code> is a unique GitHub-style slug."),
+                    ("markdown.toc(text, { minLevel = 1, maxLevel = 6 })", "str", "A table of contents: a nested Markdown list of links to the headings."),
+                    ("markdown.slug(text)", "str", "GitHub-style anchor: <code>\"Hello, World!\"</code> → <code>hello-world</code>."),
+                    ("markdown.frontmatter(text)", "list · error", "<code>[meta, body]</code>; <code>meta</code> is <code>{}</code> without front matter. Invalid YAML/TOML is an error value."),
+                ],
+                "example": r'''
+import markdown from "fogu:markdown"
+const src = "---\ntitle: Notes\n---\n# Intro\n\nSome *text* and a [link](https://fogu.dev).\n\n## Tasks\n\n- [x] parse\n- [ ] render\n"
+const [meta, body] = markdown.frontmatter(src)?
+print(meta.title)
+print(markdown.toHtml(body, { headingIds: true }))
+print(markdown.toc(src))
+print(markdown.toText(src))
+print(markdown.parse("Hi **there**")[0])
+''',
+                "run": True,
+            }
+        ],
+    },
     # ------------------------------------------------------------------ storage
     {
         "id": "mod-kv",

@@ -9,6 +9,8 @@ pub mod shell;
 pub mod watch;
 pub mod zip;
 pub mod formats;
+pub mod json5;
+pub mod markdown;
 #[cfg(not(target_family = "wasm"))]
 pub mod net;
 #[cfg(not(target_family = "wasm"))]

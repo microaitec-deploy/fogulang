@@ -217,6 +217,8 @@ print(xml.stringify({ name: "note", attrs: { to: "Ana" }, children: [{ name: "bo
 </note>`}
         />
       </section>
+      <RefSection id="mod-json5" onRun={onRun} />
+      <RefSection id="mod-markdown" onRun={onRun} />
 
       {/* ================= FOGU:KV ================= */}
       <section id="mod-kv" data-group="Storage" data-title="fogu:kv" className="scroll-mt-20 mt-16">

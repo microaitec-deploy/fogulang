@@ -1,0 +1,52 @@
+{tags: [a, b], title: Hello} true
+[{title: T}, body]
+[{}, just text]
+nil true
+[{id: intro, level: 1, text: Intro}, {id: install, level: 2, text: Install}, {id: install-1, level: 2, text: Install}]
+- [Intro](#intro)
+  - [Install](#install)
+  - [Install](#install-1)
+- [Install](#install)
+- [Install](#install-1)
+hello-world-2026
+<h1 id="hi">Hi</h1>
+<p>Some <em>text</em> <del>x</del> and <code>c</code>.</p>
+<ul>
+<li><input disabled="" type="checkbox" checked=""/>
+done</li>
+<li><input disabled="" type="checkbox"/>
+todo</li>
+</ul>
+<pre><code class="language-fogu">print(1)
+</code></pre>
+
+<h1>No ids</h1>
+&lt;script&gt;x&lt;/script&gt;
+<p><a href="#">a</a> &lt;b&gt;b&lt;/b&gt;</p>
+
+<p>~~x~~</p>
+Intro
+
+Some emphasis, bold, gone and code.
+
+Install
+
+- [x] done
+- [ ] todo
+  1. nested
+
+print(1)
+
+a | b
+1 | 2
+
+A note[1] and logo.
+
+[1]: The footnote.
+
+Install
+{children: [{text: Hi , type: text}, {children: [{text: there, type: text}], type: emphasis}], id: hi-there, level: 1, type: heading}
+{children: [{children: [{text: a, type: text}], type: item}, {children: [{children: [{text: b, type: text}], title: T, type: link, url: /x}], type: item}], ordered: false, start: 1, type: list}
+{lang: py, text: x = 1, type: codeBlock}
+table [left, right] true 2
+true nil

@@ -27,6 +27,8 @@ value on operational failures (use `?` or `const [v, err] = …`).
 - [fogu:yaml](#foguyaml)
 - [fogu:toml](#fogutoml)
 - [fogu:xml](#foguxml)
+- [fogu:json5](#fogujson5)
+- [fogu:markdown](#fogumarkdown)
 - [fogu:kv](#fogukv)
 - [fogu:sql](#fogusql)
 - [fogu:orm](#foguorm)
@@ -1059,6 +1061,89 @@ feed pt [1, 2] Olá & adeus
 <note to="Ana">
   <body>1 &lt; 2</body>
 </note>
+```
+
+## fogu:json5
+
+```fogu
+import json5 from "fogu:json5"
+```
+
+[JSON5](https://json5.org), JSON for humans: `//` and `/* */` comments, trailing commas, unquoted keys, single-quoted and multi-line strings (`\` at the end of a line), hex numbers, `.5` / `5.` / `+1`, `Infinity` and `NaN`. Invalid input is an error value whose message has the `line:column`. Map keys are written sorted.
+
+- `json5.parse(text)` → value · error — JSON5 (or plain JSON) → maps, lists, str, int, float, bool, nil.
+- `json5.stringify(value, indent?)` → str — JSON5: identifier keys unquoted, `NaN`/`Infinity` kept; `indent` is a number of spaces or a string (compact without it).
+- `json5.read(path) · json5.write(path, value, indent = 2)` → value · nil — The same, from/to a file.
+
+```fogu
+import json5 from "fogu:json5"
+const cfg = json5.parse("{\n  // the server\n  host: 'localhost',\n  port: 0x1F90,\n  tags: ['web', 'api',],\n}")?
+print(cfg.host, cfg.port, cfg.tags)
+print(json5.stringify({ name: "fogu", "dash-key": 1, ratio: 0.5 }))
+const [_, err] = json5.parse("{ a: 1,\n  b: }")
+print(err.message)
+```
+
+output:
+
+```text
+localhost 8080 [web, api]
+{"dash-key":1,name:"fogu",ratio:0.5}
+json5.parse: line 2:6: unexpected character '}'
+```
+
+## fogu:markdown
+
+```fogu
+import markdown from "fogu:markdown"
+```
+
+CommonMark plus the GitHub extensions (tables, strikethrough, task lists, footnotes, `> [!NOTE]` alerts), with pulldown-cmark. Front matter (`---` YAML or `+++` TOML on the first line) is skipped by every function; `frontmatter` returns it.
+
+- `markdown.toHtml(text, { gfm = true, sanitize = false, headingIds = false, smart = false })` → str — HTML. `sanitize` escapes raw HTML and turns `javascript:`/`vbscript:`/`file:`/non-image `data:` links into `#` (for untrusted text); `headingIds` gives headings their slug as `id`; `smart`: curly quotes and dashes.
+- `markdown.toText(text)` → str — Plain text: no markup, blocks separated by blank lines, list items with `- ` / `1. `, table cells joined by ` | `.
+- `markdown.parse(text)` → list — The block nodes as maps `{ type, … }`: `heading` (level, id), `paragraph`, `list` (ordered, start) of `item` (checked), `codeBlock` (lang, text), `blockquote` (kind), `table` (align) of `row` (header) of `cell`, `html`, `rule`, `footnote` (label); inline: `text`, `code`, `emphasis`, `strong`, `strikethrough`, `link` (url, title), `image` (url, title, alt), `footnoteRef`, `break`. Containers have `children`.
+- `markdown.headings(text)` → list — `{ level, text, id }` for every heading; `id` is a unique GitHub-style slug.
+- `markdown.toc(text, { minLevel = 1, maxLevel = 6 })` → str — A table of contents: a nested Markdown list of links to the headings.
+- `markdown.slug(text)` → str — GitHub-style anchor: `"Hello, World!"` → `hello-world`.
+- `markdown.frontmatter(text)` → list · error — `[meta, body]`; `meta` is `{}` without front matter. Invalid YAML/TOML is an error value.
+
+```fogu
+import markdown from "fogu:markdown"
+const src = "---\ntitle: Notes\n---\n# Intro\n\nSome *text* and a [link](https://fogu.dev).\n\n## Tasks\n\n- [x] parse\n- [ ] render\n"
+const [meta, body] = markdown.frontmatter(src)?
+print(meta.title)
+print(markdown.toHtml(body, { headingIds: true }))
+print(markdown.toc(src))
+print(markdown.toText(src))
+print(markdown.parse("Hi **there**")[0])
+```
+
+output:
+
+```text
+Notes
+<h1 id="intro">Intro</h1>
+<p>Some <em>text</em> and a <a href="https://fogu.dev">link</a>.</p>
+<h2 id="tasks">Tasks</h2>
+<ul>
+<li><input disabled="" type="checkbox" checked=""/>
+parse</li>
+<li><input disabled="" type="checkbox"/>
+render</li>
+</ul>
+
+- [Intro](#intro)
+  - [Tasks](#tasks)
+Intro
+
+Some text and a link.
+
+Tasks
+
+- [x] parse
+- [ ] render
+{children: [{text: Hi , type: text}, {children: [{text: there, type: text}], type: strong}], type: paragraph}
 ```
 
 ## fogu:kv

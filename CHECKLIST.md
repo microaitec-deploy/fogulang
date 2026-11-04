@@ -146,7 +146,7 @@ Fundamental API (§44):
 | `[x]` | `fogu:fs`, `fogu:path` (`fs_path.fg`), `fogu:process` (`process.fg`), `fogu:sync` (`sync.fg`), `fogu:test` (`tests/cli.rs`) |
 | `[x]` | extras: `fogu:orm` (Prisma-style ORM, `orm.fg`), `fogu:jwt` (`jwt.fg`), web middleware (`web_middleware.fg`), `fogu:ssh` (ssh/scp/tunnels), `fogu:scylla`, `fogu:fogumq` — the last three tested by hand against real servers |
 | `[ ]` | `fogu:context` |
-| `[x]` | `fogu:crypto`, `fogu:regex`, `fogu:log` (`regex_crypto_log.fg`), `fogu:yaml`, `fogu:toml`, `fogu:csv`, `fogu:excel`, `fogu:xml` (`formats.fg`) |
+| `[x]` | `fogu:crypto`, `fogu:regex`, `fogu:log` (`regex_crypto_log.fg`), `fogu:yaml`, `fogu:toml`, `fogu:csv`, `fogu:excel`, `fogu:xml` (`formats.fg`), `fogu:json5` (`json5.fg`), `fogu:markdown` (`markdown.fg`) |
 | `[x]` | `fogu:websocket`, `fogu:mail` (SMTP + HTTP APIs, `mail.fg`), `fogu:ai` (`ai.fg`), `fogu:shell` (`shell.fg`), `fogu:s3` (`s3.fg`) |
 | `[x]` | DNS lookups — in `fogu:security` (`dns`, `reverseDns`, hickory) |
 | `[x]` | `fogu:mqtt`, `fogu:nats` (+ JetStream), `fogu:redis`, `fogu:rabbitmq` (AMQP) — tested by hand against real servers |

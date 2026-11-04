@@ -98,7 +98,9 @@ export const TOC_GROUPS: TocGroup[] = [
       { id: 'mod-excel', title: 'fogu:excel' },
       { id: 'mod-yaml', title: 'fogu:yaml' },
       { id: 'mod-toml', title: 'fogu:toml' },
-      { id: 'mod-xml', title: 'fogu:xml' }
+      { id: 'mod-xml', title: 'fogu:xml' },
+      { id: 'mod-json5', title: 'fogu:json5' },
+      { id: 'mod-markdown', title: 'fogu:markdown' }
     ]
   },
   {

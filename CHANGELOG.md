@@ -51,6 +51,17 @@ be incompatible changes (spec §75).
   `http.serve(port, handler, { tls, quiet, maxBody })` (`fogu:http`); PEM text or file paths.
 - HTTP client: `ca` (a PEM certificate or its path, trusted for that request) and `insecure: true`
   (accept any certificate) options.
+- `fogu:json5` — JSON5 (comments, trailing commas, unquoted keys, single-quoted and multi-line
+  strings, hex numbers, `.5`/`5.`/`+1`, `Infinity`, `NaN`): `parse` (errors are values with
+  `line:column`), `stringify(value, indent?)` (identifier keys unquoted), `read`, `write`. A
+  hand-written parser (no new dependency); `json5::parse_value` is public for other native code
+  (`tests/spec/json5.fg`).
+- `fogu:markdown` — GitHub-flavoured Markdown with pulldown-cmark: `toHtml(text, { gfm, sanitize,
+  headingIds, smart })` (`sanitize` escapes raw HTML and neutralizes `javascript:`-style links),
+  `toText`, `parse` (a tree of block/inline nodes as maps), `headings` (with unique GitHub-style
+  slugs), `toc`, `slug`, `frontmatter` (`---` YAML / `+++` TOML → `[meta, body]`; front matter
+  is skipped by the other functions). Always built, also for WebAssembly: pulldown-cmark is no
+  longer tied to the `network` feature (`tests/spec/markdown.fg`).
 
 ### Changed
 

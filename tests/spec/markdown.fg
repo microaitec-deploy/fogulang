@@ -1,0 +1,34 @@
+import markdown from "fogu:markdown"
+
+const doc = "---\ntitle: Hello\ntags: [a, b]\n---\n# Intro\n\nSome *emphasis*, **bold**, ~~gone~~ and `code`.\n\n## Install\n\n- [x] done\n- [ ] todo\n  1. nested\n\n```fogu\nprint(1)\n```\n\n| a | b |\n|:--|--:|\n| 1 | 2 |\n\nA note[^1] and ![logo](/l.png \"Logo\").\n\n[^1]: The footnote.\n\n## Install\n"
+
+// ---------- front matter ----------
+const [meta, body] = markdown.frontmatter(doc)?
+print(meta, body.starts_with("# Intro"))
+print(markdown.frontmatter("+++\ntitle = \"T\"\n+++\nbody")?)
+print(markdown.frontmatter("just text")?)
+const [fm, fe] = markdown.frontmatter("---\na: [1\n---\n")
+print(fm, fe.message.starts_with("markdown.frontmatter: yaml:"))
+
+// ---------- headings, toc, slug ----------
+print(markdown.headings(doc))
+print(markdown.toc(doc))
+print(markdown.toc(doc, { minLevel: 2 }))
+print(markdown.slug("Hello, World! 2026"))
+
+// ---------- HTML ----------
+print(markdown.toHtml("# Hi\n\nSome *text* ~~x~~ and `c`.\n\n- [x] done\n- [ ] todo\n\n```fogu\nprint(1)\n```\n", { headingIds: true }))
+print(markdown.toHtml("# No ids").trim())
+print(markdown.toHtml("<script>x</script>\n\n[a](javascript:alert(1)) <b>b</b>", { sanitize: true }))
+print(markdown.toHtml("~~x~~", { gfm: false }).trim())
+
+// ---------- plain text ----------
+print(markdown.toText(doc))
+
+// ---------- the tree ----------
+const nodes = markdown.parse("# Hi *there*\n\n- a\n- [b](/x \"T\")\n\n```py\nx = 1\n```\n")
+for n in nodes { print(n) }
+const table = markdown.parse("| a | b |\n|:--|--:|\n| 1 | 2 |\n")[0]
+print(table.type, table.align, table.children[0].header, table.children[1].children[1].children[0].text)
+const tasks = markdown.parse("- [x] done\n- plain\n")[0].children
+print(tasks[0].checked, tasks[1].checked)

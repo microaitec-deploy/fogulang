@@ -277,7 +277,7 @@ pub fn yaml_build() -> ModuleValue {
     )
 }
 
-fn yaml_parse(text: &str) -> Result<Value, String> {
+pub(crate) fn yaml_parse(text: &str) -> Result<Value, String> {
     let v: J = serde_yaml::from_str(text).map_err(|e| io_err!("yaml: {}", e))?;
     Ok(json_to_value(&v))
 }
@@ -323,7 +323,7 @@ fn toml_to_json(v: toml::Value) -> J {
     }
 }
 
-fn toml_parse(text: &str) -> Result<Value, String> {
+pub(crate) fn toml_parse(text: &str) -> Result<Value, String> {
     let t: toml::Table = text.parse().map_err(|e: toml::de::Error| io_err!("toml: {}", e.to_string().trim()))?;
     Ok(json_to_value(&toml_to_json(toml::Value::Table(t))))
 }

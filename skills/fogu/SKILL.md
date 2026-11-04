@@ -153,7 +153,7 @@ panic`, and the `Fogu` object: `Fogu.file(path).text()/.json()/.write(s)`,
 | Need | Module |
 | --- | --- |
 | files, paths, processes, shell | `fogu:fs` `fogu:path` `fogu:process` `fogu:shell` |
-| JSON, CSV, Excel, YAML, TOML, XML | `fogu:json` `fogu:csv` `fogu:excel` `fogu:yaml` `fogu:toml` `fogu:xml` |
+| JSON, JSON5, CSV, Excel, YAML, TOML, XML, Markdown | `fogu:json` `fogu:json5` `fogu:csv` `fogu:excel` `fogu:yaml` `fogu:toml` `fogu:xml` `fogu:markdown` |
 | time, scheduling, events | `fogu:time` `fogu:cron` `fogu:events` |
 | HTTP client/server (uploads: `multipart` + `http.file`), web framework, WebSocket, TCP/UDP | `fogu:http` `fogu:web` `fogu:websocket` `fogu:net` (`conn.read()` → buffer, `readLine()` → str, both `nil` at end of stream) |
 | interactive server-rendered UIs (signals, shards, procedures; Topcoat UI / shadcn-rs kits, Tailwind) | `fogu:topcoat` with `fogu:web` |

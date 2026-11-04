@@ -47,6 +47,8 @@ pub use io::shell;
 pub use io::watch;
 pub use io::zip;
 pub use io::formats;
+pub use io::json5;
+pub use io::markdown;
 #[cfg(not(target_family = "wasm"))]
 pub use io::net;
 #[cfg(not(target_family = "wasm"))]

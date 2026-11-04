@@ -258,6 +258,8 @@ fn install(ctx: &mut NativeContext) {
     ctx.define_lazy("yaml", crate::native::formats::yaml_build);
     ctx.define_lazy("toml", crate::native::formats::toml_build);
     ctx.define_lazy("xml", crate::native::formats::xml_build);
+    ctx.define_lazy("json5", crate::native::json5::build);
+    ctx.define_lazy("markdown", crate::native::markdown::build);
     #[cfg(not(target_family = "wasm"))]
     ctx.define_lazy("ffi", crate::native::ffi::build);
     #[cfg(feature = "ops")]

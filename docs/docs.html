@@ -1087,6 +1087,59 @@ print(xml.stringify({ name: "note", attrs: { to: "Ana" }, children: [{ name: "bo
 </note></script>
     </section>
 
+    <section id="mod-json5" data-group="Data formats" data-title="fogu:json5" class="scroll-mt-20 mt-16">
+      <h2 class="text-2xl font-bold"><code>fogu:json5</code></h2>
+      <p><a href="https://json5.org">JSON5</a>, JSON for humans: <code>//</code> and <code>/* */</code> comments, trailing commas, unquoted keys, single-quoted and multi-line strings (<code>\</code> at the end of a line), hex numbers, <code>.5</code> / <code>5.</code> / <code>+1</code>, <code>Infinity</code> and <code>NaN</code>. Invalid input is an error value whose message has the <code>line:column</code>. Map keys are written sorted.</p>
+      <script type="text/x-fogu" data-title="import">import json5 from "fogu:json5"</script>
+      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>json5.parse(text)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">value · error</td><td class="py-2">JSON5 (or plain JSON) → maps, lists, str, int, float, bool, nil.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>json5.stringify(value, indent?)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">JSON5: identifier keys unquoted, <code>NaN</code>/<code>Infinity</code> kept; <code>indent</code> is a number of spaces or a string (compact without it).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>json5.read(path) · json5.write(path, value, indent = 2)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">value · nil</td><td class="py-2">The same, from/to a file.</td></tr></tbody></table></div>
+      <script type="text/x-fogu" data-title="example.fg">import json5 from "fogu:json5"
+const cfg = json5.parse("{\n  // the server\n  host: 'localhost',\n  port: 0x1F90,\n  tags: ['web', 'api',],\n}")?
+print(cfg.host, cfg.port, cfg.tags)
+print(json5.stringify({ name: "fogu", "dash-key": 1, ratio: 0.5 }))
+const [_, err] = json5.parse("{ a: 1,\n  b: }")
+print(err.message)</script>
+      <script type="text/x-fogu" data-lang="text" data-title="output">localhost 8080 [web, api]
+{"dash-key":1,name:"fogu",ratio:0.5}
+json5.parse: line 2:6: unexpected character '}'</script>
+    </section>
+
+    <section id="mod-markdown" data-group="Data formats" data-title="fogu:markdown" class="scroll-mt-20 mt-16">
+      <h2 class="text-2xl font-bold"><code>fogu:markdown</code></h2>
+      <p>CommonMark plus the GitHub extensions (tables, strikethrough, task lists, footnotes, <code>&gt; [!NOTE]</code> alerts), with pulldown-cmark. Front matter (<code>---</code> YAML or <code>+++</code> TOML on the first line) is skipped by every function; <code>frontmatter</code> returns it.</p>
+      <script type="text/x-fogu" data-title="import">import markdown from "fogu:markdown"</script>
+      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>markdown.toHtml(text, { gfm = true, sanitize = false, headingIds = false, smart = false })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">HTML. <code>sanitize</code> escapes raw HTML and turns <code>javascript:</code>/<code>vbscript:</code>/<code>file:</code>/non-image <code>data:</code> links into <code>#</code> (for untrusted text); <code>headingIds</code> gives headings their slug as <code>id</code>; <code>smart</code>: curly quotes and dashes.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>markdown.toText(text)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Plain text: no markup, blocks separated by blank lines, list items with <code>- </code> / <code>1. </code>, table cells joined by <code> | </code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>markdown.parse(text)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list</td><td class="py-2">The block nodes as maps <code>{ type, … }</code>: <code>heading</code> (level, id), <code>paragraph</code>, <code>list</code> (ordered, start) of <code>item</code> (checked), <code>codeBlock</code> (lang, text), <code>blockquote</code> (kind), <code>table</code> (align) of <code>row</code> (header) of <code>cell</code>, <code>html</code>, <code>rule</code>, <code>footnote</code> (label); inline: <code>text</code>, <code>code</code>, <code>emphasis</code>, <code>strong</code>, <code>strikethrough</code>, <code>link</code> (url, title), <code>image</code> (url, title, alt), <code>footnoteRef</code>, <code>break</code>. Containers have <code>children</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>markdown.headings(text)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list</td><td class="py-2"><code>{ level, text, id }</code> for every heading; <code>id</code> is a unique GitHub-style slug.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>markdown.toc(text, { minLevel = 1, maxLevel = 6 })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">A table of contents: a nested Markdown list of links to the headings.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>markdown.slug(text)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">GitHub-style anchor: <code>"Hello, World!"</code> → <code>hello-world</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>markdown.frontmatter(text)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list · error</td><td class="py-2"><code>[meta, body]</code>; <code>meta</code> is <code>{}</code> without front matter. Invalid YAML/TOML is an error value.</td></tr></tbody></table></div>
+      <script type="text/x-fogu" data-title="example.fg">import markdown from "fogu:markdown"
+const src = "---\ntitle: Notes\n---\n# Intro\n\nSome *text* and a [link](https://fogu.dev).\n\n## Tasks\n\n- [x] parse\n- [ ] render\n"
+const [meta, body] = markdown.frontmatter(src)?
+print(meta.title)
+print(markdown.toHtml(body, { headingIds: true }))
+print(markdown.toc(src))
+print(markdown.toText(src))
+print(markdown.parse("Hi **there**")[0])</script>
+      <script type="text/x-fogu" data-lang="text" data-title="output">Notes
+<h1 id="intro">Intro</h1>
+<p>Some <em>text</em> and a <a href="https://fogu.dev">link</a>.</p>
+<h2 id="tasks">Tasks</h2>
+<ul>
+<li><input disabled="" type="checkbox" checked=""/>
+parse</li>
+<li><input disabled="" type="checkbox"/>
+render</li>
+</ul>
+
+- [Intro](#intro)
+  - [Tasks](#tasks)
+Intro
+
+Some text and a link.
+
+Tasks
+
+- [x] parse
+- [ ] render
+{children: [{text: Hi , type: text}, {children: [{text: there, type: text}], type: strong}], type: paragraph}</script>
+    </section>
+
     <section id="mod-kv" data-group="Storage" data-title="fogu:kv" class="scroll-mt-20 mt-16">
       <h2 class="text-2xl font-bold"><code>fogu:kv</code></h2>
       <p>An embedded key-value store in a single file (redb, ACID). Values are any Fogu value (stored as JSON).</p>
