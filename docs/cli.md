@@ -263,9 +263,11 @@ the first time (`fogu add -g desktop`); `update` installs the latest version.
 
 ```sh
 fogu desktop create my-app --template react   # vanilla | ts | react | vue | svelte
-fogu desktop dev                              # Vite dev server + window (current folder)
+fogu desktop dev                              # the window with hot reload (current folder): Fogu reloads in place, Vite HMR
 fogu desktop build --target windows           # dist/my-app.exe: the generic host + the app, in seconds (no Rust)
 fogu desktop build --installer                # compiled in: installers and the app's icon (Rust + Tauri CLI)
+fogu desktop ci                               # .github/workflows/fogu-desktop.yml: builds Windows, macOS and Linux
+fogu desktop keygen --endpoint URL            # signing keys of self-updates; build then writes dist/latest.json
 fogu mcu boards                               # board profiles
 fogu mcu build blink.fg --board pico          # .uf2 / .hex / .bin + .elf
 fogu mcu run blink.fg --board uno --port COM5 # build + flash + serial monitor
