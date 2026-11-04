@@ -37,6 +37,20 @@ be incompatible changes (spec §75).
   deep `equal` and `clone` (`tests/spec/types.fg`).
 - `Fogu.execPath`: the running executable. The test runners of the libraries in `libs/` use it by
   default, so `fogu tests/run.fg` tests with the same binary.
+- `fogu:tls` — TLS over TCP with rustls: `tls.connect("host:port", { verify, ca, serverName, cert,
+  key, alpn, timeout })` and `tls.listen("host:port", { cert, key, ca, clientAuth, alpn, timeout })`
+  give a `TlsStream` / `TlsListener` with the same methods as `fogu:net`'s `TcpStream` /
+  `TcpListener` (`for conn in listener` too). Mutual TLS (`ca` on the server, `cert`/`key` on the
+  client), ALPN, SNI, `verify: false` for development; handshakes of a listener run in the
+  background, so a slow or failing client never blocks `accept` (`failedHandshakes`, `lastError`).
+  Streams expose `protocol`, `cipher`, `alpn`, `serverName` and `peerCert` (subject, issuer,
+  notAfter, sha256 fingerprint… as `parseCert`). STARTTLS: `tls.upgrade(conn, opts)` /
+  `tls.upgradeServer(conn, { cert, key })` on a plain `TcpStream`. `tls.selfSigned(names)` and
+  `tls.parseCert(pem)` (as in `fogu:security`). `tests/spec/tls.fg`, `examples/tls.fg`.
+- HTTPS servers: `app.listen(port, { tls: { cert, key } })` (`fogu:web`) and
+  `http.serve(port, handler, { tls, quiet, maxBody })` (`fogu:http`); PEM text or file paths.
+- HTTP client: `ca` (a PEM certificate or its path, trusted for that request) and `insecure: true`
+  (accept any certificate) options.
 
 ### Changed
 

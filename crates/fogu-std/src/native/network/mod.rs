@@ -20,3 +20,5 @@ pub mod html;
 pub mod mail;
 #[cfg(not(target_family = "wasm"))]
 pub mod security;
+#[cfg(not(target_family = "wasm"))]
+pub mod tls;

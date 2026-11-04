@@ -33,10 +33,12 @@
 use std::cell::RefCell;
 use ahash::AHashMap as HashMap;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, ReadBuf};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -114,7 +116,7 @@ fn resolve(args: &[Value]) -> Result<Value, String> {
 // ---------- helpers ----------
 
 /// An optional timeout argument: a duration, or an int of milliseconds.
-fn opt_timeout(v: Option<&Value>, what: &str) -> Result<Option<Duration>, String> {
+pub(crate) fn opt_timeout(v: Option<&Value>, what: &str) -> Result<Option<Duration>, String> {
     match v {
         None | Some(Value::Nil) => Ok(None),
         Some(Value::Int(ms)) if *ms >= 0 => Ok(Some(Duration::from_millis(*ms as u64))),
@@ -133,7 +135,7 @@ fn size_arg(args: &[Value], what: &str, default: usize) -> Result<usize, String>
 
 /// Runs `fut` on the runtime (bounded by `timeout`) and turns its result into
 /// a value on the interpreter thread.
-fn op<T, F>(what: &'static str, timeout: Option<Duration>, fut: F, finish: impl FnOnce(T) -> Value + 'static) -> Poller
+pub(crate) fn op<T, F>(what: &'static str, timeout: Option<Duration>, fut: F, finish: impl FnOnce(T) -> Value + 'static) -> Poller
 where
     T: Send + 'static,
     F: std::future::Future<Output = std::io::Result<T>> + Send + 'static,
@@ -154,7 +156,7 @@ where
     })
 }
 
-fn closed(what: &str) -> Option<Result<Poller, String>> {
+pub(crate) fn closed(what: &str) -> Option<Result<Poller, String>> {
     Some(Err(io_err!("{}: the socket is closed", what)))
 }
 
@@ -214,12 +216,61 @@ impl FoguObject for TcpListenerValue {
 
 // ================= TCP STREAM =================
 
+/// The read side of a stream: a plain TCP half (which can be reunited with its
+/// write half, for STARTTLS) or any other reader (a TLS stream's half).
+pub enum StreamRead {
+    Tcp(OwnedReadHalf),
+    Boxed(Box<dyn AsyncRead + Send + Unpin>),
+}
+
+/// The write side of a stream (see [`StreamRead`]).
+pub enum StreamWrite {
+    Tcp(OwnedWriteHalf),
+    Boxed(Box<dyn AsyncWrite + Send + Unpin>),
+}
+
+impl AsyncRead for StreamRead {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            StreamRead::Tcp(r) => Pin::new(r).poll_read(cx, buf),
+            StreamRead::Boxed(r) => Pin::new(r).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for StreamWrite {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            StreamWrite::Tcp(w) => Pin::new(w).poll_write(cx, buf),
+            StreamWrite::Boxed(w) => Pin::new(w).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            StreamWrite::Tcp(w) => Pin::new(w).poll_flush(cx),
+            StreamWrite::Boxed(w) => Pin::new(w).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            StreamWrite::Tcp(w) => Pin::new(w).poll_shutdown(cx),
+            StreamWrite::Boxed(w) => Pin::new(w).poll_shutdown(cx),
+        }
+    }
+}
+
+/// A connected stream: `TcpStream` (plain TCP) or `TlsStream` (`fogu:tls`),
+/// with the same methods; a TLS stream adds read-only fields (`extra`).
 pub struct TcpStreamValue {
-    reader: Option<Arc<AsyncMutex<BufReader<OwnedReadHalf>>>>,
-    writer: Option<Arc<AsyncMutex<OwnedWriteHalf>>>,
+    reader: Option<Arc<AsyncMutex<BufReader<StreamRead>>>>,
+    writer: Option<Arc<AsyncMutex<StreamWrite>>>,
     peer: String,
     local: String,
     timeout: Option<Duration>,
+    kind: &'static str,
+    extra: Vec<(&'static str, Value)>,
 }
 
 impl TcpStreamValue {
@@ -228,20 +279,67 @@ impl TcpStreamValue {
         let peer = s.peer_addr().map(|a| a.to_string()).unwrap_or_default();
         let local = s.local_addr().map(|a| a.to_string()).unwrap_or_default();
         let (r, w) = s.into_split();
+        Self::from_halves(StreamRead::Tcp(r), StreamWrite::Tcp(w), "TcpStream", peer, local, Vec::new())
+    }
+
+    /// Wraps any stream (e.g. a TLS stream over TCP) as an object of type
+    /// `kind` with the methods of `TcpStream` and the fields in `extra`.
+    pub fn wrap_io<S>(s: S, kind: &'static str, peer: String, local: String, extra: Vec<(&'static str, Value)>) -> Value
+    where
+        S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    {
+        let (r, w) = tokio::io::split(s);
+        Self::from_halves(StreamRead::Boxed(Box::new(r)), StreamWrite::Boxed(Box::new(w)), kind, peer, local, extra)
+    }
+
+    fn from_halves(r: StreamRead, w: StreamWrite, kind: &'static str, peer: String, local: String, extra: Vec<(&'static str, Value)>) -> Value {
         NativeObjectRef::new(TcpStreamValue {
             reader: Some(Arc::new(AsyncMutex::new(BufReader::with_capacity(16 * 1024, r)))),
             writer: Some(Arc::new(AsyncMutex::new(w))),
             peer,
             local,
             timeout: None,
+            kind,
+            extra,
         })
         .to_value()
+    }
+
+    /// Takes the plain TCP socket out of this object (which becomes closed),
+    /// to start TLS on it (STARTTLS). Fails when the stream is already TLS,
+    /// closed, busy in another task, or holds data read but not consumed.
+    pub fn take_tcp(&mut self, what: &str) -> Result<tokio::net::TcpStream, String> {
+        if self.kind != "TcpStream" {
+            return Err(format!("{}: the connection is already a {}", what, self.kind));
+        }
+        let (Some(r), Some(w)) = (self.reader.take(), self.writer.take()) else {
+            return Err(io_err!("{}: the socket is closed", what));
+        };
+        let (r, w) = match (Arc::try_unwrap(r), Arc::try_unwrap(w)) {
+            (Ok(r), Ok(w)) => (r.into_inner(), w.into_inner()),
+            (r, w) => {
+                // restore what we took: an operation of another task holds it
+                self.reader = Some(r.map(|m| Arc::new(m)).unwrap_or_else(|a| a));
+                self.writer = Some(w.map(|m| Arc::new(m)).unwrap_or_else(|a| a));
+                return Err(io_err!("{}: the connection is in use by another task", what));
+            }
+        };
+        if !r.buffer().is_empty() {
+            let n = r.buffer().len();
+            self.reader = Some(Arc::new(AsyncMutex::new(r)));
+            self.writer = Some(Arc::new(AsyncMutex::new(w)));
+            return Err(io_err!("{}: {} bytes were received but not read yet", what, n));
+        }
+        match (r.into_inner(), w) {
+            (StreamRead::Tcp(r), StreamWrite::Tcp(w)) => r.reunite(w).map_err(|e| io_err!("{}: {}", what, e)),
+            _ => Err(io_err!("{}: not a plain TCP connection", what)),
+        }
     }
 }
 
 impl FoguObject for TcpStreamValue {
     fn name(&self) -> &str {
-        "TcpStream"
+        self.kind
     }
 
     fn get(&self, field: &str) -> Option<Value> {
@@ -249,7 +347,7 @@ impl FoguObject for TcpStreamValue {
             "peer" | "peerAddr" => Some(Value::Str(self.peer.as_str().into())),
             "localAddr" => Some(Value::Str(self.local.as_str().into())),
             "open" => Some(Value::Bool(self.writer.is_some())),
-            _ => None,
+            _ => self.extra.iter().find(|(k, _)| *k == field).map(|(_, v)| v.clone()),
         }
     }
 
@@ -272,8 +370,8 @@ impl FoguObject for TcpStreamValue {
                 Ok(Value::Nil)
             }
             other => Err(format!(
-                "method '{}' does not exist on TcpStream (read readExact readLine readText readAll write writeLine close setTimeout)",
-                other
+                "method '{}' does not exist on {} (read readExact readLine readText readAll write writeLine close setTimeout)",
+                other, self.kind
             )),
         }
     }
@@ -362,6 +460,14 @@ impl FoguObject for TcpStreamValue {
 
     fn methods(&self) -> Vec<&'static str> {
         vec!["read", "readExact", "readLine", "readText", "readAll", "write", "writeLine", "close", "setTimeout", "peer", "peerAddr"]
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 

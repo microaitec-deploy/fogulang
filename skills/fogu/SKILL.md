@@ -159,6 +159,7 @@ panic`, and the `Fogu` object: `Fogu.file(path).text()/.json()/.write(s)`,
 | interactive server-rendered UIs (signals, shards, procedures; Topcoat UI / shadcn-rs kits, Tailwind) | `fogu:topcoat` with `fogu:web` |
 | Socket.IO (server, also on a `fogu:web` port; client), gRPC | `fogu:socketio` `fogu:grpc` (+ `fogu:protobuf` schemas) |
 | TLS/cert checks, port scan, DNS, security headers, passwords, TOTP, secret scanning, signatures, rate limits | `fogu:security` |
+| TLS sockets (client, server, mTLS, STARTTLS) and HTTPS servers; self-signed certs for development | `fogu:tls` (`tls.connect(addr, { ca })`, `tls.listen(addr, { cert, key })` — same methods as `fogu:net`; HTTPS: `app.listen(port, { tls: tls.selfSigned(["localhost"])? })`) |
 | databases | `fogu:sql` (SQLite/Postgres/MySQL) `fogu:orm` `fogu:kv` `fogu:surrealkv` (versioned, transactions) `fogu:surrealdb` `fogu:redis` `fogu:scylla` `fogu:etcd` |
 | messaging, job queues | `fogu:nats` (`nats.fogu()`: KV, sub/pub, services) `fogu:kafka` `fogu:rabbitmq` `fogu:mqtt` `fogu:fogumq` `fogu:foguMQ-client` (FlowMQ v6) `fogu:bullmq` |
 | an embedded message broker (KV, channels, pub/sub, RPC, clusters) | `fogu:broker` (`broker.start(addr)`, inline `b.client()`, web admin `b.admin(port)`) |

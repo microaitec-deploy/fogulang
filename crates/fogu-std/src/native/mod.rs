@@ -82,6 +82,9 @@ pub use network::mail;
 #[cfg(feature = "network")]
 #[cfg(not(target_family = "wasm"))]
 pub use network::security;
+#[cfg(feature = "network")]
+#[cfg(not(target_family = "wasm"))]
+pub use network::tls;
 #[cfg(feature = "database")]
 #[cfg(not(target_family = "wasm"))]
 pub use database::sql;

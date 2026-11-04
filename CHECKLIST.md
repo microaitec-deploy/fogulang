@@ -140,7 +140,8 @@ Fundamental API (§44):
 | --- | --- |
 | `[x]` | `fogu:math`, `fogu:json`, `fogu:time`, `fogu:net` (TCP/UDP), `fogu:http`, `fogu:cron` |
 | `[x]` | extras not in the spec: `fogu:system`, `fogu:events`, `fogu:kv`, `fogu:surrealkv`, `fogu:sql`, `fogu:web` |
-| `[~]` | `fogu:net` without TLS; `fogu:http` without HTTP/2 or the `http.serve({ port, fetch })` form |
+| `[x]` | `fogu:tls` — TLS client/server over TCP (rustls; mTLS, ALPN, SNI, STARTTLS, peer certificate), HTTPS in `fogu:web` / `fogu:http` (`tls: { cert, key }`), `tls.selfSigned` |
+| `[~]` | `fogu:http` without HTTP/2 or the `http.serve({ port, fetch })` form |
 | `[~]` | `fogu:cron` requires calling `cron.tick()`; it does not run in the background |
 | `[x]` | `fogu:fs`, `fogu:path` (`fs_path.fg`), `fogu:process` (`process.fg`), `fogu:sync` (`sync.fg`), `fogu:test` (`tests/cli.rs`) |
 | `[x]` | extras: `fogu:orm` (Prisma-style ORM, `orm.fg`), `fogu:jwt` (`jwt.fg`), web middleware (`web_middleware.fg`), `fogu:ssh` (ssh/scp/tunnels), `fogu:scylla`, `fogu:fogumq` — the last three tested by hand against real servers |

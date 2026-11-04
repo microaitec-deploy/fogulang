@@ -1,0 +1,111 @@
+// fogu:tls — TLS servers and clients in one program (self-signed certificates)
+import tls from "fogu:tls"
+import net from "fogu:net"
+import web from "fogu:web"
+import http from "fogu:http"
+import time from "fogu:time"
+
+const pair = tls.selfSigned(["localhost", "127.0.0.1"])?
+print(pair.cert.starts_with("-----BEGIN CERTIFICATE"), pair.key.contains("PRIVATE KEY"))
+const info = tls.parseCert(pair.cert)?
+print(info.commonName, info.names, info.selfSigned)
+
+// an echo server: for conn in listener, each connection in its own task
+const server = tls.listen("127.0.0.1:0", { cert: pair.cert, key: pair.key, alpn: ["echo/1"] })?
+fg fn() {
+    for conn in server {
+        fg fn() {
+            while true {
+                const line = conn.readLine()?
+                if line == nil { break }
+                conn.writeLine("echo: " + line)?
+            }
+            conn.close()
+        }()
+    }
+}()
+
+// trust the self-signed certificate with `ca`; the name checked is the IP
+const c = tls.connect(server.addr, { ca: pair.cert, alpn: ["echo/1"] })?
+print(typeof(c), c.protocol, c.alpn, c.open, c.serverName)
+c.writeLine("hello tls")?
+print(c.readLine()?)
+c.write("two\nlines\n")?
+print(c.readLine()?, c.readLine()?)
+print(c.peerCert.commonName, c.peerCert.sha256 == info.sha256)
+c.close()
+print(c.open)
+
+// serverName (SNI) picks the name to check
+const c2 = tls.connect(server.addr, { ca: pair.cert, serverName: "localhost" })?
+c2.writeLine("by name")?
+print(c2.readLine()?, c2.serverName, c2.alpn)
+c2.close()
+
+// the system roots do not know the certificate: the handshake fails
+const [bad, err] = tls.connect(server.addr)
+print(bad, typeof(err), err.message.contains("UnknownIssuer"))
+// verify: false accepts any certificate (development only)
+const c3 = tls.connect(server.addr, { verify: false })?
+c3.writeLine("insecure")?
+print(c3.readLine()?)
+c3.close()
+time.delay(100ms)
+print("failed handshakes:", server.failedHandshakes)
+
+// mutual TLS: the server trusts the client's certificate
+const client = tls.selfSigned("client")?
+const mserver = tls.listen("127.0.0.1:0", { cert: pair.cert, key: pair.key, ca: client.cert })?
+fg fn() {
+    for conn in mserver {
+        conn.writeLine("hi " + conn.peerCert.commonName)?
+        conn.close()
+    }
+}()
+const m = tls.connect(mserver.addr, { ca: pair.cert, cert: client.cert, key: client.key })?
+print(m.readLine()?, m.peerCert.commonName)
+m.close()
+// no client certificate: the server rejects the connection
+const m2 = tls.connect(mserver.addr, { ca: pair.cert })?
+const [line, e2] = m2.readLine()
+print(line, typeof(e2))
+m2.close()
+
+// STARTTLS: a plain connection upgraded on both sides
+const plain = net.tcpListen("127.0.0.1:0")?
+fg fn() {
+    const conn = plain.accept()?
+    print("server:", conn.readLine()?)
+    conn.writeLine("OK")?
+    const s = tls.upgradeServer(conn, { cert: pair.cert, key: pair.key })?
+    s.writeLine("secret " + s.readLine()?)?
+    s.close()
+}()
+const pc = net.tcpConnect(plain.addr)?
+pc.writeLine("STARTTLS")?
+print("client:", pc.readLine()?)
+const sc = tls.upgrade(pc, { ca: pair.cert, serverName: "localhost" })?
+print(pc.open, typeof(sc), sc.protocol)
+sc.writeLine("data")?
+print(sc.readLine()?)
+sc.close()
+
+// HTTPS: fogu:web with { tls: { cert, key } }
+const app = web.app()
+app.get("/", (ctx) => ({ secure: true, path: ctx.path }))
+app.listen(18435, { tls: pair, quiet: true })
+let done = false
+fg fn() {
+    const r = http.get("https://127.0.0.1:18435/", { ca: pair.cert })?
+    print(r.status, r.json()?)
+    const r2 = http.get("https://localhost:18435/", { insecure: true })?
+    print(r2.status)
+    const [r3, e4] = http.get("https://127.0.0.1:18435/")
+    print(r3, typeof(e4))
+    const h = tls.connect("127.0.0.1:18435", { ca: pair.cert, alpn: ["http/1.1"] })?
+    h.write("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?
+    print(h.readLine()?, h.alpn)
+    h.close()
+    done = true
+}()
+while !done { time.delay(10ms) }

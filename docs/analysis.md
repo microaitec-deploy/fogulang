@@ -298,6 +298,11 @@
 - Connecting (`fogumq.connect`, `mqtt`, ssh tunnels) still blocks while the
   handshake runs; module functions of `fs` run inline.
 - `fogu build --compile` does not embed data files the program reads at runtime.
+- TLS (`fogu:tls`, HTTPS in `fogu:web`/`fogu:http`) uses rustls; the HTTP client still uses
+  native-tls (OpenSSL / SChannel), so its `ca` option goes through a different stack. The
+  standalone `websocket.listen` and `io.listen` (Socket.IO) servers have no TLS option yet (serve
+  them through `app.listen(port, { tls })` or a proxy); HTTPS is HTTP/1.1 only. A TLS read that
+  ends without the peer's `close_notify` is an error value, not `nil`.
 - `fogu:kafka` has no consumer groups (rskafka does not implement the group protocol):
   consumers keep their own offsets.
 - `fogu:grpc` receives every request of a bidirectional call before running the handler

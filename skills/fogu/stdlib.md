@@ -11,6 +11,7 @@ value on operational failures (use `?` or `const [v, err] = …`).
 - [The Fogu object](#the-fogu-object)
 - [fogu:math](#fogumath)
 - [fogu:json](#fogujson)
+- [fogu:types](#fogutypes)
 - [fogu:time](#fogutime)
 - [fogu:system](#fogusystem)
 - [fogu:fs](#fogufs)
@@ -44,6 +45,7 @@ value on operational failures (use `?` or `const [v, err] = …`).
 - [fogu:security](#fogusecurity)
 - [fogu:websocket](#foguwebsocket)
 - [fogu:net](#fogunet)
+- [fogu:tls](#fogutls)
 - [fogu:events](#foguevents)
 - [fogu:cron](#fogucron)
 - [fogu:nats](#fogunats)
@@ -74,10 +76,10 @@ value on operational failures (use `?` or `const [v, err] = …`).
 
 ## Overview
 
-Modules are imported with `import name from "fogu:name"` (or by name: `import { parse } from "fogu:json"`). Each section below lists every function with its parameters and return value, and shows an example with its **real output** (the examples are run when this page is generated). Core [`fogu:math`](#fogumath) [`fogu:json`](#fogujson) [`fogu:time`](#fogutime) [`fogu:system`](#fogusystem) [`fogu:fs`](#fogufs) [`fogu:path`](#fogupath) [`fogu:process`](#foguprocess) [`fogu:sync`](#fogusync) [`fogu:test`](#fogutest) [`fogu:log`](#fogulog) [`fogu:regex`](#foguregex) [`fogu:crypto`](#fogucrypto)
+Modules are imported with `import name from "fogu:name"` (or by name: `import { parse } from "fogu:json"`). Each section below lists every function with its parameters and return value, and shows an example with its **real output** (the examples are run when this page is generated). Core [`fogu:math`](#fogumath) [`fogu:json`](#fogujson) [`fogu:time`](#fogutime) [`fogu:types`](#fogutypes) [`fogu:system`](#fogusystem) [`fogu:fs`](#fogufs) [`fogu:path`](#fogupath) [`fogu:process`](#foguprocess) [`fogu:sync`](#fogusync) [`fogu:test`](#fogutest) [`fogu:log`](#fogulog) [`fogu:regex`](#foguregex) [`fogu:crypto`](#fogucrypto)
 Data formats [`fogu:csv`](#fogucsv) [`fogu:excel`](#foguexcel) [`fogu:yaml`](#foguyaml) [`fogu:toml`](#fogutoml) [`fogu:xml`](#foguxml)
 Storage [`fogu:kv`](#fogukv) [`fogu:surrealkv`](#fogusurrealkv) [`fogu:surrealdb`](#fogusurrealdb) [`fogu:sql`](#fogusql) [`fogu:orm`](#foguorm) [`fogu:redis`](#foguredis) [`fogu:s3`](#fogus3) [`fogu:scylla`](#foguscylla) [`fogu:etcd`](#foguetcd)
-Web & network [`fogu:http`](#foguhttp) [`fogu:web`](#foguweb) [`fogu:jwt`](#fogujwt) [`fogu:topcoat`](#fogutopcoat) [`fogu:websocket`](#foguwebsocket) [`fogu:socketio`](#fogusocketio) [`fogu:grpc`](#fogugrpc) [`fogu:net`](#fogunet) [`fogu:security`](#fogusecurity)
+Web & network [`fogu:http`](#foguhttp) [`fogu:web`](#foguweb) [`fogu:jwt`](#fogujwt) [`fogu:topcoat`](#fogutopcoat) [`fogu:websocket`](#foguwebsocket) [`fogu:socketio`](#fogusocketio) [`fogu:grpc`](#fogugrpc) [`fogu:net`](#fogunet) [`fogu:tls`](#fogutls) [`fogu:security`](#fogusecurity)
 Messaging & events [`fogu:nats`](#fogunats) [`fogu:kafka`](#fogukafka) [`fogu:rabbitmq`](#fogurabbitmq) [`fogu:mqtt`](#fogumqtt) [`fogu:broker`](#fogubroker) [`fogu:fogumq`](#fogufogumq) [`fogu:foguMQ-client`](#fogufoguMQ-client) [`fogu:events`](#foguevents) [`fogu:cron`](#fogucron)
 Integrations [`fogu:mail`](#fogumail) [`fogu:ai`](#foguai) [`fogu:ssh`](#fogussh) [`fogu:shell`](#fogushell) [`fogu:ffi`](#foguffi) [`fogu:playbook`](#foguplaybook)
 
@@ -382,23 +384,48 @@ remove src/old.fg
 import math from "fogu:math"
 ```
 
-- `math.PI · math.E` → float — Constants.
-- `math.abs(x)` → number — Absolute value (int stays int).
-- `math.sqrt(x)` → float — Square root.
-- `math.pow(base, exp)` → number — Power.
-- `math.floor(x) · math.ceil(x)` → int — Rounding down / up.
+Numbers. Rounding to an int (`floor ceil trunc round`) keeps ints as they are; the other functions return floats. The JIT compiles these calls inside hot code with the same results.
+
+- `math.PI · E · TAU · LN2 · LN10 · SQRT2 · EPSILON · INF · NAN` → float — Constants.
+- `math.MAX_INT · math.MIN_INT` → int — The int range (64-bit).
+- `math.abs(x) · math.sign(x)` → number — Ints stay ints; `sign` is -1, 0 or 1.
+- `math.sqrt(x) · cbrt(x) · pow(base, exp) · hypot(x, y)` → float
+- `math.floor(x) · ceil(x) · trunc(x) · round(x)` → int — `round` takes halves away from zero.
+- `math.round(x, digits) · math.fract(x)` → float — Rounded to `digits` decimals; the fractional part.
+- `math.sin cos tan asin acos atan (x) · atan2(y, x)` → float — Radians.
+- `math.sinh cosh tanh asinh acosh atanh (x)` → float — Hyperbolic.
+- `math.exp(x) · exp2 · expm1 · log(x, base?) · log2 · log10 · log1p` → float — `log(x)` is the natural logarithm.
+- `math.degrees(rad) · math.radians(deg)` → float
+- `math.min(...) · math.max(...)` → number — Of the arguments or of one list; keeps the winner's type.
+- `math.clamp(x, lo, hi) · math.lerp(a, b, t)` → number · float — `clamp` of ints is an int.
+- `math.isNaN(x) · isInf(x) · isFinite(x)` → bool
+- `math.gcd(a, b) · lcm(a, b) · factorial(n) · isPrime(n)` → int · bool — Ints; overflow is an error.
+- `math.sum(list) · mean(list) · median(list)` → number · float — `sum` of ints is an int.
+- `math.random() · randomInt(min, max) · uniform(lo, hi)` → float · int · float — `[0, 1)`; both ends included; `[lo, hi)`. Not for secrets: use `crypto`.
+- `math.choice(list) · math.shuffle(list) · math.seed(n)` → value · list · nil — A random element (`nil` if empty); shuffles in place and returns the list; a repeatable sequence.
 
 ```fogu
 import math from "fogu:math"
 print(math.abs(-4), math.sqrt(16), math.pow(2, 10), math.floor(2.7), math.ceil(2.1))
-print(math.PI)
+print(math.round(math.sin(math.PI / 2), 6), math.atan2(1, 1) == math.PI / 4, math.hypot(3, 4))
+print(math.log(math.E), math.log(8, 2), math.round(2.5), math.round(3.14159, 2))
+print(math.min(3, 1, 2), math.max([4, 9, 2]), math.clamp(15, 0, 10), math.lerp(0, 10, 0.25))
+print(math.gcd(12, 18), math.factorial(10), math.mean([1, 2, 3, 4]), math.median([5, 1, 3]))
+math.seed(7)
+const a = math.randomInt(1, 6)
+math.seed(7)
+print(a == math.randomInt(1, 6), math.random() < 1)
 ```
 
 output:
 
 ```text
 4 4.0 1024.0 2 3
-3.141592653589793
+1.0 true 5.0
+1.0 3.0 3 3.14
+1 9 10 2.5
+6 3628800 2.5 3.0
+true true
 ```
 
 ## fogu:json
@@ -424,46 +451,101 @@ Ana [a, b] int
 {"list":[1,2.5,null],"ok":true}
 ```
 
+## fogu:types
+
+```fogu
+import types from "fogu:types"
+```
+
+Runtime type checks, lenient conversions and schemas for data that comes from outside (JSON bodies, query strings, environment variables, files).
+
+- `types.isInt isFloat isNumber isStr isBool isNil isList isMap isBuffer isFn isError isDuration isRange isStruct isObject isChan (v)` → bool
+- `types.isEmpty(v)` → bool — `nil`, `""`, `[]`, `{}`, an empty buffer or range.
+- `types.of(v)` → str — Like `typeof`, but the name of a struct or native object (`"User"`, `"Date"`).
+- `types.toInt toFloat toBool toStr toList toMap (v, default?)` → value · error — Lenient conversions: `" 0x1F "` → 31, `"1_000"` → 1000, `"yes"/"off"` → bool, a struct → map, pairs → map. When it can't convert: `default`, or an error value.
+- `types.is(v, spec)` → bool — Whether `v` matches the spec.
+- `types.check(v, spec)` → value · error — `v`, or an error value naming the first problem with its path (`tags[1]: expected str, got int 2`).
+- `types.validate(v, spec)` → list — Every problem (empty when valid).
+- `types.assert(v, spec)` → value — Like `check`, but a mismatch stops the program.
+- `types.coerce(v, spec)` → value · error — A copy where texts become the ints, floats and bools the spec asks for (query strings, forms, env vars), then checked.
+- `types.equal(a, b) · types.clone(v)` → bool · value — Deep equality (structs by fields); a deep copy.
+- `spec` — A type name (`any nil bool int float number str list map buffer fn error duration range struct object chan`, or a struct/object name); `"T?"` also nil, `"A|B"`, `"[T]"` a list of T, `"{T}"` a map of T; `[spec]`; `{ field: spec, "opt?": spec }`; or `{ "$type": spec, min, max, minLen, maxLen, pattern, oneOf, nullable, fields, items, strict }`.
+
+```fogu
+import types from "fogu:types"
+print(types.isInt(3), types.of([]), types.toInt("0x1F"), types.toBool("yes"), types.toInt("x", 0))
+const User = { name: { "$type": "str", minLen: 1 }, "age?": { "$type": "int", min: 0 }, tags: "[str]" }
+print(types.is({ name: "Ana", tags: [] }, User))
+for p in types.validate({ name: "", age: -1, tags: [1] }, User) { print(p) }
+print(types.coerce({ page: "2", debug: "true" }, { page: "int", debug: "bool" })?)
+```
+
+output:
+
+```text
+true list 31 true 0
+true
+age: must be >= 0, got -1
+name: length must be >= 1, got 0
+tags[0]: expected str, got int 1
+{debug: true, page: 2}
+```
+
 ## fogu:time
 
 ```fogu
 import time from "fogu:time"
 ```
 
+Clocks, waits and dates. A Date is an instant plus a time zone (UTC unless you choose another); its fields and `format` use that zone. The IANA time zone database is built in.
+
 - `time.now()` → int — Milliseconds since the UNIX epoch.
 - `time.monotonic()` → float — Seconds from a fixed point; never goes backwards (the wall clock can jump): measure durations with it.
-- `time.Date()` → Date — The current instant (UTC).
+- `time.Date(at?, zone?)` → Date · error — The current instant; or `at` = milliseconds, a text (as `time.parse`) or a map `{ year, month, day, hour, minute, second, millis, zone }`.
+- `time.zone() · time.setZone(name)` → str · nil · error — The default zone of new dates ("UTC" at start): an IANA name (`"America/Sao_Paulo"`), `"UTC"` or `"local"` (the system's zone). An unknown name is an error value.
+- `time.localZone() · time.zones()` → str · list — The system's zone (`TZ`, then the OS); every IANA name.
+- `time.parse(text, format?, zone?)` → Date · error — RFC 3339 / ISO 8601, RFC 2822, `YYYY-MM-DD[ HH:MM[:SS]]`, or a strftime `format`. Texts without an offset are read in `zone` (default: the default zone).
+- `time.format(date | ms, format, zone?)` → str — strftime: `%Y %m %d %H %M %S %3f %A %a %B %b %j %U %Z %z %s`…
+- `time.isLeapYear(y) · time.daysInMonth(y, m)` → bool · int
 - `time.delay(d) · time.sleep(seconds)` → nil — Waits; other `fg` tasks keep running.
 
 ### Date
 
 - `d.year · d.month · d.day` → int — Month 1–12.
 - `d.hour · d.minute · d.second · d.millis · d.weekday` → int — Weekday 0 = Sunday.
+- `d.zone · d.offset` → str · int — The zone name; minutes east of UTC (São Paulo: -180).
+- `d.dayOfYear · d.week · d.isLeapYear · d.daysInMonth` → int · bool — `week` is the ISO week.
 - `d.getTime()` → int — Milliseconds since the epoch (also `d.ms`).
-- `d.toISOString()` → str — `2026-10-10T12:00:00.000Z`
-- `d.toString()` → str — Human readable.
+- `d.toISOString() · d.iso()` → str — UTC (`2026-10-10T12:00:00.000Z`); RFC 3339 with the zone's offset.
+- `d.toString() · d.format(fmt)` → str — Human readable; strftime.
+- `d.setZone(name) · d.in(name)` → nil · Date — The same instant in another zone: in place, or a copy.
+- `d.add(units) · d.sub(units)` → Date — A new Date. `units`: a duration (`90m`), ms, or `{ years, months, weeks, days, hours, minutes, seconds, millis }` — calendar units follow the zone's clock (a day can be 23 or 25 hours; Jan 31 + 1 month = Feb 28).
+- `d.startOf(unit) · d.clone()` → Date — `year month week day hour minute second` (weeks start on Monday).
 - `d.addMs(ms)` → nil — Moves the date by `ms` (in place).
-- `d.diff(other)` → int — Milliseconds between the dates.
-- `getFullYear() getMonth() getDate() getDay() getHours() getMinutes() getSeconds() getMilliseconds()` → int — JavaScript-style getters (month 0–11).
+- `d.diff(other) · before · after · equals · sameDay` → int · bool — Milliseconds between the dates; comparisons (a Date or ms).
+- `getFullYear() getMonth() getDate() getDay() getHours() getMinutes() getSeconds() getMilliseconds() getTimezoneOffset()` → int — JavaScript-style getters (month 0–11).
 
 ```fogu
 import time from "fogu:time"
 const start = time.now()
 time.delay(20ms)
 print(time.now() - start >= 20)
-const d = time.Date()
-print(d.year > 2000, d.month >= 1, d.toISOString().ends_with("Z"))
-const later = time.Date()
-later.addMs(24 * 3600 * 1000)
-print(later.diff(d) >= 86400000)
+const d = time.Date(1793793600000)
+print(d.toISOString(), d.in("America/Sao_Paulo").format("%d/%m/%Y %H:%M %Z"))
+time.setZone("America/New_York")
+const x = time.Date({ year: 2026, month: 1, day: 31, hour: 9 })
+print(x.iso(), x.add({ months: 1 }).iso(), x.startOf("month").format("%A"))
+print(time.parse("04/11/2026 08:05", "%d/%m/%Y %H:%M", "Europe/Lisbon").toISOString())
+time.setZone("UTC")
 ```
 
 output:
 
 ```text
 true
-true true true
-true
+2026-11-04T12:00:00.000Z 04/11/2026 09:00 -03
+2026-01-31T09:00:00.000-05:00 2026-02-28T09:00:00.000-05:00 Thursday
+2026-11-04T08:05:00.000Z
 ```
 
 ## fogu:system
@@ -786,7 +868,10 @@ import crypto from "fogu:crypto"
 - `crypto.verifyPassword(password, hash)` → bool
 - `crypto.randomBytes(n) · crypto.randomHex(n)` → list · str — Secure random.
 - `crypto.randomInt(min, max)` → int — Inclusive, unbiased.
-- `crypto.uuid()` → str — Random UUID v4.
+- `crypto.uuid(version = 4, namespace?, name?)` → str — `uuid()` / `uuid(4)` random, `uuid(7)` time-ordered, `uuid(5, namespace, name)` name-based.
+- `crypto.uuidv4() · crypto.uuidv7()` → str — v4: random. v7: the creation time in milliseconds followed by random bits — sorts by creation time (also within the same millisecond), good for database keys.
+- `crypto.uuidv5(namespace, name)` → str — SHA-1 of a namespace and a name: the same inputs always give the same UUID. `namespace`: `"dns"`, `"url"`, `"oid"`, `"x500"` or a UUID; `name`: str or bytes.
+- `crypto.uuidInfo(text)` → map · error — `{ version, variant, time }`; `time` is the creation time in ms since the epoch for v1/v6/v7, else nil. Text that is not a UUID → error value.
 - `crypto.base64(data, { url }) · crypto.fromBase64(text, { bytes })` → str — `data`: str or list of bytes.
 - `crypto.hex(data) · crypto.fromHex(text, { bytes })` → str
 - `crypto.equal(a, b)` → bool — Constant-time comparison.
@@ -802,6 +887,11 @@ print(err)
 const h = crypto.hashPassword("hunter2")
 print(crypto.verifyPassword("hunter2", h), crypto.verifyPassword("hunter3", h))
 print(crypto.base64("olá"), crypto.fromBase64("b2zDoQ=="), crypto.hex("hi"), len(crypto.uuid()))
+print(crypto.uuidv5("dns", "example.com"), crypto.uuidv5("url", "https://fogu.dev") == crypto.uuid(5, "url", "https://fogu.dev"))
+const a = crypto.uuidv7()
+const b = crypto.uuidv7()
+print(a < b, crypto.uuidInfo(a)?.version, crypto.uuidInfo(crypto.uuidv4())?.time, crypto.uuidInfo(a)?.time > 0)
+print(crypto.uuidInfo("not-a-uuid"))
 ```
 
 output:
@@ -813,6 +903,9 @@ card 4242
 error: crypto.decrypt: wrong key or corrupted data
 true false
 b2zDoQ== olá 6869 36
+cfbff0d1-9375-5685-968c-48ce8b15ae17 true
+true 7 nil true
+error: uuidInfo: 'not-a-uuid' is not a UUID: invalid character: found `n` at 0
 ```
 
 ## fogu:csv
@@ -1363,7 +1456,7 @@ A minimal HTTP server (one handler for every request) and an HTTP client. For ro
 - `http.get(url, opts?) · http.delete(url, opts?) · http.head(url, opts?)` → Response · error — Network failures are error values; HTTP 4xx/5xx are normal responses (`res.ok` is false).
 - `http.post(url, body?, opts?) · http.put(…) · http.patch(…)` → Response · error — `body`: a str (text/plain), a map or list (JSON), bytes (octet-stream).
 - `http.request({ method, url, ...opts })` → Response · error
-- `opts: { headers, query, json, form, multipart, body, timeout, redirects = true, basicAuth: [user, pass], bearer }` — `form`: urlencoded fields. `multipart`: a map of fields — text values, `http.file(path)` (streamed from disk), `{ data, filename, type }` bytes, or a list (a repeated field). Map keys are sent in alphabetical order.
+- `opts: { headers, query, json, form, multipart, body, timeout, redirects = true, basicAuth: [user, pass], bearer, ca, insecure }` — `ca`: a PEM certificate (or its path) trusted for HTTPS, e.g. a self-signed one; `insecure: true` accepts any certificate (development only). `form`: urlencoded fields. `multipart`: a map of fields — text values, `http.file(path)` (streamed from disk), `{ data, filename, type }` bytes, or a list (a repeated field). Map keys are sent in alphabetical order.
 - `http.file(path, { filename, type })` → HttpFile · error — A file to upload; the type comes from the extension.
 - `http.download(url, path, opts?)` → int · error — Streams the body to a file; returns the bytes written (non-2xx is an error).
 - `res.status · res.ok · res.url · res.headers · res.body` — `headers`: the first value of each (lower case).
@@ -1371,7 +1464,7 @@ A minimal HTTP server (one handler for every request) and an HTTP client. For ro
 
 ### Server
 
-- `http.serve(port | "ip:port", fn(req))` → nil — Requests are answered as soon as they arrive while the program is alive — waiting in `Fogu.signal.wait()`, `time.delay`, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or `"0.0.0.0:8080"`, `"[::1]:8080"`, `":8080"`.
+- `http.serve(port | "ip:port", fn(req), { tls: { cert, key }, quiet, maxBody }?)` → nil — `tls` serves HTTPS (see [fogu:tls](#fogutls)). Requests are answered as soon as they arrive while the program is alive — waiting in `Fogu.signal.wait()`, `time.delay`, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or `"0.0.0.0:8080"`, `"[::1]:8080"`, `":8080"`.
 - `req.method · req.path · req.query · req.headers · req.body` — `query` is the raw query string.
 - `req.header(name) · req.json() · req.form() · req.bytes()` — `form()`: urlencoded and multipart bodies.
 - `http.text(body, opts?) · http.json(value, opts?) · http.html(body, opts?)` → Response — `opts: { status, headers }`.
@@ -1465,7 +1558,7 @@ A web framework: routes with parameters, middleware, static files and SPA builds
 - `app.static(dir) · app.static(prefix, dir, { spa, index, maxAge, dotfiles })` → App — Files served by the server thread: ETag/304, `Cache-Control`; `spa: true` serves `index.html` for unknown HTML routes (React, Vue, Svelte builds).
 - `app.ws(path, ...middlewares, (ws, ctx) => …, { protocols })` → App — WebSocket routes; the handler runs in its own task with a [WebSocket](#foguwebsocket) on the upgraded HTTP connection.
 - `app.set(key, value) · app.store` → App · map — Shared state (`ctx.store`).
-- `app.listen(port | "ip:port", { host = "127.0.0.1", maxBody = 10 MB, quiet })` → nil · error — `app.listen("0.0.0.0:3000")` (or `host: "0.0.0.0"`) accepts other machines; IPv6 as `"[::1]:3000"`. A host in the string wins over `host`.
+- `app.listen(port | "ip:port", { host = "127.0.0.1", maxBody = 10 MB, quiet, tls: { cert, key } })` → nil · error — `tls` serves HTTPS: PEM text or file paths (`tls.selfSigned(["localhost"])` for development; options as `tls.listen`). `app.listen("0.0.0.0:3000")` (or `host: "0.0.0.0"`) accepts other machines; IPv6 as `"[::1]:3000"`. A host in the string wins over `host`.
 - `app.handler()` → fn — Calls the app without a network (tests): `h({ method, path, headers, body })` → Response.
 - `app.routes()` → list
 
@@ -1943,6 +2036,46 @@ buffer 00ff0a 255
 hello udp 9 buffer true
 ```
 
+## fogu:tls
+
+```fogu
+import tls from "fogu:tls"
+```
+
+TLS over TCP (rustls): encrypted clients and servers with the same API as [fogu:net](#fogunet) — a `TlsStream` has every method of a `TcpStream` and a `TlsListener` works like a `TcpListener` (including `for conn in listener`). Certificates and keys are PEM text, a buffer or the path of a PEM file. HTTPS servers take the same `{ cert, key }` as the `tls` option of `app.listen` / `http.serve`.
+
+- `tls.connect("host:port", { verify = true, ca, serverName, cert, key, alpn, timeout = 30s })` → TlsStream · error — `ca`: the trusted certificates (default: the system's); `verify: false` accepts any (development only); `serverName` (alias `sni`): the name sent and checked (default: the host); `cert` + `key`: a client certificate (mutual TLS); `alpn`: a str or a list.
+- `tls.listen("host:port", { cert, key, ca, clientAuth = "require", alpn, timeout = 10s })` → TlsListener · error — `ca` asks clients for a certificate signed by it (`clientAuth: "optional"` lets clients without one in). Handshakes run in the background (bounded by `timeout`): `accept(timeout?)` returns finished connections only; fields `addr port failedHandshakes lastError`.
+- `stream.protocol · stream.cipher · stream.alpn · stream.serverName · stream.peerCert` — `TLSv1.3`, the cipher suite, the negotiated protocol, the SNI name, and the peer's certificate as `tls.parseCert` describes it (nil when there is none).
+- `tls.upgrade(conn, clientOptions?) · tls.upgradeServer(conn, { cert, key, ... })` → TlsStream · error — STARTTLS: starts TLS on a plain `TcpStream` (which is closed afterwards); data received but not read yet is an error.
+- `tls.selfSigned(names, { days = 365 })` → { cert, key } · error — A self-signed certificate (PEM) for development; names are DNS names or IPs.
+- `tls.parseCert(pem | der)` → map · error — `subject commonName issuer names serial notBefore notAfter daysLeft expired selfSigned ca signature keyType keyBits sha256`.
+
+```fogu
+import tls from "fogu:tls"
+const pair = tls.selfSigned(["localhost", "127.0.0.1"])?
+const server = tls.listen("127.0.0.1:0", { cert: pair.cert, key: pair.key })?
+fg fn() {
+    for conn in server {
+        conn.writeLine("hello " + conn.readLine()?)?
+        conn.close()
+    }
+}()
+const c = tls.connect(server.addr, { ca: pair.cert, serverName: "localhost" })?
+c.writeLine("tls")?
+print(c.readLine()?, c.protocol, c.peerCert.commonName)
+c.close()
+const [_, err] = tls.connect(server.addr)       // the system roots do not trust it
+print(typeof(err))
+```
+
+output:
+
+```text
+hello tls TLSv1.3 localhost
+error
+```
+
 ## fogu:events
 
 ```fogu
@@ -1971,8 +2104,9 @@ output:
 order 1 total 9.9
 first order only: 1
 true
-false
-false []
+order 2 total 15
+true
+false [order]
 ```
 
 ## fogu:cron
@@ -2665,14 +2799,18 @@ error: shell.text: exit code 1: cat: missing.txt: No such file or directory
 import ffi from "fogu:ffi"
 ```
 
-Calls functions of native libraries (C ABI): `.dll`, `.so`, `.dylib`. **Unsafe by nature**: a wrong signature can crash the program. Supported signatures: up to 4 arguments mixing integers and floats, or up to 8 integer/pointer arguments.
+Calls functions of native libraries (C ABI): `.dll`, `.so`, `.dylib`, and lets C call Fogu functions back. **Unsafe by nature**: a wrong signature can crash the program. Each signature gets a native stub generated with Cranelift: any number of arguments mixing integers, pointers, `f64` and `f32` (`ffi.native` is `true`). On 32-bit ARM, which has no Cranelift backend, a precompiled table is used instead (up to 4 arguments mixing integers and floats, or up to 8 integers; no `f32` arguments, no callbacks).
 
 - `ffi.open(name)` → Library · error — A path or a name; `"c"` and `"m"` are the C runtime and the math library. The same name works on every platform: without an extension it gets the platform's prefix and suffix (`"native/mylib"` → `native/libmylib.so` on Linux, `native/libmylib.dylib` on macOS, `native/mylib.dll` on Windows), and another platform's extension is mapped to the native one (`"mylib.dll"` on Linux also tries `libmylib.so`). The error lists every file tried.
 - `lib.func(symbol, [argTypes], returnType = "void")` → fn · error — A Fogu function that calls the symbol.
-- `lib.has(symbol) · lib.name` → bool · str
-- `types` — `i8 i16 i32 i64 u8 u16 u32 u64 isize usize bool f64 ptr str buffer`; results also `f32 void`. `str` passes a NUL-terminated copy; a `str` result reads a C string.
-- `ffi.alloc(size)` → Buffer — Memory for out-parameters: `text() bytes(start?, len?) write(offset, str | bytes) i32/u32/i64/f64(offset)`, fields `size address`.
-- `ffi.types · ffi.suffix` → list · str
+- `lib.has(symbol) · lib.addr(symbol) · lib.name` → bool · int · str — `addr`: the address of a function or a global variable (read it with `ffi.read`).
+- `types` — `i8 i16 i32 i64 u8 u16 u32 u64 isize usize bool f32 f64 ptr str buffer`; results also `void`. `str` passes a NUL-terminated copy; a `str` result reads a C string. A `ptr` takes an int address, `nil` (NULL), a Buffer or a Callback.
+- `ffi.alloc(size) · ffi.cstring(text)` → Buffer — Memory for out-parameters and structs (zeroed), or a NUL-terminated copy of a text. Methods: `get(type, offset = 0)`, `set(type, offset, value)`, `ptr(offset = 0)`, `text()`, `bytes(start?, len?)`, `write(offset, str | bytes | buffer)`, `toBuffer()`, `i8 u8 i16 u16 i32 u32 i64 u64 f32 f64(offset)`; fields `size address`. Little-endian.
+- `ffi.callback(fn, [argTypes], returnType = "void")` → Callback — A C function pointer that runs `fn`: pass it as a `ptr` argument (`qsort`, `EnumWindows`, event loops…). Field `address`; `close()` releases the function (later calls return 0). Callbacks run on the interpreter's thread while a C function called through `fogu:ffi` is running; a call from another thread returns 0 and is reported on stderr. An error inside a callback makes the C call that ran it fail with that error.
+- `ffi.read(ptr, type, offset = 0) · ffi.write(ptr, type, value, offset = 0)` → value · nil — Raw memory at an address (or a Buffer).
+- `ffi.string(ptr, len?) · ffi.bytes(ptr, len)` → str · buffer — A C string (`nil` for NULL), or a copy of `len` bytes.
+- `ffi.sizeof(type) · ffi.NULL · ffi.lastError()` → int — `lastError`: `errno` (`GetLastError` on Windows) right after the last ffi call.
+- `ffi.types · ffi.suffix · ffi.native` → list · str · bool
 
 ```fogu
 import ffi from "fogu:ffi"
@@ -2694,6 +2832,28 @@ output:
 5 4 42
 1024.0
 copied [99, 111, 112]
+```
+
+### Callbacks
+
+```fogu
+import ffi from "fogu:ffi"
+// qsort sorts C ints, calling a Fogu comparator for each pair
+const qsort = ffi.open("c")?.func("qsort", ["buffer", "usize", "usize", "ptr"])?
+const nums = [42, -7, 19, 3, 0]
+const buf = ffi.alloc(4 * nums.len())
+for i in 0..nums.len() { buf.set("i32", 4 * i, nums[i]) }
+const cmp = ffi.callback(fn(a, b) { return ffi.read(a, "i32") - ffi.read(b, "i32") }, ["ptr", "ptr"], "i32")
+qsort(buf, nums.len(), 4, cmp)
+const out = []
+for i in 0..nums.len() { out.push(buf.get("i32", 4 * i)) }
+print(out)
+```
+
+output:
+
+```text
+[-7, 0, 3, 19, 42]
 ```
 
 ## fogu:playbook

@@ -19,7 +19,8 @@
 //!
 //! Options: `headers`, `query`, `json`, `form`, `multipart`, `body`,
 //! `timeout`, `redirects` (default true), `basicAuth: [user, pass]`,
-//! `bearer`. Error statuses (4xx/5xx) are responses (`r.ok` is false);
+//! `bearer`, `ca` (a PEM certificate or its path, trusted for HTTPS) and
+//! `insecure` (true: accept any certificate — development only). Error statuses (4xx/5xx) are responses (`r.ok` is false);
 //! network failures are error values.
 
 use ahash::AHashMap as HashMap;
@@ -133,6 +134,9 @@ struct Plan {
     bearer: Option<String>,
     /// download to this path instead of reading the body
     save_to: Option<String>,
+    /// HTTPS: an extra trusted certificate (PEM), and whether to accept any
+    ca: Option<Vec<u8>>,
+    insecure: bool,
 }
 
 fn pairs(v: &Value, what: &str) -> Result<Vec<(String, String)>, String> {
@@ -215,6 +219,8 @@ fn plan(method: &str, url: &Value, body: Option<&Value>, o: Option<&Value>) -> R
         basic: None,
         bearer: None,
         save_to: None,
+        ca: None,
+        insecure: false,
     };
     let raw_body = |v: &Value| -> Result<Body, String> {
         Ok(match v {
@@ -233,7 +239,7 @@ fn plan(method: &str, url: &Value, body: Option<&Value>, o: Option<&Value>) -> R
         Some(Value::Map(m)) => {
             let m = m.borrow();
             const KNOWN: &[&str] =
-                &["headers", "query", "json", "form", "multipart", "body", "timeout", "redirects", "basicAuth", "bearer", "method", "url"];
+                &["headers", "query", "json", "form", "multipart", "body", "timeout", "redirects", "basicAuth", "bearer", "method", "url", "ca", "insecure"];
             for k in m.keys() {
                 if !KNOWN.contains(&k.as_str()) {
                     return Err(format!("{}: unknown option '{}' ({})", what, k, KNOWN.join(" ")));
@@ -270,6 +276,15 @@ fn plan(method: &str, url: &Value, body: Option<&Value>, o: Option<&Value>) -> R
             if let Some(t) = m.get("bearer") {
                 p.bearer = Some(t.to_display_string());
             }
+            if let Some(i) = m.get("insecure") {
+                p.insecure = i.is_truthy();
+            }
+            match m.get("ca") {
+                None | Some(Value::Nil) => {}
+                Some(Value::Str(s)) if s.contains("-----BEGIN") => p.ca = Some(s.as_bytes().to_vec()),
+                Some(Value::Str(s)) => p.ca = Some(std::fs::read(s.as_str()).map_err(|e| io_err!("{}: ca {}: {}", what, s.as_str(), e))?),
+                Some(other) => p.ca = Some(bytes_of(other, &what)?),
+            }
         }
         Some(other) => return Err(format!("{}: options must be a map, got '{}'", what, other.type_name())),
     }
@@ -298,7 +313,24 @@ fn no_redirect_client() -> &'static reqwest::blocking::Client {
 
 fn send(p: Plan) -> Result<Got, String> {
     let what = format!("http.{}", p.method.as_str().to_ascii_lowercase());
-    let client = if p.redirects { crate::native::http::blocking_client() } else { no_redirect_client() };
+    // a custom CA or `insecure`: a client of its own (the shared ones trust the system roots)
+    let custom = if p.ca.is_some() || p.insecure {
+        let mut b = reqwest::blocking::Client::builder().timeout(None).danger_accept_invalid_certs(p.insecure);
+        if !p.redirects {
+            b = b.redirect(reqwest::redirect::Policy::none());
+        }
+        if let Some(pem) = &p.ca {
+            b = b.add_root_certificate(reqwest::Certificate::from_pem(pem).map_err(|e| io_err!("{}: ca: {}", what, e))?);
+        }
+        Some(b.build().map_err(|e| io_err!("{}: {}", what, e))?)
+    } else {
+        None
+    };
+    let client = match &custom {
+        Some(c) => c,
+        None if p.redirects => crate::native::http::blocking_client(),
+        None => no_redirect_client(),
+    };
     let mut req = client.request(p.method, &p.url);
     if !p.query.is_empty() {
         req = req.query(&p.query);

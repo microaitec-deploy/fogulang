@@ -1,0 +1,21 @@
+true true
+localhost [localhost, 127.0.0.1] true
+object TLSv1.3 echo/1 true nil
+echo: hello tls
+echo: two echo: lines
+localhost true
+false
+echo: by name localhost nil
+nil error true
+echo: insecure
+failed handshakes: 1
+hi client localhost
+nil error
+server: STARTTLS
+client: OK
+false object TLSv1.3
+secret data
+200 {path: /, secure: true}
+200
+nil error
+HTTP/1.1 200 OK http/1.1

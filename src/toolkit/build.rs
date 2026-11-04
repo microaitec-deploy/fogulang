@@ -411,7 +411,7 @@ fn module_area(module: &str) -> Option<&'static str> {
     Some(match module {
         "etcd" | "kv" | "surrealkv" | "surrealdb" | "sql" | "orm" | "redis" | "scylla" => "database",
         "grpc" | "protobuf" => "rpc",
-        "security" | "socketio" | "http" | "web" | "topcoat" | "jwt" | "mail" | "websocket" | "html" => "network",
+        "security" | "tls" | "socketio" | "http" | "web" | "topcoat" | "jwt" | "mail" | "websocket" | "html" => "network",
         "broker" | "kafka" | "mq" | "fogumq" | "foguMQ-client" | "nats" | "rabbitmq" | "mqtt" | "bullmq" => "messaging",
         "ai" | "plot" => "ai",
         "s3" | "docker" | "service" | "playbook" | "ssh" => "ops",

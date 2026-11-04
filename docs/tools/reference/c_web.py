@@ -17,7 +17,7 @@ SECTIONS = [
                     ("http.get(url, opts?) · http.delete(url, opts?) · http.head(url, opts?)", "Response · error", "Network failures are error values; HTTP 4xx/5xx are normal responses (<code>res.ok</code> is false)."),
                     ("http.post(url, body?, opts?) · http.put(…) · http.patch(…)", "Response · error", "<code>body</code>: a str (text/plain), a map or list (JSON), bytes (octet-stream)."),
                     ("http.request({ method, url, ...opts })", "Response · error", ""),
-                    ("opts: { headers, query, json, form, multipart, body, timeout, redirects = true, basicAuth: [user, pass], bearer }", "", "<code>form</code>: urlencoded fields. <code>multipart</code>: a map of fields — text values, <code>http.file(path)</code> (streamed from disk), <code>{ data, filename, type }</code> bytes, or a list (a repeated field). Map keys are sent in alphabetical order."),
+                    ("opts: { headers, query, json, form, multipart, body, timeout, redirects = true, basicAuth: [user, pass], bearer, ca, insecure }", "", "<code>ca</code>: a PEM certificate (or its path) trusted for HTTPS, e.g. a self-signed one; <code>insecure: true</code> accepts any certificate (development only). <code>form</code>: urlencoded fields. <code>multipart</code>: a map of fields — text values, <code>http.file(path)</code> (streamed from disk), <code>{ data, filename, type }</code> bytes, or a list (a repeated field). Map keys are sent in alphabetical order."),
                     ("http.file(path, { filename, type })", "HttpFile · error", "A file to upload; the type comes from the extension."),
                     ("http.download(url, path, opts?)", "int · error", "Streams the body to a file; returns the bytes written (non-2xx is an error)."),
                     ("res.status · res.ok · res.url · res.headers · res.body", "", "<code>headers</code>: the first value of each (lower case)."),
@@ -27,7 +27,7 @@ SECTIONS = [
             {
                 "h3": "Server",
                 "api": [
-                    ("http.serve(port | \"ip:port\", fn(req))", "nil", "Requests are answered as soon as they arrive while the program is alive — waiting in <code>Fogu.signal.wait()</code>, <code>time.delay</code>, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or <code>\"0.0.0.0:8080\"</code>, <code>\"[::1]:8080\"</code>, <code>\":8080\"</code>."),
+                    ("http.serve(port | \"ip:port\", fn(req), { tls: { cert, key }, quiet, maxBody }?)", "nil", "<code>tls</code> serves HTTPS (see <a class=\"underline\" href=\"#mod-tls\">fogu:tls</a>). Requests are answered as soon as they arrive while the program is alive — waiting in <code>Fogu.signal.wait()</code>, <code>time.delay</code>, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or <code>\"0.0.0.0:8080\"</code>, <code>\"[::1]:8080\"</code>, <code>\":8080\"</code>."),
                     ("req.method · req.path · req.query · req.headers · req.body", "", "<code>query</code> is the raw query string."),
                     ("req.header(name) · req.json() · req.form() · req.bytes()", "", "<code>form()</code>: urlencoded and multipart bodies."),
                     ("http.text(body, opts?) · http.json(value, opts?) · http.html(body, opts?)", "Response", "<code>opts: { status, headers }</code>."),
@@ -114,7 +114,7 @@ while !done { Fogu.sleep(10ms) }
                     ("app.static(dir) · app.static(prefix, dir, { spa, index, maxAge, dotfiles })", "App", "Files served by the server thread: ETag/304, <code>Cache-Control</code>; <code>spa: true</code> serves <code>index.html</code> for unknown HTML routes (React, Vue, Svelte builds)."),
                     ("app.ws(path, ...middlewares, (ws, ctx) => …, { protocols })", "App", "WebSocket routes; the handler runs in its own task with a <a class=\"underline\" href=\"#mod-websocket\">WebSocket</a> on the upgraded HTTP connection."),
                     ("app.set(key, value) · app.store", "App · map", "Shared state (<code>ctx.store</code>)."),
-                    ("app.listen(port | \"ip:port\", { host = \"127.0.0.1\", maxBody = 10 MB, quiet })", "nil · error", "<code>app.listen(\"0.0.0.0:3000\")</code> (or <code>host: \"0.0.0.0\"</code>) accepts other machines; IPv6 as <code>\"[::1]:3000\"</code>. A host in the string wins over <code>host</code>."),
+                    ("app.listen(port | \"ip:port\", { host = \"127.0.0.1\", maxBody = 10 MB, quiet, tls: { cert, key } })", "nil · error", "<code>tls</code> serves HTTPS: PEM text or file paths (<code>tls.selfSigned([\"localhost\"])</code> for development; options as <code>tls.listen</code>). <code>app.listen(\"0.0.0.0:3000\")</code> (or <code>host: \"0.0.0.0\"</code>) accepts other machines; IPv6 as <code>\"[::1]:3000\"</code>. A host in the string wins over <code>host</code>."),
                     ("app.handler()", "fn", "Calls the app without a network (tests): <code>h({ method, path, headers, body })</code> → Response."),
                     ("app.routes()", "list", ""),
                 ],
@@ -576,6 +576,48 @@ const b = net.udpBind("127.0.0.1:0")?
 a.sendTo(b.addr, "hello udp")?
 const p = b.recvFrom()?
 print(p.text, p.len, typeof(p.data), p.from == a.addr)
+''',
+                "run": True,
+            }
+        ],
+    },
+    {
+        "id": "mod-tls",
+        "group": W,
+        "title": "fogu:tls",
+        "import": 'import tls from "fogu:tls"',
+        "intro": "TLS over TCP (rustls): encrypted clients and servers with the same API as "
+        "<a class=\"underline\" href=\"#mod-net\">fogu:net</a> — a <code>TlsStream</code> has every method of a "
+        "<code>TcpStream</code> and a <code>TlsListener</code> works like a <code>TcpListener</code> (including "
+        "<code>for conn in listener</code>). Certificates and keys are PEM text, a buffer or the path of a PEM file. "
+        "HTTPS servers take the same <code>{ cert, key }</code> as the <code>tls</code> option of "
+        "<code>app.listen</code> / <code>http.serve</code>.",
+        "blocks": [
+            {
+                "api": [
+                    ("tls.connect(\"host:port\", { verify = true, ca, serverName, cert, key, alpn, timeout = 30s })", "TlsStream · error", "<code>ca</code>: the trusted certificates (default: the system's); <code>verify: false</code> accepts any (development only); <code>serverName</code> (alias <code>sni</code>): the name sent and checked (default: the host); <code>cert</code> + <code>key</code>: a client certificate (mutual TLS); <code>alpn</code>: a str or a list."),
+                    ("tls.listen(\"host:port\", { cert, key, ca, clientAuth = \"require\", alpn, timeout = 10s })", "TlsListener · error", "<code>ca</code> asks clients for a certificate signed by it (<code>clientAuth: \"optional\"</code> lets clients without one in). Handshakes run in the background (bounded by <code>timeout</code>): <code>accept(timeout?)</code> returns finished connections only; fields <code>addr port failedHandshakes lastError</code>."),
+                    ("stream.protocol · stream.cipher · stream.alpn · stream.serverName · stream.peerCert", "", "<code>TLSv1.3</code>, the cipher suite, the negotiated protocol, the SNI name, and the peer's certificate as <code>tls.parseCert</code> describes it (nil when there is none)."),
+                    ("tls.upgrade(conn, clientOptions?) · tls.upgradeServer(conn, { cert, key, ... })", "TlsStream · error", "STARTTLS: starts TLS on a plain <code>TcpStream</code> (which is closed afterwards); data received but not read yet is an error."),
+                    ("tls.selfSigned(names, { days = 365 })", "{ cert, key } · error", "A self-signed certificate (PEM) for development; names are DNS names or IPs."),
+                    ("tls.parseCert(pem | der)", "map · error", "<code>subject commonName issuer names serial notBefore notAfter daysLeft expired selfSigned ca signature keyType keyBits sha256</code>."),
+                ],
+                "example": r'''
+import tls from "fogu:tls"
+const pair = tls.selfSigned(["localhost", "127.0.0.1"])?
+const server = tls.listen("127.0.0.1:0", { cert: pair.cert, key: pair.key })?
+fg fn() {
+    for conn in server {
+        conn.writeLine("hello " + conn.readLine()?)?
+        conn.close()
+    }
+}()
+const c = tls.connect(server.addr, { ca: pair.cert, serverName: "localhost" })?
+c.writeLine("tls")?
+print(c.readLine()?, c.protocol, c.peerCert.commonName)
+c.close()
+const [_, err] = tls.connect(server.addr)       // the system roots do not trust it
+print(typeof(err))
 ''',
                 "run": True,
             }
