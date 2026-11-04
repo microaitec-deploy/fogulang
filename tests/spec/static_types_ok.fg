@@ -1,0 +1,28 @@
+// Code the static inference must accept: types it cannot know are never reported.
+let x = 1
+x = "now a string"
+print(x + "!")
+
+fn scale(v: float) { return v * 2 }
+const y: int = scale(2)        // v may hold an int: not reported
+print(y)
+
+fn pick(a, b = "b", ...rest) { return [a, b, len(rest)] }
+print(pick(1), pick(1, nil), pick(1, 2, 3, 4))
+
+const d = 2s
+print(d * 2, 3 * d, d / 2, d / 1s, d + 500ms)
+print(1.5 * 2, 7 / 2, 2 ** 3, "a" + `b${1}`, [1] + [2])
+print(nil ?? 3, 1 < 2.5, "a" < "b")
+
+fn label(n: int): str { return str(n) + "!" }
+print(label(3) + "?")
+
+const _unused = 1
+fn early(n) {
+    if n > 0 {
+        return "positive"
+    }
+    return "other"
+}
+print(early(1), early(-1))

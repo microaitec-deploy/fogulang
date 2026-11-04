@@ -8,6 +8,20 @@ be incompatible changes (spec §75).
 
 ### Added
 
+- `fogu check` is much more useful: it accepts folders (recursive; skips hidden folders,
+  `node_modules`, `target`, `dist`, `fogu_modules`), reports **every** error of a file, and has
+  `--help`, `--json` (file, line, column, severity, code, message, help), `--strict` /
+  `--deny-warnings`, `-q/--quiet` and `-w/--watch`. A conservative static type inference
+  (literals, annotated or never-reassigned variables, signatures of `fn` declarations) finds
+  `const n: int = "x"`, `1 + "a"`, `"a" * 2`, `-"x"`, `1 < "b"`, arguments that cannot match an
+  annotated parameter, returns that cannot match the declared type, too many arguments to a
+  function (defaults and `...rest` respected) and a wrong argument count to a core global
+  (`len(1, 2, 3)`) — new codes E0209 (arguments) and E0210 (operators). Unknown types are never
+  reported. New warnings: unused imports (W0002), unreachable code after
+  `return`/`break`/`continue` (W0003), a variable shadowing another of the same function (W0004);
+  unused variables are W0001. These errors also stop a program before it starts, as the other
+  static errors do.
+
 - `fogu:math`: `sin cos tan asin acos atan atan2 sinh cosh tanh asinh acosh atanh exp exp2 expm1
   log(x, base?) log2 log10 log1p cbrt hypot trunc round(x, digits?) fract sign min max clamp lerp
   degrees radians isNaN isInf isFinite gcd lcm factorial isPrime sum mean median`, a seedable

@@ -125,6 +125,10 @@ fn classify(msg: &str, kind: Option<&str>) -> (Option<&'static str>, Option<&'st
         ("type mismatch", "E0207", Some("the value does not match the type annotation")),
         ("unknown type", "E0208", None),
         ("has no error", "E0206", None),
+        ("arguments, got", "E0209", Some("check the number of arguments the function takes")),
+        ("operator not applicable", "E0210", Some("convert one side first, e.g. str(n) or int(s)")),
+        ("operator '-' not applicable", "E0210", None),
+        ("cannot compare", "E0210", Some("only numbers, strings and durations can be ordered")),
         ("deadlock", "E0300", Some("some channel never receives or sends; use close(), a buffer, or select with default/timeout")),
     ];
     for (needle, code, help) in TABLE {
@@ -171,6 +175,93 @@ fn underline(src_line: &str, col: Option<u32>, msg: &str) -> (usize, usize) {
     (start, end.saturating_sub(start).max(1))
 }
 
+/// Code and help of a warning of the resolver (`line N: msg`).
+fn classify_warning(msg: &str) -> (&'static str, Option<&'static str>) {
+    const TABLE: &[(&str, &str, Option<&str>)] = &[
+        ("unused variable", "W0001", None),
+        ("unused import", "W0002", Some("remove the import, or prefix its name with '_'")),
+        ("unreachable code", "W0003", Some("remove it, or move it before the statement that ends the block")),
+        ("shadows the one declared", "W0004", Some("rename one of them (or prefix it with '_' to silence this)")),
+    ];
+    for (needle, code, help) in TABLE {
+        if msg.contains(needle) {
+            return (code, *help);
+        }
+    }
+    ("W0000", None)
+}
+
+/// A diagnostic with every part resolved (`fogu check --json`).
+#[derive(Debug, PartialEq)]
+pub struct Finding {
+    pub file: Option<String>,
+    pub line: Option<u32>,
+    pub col: Option<u32>,
+    /// `error` or `warning`.
+    pub severity: &'static str,
+    pub code: Option<&'static str>,
+    pub msg: String,
+    pub help: Vec<String>,
+}
+
+/// Splits an error (`warning == false`) or a warning prefixed with its file
+/// (`file: line N: msg`), finding the column in the source when the message
+/// has none.
+pub fn finding(text: &str, warning: bool) -> Finding {
+    let d = parse(text);
+    let (code, known_help) = if warning {
+        let (c, h) = classify_warning(&d.msg);
+        (Some(c), h)
+    } else {
+        classify(&d.msg, d.kind)
+    };
+    let mut help = d.help.clone();
+    if help.is_empty() {
+        help.extend(known_help.map(str::to_string));
+    }
+    let col = d.col.or_else(|| {
+        let src = source_line(d.file.as_deref()?, d.line?)?;
+        Some(underline(&src, None, &d.msg).0 as u32 + 1)
+    });
+    Finding {
+        file: d.file,
+        line: d.line,
+        col,
+        severity: if warning { "warning" } else { "error" },
+        code,
+        msg: d.msg,
+        help,
+    }
+}
+
+/// Line `line` (1-based) of a file, tabs expanded.
+fn source_line(file: &str, line: u32) -> Option<String> {
+    std::fs::read_to_string(file)
+        .ok()?
+        .lines()
+        .nth((line as usize).checked_sub(1)?)
+        .map(|s| s.replace('\t', "    "))
+}
+
+/// A warning of the resolver, prefixed with its file (`file: line N: msg`),
+/// in the same layout as an error. Written to stdout.
+pub fn render_warning(text: &str) -> String {
+    let f = finding(text, true);
+    let head = format!("warning[{}]:", f.code.unwrap_or("W0000"));
+    let mut out = format!("{} {}", ui::yellow(&head), ui::bold(&f.msg));
+    if let Some(file) = &f.file {
+        let pos = match f.line {
+            Some(l) => format!("{}:{}", file, l),
+            None => file.clone(),
+        };
+        out.push_str(&format!("\n  {} {}", ui::cyan("-->"), pos));
+    }
+    for h in f.help {
+        out.push_str(&format!("\n   {} {}", ui::cyan("= help:"), h));
+    }
+    out
+}
+
 /// Full message, ready to write to stderr.
 pub fn render(err: &str) -> String {
     let d = parse(err);
@@ -189,13 +280,7 @@ pub fn render(err: &str) -> String {
         };
         out.push_str(&format!("\n  {} {}", ui::cyan_err("-->"), pos));
 
-        let src_line = d.line.and_then(|l| {
-            std::fs::read_to_string(file)
-                .ok()?
-                .lines()
-                .nth(l as usize - 1)
-                .map(|s| s.replace('\t', "    "))
-        });
+        let src_line = d.line.and_then(|l| source_line(file, l));
         if let (Some(l), Some(src)) = (d.line, src_line) {
             let num = l.to_string();
             let pad = " ".repeat(num.len());
@@ -251,5 +336,16 @@ mod tests {
         assert_eq!(underline("  return a / b", None, "division by zero"), (2, 12));
         assert_eq!(underline("let x = (1 +", Some(9), ""), (8, 1));
         assert_eq!(underline("print(n.x)", None, "parameter 'n' expects"), (6, 1));
+    }
+
+    #[test]
+    fn classifies_the_static_type_errors_and_warnings() {
+        let f = finding("x.fg: line 2: type error: operator not applicable between 'int' and 'str'", false);
+        assert_eq!((f.code, f.line, f.severity), (Some("E0210"), Some(2), "error"));
+        let f = finding("x.fg: line 1: type error: native function 'len' expects 1 arguments, got 3", false);
+        assert_eq!(f.code, Some("E0209"));
+        let f = finding("x.fg: line 4: unused import 'json'", true);
+        assert_eq!((f.code, f.severity, f.msg.as_str()), (Some("W0002"), "warning", "unused import 'json'"));
+        assert_eq!(f.file.as_deref(), Some("x.fg"));
     }
 }

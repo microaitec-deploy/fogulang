@@ -51,7 +51,8 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
   modules `runtime`, `native`, `host`.
   - `runtime/`: `lexer.rs`, `token.rs`, `parser.rs`, `ast.rs` (errors always with
     `line:column`); `resolver.rs` (static checks before running: names, types, `?`,
-    `match`, unused-variable warnings); `interpreter.rs` — **semantic reference**;
+    `match`, a conservative type inference — `Ty::Any` is never reported —, warnings;
+    `analyze` collects everything for `fogu check`, `check` returns the first error); `interpreter.rs` — **semantic reference**;
     `environment.rs` (lexical scope, FxHash, each top-level env knows its module;
     loop bodies reuse their scope via `LoopScope` unless a closure captured it);
     `value.rs` (`Value` uses `Rc<RefCell<..>>` → **not `Send`**); `fstr.rs` (`Str`, the
@@ -94,7 +95,7 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
   `host`, `register`; `main.rs` only calls `fogu::toolkit::run()` (which calls
   `register()`); `embed.rs` (the runtime of `ffi/`) registers too. `toolkit/` — Bun-style
   CLI (`mod.rs`: flags and dispatch; `commands.rs`: `run/init/add/remove/install/update/
-  list/pm/check`; `build.rs`: `build --compile` and running an embedded bundle;
+  list/pm`; `check.rs`: `fogu check`; `build.rs`: `build --compile` and running an embedded bundle;
   `testing.rs`: `fogu test`; `diag.rs`: diagnostics; `repl.rs` with rustyline; `ui.rs`).
 - Features (root, forwarded to fogu-std): `network database messaging ops hardware ai
   media rpc`, all default; `database` enables `rpc`, `ai` enables `media` and `network`.

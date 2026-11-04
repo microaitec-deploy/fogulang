@@ -262,6 +262,20 @@
   scopes and calls. The next real step is Phase 4 (the bytecode VM with slots resolved at
   compile time), not more tuning of the tree-walker.
 
+## Fifteenth round (`fogu check`)
+
+- `fogu check` accepts folders, reports every error of a file (the resolver recovers per
+  statement; `resolver::check`, used before running, still returns the first), and has
+  `--help`, `--json`, `--strict`/`--deny-warnings`, `-q`, `--watch`.
+- A conservative type inference in the resolver (`Ty`, `binop` mirrors `eval_binary`): the
+  messages are those of the interpreter, so a static error is exactly the error the code would
+  hit when it runs. Too many arguments are an error; missing ones are not (they are `nil`).
+- New warnings: unused imports, unreachable code after `return`/`break`/`continue`,
+  shadowing inside the same function. Unused parameters are not reported (callbacks often
+  ignore theirs).
+- `tests/spec/error_type_param.fg` and `error_type_return.fg` now pass values the inference
+  cannot see (`[x][0]`), so they still cover the run-time checks.
+
 ## Known gaps
 
 - `fogu:foguMQ-client` (FlowMQ v6) is tested against an in-process mock broker only (Rust unit
@@ -289,8 +303,11 @@
   functions that may return lists. Found in the MCP server (batches) and the broker admin.
 
 - The JIT does not compile strings/lists/maps/structs.
-- Generic type arguments and bounds are not checked; type mismatches of values
-  are only found at runtime (no static inference).
+- Generic type arguments and bounds are not checked. The static inference of the resolver
+  is deliberately small: literals, annotated parameters/variables, variables never
+  reassigned anywhere in the file (by name) and the signatures of `fn` declarations of the
+  same file. Fields, call results of methods/modules/imports, struct types and generics are
+  `Ty::Any` and never reported, so most type mismatches are still found at runtime.
 - No central package registry, no signatures/`fogu audit`, no `fogu fmt`.
 - `Fogu.watch` and `Fogu.serve/reply` are not implemented.
 - Old dead-code warnings in native modules.

@@ -7,7 +7,7 @@ fogu run [file|script]       run; without a target uses "entry" from fogu.json
 fogu <script>                script from fogu.json (e.g. fogu dev)
 fogu -e '<code>'             run code;  fogu -p '1+2*3' prints the result
 fogu --watch <file>          restart when *.fg / fogu.json change
-fogu check [files]           syntax, names and types (no args: every .fg here)
+fogu check [paths] [opts]    syntax, names and types (files or folders; no args: every .fg here)
 fogu build --compile [file]  standalone executable in dist/ (-o <folder>, --target <platform>|all)
 fogu test [paths] [-t text]  run the tests of *.test.fg files
 fogu init | add | remove | install | update | list | pm   (see packages.md)
@@ -68,11 +68,73 @@ build it.
 
 ## `fogu check`
 
-Checks every file without running it: syntax, undefined names, use before
-declaration, unknown type names, `?` in a function whose return type has no
-`error`, non-exhaustive `match`. Unused local variables are reported as
-warnings (prefix a name with `_` to silence it). The same errors stop
-`fogu <file>` before the program starts.
+```text
+fogu check                       every .fg file under the current folder
+fogu check main.fg lib/ examples one or more files and folders
+fogu check --json src            machine-readable diagnostics
+fogu check --strict              warnings also fail (same as --deny-warnings)
+fogu check -q                    only print the problems
+fogu check --watch src           check again whenever a .fg file changes
+fogu check --help
+```
+
+Checks files without running them. Folders are searched recursively, skipping
+hidden folders (`.git`, `.fogu`…), `node_modules`, `target`, `dist` and
+`fogu_modules`. Every error of a file is reported (not only the first).
+
+**Errors** — syntax, undefined names, use before declaration, unknown type
+names, `?` in a function whose return type has no `error`, non-exhaustive
+`match`, and the type errors the code would hit when it runs, found by a small
+conservative inference over literals, annotated variables, variables that are
+never reassigned and the signatures of the functions declared with `fn`:
+
+```fogu
+const n: int = "x"          // E0207 type mismatch: variable 'n' is declared as int, got str
+print(1 + "a")              // E0210 operator not applicable between 'int' and 'str'
+const s = "ab"
+print(s * 2)                // E0210 operator not applicable between 'str' and 'int'
+print(len(1, 2, 3))         // E0209 native function 'len' expects 1 arguments, got 3
+fn add(a: int, b = 0): int { return a + b }
+add(1, 2, 3)                // E0209 function 'add' expects at most 2 arguments, got 3
+add("1")                    // E0207 type mismatch: parameter 'a' expects int, got str
+fn name(): str { return 1 } // E0207 type mismatch: function 'name' must return str, got int
+```
+
+When a type is not known (a parameter without annotation, a variable that is
+reassigned somewhere, a field, a call result without a declared return type…)
+nothing is reported. Missing arguments are not an error (they are `nil`, or the
+default value), and a variadic `...rest` accepts any number.
+
+**Warnings** — unused local variables (W0001) and imports (W0002), code after
+`return`/`break`/`continue` (W0003), a variable that shadows another one of an
+enclosing block of the same function (W0004). Prefix a name with `_` to
+silence the warnings about it. Warnings never fail the check unless
+`--strict`/`--deny-warnings` is given.
+
+The same errors stop `fogu <file>` (and imported modules) before the program
+starts, reported with the first one; warnings are only printed by `fogu check`.
+
+The exit code is 0 when there are no errors (and no warnings with `--strict`), 1
+otherwise, 2 for an unknown option. `--json` prints one object (here for `const x = 1` / `print(1 + "a")`):
+
+```json
+{
+  "files": 1,
+  "errors": 1,
+  "warnings": 1,
+  "ok": false,
+  "diagnostics": [
+    { "file": "main.fg", "line": 2, "column": 1, "severity": "error", "code": "E0210",
+      "message": "operator not applicable between 'int' and 'str'",
+      "help": ["convert one side first, e.g. str(n) or int(s)"] },
+    { "file": "main.fg", "line": 1, "column": 7, "severity": "warning", "code": "W0001",
+      "message": "unused variable 'x' (prefix it with '_' to silence this)", "help": [] }
+  ]
+}
+```
+
+`column` is the position of the name the message quotes (or of the statement)
+when the error itself has no column.
 
 ## `fogu test`
 

@@ -1,6 +1,7 @@
 //! Fogu toolkit — CLI (Bun-style), REPL and package manager.
 
 pub mod build;
+pub mod check;
 pub mod cli;
 pub mod commands;
 pub mod diag;
@@ -44,7 +45,7 @@ fn help() -> String {
   update [package...]     update to the latest commits      (alias: up)
   list                    list the installed dependencies   (alias: ls)
   pm <path|ls|cache|hash> utilities for the global package store
-  check [files...]        check syntax and names without running
+  check [paths] [--json]  static checks without running (--strict, --watch; see check --help)
   build --compile [file]  build a standalone executable in dist/ (--target linux-arm64,windows-x64,…|all; --targets)
   test [paths] [-t text]  run the tests of *.test.fg files
   fmt [paths] [--check]   format .fg files (- for stdin)
@@ -326,7 +327,7 @@ fn real_main(mut args: Vec<String>, flags: RunFlags) -> i32 {
             "update" | "up" | "upgrade" => return commands::update(rest),
             "list" | "ls" => return commands::list(rest),
             "pm" => return commands::pm(rest),
-            "check" => return commands::check(rest),
+            "check" => return check::check(rest),
             "build" => return build::build(rest),
             "test" => return testing::test(rest),
             "fmt" => return fmt::fmt(rest),

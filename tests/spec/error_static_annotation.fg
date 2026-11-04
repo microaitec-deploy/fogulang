@@ -1,0 +1,2 @@
+print("never printed: static errors stop the program before it starts")
+const n: int = "x"

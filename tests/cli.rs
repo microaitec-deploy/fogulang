@@ -1,5 +1,5 @@
 //! Integration tests of CLI commands that work on whole projects:
-//! `fogu init`, `fogu test`, `fogu build --compile`, `fogu fmt` and `.env` loading.
+//! `fogu init`, `fogu test`, `fogu build --compile`, `fogu fmt`, `fogu check` and `.env` loading.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -296,4 +296,94 @@ fn build_compile_service_records_the_settings() {
         let bad = run(&["stop", "now"]);
         assert!(!bad.status.success() && text(&bad).contains("takes no arguments"), "{}", text(&bad));
     }
+}
+
+// ---------- fogu check ----------
+
+#[test]
+fn check_walks_folders_and_skips_hidden_and_build_ones() {
+    let d = TempDir::new("check-dir");
+    d.write("src/a.fg", "print(1)\n");
+    d.write("src/sub/b.fg", "print(2)\n");
+    // never searched: these would fail
+    for skipped in [".hidden/x.fg", "node_modules/x.fg", "target/x.fg", "dist/x.fg", ".fogu/x.fg"] {
+        d.write(skipped, "print(undefined_name)\n");
+    }
+    let o = fogu(d.path(), &["check", "src"]);
+    let out = text(&o);
+    assert!(o.status.success(), "{}", out);
+    assert!(out.contains("2 file(s), 0 with errors"), "{}", out);
+    // without arguments: every .fg under the current folder (the same two)
+    let o = fogu(d.path(), &["check"]);
+    assert!(o.status.success(), "{}", text(&o));
+    assert!(text(&o).contains("2 file(s)"), "{}", text(&o));
+    // a missing path is an error
+    let o = fogu(d.path(), &["check", "nope"]);
+    assert!(!o.status.success());
+    assert!(text(&o).contains("nope: file or folder not found"), "{}", text(&o));
+}
+
+#[test]
+fn check_help_is_not_a_file() {
+    let d = TempDir::new("check-help");
+    let o = fogu(d.path(), &["check", "--help"]);
+    assert!(o.status.success(), "{}", text(&o));
+    assert!(text(&o).contains("Usage: fogu check"), "{}", text(&o));
+    let o = fogu(d.path(), &["check", "--bogus"]);
+    assert_eq!(o.status.code(), Some(2), "{}", text(&o));
+}
+
+#[test]
+fn check_reports_every_error_as_json() {
+    let d = TempDir::new("check-json");
+    d.write(
+        "main.fg",
+        "const unused = 1\nprint(1 + \"a\")\nconst n: int = \"x\"\nprint(len(1, 2))\nprint(n)\n",
+    );
+    let o = fogu(d.path(), &["check", "--json", "main.fg"]);
+    assert!(!o.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).expect("JSON on stdout");
+    assert_eq!(v["errors"], 3, "{}", v);
+    assert_eq!(v["warnings"], 1, "{}", v);
+    assert_eq!(v["ok"], false);
+    let diags = v["diagnostics"].as_array().unwrap();
+    let first = &diags[0];
+    assert_eq!(first["file"], "main.fg");
+    assert_eq!(first["line"], 2);
+    assert_eq!(first["severity"], "error");
+    assert_eq!(first["code"], "E0210");
+    assert_eq!(first["message"], "operator not applicable between 'int' and 'str'");
+    assert!(first["column"].as_u64().is_some(), "{}", first);
+    assert_eq!(diags[1]["code"], "E0207");
+    assert_eq!(diags[2]["code"], "E0209");
+    let w = &diags[3];
+    assert_eq!(
+        (w["severity"].as_str(), w["code"].as_str(), w["line"].as_u64()),
+        (Some("warning"), Some("W0001"), Some(1))
+    );
+    assert_eq!(w["column"], 7, "{}", w);
+}
+
+#[test]
+fn check_strict_fails_on_warnings() {
+    let d = TempDir::new("check-strict");
+    d.write("main.fg", "import json from \"fogu:json\"\nfn f() {\n    return 1\n    print(2)\n}\nprint(f())\n");
+    let o = fogu(d.path(), &["check", "main.fg"]);
+    let out = text(&o);
+    assert!(o.status.success(), "{}", out);
+    assert!(out.contains("warning[W0002]: unused import 'json'"), "{}", out);
+    assert!(out.contains("warning[W0003]: unreachable code after 'return'"), "{}", out);
+    for flag in ["--strict", "--deny-warnings"] {
+        let o = fogu(d.path(), &["check", flag, "main.fg"]);
+        assert_eq!(o.status.code(), Some(1), "{}", text(&o));
+    }
+    // --quiet: nothing for a clean file
+    d.write("ok.fg", "print(1)\n");
+    let o = fogu(d.path(), &["check", "-q", "ok.fg"]);
+    assert!(o.status.success());
+    assert_eq!(text(&o).trim(), "");
+    // warnings are not printed when running
+    let o = fogu(d.path(), &["main.fg"]);
+    assert!(o.status.success(), "{}", text(&o));
+    assert_eq!(text(&o).trim(), "1");
 }

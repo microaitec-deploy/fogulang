@@ -1,0 +1,10 @@
+// defaults and ...rest are respected: only the call at line 7 has too many arguments
+fn area(w, h = 1) { return w * h }
+fn sum(...xs) { return len(xs) }
+print(area(2), area(2, 3), sum(), sum(1, 2, 3, 4))
+fn later() {
+    // a function declared further down is known too
+    return volume(1, 2, 3, 4)
+}
+fn volume(w, h, d) { return w * h * d }
+print(later)

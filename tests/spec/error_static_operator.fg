@@ -1,0 +1,6 @@
+const greeting = "hi"
+fn twice(s) {
+    return s + s
+}
+print(twice(greeting))
+print(greeting * 2)

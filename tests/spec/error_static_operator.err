@@ -1,0 +1,3 @@
+error[E0210]: operator not applicable between 'str' and 'int'
+--> error_static_operator.fg:6
+convert one side first

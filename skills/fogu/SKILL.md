@@ -18,8 +18,11 @@ standard library function, with signatures) or run the code.
 ## Working loop
 
 1. Write the code in a `.fg` file.
-2. `fogu check file.fg` catches syntax, unknown names, type and `match` errors
-   without running anything. Fix everything it reports.
+2. `fogu check file.fg` (or a folder) catches syntax, unknown names, type and
+   `match` errors — including `1 + "a"`, `const n: int = "x"`, wrong argument
+   counts — without running anything, and warns about unused variables and
+   imports, unreachable code and shadowing. Fix everything it reports;
+   `fogu check --json` gives machine-readable diagnostics.
 3. `fogu file.fg [args]` runs it. Errors print `file:line`, a code (`E0100`…),
    the source line and often a `help:` hint. Read them; they are precise.
 4. For anything non-trivial, add tests in `name.test.fg` and run `fogu test`.

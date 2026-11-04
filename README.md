@@ -462,7 +462,7 @@ fogu <script>                script from fogu.json (e.g. fogu dev)
 fogu -e '<code>'             run code
 fogu -p '<expr>'             evaluate and print the result
 fogu --watch <file>          restart when *.fg / fogu.json change
-fogu check [files]           syntax, names and types (no args: every .fg here)
+fogu check [paths] [opts]    syntax, names and types: files or folders (--json, --strict, --watch)
 fogu build --compile [file]  standalone executable in dist/ (--target linux-arm64|windows-x64|…|all)
 fogu test [paths] [-t text]  run the tests of *.test.fg files
 fogu fmt [paths] [--check]   format .fg files

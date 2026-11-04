@@ -1,0 +1,2 @@
+error[E0209]: native function 'len' expects 1 arguments, got 3
+--> error_static_builtin_arity.fg:2

@@ -1,0 +1,2 @@
+error[E0209]: function 'volume' expects at most 3 arguments, got 4
+--> error_static_fn_arity.fg:7

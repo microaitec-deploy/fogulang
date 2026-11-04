@@ -176,7 +176,7 @@ Fundamental API (§44):
 - [x] `fogu init` (creates `fogu.json`, `main.fg` and `.gitignore`), `add`, `remove`, `install`, `update`, `list`, `pm`
 - [x] Extras: `-e`, `-p`, `--watch`, `fogu.json` scripts, JIT flags
 - [x] CLI integration tests (`tests/cli.rs`): `init`, `test`, `build --compile`
-- [x] `fogu check` (§62) — syntax, undeclared names, use before declaration, unknown types, `?` misuse, non-exhaustive `match`, and unused-variable warnings; type mismatches of values are only detected at runtime
+- [x] `fogu check` (§62) — syntax, undeclared names, use before declaration, unknown types, `?` misuse, non-exhaustive `match`, and warnings (unused variables and imports, unreachable code, shadowing); a conservative static type inference reports operators on incompatible types, annotation/argument/return mismatches and wrong argument counts; folders, `--json`, `--strict`, `--quiet`, `--watch`
 - [x] `fogu test` with `*.test.fg` files and `fogu:test` (`test`, `skip`, `expect(v).toBe/…`, `.not`), `-t` filter (§63) — `tests/cli.rs`
 - [x] `fogu fmt` (§61) — token-based, verified against the lexer; `tests/cli.rs`
 - [x] `fogu build --compile` — standalone executable in `dist/` with the program, its modules and its packages (§64)
@@ -232,7 +232,7 @@ to what already exists.
 - [~] Generics parsed and erased (arguments and bounds not checked)
 - [x] Static `match` exhaustiveness
 - [x] `?` restricted by the declared return type
-- [ ] Static type inference (detect `add(1, "2")` before running)
+- [x] Static type inference, conservative (detect `add(1, "2")`, `1 + "a"`, `len(1, 2)` before running; unknown types are never reported)
 
 ### Phase E — Runtime and system library ✅ (core done)
 

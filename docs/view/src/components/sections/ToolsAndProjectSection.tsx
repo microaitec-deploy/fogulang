@@ -20,7 +20,7 @@ fogu <script>                script from fogu.json (e.g. fogu dev)
 fogu -e '<code>'             run code
 fogu -p '<expression>'       evaluate and print the result
 fogu --watch <file>          restart when *.fg / fogu.json change
-fogu check [files]           syntax, names and types (+ unused-variable warnings)
+fogu check [paths] [opts]    syntax, names and types of files or folders (--json, --strict, -q, --watch)
 fogu build --compile [file]  standalone executable in dist/
 fogu test [paths] [-t text]  run the tests of *.test.fg files
 fogu fmt [paths] [--check]   format .fg files in the single Fogu style (- for stdin)
@@ -60,10 +60,19 @@ fogu init | add | remove | install | update | list | pm`}
       <section id="diagnostics" data-group="Tools" data-title="Diagnostics" className="scroll-mt-20 mt-16">
         <h2 className="text-2xl font-bold">Diagnostics</h2>
         <p>
-          Undefined names, uses before declaration, unknown types, misplaced <code>?</code> and non-exhaustive
-          <code>match</code> are detected <strong>before</strong> the program runs. Errors show a code, the position, an excerpt
-          and, when possible, a suggestion. <code>fogu check</code> also warns about unused local variables (prefix them with
-          <code>_</code> to silence the warning).
+          Undefined names, uses before declaration, unknown types, misplaced <code>?</code>, non-exhaustive
+          <code>match</code> and type errors a conservative inference can prove (<code>1 + "a"</code>,{' '}
+          <code>const n: int = "x"</code>, an argument or a <code>return</code> that cannot match its annotation, too many
+          arguments, <code>len(1, 2)</code>) are detected <strong>before</strong> the program runs; when a type is not known
+          nothing is reported. Errors show a code, the position, an excerpt and, when possible, a suggestion.
+        </p>
+        <p>
+          <code>fogu check</code> accepts files and folders and reports every error of each file. It also warns about unused
+          variables and imports, unreachable code after <code>return</code>/<code>break</code>/<code>continue</code> and
+          variables that shadow another one of the same function (prefix a name with <code>_</code> to silence it).{' '}
+          <code>--json</code> prints machine-readable diagnostics (file, line, column, severity, code, message, help),{' '}
+          <code>--strict</code> (or <code>--deny-warnings</code>) makes warnings fail, <code>-q</code> prints only the problems
+          and <code>--watch</code> checks again on every change.
         </p>
         <DocCodeBlock
           lang="text"
@@ -90,6 +99,8 @@ fogu init | add | remove | install | update | list | pm`}
               <tr><td className="py-2 pr-4"><code>E0203</code> · <code>E0204</code> · <code>E0205</code></td><td>non-exhaustive <code>match</code> · value is not callable · stack overflow</td></tr>
               <tr><td className="py-2 pr-4"><code>E0206</code></td><td><code>?</code> outside a function, or in a function whose return type has no <code>error</code></td></tr>
               <tr><td className="py-2 pr-4"><code>E0207</code> · <code>E0208</code></td><td>type mismatch · unknown type</td></tr>
+              <tr><td className="py-2 pr-4"><code>E0209</code> · <code>E0210</code></td><td>wrong number of arguments · operator not applicable to these types</td></tr>
+              <tr><td className="py-2 pr-4"><code>W0001</code> · <code>W0002</code> · <code>W0003</code> · <code>W0004</code></td><td>warnings: unused variable · unused import · unreachable code · shadowed variable</td></tr>
               <tr><td className="py-2 pr-4"><code>E0300</code></td><td>deadlock between tasks</td></tr>
             </tbody>
           </table>

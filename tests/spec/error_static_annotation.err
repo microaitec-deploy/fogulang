@@ -1,0 +1,2 @@
+error[E0207]: type mismatch: variable 'n' is declared as int, got str
+--> error_static_annotation.fg:2
