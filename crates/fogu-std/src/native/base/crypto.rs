@@ -13,6 +13,7 @@
 //! print(crypto.uuid(), crypto.randomHex(16), crypto.randomInt(1, 6))
 //! print(crypto.uuidv7(), crypto.uuidv5("dns", "example.com"))  // time-ordered · name-based
 //! print(crypto.base64("olá"), crypto.fromBase64("b2zDoQ=="))
+//! print(crypto.hashFile("sha256", "app.exe"))                // a file's digest (hex)
 //! ```
 
 use std::cell::RefCell;
@@ -34,6 +35,7 @@ pub fn build() -> ModuleValue {
         e.insert(name.to_string(), nfn_var(name, min, func));
     };
     f("hash", 2, hash);
+    f("hashFile", 2, hash_file);
     f("hmac", 3, hmac_fn);
     f("encrypt", 2, encrypt);
     f("decrypt", 2, decrypt);
@@ -248,6 +250,17 @@ fn digest(algo: &str, data: &[u8]) -> Result<Vec<u8>, String> {
 fn hash(a: &[Value]) -> Result<Value, String> {
     max_args(a, 3, "hash")?;
     let d = digest(&str_arg(a, 0, "hash")?, &bytes_arg(&a[1], "hash")?)?;
+    Ok(Value::Str(encode_out(&d, a.get(2)).into()))
+}
+
+/// hashFile(algo, path, { base64 }) → the digest of a file's bytes (hex), for
+/// files the text API cannot read (executables, archives).
+fn hash_file(a: &[Value]) -> Result<Value, String> {
+    max_args(a, 3, "hashFile")?;
+    let algo = str_arg(a, 0, "hashFile")?;
+    let path = str_arg(a, 1, "hashFile")?;
+    let data = std::fs::read(&path).map_err(|e| io_err!("crypto.hashFile: {}: {}", path, e))?;
+    let d = digest(&algo, &data)?;
     Ok(Value::Str(encode_out(&d, a.get(2)).into()))
 }
 

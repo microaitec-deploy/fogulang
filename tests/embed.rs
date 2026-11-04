@@ -71,3 +71,32 @@ fn sources_in_memory_over_a_folder() {
     fogu::runtime::vfs::clear();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Several runtimes in one process run at the same time, each with its own
+/// globals (the desktop host's workers).
+#[test]
+fn runtimes_run_in_parallel() {
+    let code = "fn spin(n) { let s = 0\nfor i in 0..n { s = (s + i * 7) % 1000003 }\nreturn s }";
+    let a = std::sync::Arc::new(Runtime::new().unwrap());
+    let b = std::sync::Arc::new(Runtime::new().unwrap());
+    a.eval(code).unwrap();
+    b.eval(code).unwrap();
+    a.eval("let who = \"a\"").unwrap();
+    b.eval("let who = \"b\"").unwrap();
+    let t0 = std::time::Instant::now();
+    a.call("spin", "[3000000]").unwrap();
+    let one = t0.elapsed();
+    let t1 = std::time::Instant::now();
+    let (ra, rb) = (std::sync::Arc::clone(&a), std::sync::Arc::clone(&b));
+    let ha = std::thread::spawn(move || ra.call("spin", "[3000000]").unwrap());
+    let hb = std::thread::spawn(move || rb.call("spin", "[3000000]").unwrap());
+    let (x, y) = (ha.join().unwrap(), hb.join().unwrap());
+    let both = t1.elapsed();
+    assert_eq!(x, y);
+    assert_eq!(a.eval("who").unwrap(), "\"a\"");
+    assert_eq!(b.eval("who").unwrap(), "\"b\"");
+    eprintln!("one call {:?}, two in parallel {:?}", one, both);
+    if std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) > 1 {
+        assert!(both < one * 18 / 10, "the runtimes did not run in parallel: one {:?}, two {:?}", one, both);
+    }
+}

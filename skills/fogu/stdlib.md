@@ -865,6 +865,7 @@ import crypto from "fogu:crypto"
 ```
 
 - `crypto.hash(algo, data, { base64 })` → str — `md5 sha1 sha256 sha384 sha512`; hex by default.
+- `crypto.hashFile(algo, path, { base64 })` → str · error — The digest of a file's bytes (executables, archives: files `fs.readText` cannot read). Missing file → error value.
 - `crypto.hmac(algo, key, data, { base64 })` → str
 - `crypto.encrypt(data, key)` → str — AES-256-GCM; `key` is a password (argon2id) or 64 hex chars. Base64 output with salt and nonce.
 - `crypto.decrypt(box, key, { bytes })` → str · error — Wrong key or altered data → error value.

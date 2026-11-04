@@ -25,3 +25,5 @@ ERROR failed module=db table=users code=23
 {"level":"info","msg":"as json","list":[1,2],"ok":true}
 ERROR to a file
 off
+true
+error

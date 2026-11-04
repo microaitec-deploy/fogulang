@@ -55,3 +55,9 @@ print(fs.readText("log.tmp.txt")?.trim())
 log.setLevel("off")
 log.error("silent")
 print(log.level())
+
+// crypto.hashFile: the digest of a file (bytes)
+import fs from "fogu:fs"
+fs.writeText(Fogu.asset("hashfile.tmp.txt"), "abc")?
+print(crypto.hashFile("sha256", Fogu.asset("hashfile.tmp.txt")) == crypto.hash("sha256", "abc"))
+print(typeof(crypto.hashFile("sha256", Fogu.asset("missing.tmp.txt"))))

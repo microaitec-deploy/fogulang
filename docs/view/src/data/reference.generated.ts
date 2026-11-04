@@ -1254,6 +1254,11 @@ export const REFERENCE: Record<string, RefData> = {
       "<code>md5 sha1 sha256 sha384 sha512</code>; hex by default."
      ],
      [
+      "crypto.hashFile(algo, path, { base64 })",
+      "str · error",
+      "The digest of a file's bytes (executables, archives: files <code>fs.readText</code> cannot read). Missing file → error value."
+     ],
+     [
       "crypto.hmac(algo, key, data, { base64 })",
       "str",
       ""
