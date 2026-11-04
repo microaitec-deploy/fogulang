@@ -19,6 +19,8 @@ const DESKTOP_HELP: &str = "fogu desktop — desktop apps: a Tauri window whose 
                                          a mobile package (experimental; --check lists the missing tools)
   fogu desktop ci [dir] [--os windows,macos,linux] [--installer]
                                          a GitHub Actions workflow that builds every OS
+  fogu desktop keygen [dir] [--endpoint URL]
+                                         the signing keys of self-updates (build signs, writes dist/latest.json)
   fogu desktop update                    install the latest desktop library
   fogu desktop path                      where the library is
 
@@ -74,6 +76,7 @@ pub fn desktop(args: &[String]) -> i32 {
         "dev" => "dev.fg",
         "build" => "build.fg",
         "ci" => "ci.fg",
+        "keygen" => "keygen.fg",
         "update" | "upgrade" => return update("desktop"),
         "path" | "where" => {
             return match library("desktop", false) {
@@ -120,7 +123,7 @@ pub fn desktop(args: &[String]) -> i32 {
 
 /// Whether `a` is the value of a flag that takes one (`--target windows`).
 fn is_flag_value(argv: &[String], a: &str) -> bool {
-    const WITH_VALUE: &[&str] = &["--target", "--port", "--host", "--features", "--template", "--title", "--identifier", "--os", "--server"];
+    const WITH_VALUE: &[&str] = &["--target", "--port", "--host", "--features", "--template", "--title", "--identifier", "--os", "--server", "--endpoint"];
     argv.windows(2).any(|w| WITH_VALUE.contains(&w[0].as_str()) && w[1] == a)
 }
 
