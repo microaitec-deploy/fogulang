@@ -83,7 +83,7 @@ security), `database` (sql, orm, kv, surrealkv, surrealdb, scylla, redis, etcd),
 `messaging` (nats, mqtt, kafka, rabbitmq, bullmq, fogumq, broker), `ops` (ssh, docker,
 service, playbook, s3), `ai` (ai/MCP, plot), `media` (image, webview), `rpc` (grpc, protobuf). `database`
 turns on `rpc`; `ai` turns on `media` and `network`. The core modules (time, sync, cron,
-log, regex, crypto, vm, cli, ffi, fs, path, process, system, shell, zip, csv/json/yaml…,
+log, regex, crypto, password, vm, cli, ffi, fs, path, process, system, shell, zip, csv/json/yaml…,
 net) are always built. A module whose feature is off cannot be imported (unknown module).
 
 Put the binary on your `PATH`, or use `cargo run -- <args>` while developing.
@@ -405,6 +405,7 @@ Each module is evaluated once; cycles are a load error.
 | `fogu:rabbitmq` | AMQP 0-9-1: `exchange queue bind publish consume get`, acks | [rabbitmq.fg](examples/rabbitmq.fg) |
 | `fogu:mqtt` | MQTT 3.1.1: `publish subscribe next`, QoS, retain, last will | [mqtt.fg](examples/mqtt.fg) |
 | `fogu:regex` · `fogu:crypto` · `fogu:log` | regular expressions · hashes, HMAC, AES-GCM, argon2, random · structured logging | — |
+| `fogu:password` | password hashing (argon2id/i/d, bcrypt, scrypt, PBKDF2; pepper, `needsRehash`), random passwords and passphrases, strength | — |
 | `fogu:csv` · `fogu:excel` · `fogu:yaml` · `fogu:toml` · `fogu:xml` · `fogu:json5` | `parse stringify read write` (Excel: `read sheets write`) | — |
 | `fogu:markdown` | `toHtml toText parse headings toc slug frontmatter` | — |
 | `fogu:html` | parse + CSS selectors, Jinja templates, `sanitize`, HTML ↔ Markdown/text | — |

@@ -664,24 +664,9 @@ fn audit_headers(r: &HeaderReport) -> Value {
 // ---------------------------------------------------------------------
 
 /// passwordStrength(password, [user inputs]) → { score 0..4, guesses, crackTime, warning, suggestions }
+/// (the same as `password.strength`)
 fn password_strength(a: &[Value]) -> Result<Value, String> {
-    max_args(a, 2, "security.passwordStrength")?;
-    let pw = str_arg(a, 0, "security.passwordStrength")?;
-    let inputs: Vec<String> = match a.get(1) {
-        Some(Value::List(l)) => l.borrow().iter().map(|v| v.to_display_string()).collect(),
-        _ => Vec::new(),
-    };
-    let refs: Vec<&str> = inputs.iter().map(String::as_str).collect();
-    let e = zxcvbn::zxcvbn(&pw, &refs);
-    let fb = e.feedback();
-    Ok(map(vec![
-        ("score", Value::Int(u8::from(e.score()) as i64)),
-        ("guesses", Value::Int(e.guesses().min(i64::MAX as u64) as i64)),
-        ("crackTime", Value::Str(e.crack_times().offline_slow_hashing_1e4_per_second().to_string().into())),
-        ("crackTimeOnline", Value::Str(e.crack_times().online_throttling_100_per_hour().to_string().into())),
-        ("warning", fb.and_then(|f| f.warning()).map(|w| Value::Str(w.to_string().into())).unwrap_or(Value::Nil)),
-        ("suggestions", list(fb.map(|f| f.suggestions().iter().map(|s| Value::Str(s.to_string().into())).collect()).unwrap_or_default())),
-    ]))
+    crate::native::password::strength_fn(a, "security.passwordStrength")
 }
 
 const B32: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";

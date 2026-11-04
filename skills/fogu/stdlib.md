@@ -22,6 +22,7 @@ value on operational failures (use `?` or `const [v, err] = …`).
 - [fogu:log](#fogulog)
 - [fogu:regex](#foguregex)
 - [fogu:crypto](#fogucrypto)
+- [fogu:password](#fogupassword)
 - [fogu:csv](#fogucsv)
 - [fogu:excel](#foguexcel)
 - [fogu:yaml](#foguyaml)
@@ -78,7 +79,7 @@ value on operational failures (use `?` or `const [v, err] = …`).
 
 ## Overview
 
-Modules are imported with `import name from "fogu:name"` (or by name: `import { parse } from "fogu:json"`). Each section below lists every function with its parameters and return value, and shows an example with its **real output** (the examples are run when this page is generated). Core [`fogu:math`](#fogumath) [`fogu:json`](#fogujson) [`fogu:time`](#fogutime) [`fogu:types`](#fogutypes) [`fogu:system`](#fogusystem) [`fogu:fs`](#fogufs) [`fogu:path`](#fogupath) [`fogu:process`](#foguprocess) [`fogu:sync`](#fogusync) [`fogu:test`](#fogutest) [`fogu:log`](#fogulog) [`fogu:regex`](#foguregex) [`fogu:crypto`](#fogucrypto)
+Modules are imported with `import name from "fogu:name"` (or by name: `import { parse } from "fogu:json"`). Each section below lists every function with its parameters and return value, and shows an example with its **real output** (the examples are run when this page is generated). Core [`fogu:math`](#fogumath) [`fogu:json`](#fogujson) [`fogu:time`](#fogutime) [`fogu:types`](#fogutypes) [`fogu:system`](#fogusystem) [`fogu:fs`](#fogufs) [`fogu:path`](#fogupath) [`fogu:process`](#foguprocess) [`fogu:sync`](#fogusync) [`fogu:test`](#fogutest) [`fogu:log`](#fogulog) [`fogu:regex`](#foguregex) [`fogu:crypto`](#fogucrypto) [`fogu:password`](#fogupassword)
 Data formats [`fogu:csv`](#fogucsv) [`fogu:excel`](#foguexcel) [`fogu:yaml`](#foguyaml) [`fogu:toml`](#fogutoml) [`fogu:xml`](#foguxml)
 Storage [`fogu:kv`](#fogukv) [`fogu:surrealkv`](#fogusurrealkv) [`fogu:surrealdb`](#fogusurrealdb) [`fogu:sql`](#fogusql) [`fogu:orm`](#foguorm) [`fogu:redis`](#foguredis) [`fogu:s3`](#fogus3) [`fogu:scylla`](#foguscylla) [`fogu:etcd`](#foguetcd)
 Web & network [`fogu:http`](#foguhttp) [`fogu:web`](#foguweb) [`fogu:jwt`](#fogujwt) [`fogu:topcoat`](#fogutopcoat) [`fogu:websocket`](#foguwebsocket) [`fogu:socketio`](#fogusocketio) [`fogu:grpc`](#fogugrpc) [`fogu:net`](#fogunet) [`fogu:tls`](#fogutls) [`fogu:security`](#fogusecurity)
@@ -866,8 +867,8 @@ import crypto from "fogu:crypto"
 - `crypto.hmac(algo, key, data, { base64 })` → str
 - `crypto.encrypt(data, key)` → str — AES-256-GCM; `key` is a password (argon2id) or 64 hex chars. Base64 output with salt and nonce.
 - `crypto.decrypt(box, key, { bytes })` → str · error — Wrong key or altered data → error value.
-- `crypto.hashPassword(password)` → str — argon2id PHC string, for storing passwords.
-- `crypto.verifyPassword(password, hash)` → bool
+- `crypto.hashPassword(password)` → str — argon2id PHC string (OWASP parameters), for storing passwords. [`fogu:password`](#fogupassword) adds bcrypt, scrypt, PBKDF2, peppers and rehash checks.
+- `crypto.verifyPassword(password, hash)` → bool · error — Any hash `password.verify` understands; a malformed hash → error value.
 - `crypto.randomBytes(n) · crypto.randomHex(n)` → list · str — Secure random.
 - `crypto.randomInt(min, max)` → int — Inclusive, unbiased.
 - `crypto.uuid(version = 4, namespace?, name?)` → str — `uuid()` / `uuid(4)` random, `uuid(7)` time-ordered, `uuid(5, namespace, name)` name-based.
@@ -909,6 +910,51 @@ cfbff0d1-9375-5685-968c-48ce8b15ae17 true
 true 7 nil true
 error: uuidInfo: 'not-a-uuid' is not a UUID: invalid character: found `n` at 0
 ```
+
+## fogu:password
+
+```fogu
+import password from "fogu:password"
+```
+
+Password storage. `hash` and `verify` are slow on purpose and run off the interpreter thread, so other `fg` tasks keep running. The salt is always random (16 bytes). Defaults follow the OWASP Password Storage Cheat Sheet: argon2id m=19456 KiB t=2 p=1 · bcrypt cost 12 · scrypt N=2 17 r=8 p=1 · PBKDF2-SHA256 600 000 / PBKDF2-SHA512 210 000 iterations.
+
+- `password.hash(pw, { algorithm, memory, time, parallelism, cost, n, r, p, iterations, pepper })` → str · error — `algorithm`: `argon2id` (default), `argon2i`, `argon2d`, `bcrypt`, `scrypt`, `pbkdf2-sha256`, `pbkdf2-sha512`. argon2: `memory` (KiB), `time`, `parallelism`; bcrypt: `cost` 4..31; scrypt: `n` (power of two), `r`, `p`; PBKDF2: `iterations`. Returns a PHC string (`$argon2id$…`, `$scrypt$…`, `$pbkdf2-sha256$…`) or bcrypt's `$2b$…`. Unknown options stop the program.
+- `password.verify(pw, hash, { pepper })` → bool · error — Detects the algorithm from the hash (`$argon2id$`, `$2a$`/`$2b$`/`$2y$`, `$scrypt$`, `$pbkdf2-sha256$`…); constant-time comparison. A malformed or unsupported hash → error value. Accepts the same options map as `hash`.
+- `password.needsRehash(hash, options?)` → bool · error — True when the hash uses another algorithm or weaker parameters than `options` (default: argon2id with the defaults), or bcrypt `$2a$`. Check it after a successful login and store a new hash.
+- `password.info(hash)` → map · error — `{ algorithm, version, … }` without salt or hash: argon2 `memory time parallelism length`, bcrypt `cost`, scrypt `n r p length`, PBKDF2 `iterations length`.
+- `password.generate(length = 16, { upper, lower, digits, symbols, excludeAmbiguous })` → str — From the OS CSPRNG, unbiased, with at least one character of every class chosen (all on by default). `symbols`: a bool or the set of symbols to use; `excludeAmbiguous` drops `Il1O0o`.
+- `password.passphrase(words = 5, sep = "-")` → str — Words from a built-in list of ~1150 (≈10 bits each: 5 words ≈ 50 bits).
+- `password.strength(pw, [user inputs])` → map — `{ score 0..4, guesses, bits, crackTime, crackTimeOnline, warning, suggestions, estimator }`: zxcvbn when built with the `network` feature, else an entropy estimate on the same scale (`estimator` says which). Same as `security.passwordStrength`.
+- `password.algorithms` → list — The algorithm names `hash` accepts.
+
+```fogu
+import password from "fogu:password"
+const h = password.hash("hunter2")
+print(h.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"), password.verify("hunter2", h), password.verify("hunter3", h))
+const b = password.hash("hunter2", { algorithm: "bcrypt", cost: 10 })
+print(password.info(b), password.needsRehash(b))
+const secret = { pepper: "kept outside the database" }
+const p = password.hash("hunter2", { algorithm: "scrypt", n: 16384, pepper: secret.pepper })
+print(password.verify("hunter2", p, secret), password.verify("hunter2", p))
+const [_, err] = password.verify("hunter2", "not a hash")
+print(err)
+print(len(password.generate()), len(password.generate(24, { symbols: false })), password.passphrase(4).split("-").len())
+print(password.strength("password").score, password.strength("correct horse battery staple 9!").score)
+```
+
+output:
+
+```text
+true true false
+{algorithm: bcrypt, cost: 10, version: 2b} true
+true false
+error: password.verify: not a valid password hash (password hash string missing field)
+16 24 4
+0 4
+```
+
+> Pepper : with `{ pepper }` the hashed secret is `base64(HMAC-SHA256(pepper, password))`. Keep the pepper outside the database (environment, secret store) and pass the same one to `verify`; losing it makes every peppered hash unverifiable. bcrypt only reads 72 bytes: longer passwords are refused (`hash` → error value, `verify` → false) instead of silently truncated — use argon2id, or a pepper (which pre-hashes the password to 44 bytes).
 
 ## fogu:csv
 
@@ -1960,7 +2006,7 @@ Security and network auditing: TLS and certificates (rustls, x509-parser, rcgen)
 - `security.scan(host, ports = "common", { timeout = 500ms, concurrency = 200, banner })` → list · error — Ports: an int, a list, a range or `"22,80,8000-8100"`. → `[{ port, service, banner }]`.
 - `security.dns(name, type = "A", { server, timeout = 3s }) · security.reverseDns(ip, opts?)` → list · error — `A AAAA MX TXT NS CNAME SOA CAA SRV PTR…` → `[{ type, value, ttl }]`. Servers: `server`, `$FOGU_DNS`, the system's, then 1.1.1.1/8.8.8.8.
 - `security.headers(url, { timeout })` → map · error — HSTS, CSP, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy → `{ grade, score, present, missing, warnings }` (leaky `server`, unsafe CSP, cookies without Secure/HttpOnly/SameSite…).
-- `security.passwordStrength(pw, [userInputs])` → map — `{ score 0..4, guesses, crackTime, crackTimeOnline, warning, suggestions }`.
+- `security.passwordStrength(pw, [userInputs])` → map — `{ score 0..4, guesses, bits, crackTime, crackTimeOnline, warning, suggestions, estimator }` (zxcvbn). The same as [`password.strength`](#fogupassword).
 - `security.totpSecret() · totp(secret, opts) · verifyTotp(secret, code, { window = 1 }) · otpauthUrl(secret, account, { issuer })` — RFC 6238 (SHA-1, 6 digits, 30 s); the URL goes into a QR code for authenticator apps.
 - `security.scanSecrets(text) · security.scanFiles(path)` → list — AWS keys, GitHub/GitLab/Slack/Stripe/OpenAI/Anthropic tokens, private keys, JWTs, passwords in URLs, `password = "…"` → `[{ file?, rule, line, column, match }]` (redacted).
 - `security.keypair() · sign(privateKey, msg) · verify(publicKey, msg, sig)` — Ed25519, base64 keys and signatures.

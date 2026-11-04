@@ -252,6 +252,7 @@ fn install(ctx: &mut NativeContext) {
     #[cfg(feature = "rpc")]
     ctx.define_lazy("protobuf", crate::native::protobuf::build);
     ctx.define_lazy("crypto", crate::native::crypto::build);
+    ctx.define_lazy("password", crate::native::password::build);
     ctx.define_lazy("log", crate::native::log::build);
     ctx.define_lazy("csv", crate::native::formats::csv_build);
     ctx.define_lazy("excel", crate::native::formats::excel_build);

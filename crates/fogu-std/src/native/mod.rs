@@ -28,6 +28,7 @@ pub use base::cron;
 pub use base::log;
 pub use base::regex;
 pub use base::crypto;
+pub use base::password;
 pub use base::vm;
 pub use base::fogu_global;
 #[cfg(not(target_family = "wasm"))]

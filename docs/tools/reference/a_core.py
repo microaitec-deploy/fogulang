@@ -4,7 +4,7 @@ G = "Standard library"
 C = "Core modules"
 
 MODULE_TABLE = [
-    ("Core", "fogu:math fogu:json fogu:time fogu:types fogu:system fogu:fs fogu:path fogu:process fogu:sync fogu:test fogu:log fogu:regex fogu:crypto"),
+    ("Core", "fogu:math fogu:json fogu:time fogu:types fogu:system fogu:fs fogu:path fogu:process fogu:sync fogu:test fogu:log fogu:regex fogu:crypto fogu:password"),
     ("Data formats", "fogu:csv fogu:excel fogu:yaml fogu:toml fogu:xml"),
     ("Storage", "fogu:kv fogu:surrealkv fogu:surrealdb fogu:sql fogu:orm fogu:redis fogu:s3 fogu:scylla fogu:etcd"),
     ("Web &amp; network", "fogu:http fogu:web fogu:jwt fogu:topcoat fogu:websocket fogu:socketio fogu:grpc fogu:net fogu:tls fogu:security"),
@@ -738,8 +738,8 @@ print(regex.findAll("v1.2 and v3.10", "\\d+\\.\\d+").map((x) => x.text))
                     ("crypto.hmac(algo, key, data, { base64 })", "str", ""),
                     ("crypto.encrypt(data, key)", "str", "AES-256-GCM; <code>key</code> is a password (argon2id) or 64 hex chars. Base64 output with salt and nonce."),
                     ("crypto.decrypt(box, key, { bytes })", "str · error", "Wrong key or altered data → error value."),
-                    ("crypto.hashPassword(password)", "str", "argon2id PHC string, for storing passwords."),
-                    ("crypto.verifyPassword(password, hash)", "bool", ""),
+                    ("crypto.hashPassword(password)", "str", "argon2id PHC string (OWASP parameters), for storing passwords. <a href=\"#mod-password\"><code>fogu:password</code></a> adds bcrypt, scrypt, PBKDF2, peppers and rehash checks."),
+                    ("crypto.verifyPassword(password, hash)", "bool · error", "Any hash <code>password.verify</code> understands; a malformed hash → error value."),
                     ("crypto.randomBytes(n) · crypto.randomHex(n)", "list · str", "Secure random."),
                     ("crypto.randomInt(min, max)", "int", "Inclusive, unbiased."),
                     ("crypto.uuid(version = 4, namespace?, name?)", "str", "<code>uuid()</code> / <code>uuid(4)</code> random, <code>uuid(7)</code> time-ordered, <code>uuid(5, namespace, name)</code> name-based."),
@@ -766,6 +766,43 @@ const a = crypto.uuidv7()
 const b = crypto.uuidv7()
 print(a < b, crypto.uuidInfo(a)?.version, crypto.uuidInfo(crypto.uuidv4())?.time, crypto.uuidInfo(a)?.time > 0)
 print(crypto.uuidInfo("not-a-uuid"))
+''',
+                "run": True,
+            }
+        ],
+    },
+    {
+        "id": "mod-password",
+        "group": C,
+        "title": "fogu:password",
+        "import": 'import password from "fogu:password"',
+        "intro": "Password storage. <code>hash</code> and <code>verify</code> are slow on purpose and run off the interpreter thread, so other <code>fg</code> tasks keep running. The salt is always random (16 bytes). Defaults follow the OWASP Password Storage Cheat Sheet: argon2id m=19456 KiB t=2 p=1 · bcrypt cost 12 · scrypt N=2<sup>17</sup> r=8 p=1 · PBKDF2-SHA256 600 000 / PBKDF2-SHA512 210 000 iterations.",
+        "blocks": [
+            {
+                "api": [
+                    ("password.hash(pw, { algorithm, memory, time, parallelism, cost, n, r, p, iterations, pepper })", "str · error", "<code>algorithm</code>: <code>argon2id</code> (default), <code>argon2i</code>, <code>argon2d</code>, <code>bcrypt</code>, <code>scrypt</code>, <code>pbkdf2-sha256</code>, <code>pbkdf2-sha512</code>. argon2: <code>memory</code> (KiB), <code>time</code>, <code>parallelism</code>; bcrypt: <code>cost</code> 4..31; scrypt: <code>n</code> (power of two), <code>r</code>, <code>p</code>; PBKDF2: <code>iterations</code>. Returns a PHC string (<code>$argon2id$…</code>, <code>$scrypt$…</code>, <code>$pbkdf2-sha256$…</code>) or bcrypt's <code>$2b$…</code>. Unknown options stop the program."),
+                    ("password.verify(pw, hash, { pepper })", "bool · error", "Detects the algorithm from the hash (<code>$argon2id$</code>, <code>$2a$</code>/<code>$2b$</code>/<code>$2y$</code>, <code>$scrypt$</code>, <code>$pbkdf2-sha256$</code>…); constant-time comparison. A malformed or unsupported hash → error value. Accepts the same options map as <code>hash</code>."),
+                    ("password.needsRehash(hash, options?)", "bool · error", "True when the hash uses another algorithm or weaker parameters than <code>options</code> (default: argon2id with the defaults), or bcrypt <code>$2a$</code>. Check it after a successful login and store a new hash."),
+                    ("password.info(hash)", "map · error", "<code>{ algorithm, version, … }</code> without salt or hash: argon2 <code>memory time parallelism length</code>, bcrypt <code>cost</code>, scrypt <code>n r p length</code>, PBKDF2 <code>iterations length</code>."),
+                    ("password.generate(length = 16, { upper, lower, digits, symbols, excludeAmbiguous })", "str", "From the OS CSPRNG, unbiased, with at least one character of every class chosen (all on by default). <code>symbols</code>: a bool or the set of symbols to use; <code>excludeAmbiguous</code> drops <code>Il1O0o</code>."),
+                    ("password.passphrase(words = 5, sep = \"-\")", "str", "Words from a built-in list of ~1150 (≈10 bits each: 5 words ≈ 50 bits)."),
+                    ("password.strength(pw, [user inputs])", "map", "<code>{ score 0..4, guesses, bits, crackTime, crackTimeOnline, warning, suggestions, estimator }</code>: zxcvbn when built with the <code>network</code> feature, else an entropy estimate on the same scale (<code>estimator</code> says which). Same as <code>security.passwordStrength</code>."),
+                    ("password.algorithms", "list", "The algorithm names <code>hash</code> accepts."),
+                ],
+                "note": "<b>Pepper</b>: with <code>{ pepper }</code> the hashed secret is <code>base64(HMAC-SHA256(pepper, password))</code>. Keep the pepper outside the database (environment, secret store) and pass the same one to <code>verify</code>; losing it makes every peppered hash unverifiable. <b>bcrypt</b> only reads 72 bytes: longer passwords are refused (<code>hash</code> → error value, <code>verify</code> → false) instead of silently truncated — use argon2id, or a pepper (which pre-hashes the password to 44 bytes).",
+                "example": r'''
+import password from "fogu:password"
+const h = password.hash("hunter2")
+print(h.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"), password.verify("hunter2", h), password.verify("hunter3", h))
+const b = password.hash("hunter2", { algorithm: "bcrypt", cost: 10 })
+print(password.info(b), password.needsRehash(b))
+const secret = { pepper: "kept outside the database" }
+const p = password.hash("hunter2", { algorithm: "scrypt", n: 16384, pepper: secret.pepper })
+print(password.verify("hunter2", p, secret), password.verify("hunter2", p))
+const [_, err] = password.verify("hunter2", "not a hash")
+print(err)
+print(len(password.generate()), len(password.generate(24, { symbols: false })), password.passphrase(4).split("-").len())
+print(password.strength("password").score, password.strength("correct horse battery staple 9!").score)
 ''',
                 "run": True,
             }

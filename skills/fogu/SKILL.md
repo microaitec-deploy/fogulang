@@ -169,6 +169,7 @@ panic`, and the `Fogu` object: `Fogu.file(path).text()/.json()/.write(s)`,
 | cloud, mail, LLMs, SSH | `fogu:s3` `fogu:mail` `fogu:ai` `fogu:ssh` |
 | MCP servers (tools/resources/prompts for Claude) and MCP clients | `fogu:ai` (`ai.mcpServer`, `ai.mcpClient`) |
 | regex, crypto, JWT, logging | `fogu:regex` `fogu:crypto` `fogu:jwt` `fogu:log` |
+| store and check passwords (argon2id, bcrypt, scrypt, PBKDF2), upgrade old hashes, random passwords | `fogu:password` (`password.hash(pw)`, `password.verify(pw, h)?`, `password.needsRehash(h)`, `password.generate(20)`) |
 | terminal UI and argument parsing | `fogu:cli` |
 | run Fogu code at run time (also concurrently: `vm.spawn`), native C libraries | `fogu:vm` `fogu:ffi` |
 | embed Fogu in another program (C API, `.so`/`.dll`) | `cargo ffi` → `libfogu_rt`, `ffi/fogu.h`; `Fogu.host.emit` |
