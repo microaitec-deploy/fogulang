@@ -1,5 +1,5 @@
 //! Language-level modules of the standard library (always built): time, sync,
-//! cron, log, regex, crypto, vm, the `Fogu` object, signals, CLI helpers, FFI.
+//! cron, log, regex, crypto, password, vm, the `Fogu` object, signals, CLI helpers, FFI.
 
 pub mod time;
 pub mod types;
@@ -8,6 +8,7 @@ pub mod cron;
 pub mod log;
 pub mod regex;
 pub mod crypto;
+pub mod password;
 pub mod vm;
 pub mod fogu_global;
 #[cfg(not(target_family = "wasm"))]

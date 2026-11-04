@@ -8,6 +8,19 @@ be incompatible changes (spec §75).
 
 ### Added
 
+- `fogu:password` — password storage: `hash(pw, { algorithm, … })` with argon2id (default,
+  OWASP m=19456 KiB t=2 p=1), argon2i/argon2d, bcrypt (cost 12), scrypt (N=2^17 r=8 p=1) and
+  PBKDF2-SHA256/512 (600 000 / 210 000 iterations), always with a random salt; `verify(pw, hash)`
+  detects the algorithm from the PHC/MCF string (constant-time; a malformed hash is an error
+  value); `needsRehash(hash, options?)` to upgrade hashes on login; `info(hash)`; an optional
+  `pepper` (`base64(HMAC-SHA256(pepper, pw))` is hashed). bcrypt refuses passwords over 72
+  bytes instead of truncating them. Hashing runs off the interpreter thread, so `fg` tasks keep
+  running. Also `generate(length, { upper, lower, digits, symbols, excludeAmbiguous })`
+  (CSPRNG, one of each class), `passphrase(words, sep)` (built-in list of ~1150 words) and
+  `strength(pw)` (zxcvbn with the `network` feature, else an entropy estimate on the same
+  0..4 scale). `crypto.hashPassword`/`verifyPassword` now use it (still argon2id; `verifyPassword`
+  accepts every algorithm above) and `security.passwordStrength` is `password.strength`.
+
 - `fogu check` is much more useful: it accepts folders (recursive; skips hidden folders,
   `node_modules`, `target`, `dist`, `fogu_modules`), reports **every** error of a file, and has
   `--help`, `--json` (file, line, column, severity, code, message, help), `--strict` /

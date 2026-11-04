@@ -8,7 +8,7 @@
 //! print(crypto.hmac("sha256", "key", "message"))
 //! const box = crypto.encrypt("secret data", "my password")      // AES-256-GCM, base64 text
 //! print(crypto.decrypt(box, "my password")?)        // error value with a wrong key
-//! const h = crypto.hashPassword("hunter2")           // argon2id (PHC string)
+//! const h = crypto.hashPassword("hunter2")           // argon2id (PHC string); more in fogu:password
 //! print(crypto.verifyPassword("hunter2", h))         // true
 //! print(crypto.uuid(), crypto.randomHex(16), crypto.randomInt(1, 6))
 //! print(crypto.uuidv7(), crypto.uuidv5("dns", "example.com"))  // time-ordered · name-based
@@ -339,24 +339,19 @@ fn decrypt(a: &[Value]) -> Result<Value, String> {
     as_text_or_bytes(plain, a.get(2))
 }
 
+/// argon2id with the default (OWASP) parameters; `fogu:password` has the other algorithms.
 fn hash_password(a: &[Value]) -> Result<Value, String> {
-    use argon2::password_hash::{PasswordHasher, SaltString};
     max_args(a, 1, "hashPassword")?;
     let pw = str_arg(a, 0, "hashPassword")?;
-    let salt = SaltString::encode_b64(&random(16)?).map_err(|e| io_err!("crypto.hashPassword: {}", e))?;
-    let h = argon2::Argon2::default()
-        .hash_password(pw.as_bytes(), &salt)
-        .map_err(|e| io_err!("crypto.hashPassword: {}", e))?;
-    Ok(Value::Str(h.to_string().into()))
+    crate::native::password::hash_default(pw, "crypto.hashPassword")
 }
 
+/// Any hash `password.verify` understands (argon2, bcrypt, scrypt, PBKDF2).
 fn verify_password(a: &[Value]) -> Result<Value, String> {
-    use argon2::password_hash::{PasswordHash, PasswordVerifier};
     max_args(a, 2, "verifyPassword")?;
     let pw = str_arg(a, 0, "verifyPassword")?;
     let stored = str_arg(a, 1, "verifyPassword")?;
-    let parsed = PasswordHash::new(&stored).map_err(|_| io_err!("crypto.verifyPassword: not a password hash"))?;
-    Ok(Value::Bool(argon2::Argon2::default().verify_password(pw.as_bytes(), &parsed).is_ok()))
+    crate::native::password::verify_default(pw, stored, "crypto.verifyPassword")
 }
 
 #[cfg(test)]
