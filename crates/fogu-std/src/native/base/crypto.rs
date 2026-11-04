@@ -14,6 +14,7 @@
 //! print(crypto.uuidv7(), crypto.uuidv5("dns", "example.com"))  // time-ordered · name-based
 //! print(crypto.base64("olá"), crypto.fromBase64("b2zDoQ=="))
 //! print(crypto.hashFile("sha256", "app.exe"))                // a file's digest (hex)
+//! crypto.encryptFile("photo.jpg", "photo.jpg.enc", "my password")?   // and decryptFile(enc, out, key)
 //! ```
 
 use std::cell::RefCell;
@@ -36,6 +37,8 @@ pub fn build() -> ModuleValue {
     };
     f("hash", 2, hash);
     f("hashFile", 2, hash_file);
+    f("encryptFile", 3, encrypt_file);
+    f("decryptFile", 3, decrypt_file);
     f("hmac", 3, hmac_fn);
     f("encrypt", 2, encrypt);
     f("decrypt", 2, decrypt);
@@ -350,6 +353,60 @@ fn decrypt(a: &[Value]) -> Result<Value, String> {
         .decrypt(&Nonce::try_from(nonce).expect("12-byte nonce"), ct)
         .map_err(|_| io_err!("crypto.decrypt: wrong key or corrupted data"))?;
     as_text_or_bytes(plain, a.get(2))
+}
+
+/// The encrypted form of `data` (VERSION, salt, nonce, ciphertext + tag), raw bytes.
+fn seal(data: &[u8], secret: &str, what: &str) -> Result<Vec<u8>, String> {
+    if secret.is_empty() {
+        return Err(format!("{}: the key cannot be empty", what));
+    }
+    let salt = random(16)?;
+    let nonce = random(12)?;
+    let cipher = Aes256Gcm::new_from_slice(&key_for(secret, &salt)?).unwrap();
+    let ct = cipher.encrypt(&Nonce::try_from(&nonce[..]).expect("12-byte nonce"), data).map_err(|_| io_err!("crypto.{} failed", what))?;
+    let mut out = vec![VERSION];
+    out.extend(salt);
+    out.extend(nonce);
+    out.extend(ct);
+    Ok(out)
+}
+
+/// The data of a [`seal`]ed box; a wrong key or altered data is an error value.
+fn open_box(raw: &[u8], secret: &str, what: &str) -> Result<Vec<u8>, String> {
+    if raw.len() < 1 + 16 + 12 + 16 || raw[0] != VERSION {
+        return Err(io_err!("crypto.{}: the data was not made by crypto.encrypt / encryptFile", what));
+    }
+    let (salt, rest) = raw[1..].split_at(16);
+    let (nonce, ct) = rest.split_at(12);
+    let cipher = Aes256Gcm::new_from_slice(&key_for(secret, salt)?).unwrap();
+    cipher
+        .decrypt(&Nonce::try_from(nonce).expect("12-byte nonce"), ct)
+        .map_err(|_| io_err!("crypto.{}: wrong key or corrupted data", what))
+}
+
+/// `encryptFile(src, dst, key)` → bytes written: any file (binary too),
+/// AES-256-GCM with a key derived from `key`, the format of `encrypt` without base64.
+fn encrypt_file(a: &[Value]) -> Result<Value, String> {
+    max_args(a, 3, "encryptFile")?;
+    let src = str_arg(a, 0, "encryptFile")?;
+    let dst = str_arg(a, 1, "encryptFile")?;
+    let secret = str_arg(a, 2, "encryptFile")?;
+    let data = std::fs::read(&src).map_err(|e| io_err!("crypto.encryptFile: {}: {}", src, e))?;
+    let out = seal(&data, &secret, "encryptFile")?;
+    std::fs::write(&dst, &out).map_err(|e| io_err!("crypto.encryptFile: {}: {}", dst, e))?;
+    Ok(Value::Int(out.len() as i64))
+}
+
+/// `decryptFile(src, dst, key)` → bytes written; a wrong key or altered file is an error value (nothing is written).
+fn decrypt_file(a: &[Value]) -> Result<Value, String> {
+    max_args(a, 3, "decryptFile")?;
+    let src = str_arg(a, 0, "decryptFile")?;
+    let dst = str_arg(a, 1, "decryptFile")?;
+    let secret = str_arg(a, 2, "decryptFile")?;
+    let raw = std::fs::read(&src).map_err(|e| io_err!("crypto.decryptFile: {}: {}", src, e))?;
+    let plain = open_box(&raw, &secret, "decryptFile")?;
+    std::fs::write(&dst, &plain).map_err(|e| io_err!("crypto.decryptFile: {}: {}", dst, e))?;
+    Ok(Value::Int(plain.len() as i64))
 }
 
 /// argon2id with the default (OWASP) parameters; `fogu:password` has the other algorithms.

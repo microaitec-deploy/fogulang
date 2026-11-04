@@ -15,6 +15,7 @@ be incompatible changes (spec §75).
   `embed::Runtime::run_file` reads through it; `toolkit::build::embedded_in_memory()` extracts a
   bundle without writing the program's own `.fg` files (the desktop host runs apps this way).
 - `crypto.hashFile(algo, path, { base64 })` — the digest of a file's bytes (executables, archives).
+- `crypto.encryptFile(src, dst, key)` / `crypto.decryptFile(src, dst, key)` — files (binary too), AES-256-GCM, the format of `crypto.encrypt` without base64; a wrong key writes nothing.
 - Several `embed::Runtime`s in one process run in parallel, each with its own globals (tested).
 - `fogu desktop ci` — writes a GitHub Actions workflow that builds a desktop app on Windows, macOS
   and Linux runners (libs/desktop `ci.fg`).

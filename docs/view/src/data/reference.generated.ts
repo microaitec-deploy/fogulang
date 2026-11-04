@@ -1254,6 +1254,11 @@ export const REFERENCE: Record<string, RefData> = {
       "<code>md5 sha1 sha256 sha384 sha512</code>; hex by default."
      ],
      [
+      "crypto.encryptFile(src, dst, key) · crypto.decryptFile(src, dst, key)",
+      "int · error",
+      "Any file, binary too: AES-256-GCM with a key derived from <code>key</code> (the format of <code>encrypt</code>, without base64); returns the bytes written. A wrong key or an altered file is an error value and nothing is written."
+     ],
+     [
       "crypto.hashFile(algo, path, { base64 })",
       "str · error",
       "The digest of a file's bytes (executables, archives: files <code>fs.readText</code> cannot read). Missing file → error value."
@@ -2626,7 +2631,7 @@ export const REFERENCE: Record<string, RefData> = {
      ]
     ],
     "example": "import socketio from \"fogu:socketio\"\nconst log = []\nconst io = socketio.server()\nio.on(\"connection\", fn(socket) {\n    socket.join(\"lobby\")\n    socket.on(\"chat\", fn(msg, ack) {\n        io.to(\"lobby\").emit(\"chat\", \"echo:\" + msg)\n        if ack != nil { ack({ ok: true }) }\n    })\n    socket.on(\"disconnect\", fn(reason) { log.push(\"bye\") })\n})\nconst port = io.listen(\"127.0.0.1:0\")\n\nconst got = []\nconst c = socketio.connect(\"http://127.0.0.1:\" + str(port), { auth: { token: \"t1\" } })?\nc.on(\"chat\", fn(m) { got.push(m) })\nc.emit(\"chat\", \"hi\")\nprint(c.emitWithAck(\"chat\", \"ack me\", { timeout: 2s })?)\nFogu.sleep(200ms)\nc.disconnect()\nFogu.sleep(200ms)\nprint(got, log)\nio.close()",
-    "output": "{ok: true}\n[echo:hi, echo:ack me] [bye]",
+    "output": "{ok: true}\n[echo:ack me, echo:hi] [bye]",
     "outputTitle": "output"
    }
   ]

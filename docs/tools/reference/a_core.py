@@ -735,6 +735,7 @@ print(regex.findAll("v1.2 and v3.10", "\\d+\\.\\d+").map((x) => x.text))
             {
                 "api": [
                     ("crypto.hash(algo, data, { base64 })", "str", "<code>md5 sha1 sha256 sha384 sha512</code>; hex by default."),
+                    ("crypto.encryptFile(src, dst, key) · crypto.decryptFile(src, dst, key)", "int · error", "Any file, binary too: AES-256-GCM with a key derived from <code>key</code> (the format of <code>encrypt</code>, without base64); returns the bytes written. A wrong key or an altered file is an error value and nothing is written."),
                     ("crypto.hashFile(algo, path, { base64 })", "str · error", "The digest of a file's bytes (executables, archives: files <code>fs.readText</code> cannot read). Missing file → error value."),
                     ("crypto.hmac(algo, key, data, { base64 })", "str", ""),
                     ("crypto.encrypt(data, key)", "str", "AES-256-GCM; <code>key</code> is a password (argon2id) or 64 hex chars. Base64 output with salt and nonce."),

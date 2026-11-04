@@ -61,3 +61,8 @@ import fs from "fogu:fs"
 fs.writeText(Fogu.asset("hashfile.tmp.txt"), "abc")?
 print(crypto.hashFile("sha256", Fogu.asset("hashfile.tmp.txt")) == crypto.hash("sha256", "abc"))
 print(typeof(crypto.hashFile("sha256", Fogu.asset("missing.tmp.txt"))))
+// crypto.encryptFile / decryptFile: files, AES-256-GCM
+fs.writeText(Fogu.asset("plain.tmp.txt"), "olá, mundo")?
+print(crypto.encryptFile(Fogu.asset("plain.tmp.txt"), Fogu.asset("box.tmp.bin"), "pw")? == len(bytes("olá, mundo")) + 45)
+print(crypto.decryptFile(Fogu.asset("box.tmp.bin"), Fogu.asset("back.tmp.txt"), "pw")?, fs.readText(Fogu.asset("back.tmp.txt"))?)
+print(typeof(crypto.decryptFile(Fogu.asset("box.tmp.bin"), Fogu.asset("bad.tmp.txt"), "wrong")), fs.exists(Fogu.asset("bad.tmp.txt")))

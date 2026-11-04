@@ -27,3 +27,6 @@ ERROR to a file
 off
 true
 error
+true
+11 olá, mundo
+error false
