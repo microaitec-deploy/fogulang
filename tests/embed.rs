@@ -47,3 +47,27 @@ n"#).unwrap(), "300");
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 303);
     assert!(rt.register("1bad", reverse, 0).is_err());
 }
+
+/// Sources kept in memory over a real folder (the desktop host's bundles):
+/// imports between them resolve, the folder's other files are read from disk.
+#[test]
+fn sources_in_memory_over_a_folder() {
+    let dir = std::env::temp_dir().join(format!("fogu-embed-vfs-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("data")).unwrap();
+    std::fs::write(dir.join("data").join("n.txt"), "41").unwrap();
+    fogu::runtime::vfs::install_at(
+        &dir,
+        [
+            ("main.fg".to_string(), "import fs from \"fogu:fs\"\nimport lib from \"./lib/add.fg\"\nlet answer = lib.add(int(fs.readText(root + \"/data/n.txt\")?), 1)".to_string()),
+            ("lib/add.fg".to_string(), "export fn add(a, b) { return a + b }".to_string()),
+        ],
+    );
+    assert!(!dir.join("main.fg").exists());
+    let rt = Runtime::new().unwrap();
+    rt.set("root", &serde_json::to_string(&dir.to_string_lossy()).unwrap()).unwrap();
+    rt.run_file(&dir.join("main.fg").to_string_lossy()).unwrap();
+    assert_eq!(rt.eval("answer").unwrap(), "42");
+    drop(rt);
+    fogu::runtime::vfs::clear();
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -10,6 +10,12 @@ be incompatible changes (spec §75).
 
 ### Added
 
+- Embedding: `runtime::vfs::install_at(folder, files)` lays in-memory sources over a real folder (a
+  virtual file wins over the disk; the folder's other files stay on disk), `vfs::clear()`;
+  `embed::Runtime::run_file` reads through it; `toolkit::build::embedded_in_memory()` extracts a
+  bundle without writing the program's own `.fg` files (the desktop host runs apps this way).
+- `fogu desktop ci` — writes a GitHub Actions workflow that builds a desktop app on Windows, macOS
+  and Linux runners (libs/desktop `ci.fg`).
 - `fogu:webrtc` (feature `network`, not on WebAssembly) — peer-to-peer data channels with other
   Fogu programs and with browsers, on str0m (sans-IO ICE/DTLS/SCTP, RustCrypto DTLS): `webrtc.peer({
   iceServers, hosts, port, disconnectTimeout })` gathers host and STUN candidates up front, so one

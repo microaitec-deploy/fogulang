@@ -1096,7 +1096,26 @@ pub struct Embedded {
 pub fn embedded() -> Option<Result<Embedded, String>> {
     let exe = std::env::current_exe().ok()?;
     let bytes = read_tail(&exe)?;
-    Some(extract(&bytes))
+    Some(extract(&bytes, false))
+}
+
+/// Like [`embedded`], but the program's own Fogu sources (the `.fg` files
+/// outside `fogu_modules/`) are not written to disk: they are installed in
+/// the in-memory file system (`runtime::vfs`) laid over the extracted folder,
+/// which only receives the other files (assets, packages, fogu.json). Used by
+/// hosts that embed the runtime (the desktop host); the runtime must run in
+/// this process.
+#[cfg(not(target_family = "wasm"))]
+pub fn embedded_in_memory() -> Option<Result<Embedded, String>> {
+    let exe = std::env::current_exe().ok()?;
+    let bytes = read_tail(&exe)?;
+    Some(extract(&bytes, true))
+}
+
+/// Whether a bundle file stays in memory with `embedded_in_memory`.
+#[cfg(not(target_family = "wasm"))]
+fn kept_in_memory(rel: &str) -> bool {
+    rel.ends_with(".fg") && !rel.starts_with("fogu_modules/")
 }
 
 #[cfg(target_family = "wasm")]
@@ -1127,20 +1146,39 @@ fn read_tail(exe: &Path) -> Option<Vec<u8>> {
     Some(payload)
 }
 
-fn extract(payload: &[u8]) -> Result<Embedded, String> {
+fn extract(payload: &[u8], memory: bool) -> Result<Embedded, String> {
     let j: Json = serde_json::from_slice(payload).map_err(|e| format!("corrupted bundle: {}", e))?;
     let entry = j["entry"].as_str().ok_or("corrupted bundle: no entry")?.to_string();
     let service = super::service::ServiceSpec::from_json(&j["service"], j["name"].as_str().unwrap_or("app"))
         .map_err(|e| format!("corrupted bundle: {}", e))?;
     let files = j["files"].as_object().ok_or("corrupted bundle: no files")?;
 
-    let hash: String = Sha256::digest(payload).iter().take(8).map(|b| format!("{:02x}", b)).collect();
+    let mut hash: String = Sha256::digest(payload).iter().take(8).map(|b| format!("{:02x}", b)).collect();
+    if memory {
+        // never the folder of an extraction that wrote the sources
+        hash.push_str("-m");
+    }
     let dir = std::env::temp_dir().join("fogu-bundles").join(hash);
     let done = dir.join(".complete");
+    if memory {
+        let mut kept = Vec::new();
+        for (rel, content) in files {
+            if kept_in_memory(rel) {
+                if rel.split('/').any(|c| c == ".." || c.is_empty()) {
+                    return Err(format!("corrupted bundle: invalid path '{}'", rel));
+                }
+                kept.push((rel.clone(), content.as_str().unwrap_or_default().to_string()));
+            }
+        }
+        crate::runtime::vfs::install_at(&dir, kept);
+    }
     if !done.is_file() {
         for (rel, content) in files {
             if rel.split('/').any(|c| c == ".." || c.is_empty()) {
                 return Err(format!("corrupted bundle: invalid path '{}'", rel));
+            }
+            if memory && kept_in_memory(rel) {
+                continue;
             }
             let p = dir.join(rel);
             if let Some(parent) = p.parent() {

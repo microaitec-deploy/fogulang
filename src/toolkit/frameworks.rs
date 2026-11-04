@@ -17,6 +17,8 @@ const DESKTOP_HELP: &str = "fogu desktop — desktop apps: a Tauri window whose 
                                          the executable in <dir>/dist/
   fogu desktop build [dir] --android|--ios [--apk] [--aab] [--mobile-target aarch64,…] [--debug] [--check] [--reinit]
                                          a mobile package (experimental; --check lists the missing tools)
+  fogu desktop ci [dir] [--os windows,macos,linux] [--installer]
+                                         a GitHub Actions workflow that builds every OS
   fogu desktop update                    install the latest desktop library
   fogu desktop path                      where the library is
 
@@ -71,6 +73,7 @@ pub fn desktop(args: &[String]) -> i32 {
         "create" | "new" | "init" => "create.fg",
         "dev" => "dev.fg",
         "build" => "build.fg",
+        "ci" => "ci.fg",
         "update" | "upgrade" => return update("desktop"),
         "path" | "where" => {
             return match library("desktop", false) {
@@ -117,7 +120,7 @@ pub fn desktop(args: &[String]) -> i32 {
 
 /// Whether `a` is the value of a flag that takes one (`--target windows`).
 fn is_flag_value(argv: &[String], a: &str) -> bool {
-    const WITH_VALUE: &[&str] = &["--target", "--port", "--host", "--features", "--template", "--title", "--identifier"];
+    const WITH_VALUE: &[&str] = &["--target", "--port", "--host", "--features", "--template", "--title", "--identifier", "--os", "--server"];
     argv.windows(2).any(|w| WITH_VALUE.contains(&w[0].as_str()) && w[1] == a)
 }
 

@@ -195,7 +195,12 @@ fn serve(interp: &Interpreter, rx: Receiver<Cmd>) {
                 let _ = r.send(result_of(out));
             }
             Cmd::RunFile(path, r) => {
-                let out = std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path, e)).and_then(|src| {
+                // a source kept in memory (runtime/vfs.rs) wins over the disk
+                let src = match crate::runtime::vfs::read(Path::new(&path)) {
+                    Some(s) => Ok(s),
+                    None => std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path, e)),
+                };
+                let out = src.and_then(|src| {
                     let dir = Path::new(&path).parent().map(|d| d.to_path_buf()).unwrap_or_default();
                     let dir = if dir.as_os_str().is_empty() { std::env::current_dir().unwrap_or_default() } else { dir };
                     interp.set_base_dir(&dir);
