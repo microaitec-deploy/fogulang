@@ -15,10 +15,15 @@ package fogu
 #include "fogu.h"
 
 extern void foguGoHost(char *name, char *json, void *user);
+extern char *foguGoFn(char *args, void *user);
 
 // the cgo.Handle travels as an integer: C must not keep Go pointers
 static char *fogu_on_host_go(FoguRuntime *rt, uintptr_t handle) {
 	return fogu_on_host(rt, (fogu_host_fn)foguGoHost, (void *)handle);
+}
+
+static char *fogu_register_go(FoguRuntime *rt, const char *name, uintptr_t handle) {
+	return fogu_register(rt, name, (fogu_native_fn)foguGoFn, (void *)handle);
 }
 */
 import "C"
@@ -37,6 +42,7 @@ type Runtime struct {
 	mu       sync.Mutex
 	handlers map[string][]func(json.RawMessage)
 	handle   cgo.Handle
+	funcs    []cgo.Handle
 }
 
 // Version of the Fogu runtime.
@@ -177,6 +183,53 @@ func foguGoHost(name *C.char, js *C.char, user unsafe.Pointer) {
 	}
 }
 
+// Func is a Go function the Fogu program can call (see Register).
+type Func func(args []json.RawMessage) (any, error)
+
+// Register defines the global function name in the program: calling it from
+// Fogu runs fn with the arguments as JSON and returns its result (encoded as
+// JSON); a non-nil error becomes an error value in Fogu. fn runs on the
+// runtime's thread, synchronously: it must not call back into this Runtime.
+func (r *Runtime) Register(name string, fn Func) error {
+	h := cgo.NewHandle(fn)
+	n := cstr(name)
+	defer C.free(unsafe.Pointer(n))
+	if _, err := take(C.fogu_register_go(r.rt, n, C.uintptr_t(h))); err != nil {
+		h.Delete()
+		return err
+	}
+	r.mu.Lock()
+	r.funcs = append(r.funcs, h)
+	r.mu.Unlock()
+	return nil
+}
+
+//export foguGoFn
+func foguGoFn(args *C.char, user unsafe.Pointer) *C.char {
+	fn := cgo.Handle(uintptr(user)).Value().(Func)
+	var in []json.RawMessage
+	reply := func(s string, isErr bool) *C.char {
+		c := cstr(s)
+		defer C.free(unsafe.Pointer(c))
+		if isErr {
+			return C.fogu_error(c)
+		}
+		return C.fogu_string(c)
+	}
+	if err := json.Unmarshal([]byte(C.GoString(args)), &in); err != nil {
+		return reply(err.Error(), true)
+	}
+	out, err := fn(in)
+	if err != nil {
+		return reply(err.Error(), true)
+	}
+	js, err := json.Marshal(out)
+	if err != nil {
+		return reply(err.Error(), true)
+	}
+	return reply(string(js), false)
+}
+
 // Close stops the program's tasks and servers and frees the runtime.
 func (r *Runtime) Close() {
 	if r.rt != nil {
@@ -187,4 +240,8 @@ func (r *Runtime) Close() {
 		r.handle.Delete()
 		r.handle = 0
 	}
+	for _, h := range r.funcs {
+		h.Delete()
+	}
+	r.funcs = nil
 }

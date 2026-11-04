@@ -19,7 +19,7 @@ use std::rc::Rc;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 
-use crate::native::host::HostCallback;
+use crate::native::host::{HostCallback, HostFn};
 use crate::runtime::value::{Value, ERR_VALUE_PREFIX};
 use crate::runtime::{sched, Interpreter, Lexer, Parser, MAIN_STACK};
 
@@ -34,6 +34,7 @@ enum Cmd {
     Set(String, String, Reply),
     Emit(String, String, Reply),
     Host(Option<(HostCallback, usize)>, Reply),
+    Register(String, HostFn, usize, Reply),
     Stop,
 }
 
@@ -138,6 +139,12 @@ impl Runtime {
     pub fn on_host(&self, cb: Option<HostCallback>, user: usize) -> Result<String, String> {
         self.ask(|r| Cmd::Host(cb.map(|c| (c, user)), r))
     }
+
+    /// Defines the global function `name`: calling it passes the arguments as a JSON
+    /// array to `cb` and returns its answer (see `native::host::call_host_fn`).
+    pub fn register(&self, name: &str, cb: HostFn, user: usize) -> Result<String, String> {
+        self.ask(|r| Cmd::Register(name.to_string(), cb, user, r))
+    }
 }
 
 impl Drop for Runtime {
@@ -228,6 +235,16 @@ fn serve(interp: &Interpreter, rx: Receiver<Cmd>) {
             Cmd::Host(cb, r) => {
                 crate::native::host::set_callback(cb);
                 let _ = r.send(Ok("null".into()));
+            }
+            Cmd::Register(name, cb, user, r) => {
+                let ok = !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') && !name.starts_with(|c: char| c.is_ascii_digit());
+                let out = if ok {
+                    interp.set_global(&name, crate::native::host::register(&name, cb, user));
+                    Ok("null".to_string())
+                } else {
+                    Err(format!("'{}' is not a valid function name", name))
+                };
+                let _ = r.send(out);
             }
         }
     }

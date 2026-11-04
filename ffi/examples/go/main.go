@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"example.com/fogu-embed/fogu"
@@ -61,7 +62,19 @@ fn primes(limit) {
 		fmt.Println("no event")
 	}
 
-	// 4. Fogu errors come back as Go errors
+	// 4. Go functions the program can call (fogu_register)
+	_ = rt.Register("goUpper", func(args []json.RawMessage) (any, error) {
+		var s string
+		if len(args) != 1 || json.Unmarshal(args[0], &s) != nil {
+			return nil, fmt.Errorf("goUpper(text) expects a text")
+		}
+		return strings.ToUpper(s), nil
+	})
+	v, _ = rt.Eval(`const [bad, err] = goUpper(42)
+[goUpper("fogu"), err.message]`)
+	fmt.Println(string(v)) // ["FOGU","goUpper(text) expects a text"]
+
+	// 5. Fogu errors come back as Go errors
 	if _, err := rt.Eval("1 / 0"); err != nil {
 		fmt.Println("error:", err)
 	}

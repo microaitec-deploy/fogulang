@@ -171,3 +171,47 @@ pub unsafe extern "C" fn fogu_on_host(
 ) -> *mut c_char {
     unsafe { with(rt, |r| r.on_host(cb, user as usize)) }
 }
+
+/// Defines the global function `name` in the program: calling it passes the
+/// arguments as a JSON array to `cb` (on the runtime's thread, synchronously)
+/// and returns its answer. `cb` returns `fogu_string(json)` (the result),
+/// `fogu_error(message)` (an error value in Fogu) or NULL (nil); the runtime
+/// frees that string. `args_json` is only valid during the call.
+///
+/// # Safety
+/// Valid runtime; `name` a NUL-terminated string; `cb` stays callable while the runtime lives.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fogu_register(
+    rt: *mut FoguRuntime,
+    name: *const c_char,
+    cb: Option<extern "C" fn(*const c_char, *mut c_void) -> *mut c_char>,
+    user: *mut c_void,
+) -> *mut c_char {
+    unsafe {
+        with(rt, |r| {
+            let cb = cb.ok_or("fogu_register: NULL callback")?;
+            r.register(&text(name)?, cb, user as usize)
+        })
+    }
+}
+
+/// A copy of `json` for a registered function to return (the runtime frees it).
+///
+/// # Safety
+/// `json` is NULL or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fogu_string(json: *const c_char) -> *mut c_char {
+    let s = unsafe { text(json) }.unwrap_or_default();
+    CString::new(if s.is_empty() { "null".to_string() } else { s }).unwrap_or_default().into_raw()
+}
+
+/// An error for a registered function to return: Fogu receives an error value.
+///
+/// # Safety
+/// `message` is NULL or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fogu_error(message: *const c_char) -> *mut c_char {
+    let mut b = vec![fogu::native::host::ERROR_MARK];
+    b.extend(unsafe { text(message) }.unwrap_or_default().into_bytes());
+    CString::new(b).unwrap_or_default().into_raw()
+}

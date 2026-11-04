@@ -25,6 +25,10 @@ impl Host for Std {
             if let Some(id) = crate::native::ffi::ffi_id(&f.name) {
                 return Some(Handled::Native(crate::native::ffi::call_ffi(id, args, it, env)));
             }
+            // a function of the program that embeds this runtime (fogu_register)
+            if let Some(id) = crate::native::host::host_fn_id(&f.name) {
+                return Some(Handled::Native(crate::native::host::call_host_fn(id, args)));
+            }
         }
         // `fogu:vm` runs Fogu code with this interpreter
         if let Some(r) = crate::native::vm::intercept(callee, args, it) {
@@ -92,7 +96,7 @@ impl Host for Std {
             return true;
         }
         #[cfg(not(target_family = "wasm"))]
-        if crate::native::ffi::ffi_id(name).is_some() {
+        if crate::native::ffi::ffi_id(name).is_some() || crate::native::host::host_fn_id(name).is_some() {
             return true;
         }
         false

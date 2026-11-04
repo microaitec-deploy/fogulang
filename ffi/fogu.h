@@ -22,6 +22,12 @@ typedef struct FoguRuntime FoguRuntime;
  * The callback owns `name` and `json`: free them with fogu_free_string(). */
 typedef void (*fogu_host_fn)(char *name, char *json, void *user);
 
+/* A function given to the program with fogu_register: it receives the arguments
+ * as a JSON array (valid during the call) and returns fogu_string(json) — the
+ * result —, fogu_error(message) — an error value in Fogu — or NULL (nil).
+ * It runs on the runtime's thread, synchronously. */
+typedef char *(*fogu_native_fn)(const char *args_json, void *user);
+
 const char  *fogu_version(void);                                   /* static, do not free */
 FoguRuntime *fogu_new(void);                                       /* NULL on failure */
 void         fogu_free(FoguRuntime *rt);                           /* stops tasks and servers */
@@ -35,6 +41,9 @@ char *fogu_get(FoguRuntime *rt, const char *name);
 char *fogu_set(FoguRuntime *rt, const char *name, const char *value_json);
 char *fogu_emit(FoguRuntime *rt, const char *name, const char *data_json);  /* Fogu.signal.on handlers */
 char *fogu_on_host(FoguRuntime *rt, fogu_host_fn cb, void *user);  /* cb NULL removes it */
+char *fogu_register(FoguRuntime *rt, const char *name, fogu_native_fn cb, void *user);  /* a global fn */
+char *fogu_string(const char *json);                               /* results of a fogu_native_fn */
+char *fogu_error(const char *message);
 
 #ifdef __cplusplus
 }

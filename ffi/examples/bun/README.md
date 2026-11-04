@@ -34,3 +34,8 @@ fogu.close();
 A runtime runs on its own thread: its globals, `fg` tasks, servers and signal
 handlers stay alive between calls until `close()`. Values cross as JSON; a Fogu
 error becomes a JavaScript `Error`.
+
+`fogu_register` (a host function the program calls and gets a result from) is not wrapped
+here: the runtime calls it synchronously from its own thread, and a Bun `JSCallback` called
+from another thread cannot return a value. Use `on()` / `emit()` for events, or the C and Go
+APIs for synchronous functions.

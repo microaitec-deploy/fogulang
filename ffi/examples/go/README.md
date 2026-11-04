@@ -24,6 +24,7 @@ v, _ := rt.Call("add", 1, 2)                       // json.RawMessage("3")
 rt.Set("config", map[string]any{"retries": 3})
 rt.On("done", func(d json.RawMessage) { … })       // Fogu.host.emit("done", …)
 rt.Emit("job", map[string]int{"id": 7})            // Fogu.signal.on("job", …)
+rt.Register("goUpper", func(args []json.RawMessage) (any, error) { … })  // goUpper("x") in Fogu
 rt.Spawn(`import http from "fogu:http"; http.serve(8080, fn(req) { return "hi" })`)
 ```
 
