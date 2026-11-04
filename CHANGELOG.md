@@ -8,6 +8,17 @@ be incompatible changes (spec §75).
 
 ### Added
 
+- `fogu:webrtc` (feature `network`, not on WebAssembly) — peer-to-peer data channels with other
+  Fogu programs and with browsers, on str0m (sans-IO ICE/DTLS/SCTP, RustCrypto DTLS): `webrtc.peer({
+  iceServers, hosts, port, disconnectTimeout })` gathers host and STUN candidates up front, so one
+  `createOffer` / `acceptOffer` / `acceptAnswer` exchange connects (trickle with `on("candidate")` /
+  `addCandidate` too); `peer.channel(label, { ordered, maxRetransmits, maxPacketLifeTime })` (get or
+  create), `peer.accept`, `peer.wait(state, timeout)`, `peer.on(state|connected|channel|candidate|close)`;
+  `DataChannel` `send(str | buffer)`, `recv(timeout?)`, `for msg in ch`, `on(open|message|close)`,
+  `wait`, `close`. Signaling: `webrtc.signaling(app, path)` (WebSocket rooms on a `fogu:web` app, plus the
+  browser client `FoguRTC` at `<path>/client.js`), `webrtc.signalingServer(port)`,
+  `webrtc.connect(url, room)`, and one-POST `webrtc.serveHttp` / `webrtc.connectHttp`. Example
+  `examples/webrtc_chat.fg`.
 - More `export` forms: `export { a, b as c }` (names already declared: maps, struct types and
   instances, functions, imported names — the value at that point), `export const [a, b] = …`,
   `export default <expr>` / `export default fn f() {}` / `export default struct S {}`, and

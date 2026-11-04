@@ -1,0 +1,236 @@
+// The signaling helpers of fogu:webrtc, run once per interpreter by webrtc.rs:
+// `newPeer` is webrtc.peer and CLIENT_JS the browser client (webrtc_client.js).
+// The value of the last line is the map of helpers the module exports.
+//
+// Signaling protocol (JSON text over a WebSocket):
+//   client → server  { type: "join", room }
+//                    { type: "offer" | "answer" | "candidate" | …, to?, … }  relayed to `to`
+//                                                                          (or to every other member)
+//   server → client  { type: "joined", id, room, peers: [ids already there] }
+//                    { type: "peer", id }    someone joined the room
+//                    { type: "leave", id }   someone left
+//                    relayed messages carry `from`
+import json from "fogu:json"
+import web from "fogu:web"
+import http from "fogu:http"
+import websocket from "fogu:websocket"
+
+// --- server -------------------------------------------------------------------
+
+const signaling = fn(app, path) {
+    const base = path ?? "/rtc"
+    const rooms = {}
+    const ids = { next: 0 }
+    app.get(base + "/client.js", fn(ctx) {
+        return web.text(CLIENT_JS, { headers: { "content-type": "application/javascript; charset=utf-8" } })
+    })
+    app.ws(base, fn(conn, ctx) {
+        ids.next = ids.next + 1
+        const id = "p" + str(ids.next)
+        let room = nil
+        while true {
+            const [m, err] = conn.next()
+            if err != nil || m == nil { break }
+            const [msg, perr] = json.parse(m.data)
+            if perr != nil || typeof(msg) != "map" { continue }
+            if msg.type == "join" {
+                if room == nil && typeof(msg.room) == "str" {
+                    room = msg.room
+                    if !rooms.has(room) { rooms[room] = {} }
+                    const members = rooms[room]
+                    const others = members.keys()
+                    conn.send({ type: "joined", id: id, room: room, peers: others })
+                    for other in others { members[other].send({ type: "peer", id: id }) }
+                    members[id] = conn
+                }
+            } else if room != nil {
+                msg.from = id
+                const members = rooms[room]
+                if msg.to != nil {
+                    if members.has(msg.to) { members[msg.to].send(msg) }
+                } else {
+                    for other in members.keys() {
+                        if other != id { members[other].send(msg) }
+                    }
+                }
+            }
+        }
+        if room != nil {
+            const members = rooms[room]
+            members.remove(id)
+            for other in members.keys() { members[other].send({ type: "leave", id: id }) }
+            if members.len() == 0 { rooms.remove(room) }
+        }
+    })
+    return app
+}
+
+const signalingServer = fn(port, opts) {
+    const o = opts ?? {}
+    const app = web.app()
+    signaling(app, o.path ?? "/rtc")
+    app.listen(port, { host: o.host ?? "127.0.0.1", quiet: true })?
+    return app
+}
+
+// --- client -------------------------------------------------------------------
+
+// the next JSON message (a map), nil on timeout or when the connection ends
+const nextJson = fn(ws, timeout) {
+    while true {
+        const [m, err] = ws.next(timeout)
+        if err != nil || m == nil { return nil }
+        const [msg, perr] = json.parse(m.data)
+        if perr == nil && typeof(msg) == "map" { return msg }
+    }
+}
+
+// connect(signalUrl, room, opts?) → a connected Peer whose first channel (`label`) is open.
+// The first peer in the room waits for the second, which makes the offer.
+const connect = fn(url, room, opts) {
+    const o = opts ?? {}
+    const label = o.label ?? "data"
+    const ws = websocket.connect(url)?
+    ws.send({ type: "join", room: room })
+    const joined = nextJson(ws, 10s)
+    if joined == nil || joined.type != "joined" {
+        ws.close()
+        return nil, error("webrtc.connect: no answer from the signaling server at " + url)
+    }
+    const [peer, perr] = newPeer(o)
+    if perr != nil {
+        ws.close()
+        return nil, perr
+    }
+    const fail = fn(msg) {
+        ws.close()
+        peer.close()
+        return error("webrtc.connect: " + msg)
+    }
+    const caller = joined.peers.len() > 0
+    let partner = nil
+    if caller {
+        partner = joined.peers[0]
+        peer.channel(label, o.channel)
+        const [offer, oerr] = peer.createOffer()
+        if oerr != nil { return nil, fail(oerr.message) }
+        ws.send({ type: "offer", to: partner, sdp: offer })
+        while true {
+            const m = nextJson(ws, o.timeout ?? 30s)
+            if m == nil { return nil, fail("no answer from the other peer") }
+            if m.from == partner {
+                if m.type == "answer" {
+                    const [_, aerr] = peer.acceptAnswer(m.sdp)
+                    if aerr != nil { return nil, fail(aerr.message) }
+                    break
+                }
+                if m.type == "candidate" { peer.addCandidate(m.candidate) }
+                if m.type == "leave" { return nil, fail("the other peer left") }
+            }
+        }
+    } else {
+        while true {
+            const m = nextJson(ws, o.timeout)
+            if m == nil { return nil, fail("nobody else joined room '" + room + "'") }
+            if m.type == "offer" {
+                partner = m.from
+                const [answer, aerr] = peer.acceptOffer(m.sdp)
+                if aerr != nil { return nil, fail(aerr.message) }
+                ws.send({ type: "answer", to: partner, sdp: answer })
+                break
+            }
+        }
+    }
+    // candidates the other side trickles while the checks run
+    fg fn() {
+        while true {
+            const m = nextJson(ws, nil)
+            if m == nil { break }
+            if m.type == "candidate" && m.from == partner { peer.addCandidate(m.candidate) }
+        }
+    }()
+    const [_, werr] = peer.wait("connected", o.connectTimeout ?? 15s)
+    if werr != nil { return nil, fail(werr.message) }
+    // the first channel, open on both sides
+    let ch = nil
+    if caller {
+        ch = peer.channel(label)
+    } else {
+        ch = peer.accept(10s)
+        if ch == nil { return nil, fail("the other peer opened no channel") }
+    }
+    const [_, cerr] = ch.wait(10s)
+    if cerr != nil { return nil, fail(cerr.message) }
+    ws.close()
+    return peer
+}
+
+// --- HTTP-only signaling (one POST: offer → answer, like WHIP) ------------------
+
+const serveHttp = fn(app, path, handler, opts) {
+    app.post(path, fn(ctx) {
+        const [peer, perr] = newPeer(opts)
+        if perr != nil { return web.text(perr.message, { status: 500 }) }
+        const [answer, aerr] = peer.acceptOffer(ctx.body)
+        if aerr != nil {
+            peer.close()
+            return web.text(aerr.message, { status: 400 })
+        }
+        fg fn() {
+            const [_, werr] = peer.wait("connected", 15s)
+            if werr != nil {
+                peer.close()
+                return
+            }
+            // the caller's first channel, so peer.channel(label) finds it
+            if peer.accept(10s) == nil {
+                peer.close()
+                return
+            }
+            handler(peer)
+        }()
+        return web.text(answer, { status: 201, headers: { "content-type": "application/sdp" } })
+    })
+    return app
+}
+
+const connectHttp = fn(url, opts) {
+    const o = opts ?? {}
+    const peer = newPeer(o)?
+    const ch = peer.channel(o.label ?? "data", o.channel)
+    const offer = peer.createOffer()?
+    const [res, err] = http.post(url, offer, { headers: { "content-type": "application/sdp" }, timeout: 10s })
+    if err != nil {
+        peer.close()
+        return nil, err
+    }
+    if !res.ok {
+        peer.close()
+        return nil, error("webrtc.connectHttp: " + str(res.status) + " " + res.body)
+    }
+    const [_, aerr] = peer.acceptAnswer(res.body)
+    if aerr != nil {
+        peer.close()
+        return nil, aerr
+    }
+    const [_, werr] = peer.wait("connected", o.connectTimeout ?? 15s)
+    if werr != nil {
+        peer.close()
+        return nil, werr
+    }
+    const [_, cerr] = ch.wait(10s)
+    if cerr != nil {
+        peer.close()
+        return nil, cerr
+    }
+    return peer
+}
+
+const helpers = {
+    connect: connect,
+    signaling: signaling,
+    signalingServer: signalingServer,
+    serveHttp: serveHttp,
+    connectHttp: connectHttp,
+}
+helpers

@@ -64,6 +64,9 @@ error: jwt: invalid signature error: jwt: token expired`}
       {/* ================= FOGU:WEBSOCKET (generated: docs/tools/reference) ================= */}
       <RefSection id="mod-websocket" onRun={onRun} />
 
+      {/* ================= FOGU:WEBRTC (generated: docs/tools/reference) ================= */}
+      <RefSection id="mod-webrtc" onRun={onRun} />
+
       {/* ================= FOGU:SOCKETIO (generated: docs/tools/reference) ================= */}
       <RefSection id="mod-socketio" onRun={onRun} />
 

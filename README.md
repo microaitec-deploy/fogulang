@@ -78,7 +78,7 @@ cargo build --release --no-default-features                       # language + f
 cargo build --release --no-default-features --features network,database
 ```
 
-Features: `network` (http, web, websocket, socketio, topcoat, jwt, html, mail,
+Features: `network` (http, web, websocket, webrtc, socketio, topcoat, jwt, html, mail,
 security), `database` (sql, orm, kv, surrealkv, surrealdb, scylla, redis, etcd),
 `messaging` (nats, mqtt, kafka, rabbitmq, bullmq, fogumq, broker), `ops` (ssh, docker,
 service, playbook, s3), `ai` (ai/MCP, plot), `media` (image, webview), `rpc` (grpc, protobuf). `database`
@@ -407,6 +407,7 @@ Each module is evaluated once; cycles are a load error.
 | `fogu:vm` | runs Fogu code at run time (`node:vm` style): `runInNewContext createContext runInContext Script compileFunction`, timeouts | [vm.fg](examples/vm.fg) |
 | `fogu:cli` | terminal: prompts, colors, spinners, progress bars, tables, argument parsing | [cli.fg](examples/cli.fg) |
 | `fogu:websocket` | client (`ws://`, `wss://`) and server: `connect listen accept send next close`; binary frames as `buffer` | [websocket.fg](tests/spec/websocket.fg) |
+| `fogu:webrtc` | peer-to-peer data channels with Fogu or browsers: `peer channel createOffer acceptOffer acceptAnswer send recv`; signaling rooms on a `fogu:web` app (`signaling`, `connect`), one-POST `serveHttp`/`connectHttp`, browser client at `/rtc/client.js` | [webrtc.fg](tests/spec/webrtc.fg) |
 | `fogu:mail` | SMTP (Gmail, Outlook, SES… presets) and Resend, SendGrid, Mailgun, Postmark, Brevo, MailerSend, Mailjet APIs | [mail.fg](examples/mail.fg) |
 | `fogu:ai` | LLMs (OpenAI-compatible, Anthropic, Gemini): `chat stream models embed`, tools, `agent` | [ai.fg](examples/ai.fg) |
 | `fogu:shell` | POSIX-style shell with built-in Linux commands: `run exec text lines json quote cd` | — |

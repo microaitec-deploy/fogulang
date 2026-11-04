@@ -289,6 +289,28 @@
   by the core; `.json5 .yaml .toml .xml .csv` go through the new `Host::load_data` (fogu-std's
   `formats::load_data`), since fogu-core cannot depend on fogu-std.
 
+## `fogu:webrtc` (0.7.3)
+
+- Library: str0m 0.24 (sans-IO ICE/DTLS/SCTP, small, actively maintained) over webrtc-rs (a full
+  async stack with many more crates). Crypto backend `rust-crypto` (dimpl DTLS on RustCrypto, no
+  OpenSSL). Its self-signed DTLS certificate comes from rcgen, which `str0m-rust-crypto` builds with
+  dimpl's `aws-lc-rs` feature: aws-lc-sys (C, built with `cc`; it cross-builds for
+  x86_64-pc-windows-gnu here) is a new native dependency. Release binary: 72.3 MB against 65.2 MB for the previous
+  release build of the main checkout (roughly +7 MB; not measured on the exact same base).
+- Each peer: one tokio UDP socket per local address (default: the default-route address and
+  127.0.0.1, so local peers connect offline), one reader task per socket and a driver task that
+  feeds packets/timeouts to the `Rtc`. The program mutates the `Rtc` under the same mutex and
+  drains `poll_output` before releasing it (str0m's single-mutation contract), then pokes the
+  driver (`Notify`) since the next timeout may have moved. `on` handlers run from a pump task
+  started by the intercepted `webrtc.peer` (it holds an `IoGuard` only while handlers exist).
+- STUN is a small binding request of our own (str0m gathers nothing); browser mDNS candidates
+  (`*.local`) are dropped from SDP and `addCandidate` — browsers are reached through
+  peer-reflexive candidates. The signaling helpers are Fogu code (`webrtc.fg`, run like
+  `ai_mcp.fg`); `for msg in ch` is a `DataChannel` arm in the interpreter's `for`.
+- Browser interop checked with headless Windows Chrome (CDP) against a WSL process: WebSocket
+  rooms with Chrome as caller and as callee, and the HTTP POST variant; text and binary echo,
+  nominated pair `succeeded`; and `examples/webrtc_chat.fg` end to end (page → Fogu → page).
+
 ## Known gaps
 
 - Exports are values taken when the `export` runs, not live bindings: `export let n = 0` (or
@@ -339,6 +361,11 @@
   standalone `websocket.listen` and `io.listen` (Socket.IO) servers have no TLS option yet (serve
   them through `app.listen(port, { tls })` or a proxy); HTTPS is HTTP/1.1 only. A TLS read that
   ends without the peer's `close_notify` is an error value, not `nil`.
+- `fogu:webrtc` has data channels only (no audio/video tracks), no TURN relay (TURN urls in
+  `iceServers` are skipped: peers behind symmetric NATs will not connect), no ICE restart or
+  renegotiation (channels added after the connection need no SDP), IPv4 STUN only, and no
+  `maxPacketLifeTime`/`maxRetransmits` reported back for channels the other side opened.
+  `webrtc.connect` pairs two peers per room (the newcomer calls the first member).
 - `fogu:kafka` has no consumer groups (rskafka does not implement the group protocol):
   consumers keep their own offsets.
 - `fogu:grpc` receives every request of a bidirectional call before running the handler

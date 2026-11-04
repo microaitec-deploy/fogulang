@@ -1,0 +1,69 @@
+// WebRTC chat between a browser and a Fogu peer (fogu:webrtc).
+//
+//   fogu examples/webrtc_chat.fg      then open http://localhost:3000
+//
+// The fogu:web app serves the page, the browser client (/rtc/client.js) and the
+// signaling room (/rtc, a WebSocket). The Fogu peer joins room "chat" and waits;
+// the browser joins and calls it. After that, messages go peer to peer over a
+// data channel — the server only introduced them. Each new browser tab gets the
+// next Fogu peer (one conversation at a time here).
+import webrtc from "fogu:webrtc"
+import web from "fogu:web"
+
+const PAGE = `<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Fogu WebRTC chat</title>
+<style>
+  body { font: 15px system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+  #log { border: 1px solid #ccc; border-radius: 6px; padding: .5rem; height: 18rem; overflow-y: auto; white-space: pre-wrap; }
+  form { display: flex; gap: .5rem; margin-top: .5rem; } input { flex: 1; padding: .4rem; }
+</style></head>
+<body>
+<h1>Fogu WebRTC chat</h1>
+<div id="log">connecting…\n</div>
+<form id="f"><input id="msg" autocomplete="off" placeholder="say something" disabled><button>Send</button></form>
+<script src="/rtc/client.js"></script>
+<script>
+  const log = (t) => { const l = document.getElementById("log"); l.textContent += t + "\\n"; l.scrollTop = l.scrollHeight; };
+  FoguRTC.connect("/rtc", "chat").then((conn) => {
+    log("connected peer to peer (data channel '" + conn.channel.label + "')");
+    conn.channel.onmessage = (e) => log("fogu: " + e.data);
+    conn.channel.onclose = () => log("closed");
+    const input = document.getElementById("msg");
+    input.disabled = false;
+    input.focus();
+    document.getElementById("f").onsubmit = (e) => {
+      e.preventDefault();
+      if (!input.value) return;
+      conn.send(input.value);
+      log("you: " + input.value);
+      input.value = "";
+    };
+  }).catch((e) => log("error: " + e.message));
+</script>
+</body>
+</html>`
+
+const app = web.app()
+app.get("/", fn(ctx) { return web.html(PAGE) })
+webrtc.signaling(app, "/rtc")
+app.listen(3000, { host: "0.0.0.0", quiet: true })?
+print("open http://localhost:3000")
+
+while true {
+    // waits in the room until a browser joins and calls
+    const [peer, err] = webrtc.connect("ws://127.0.0.1:3000/rtc", "chat")
+    if err != nil {
+        print("connect failed:", err.message)
+        continue
+    }
+    print("browser connected")
+    const ch = peer.channel("data")
+    ch.send("hello from Fogu! I repeat what you say, in capitals.")
+    for msg in ch {
+        print("browser:", msg)
+        ch.send(str(msg).upper())
+    }
+    print("browser left")
+    peer.close()
+}

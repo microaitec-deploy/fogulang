@@ -11,6 +11,8 @@ pub mod websocket;
 #[cfg(not(target_family = "wasm"))]
 pub mod socketio;
 #[cfg(not(target_family = "wasm"))]
+pub mod webrtc;
+#[cfg(not(target_family = "wasm"))]
 pub mod web;
 #[cfg(not(target_family = "wasm"))]
 pub mod topcoat;

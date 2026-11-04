@@ -1,0 +1,25 @@
+new 1 true
+chat false
+true true
+connected connected
+chat
+true true
+hello from a
+hello from b
+buffer [1, 2, 3]
+[250, 0]
+nil
+events: one
+events: two
+events 2
+for: x
+for: y
+false true
+closed true
+webrtc: the peer is closed
+true
+connected
+echo:ping
+[2, 1]
+true
+http:hi

@@ -1,0 +1,103 @@
+// fogu:webrtc — two peers in one program on 127.0.0.1 (no STUN: works offline):
+// direct SDP exchange, text and binary both ways, handlers, `for` over a channel,
+// and the signaling helpers (WebSocket rooms, one HTTP POST) on a fogu:web app
+import webrtc from "fogu:webrtc"
+import web from "fogu:web"
+import http from "fogu:http"
+import time from "fogu:time"
+
+const opts = { iceServers: [], hosts: ["127.0.0.1"] }
+const a = webrtc.peer(opts)?
+const b = webrtc.peer(opts)?
+print(a.state, a.candidates.len(), a.candidates[0].contains("typ host"))
+const ch = a.channel("chat")
+print(ch.label, ch.open)
+const offer = a.createOffer()?
+print(offer.contains("m=application"), offer.contains("a=candidate"))
+const answer = b.acceptOffer(offer)?
+a.acceptAnswer(answer)?
+a.wait("connected", 5s)?
+b.wait("connected", 5s)?
+print(a.state, b.state)
+
+// the channel `a` opened, on `b`
+const other = b.accept(5s)
+print(other.label)
+ch.wait(5s)?
+print(ch.open, other.open)
+ch.send("hello from a")
+print(other.recv(5s))
+other.send("hello from b")
+print(ch.recv(5s))
+ch.send(bytes([1, 2, 3]))
+const bin = other.recv(5s)
+print(typeof(bin), bin.toList())
+other.send(bytes([250, 0]))
+print(ch.recv(5s).toList())
+print(other.recv(100ms))
+
+// a channel `b` opens after the connection; handlers on `a`
+const got = chan(4)
+a.on("channel", fn(c) {
+    c.on("message", fn(m) { got <- c.label + ": " + m })
+})
+const events = b.channel("events")
+events.send("one")
+events.send("two")
+print(<-got)
+print(<-got)
+print(b.channel("events").label, b.channels.len())
+
+// `for` over a channel ends when it closes
+fg fn() {
+    other.send("x")
+    other.send("y")
+    other.close()
+}()
+for m in ch { print("for:", m) }
+print(ch.open, other.closed)
+a.close()
+print(a.state, a.closed)
+b.close()
+const [_, err] = a.channel("late")
+print(err.message)
+
+// signaling over a WebSocket room on a fogu:web app
+const app = web.app()
+webrtc.signaling(app, "/rtc")
+webrtc.serveHttp(app, "/rtc/offer", fn(p) {
+    const c = p.channel("data")
+    for m in c { c.send("http:" + m) }
+}, opts)
+app.listen(18471, { quiet: true })?
+print(http.get("http://127.0.0.1:18471/rtc/client.js")?.text.contains("FoguRTC"))
+
+const url = "ws://127.0.0.1:18471/rtc"
+const done = chan(1)
+fg fn() {
+    const p = webrtc.connect(url, "room-1", opts)?
+    const c = p.channel("data")
+    for m in c {
+        if typeof(m) == "str" { c.send("echo:" + m) } else { c.send(m.reverse()) }
+    }
+    p.close()
+    done <- true
+}()
+time.delay(100ms)
+const q = webrtc.connect(url, "room-1", opts)?
+print(q.state)
+const d = q.channel("data")
+d.send("ping")
+print(d.recv(5s))
+d.send(bytes([1, 2]))
+print(d.recv(5s).toList())
+d.close()
+print(<-done)
+q.close()
+
+// one HTTP POST: offer → answer
+const h = webrtc.connectHttp("http://127.0.0.1:18471/rtc/offer", opts)?
+const hc = h.channel("data")
+hc.send("hi")
+print(hc.recv(5s))
+h.close()

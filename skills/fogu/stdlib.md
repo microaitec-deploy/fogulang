@@ -47,6 +47,7 @@ value on operational failures (use `?` or `const [v, err] = …`).
 - [fogu:grpc](#fogugrpc)
 - [fogu:security](#fogusecurity)
 - [fogu:websocket](#foguwebsocket)
+- [fogu:webrtc](#foguwebrtc)
 - [fogu:net](#fogunet)
 - [fogu:tls](#fogutls)
 - [fogu:events](#foguevents)
@@ -2105,6 +2106,78 @@ output:
 echo /room?x=1: hello
 echo /room?x=1: {"kind":"json"}
 binary <buffer 3 bytes: 01 02 ff> 3 str
+```
+
+## fogu:webrtc
+
+```fogu
+import webrtc from "fogu:webrtc"
+```
+
+Peer-to-peer data channels (WebRTC) with other Fogu programs and with browsers, built on [str0m](https://github.com/algesten/str0m) (ICE, DTLS, SCTP; no media tracks). Each peer is a task on the shared runtime with one UDP socket per local address; `recv`, `accept` and `wait` wait cooperatively. Candidates are gathered before an offer or answer is made (host addresses, plus a STUN server-reflexive one), so one offer/answer exchange is enough; trickling with `on("candidate")` / `addCandidate` works too. Signaling goes over [fogu:web](#foguweb) / [fogu:websocket](#foguwebsocket) (rooms) or one HTTP POST. Not available on WebAssembly.
+
+### Peers and channels
+
+- `webrtc.peer({ iceServers, hosts, port, disconnectTimeout = 15s })` → Peer · error — `iceServers: [{ urls, username?, credential? }]` (default `stun:stun.l.google.com:19302`; `[]` for none — offline; TURN relays are not supported). `hosts`: local IPs to use (default: the default-route address and 127.0.0.1).
+- `peer.channel(label, { ordered = true, maxRetransmits, maxPacketLifeTime, protocol, id })` → DataChannel · error — Gets the open channel with that label, or creates one (before the offer, it goes into it; after the connection, it opens directly).
+- `peer.createOffer() · peer.acceptOffer(sdp) · peer.acceptAnswer(sdp)` → str · error — SDP text (a browser's `{ type, sdp }` is accepted too). An offer with no channel asked for opens one named `"data"`. Browser mDNS candidates (`*.local`) are skipped.
+- `peer.addCandidate(c) · peer.on("candidate", fn(c))` → bool — Trickle ICE: `c` is `"candidate:…"` or `{ candidate }`.
+- `peer.wait(state = "connected", timeout?)` → true · error — States: `new connecting connected disconnected closed`; an error on timeout or when the peer closes first.
+- `peer.accept(timeout?)` → DataChannel · nil — A channel the other side opened (nil on timeout or close).
+- `peer.on(event, fn)` — `state(s)`, `connected()`, `channel(ch)`, `candidate(c)`, `close()` — each call in its own task.
+- `peer.state · peer.connected · peer.closed · peer.candidates · peer.addresses · peer.channels · peer.error · peer.close()` — A peer whose connection stays lost for `disconnectTimeout` closes.
+- `ch.send(str | buffer)` → nil · error — str → text message, buffer / list of bytes → binary; queued until the channel opens.
+- `ch.recv(timeout?) · for msg in ch · ch.tryRecv()` → str · buffer · nil — nil on timeout or when the channel closes (which ends the `for`).
+- `ch.on("open" | "message" | "close", fn) · ch.wait(timeout?) · ch.close()` — With a `message` handler, messages go to it instead of `recv`.
+- `ch.label · ch.open · ch.closed · ch.ordered · ch.protocol · ch.pending · ch.buffered`
+
+```fogu
+import webrtc from "fogu:webrtc"
+const opts = { iceServers: [], hosts: ["127.0.0.1"] }
+const a = webrtc.peer(opts)?
+const b = webrtc.peer(opts)?
+const ch = a.channel("chat")
+a.acceptAnswer(b.acceptOffer(a.createOffer()?)?)?
+a.wait("connected", 5s)?
+const other = b.accept(5s)
+ch.send("hello")
+print(other.label, other.recv(5s))
+other.send(bytes([1, 2, 3]))
+print(ch.recv(5s))
+a.close()
+b.close()
+```
+
+output:
+
+```text
+chat hello
+<buffer 3 bytes: 01 02 03>
+```
+
+### Signaling
+
+- `webrtc.signaling(app, path = "/rtc")` → App — A room-based signaling endpoint on a `fogu:web` app: a WebSocket at `path` relaying JSON `offer`/`answer`/`candidate` messages between the members of a room, and the browser client at `path/client.js`.
+- `webrtc.signalingServer(port, { host, path })` → App · error — The same on its own app and port.
+- `webrtc.connect(signalUrl, room, opts?)` → Peer · error — Joins the room and returns a connected peer whose first channel (`opts.label`, default `"data"`) is open: `peer.channel("data")`. The first peer in a room waits (`opts.timeout`, default forever), the second calls. Also takes the `webrtc.peer` options, `channel` and `connectTimeout`.
+- `webrtc.serveHttp(app, path, fn(peer), opts?) · webrtc.connectHttp(url, opts?)` → App · Peer — Signaling with one HTTP POST (offer in, answer out, `application/sdp`), like WHIP.
+- `webrtc.clientJs` → str — The browser client: `FoguRTC.connect(url, room, { label, iceServers, channel })` and `FoguRTC.connectHttp(url)` resolve to `{ pc, channel, send, close }`.
+
+```fogu
+import webrtc from "fogu:webrtc"
+import web from "fogu:web"
+
+const app = web.app()
+webrtc.signaling(app, "/rtc")           // the room endpoint + /rtc/client.js
+app.listen(3000)?
+
+// a Fogu peer waiting in room "chat"; a browser page joins with
+//   <script src="/rtc/client.js"></script>
+//   const conn = await FoguRTC.connect("/rtc", "chat")
+//   conn.channel.onmessage = (e) => console.log(e.data); conn.send("hi")
+const peer = webrtc.connect("ws://127.0.0.1:3000/rtc", "chat")?
+const ch = peer.channel("data")
+for msg in ch { ch.send(str(msg).upper()) }
 ```
 
 ## fogu:net

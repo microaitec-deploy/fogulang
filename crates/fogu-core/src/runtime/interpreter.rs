@@ -1082,6 +1082,20 @@ impl Interpreter {
                 }
             }
 
+            // a data channel of fogu:webrtc: each message until it closes
+            Value::Object(o) if o.name() == "DataChannel" => {
+                loop {
+                    let msg = self.call_native_method(&o, "recv", &[])?;
+                    if matches!(msg, Value::Nil) {
+                        break;
+                    }
+                    if let Some(f) = run_body!(msg) {
+                        return Ok(f);
+                    }
+                }
+                Ok(Flow::Normal)
+            }
+
             other => Err(format!(
                 "value of type '{}' is not iterable",
                 other.type_name()

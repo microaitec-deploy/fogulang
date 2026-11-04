@@ -71,6 +71,9 @@ pub use network::websocket;
 pub use network::socketio;
 #[cfg(feature = "network")]
 #[cfg(not(target_family = "wasm"))]
+pub use network::webrtc;
+#[cfg(feature = "network")]
+#[cfg(not(target_family = "wasm"))]
 pub use network::web;
 #[cfg(feature = "network")]
 #[cfg(not(target_family = "wasm"))]

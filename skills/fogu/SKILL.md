@@ -170,6 +170,7 @@ panic`, and the `Fogu` object: `Fogu.file(path).text()/.json()/.write(s)`,
 | HTTP client/server (uploads: `multipart` + `http.file`), web framework, WebSocket, TCP/UDP | `fogu:http` `fogu:web` `fogu:websocket` `fogu:net` (`conn.read()` → buffer, `readLine()` → str, both `nil` at end of stream) |
 | interactive server-rendered UIs (signals, shards, procedures; Topcoat UI / shadcn-rs kits, Tailwind) | `fogu:topcoat` with `fogu:web` |
 | Socket.IO (server, also on a `fogu:web` port; client), gRPC | `fogu:socketio` `fogu:grpc` (+ `fogu:protobuf` schemas) |
+| WebRTC data channels, peer to peer with Fogu or browsers (signaling rooms on a `fogu:web` app, browser client at `/rtc/client.js`) | `fogu:webrtc` (`webrtc.connect(url, room)?.channel("data")`; `send`, `recv`, `for msg in ch`) |
 | TLS/cert checks, port scan, DNS, security headers, passwords, TOTP, secret scanning, signatures, rate limits | `fogu:security` |
 | TLS sockets (client, server, mTLS, STARTTLS) and HTTPS servers; self-signed certs for development | `fogu:tls` (`tls.connect(addr, { ca })`, `tls.listen(addr, { cert, key })` — same methods as `fogu:net`; HTTPS: `app.listen(port, { tls: tls.selfSigned(["localhost"])? })`) |
 | databases | `fogu:sql` (SQLite/Postgres/MySQL) `fogu:orm` `fogu:kv` `fogu:surrealkv` (versioned, transactions) `fogu:surrealdb` `fogu:redis` `fogu:scylla` `fogu:etcd` |

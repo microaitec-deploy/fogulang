@@ -125,6 +125,7 @@ export const TOC_GROUPS: TocGroup[] = [
       { id: 'mod-topcoat', title: 'fogu:topcoat' },
       { id: 'mod-jwt', title: 'fogu:jwt' },
       { id: 'mod-websocket', title: 'fogu:websocket' },
+      { id: 'mod-webrtc', title: 'fogu:webrtc' },
       { id: 'mod-net', title: 'fogu:net' }
     ]
   },

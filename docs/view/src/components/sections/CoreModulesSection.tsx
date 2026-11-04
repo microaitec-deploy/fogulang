@@ -69,6 +69,7 @@ export const CoreModulesSection: React.FC<Props> = ({ onRun }) => {
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-topcoat"><code>fogu:topcoat</code></a>
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-jwt"><code>fogu:jwt</code></a>
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-websocket"><code>fogu:websocket</code></a>
+                  <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-webrtc"><code>fogu:webrtc</code></a>
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-socketio"><code>fogu:socketio</code></a>
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-grpc"><code>fogu:grpc</code></a>
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-net"><code>fogu:net</code></a>

@@ -160,6 +160,7 @@ Fundamental API (§44):
 | `[x]` | `fogu:webview` — tested by hand (browser, display); face detection moved to `libs/face` |
 | `[x]` | `fogu:docker` (`docker_files.fg`; live commands tested by hand), `fogu:service` (`service.fg`), `fogu:zip`, `fogu:protobuf`, `ssh.mount`, `fs.remote` |
 | `[x]` | `fogu:grpc` (`grpc.fg`), `fogu:socketio` (`socketio.fg`; official JS client/server by hand), `fogu:security` (`security.fg`), `fogu:broker` / `fogu:mq` (`broker.fg`; Bun/Go/Rust/Python clients by hand; SurrealKV storage, `b.admin` web UI), `fogu:topcoat` (`topcoat.fg`; browser runtime tested with happy-dom), MCP in `fogu:ai` (`mcp.fg`; official TS SDK client and server-filesystem by hand), `fogu:surrealdb` (`surrealdb.fg` offline; SurrealDB 3.3.4 by hand, ws and http) |
+| `[x]` | `fogu:webrtc` (`webrtc.fg`: direct SDP, WebSocket rooms and HTTP signaling between two Fogu peers on 127.0.0.1; browser interop by hand) |
 | `[x]` | `nats.fogu()` (`nats_fogu.fg` offline; nats-server + nats.js by hand), `Fogu.signal` (`signal.fg`), `ssh.shell` (`tests/cli.rs`), `vm.spawn` + `sync.Semaphore` (`vm_concurrency.fg`), HTTP client uploads (`http_client.fg`) |
 | `[x]` | C API / `.so` `.dll` (`ffi/`, `cargo ffi`; `bun:ffi` by hand) |
 

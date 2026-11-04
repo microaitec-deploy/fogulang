@@ -101,6 +101,8 @@ socketioxide = { version = "0.18.7", optional = true }
 engineioxide = { version = "0.17", optional = true }
 socketioxide-core = { version = "0.19", optional = true }
 rskafka = { version = "0.6.0", features = ["transport-tls"], optional = true }
+# fogu:webrtc — sans-IO WebRTC (ICE, DTLS, SCTP data channels); pure-Rust crypto (no OpenSSL / aws-lc)
+str0m = { version = "0.24.1", default-features = false, features = ["rust-crypto"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -112,7 +114,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 # Standard library areas (src/native/<area>); `base` and `io` are always built.
 # `cargo build --release --no-default-features --features network` builds a small binary.
 default = ["network", "database", "messaging", "ops", "ai", "media", "rpc"]
-network = ["dep:ammonia", "dep:tokio-rustls", "dep:ed25519-dalek", "dep:ego-tree", "dep:engineioxide", "dep:futures-lite", "dep:futures-util", "dep:http-body-util", "dep:hyper", "dep:hyper-util", "dep:ipnet", "dep:minijinja", "dep:rcgen", "dep:scraper", "dep:socketioxide", "dep:socketioxide-core", "dep:tokio-tungstenite", "dep:x509-parser", "dep:zxcvbn", "dep:subtle", "dep:rustls", "dep:rustls-native-certs", "dep:bytes", "dep:http"]
+network = ["dep:ammonia", "dep:tokio-rustls", "dep:ed25519-dalek", "dep:ego-tree", "dep:engineioxide", "dep:futures-lite", "dep:futures-util", "dep:http-body-util", "dep:hyper", "dep:hyper-util", "dep:ipnet", "dep:minijinja", "dep:rcgen", "dep:scraper", "dep:socketioxide", "dep:socketioxide-core", "dep:tokio-tungstenite", "dep:x509-parser", "dep:zxcvbn", "dep:subtle", "dep:rustls", "dep:rustls-native-certs", "dep:bytes", "dep:http", "dep:str0m"]
 database = ["rpc", "dep:async-trait", "dep:scylla", "dep:redb", "dep:surrealkv", "dep:sqlx", "dep:tonic", "dep:tokio-stream", "dep:prost-reflect", "dep:http"]
 messaging = ["dep:bullmq-rs", "dep:redis", "dep:rskafka", "dep:redb", "dep:surrealkv", "dep:bytes", "dep:rustls", "dep:rustls-native-certs", "dep:subtle"]
 ops = []

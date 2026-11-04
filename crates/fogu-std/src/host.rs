@@ -39,6 +39,11 @@ impl Host for Std {
         if let Some(r) = crate::native::socketio::intercept(callee, args, it, env) {
             return Some(Handled::Native(r));
         }
+        // `webrtc.peer` starts the task that runs its `on` handlers; the signaling helpers are Fogu code
+        #[cfg(all(feature = "network", not(target_family = "wasm")))]
+        if let Some(r) = crate::native::webrtc::intercept(callee, args, it, env) {
+            return Some(Handled::Native(r));
+        }
         // `nats.fogu()` objects run handlers and wait cooperatively
         #[cfg(all(feature = "messaging", not(target_family = "wasm")))]
         if let Some(r) = crate::native::nats::fogu::intercept(callee, args, it, env) {
@@ -88,7 +93,7 @@ impl Host for Std {
             return true;
         }
         #[cfg(all(feature = "network", not(target_family = "wasm")))]
-        if matches!(name, "socketio.server" | "socketio.connect") || crate::native::web::is_dispatch(name) {
+        if matches!(name, "socketio.server" | "socketio.connect") || crate::native::web::is_dispatch(name) || crate::native::webrtc::is_intercepted(name) {
             return true;
         }
         #[cfg(all(feature = "ai", not(target_family = "wasm")))]
@@ -242,6 +247,9 @@ fn install(ctx: &mut NativeContext) {
     #[cfg(feature = "network")]
     #[cfg(not(target_family = "wasm"))]
     ctx.define_lazy("websocket", crate::native::websocket::build);
+    #[cfg(feature = "network")]
+    #[cfg(not(target_family = "wasm"))]
+    ctx.define_lazy("webrtc", crate::native::webrtc::build);
     ctx.define_lazy("regex", crate::native::regex::build);
     #[cfg(feature = "network")]
     ctx.define_lazy("html", crate::native::html::build);
