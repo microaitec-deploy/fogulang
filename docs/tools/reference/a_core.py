@@ -7,7 +7,7 @@ MODULE_TABLE = [
     ("Core", "fogu:math fogu:json fogu:time fogu:types fogu:system fogu:fs fogu:path fogu:process fogu:sync fogu:test fogu:log fogu:regex fogu:crypto"),
     ("Data formats", "fogu:csv fogu:excel fogu:yaml fogu:toml fogu:xml"),
     ("Storage", "fogu:kv fogu:surrealkv fogu:surrealdb fogu:sql fogu:orm fogu:redis fogu:s3 fogu:scylla fogu:etcd"),
-    ("Web &amp; network", "fogu:http fogu:web fogu:jwt fogu:topcoat fogu:websocket fogu:socketio fogu:grpc fogu:net fogu:security"),
+    ("Web &amp; network", "fogu:http fogu:web fogu:jwt fogu:topcoat fogu:websocket fogu:socketio fogu:grpc fogu:net fogu:tls fogu:security"),
     ("Messaging &amp; events", "fogu:nats fogu:kafka fogu:rabbitmq fogu:mqtt fogu:broker fogu:fogumq fogu:foguMQ-client fogu:events fogu:cron"),
     ("Integrations", "fogu:mail fogu:ai fogu:ssh fogu:shell fogu:ffi fogu:playbook"),
 ]

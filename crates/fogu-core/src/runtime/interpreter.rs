@@ -1001,7 +1001,7 @@ impl Interpreter {
                 Ok(Flow::Normal)
             }
 
-            Value::Object(o) if o.name() == "TcpListener" => {
+            Value::Object(o) if matches!(o.name().as_str(), "TcpListener" | "TlsListener") => {
                 loop {
                     let conn = self.call_native_method(&o, "accept", &[])?;
                     if let Some(f) = run_body!(conn) {

@@ -304,7 +304,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 }
 
 /// A DER certificate → its description.
-fn cert_value(der: &[u8]) -> Result<Value, String> {
+pub(crate) fn cert_value(der: &[u8]) -> Result<Value, String> {
     let (_, c) = x509_parser::parse_x509_certificate(der).map_err(|e| io_err!("security: invalid certificate: {}", e))?;
     let reg = x509_parser::objects::oid_registry();
     let oid_name = |oid: &x509_parser::der_parser::oid::Oid| {
@@ -354,7 +354,7 @@ fn cert_value(der: &[u8]) -> Result<Value, String> {
 }
 
 /// parseCert(pem | der bytes) → the first certificate's description
-fn parse_cert(a: &[Value]) -> Result<Value, String> {
+pub(crate) fn parse_cert(a: &[Value]) -> Result<Value, String> {
     max_args(a, 1, "security.parseCert")?;
     let data = crate::native::util::bytes_of(&a[0], "security.parseCert")?;
     if data.starts_with(b"-----BEGIN") {
@@ -365,7 +365,7 @@ fn parse_cert(a: &[Value]) -> Result<Value, String> {
 }
 
 /// selfSigned(names, { days = 365 }) → { cert, key } (PEM)
-fn self_signed(a: &[Value]) -> Result<Value, String> {
+pub(crate) fn self_signed(a: &[Value]) -> Result<Value, String> {
     max_args(a, 2, "security.selfSigned")?;
     let names: Vec<String> = match &a[0] {
         Value::Str(s) => vec![s.to_string()],

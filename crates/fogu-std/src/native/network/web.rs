@@ -401,7 +401,7 @@ impl FoguObject for AppValue {
                 }
             }
 
-            // listen(8080 | "ip:port", { host = "127.0.0.1", maxBody = 10mb, quiet })
+            // listen(8080 | "ip:port", { host = "127.0.0.1", maxBody = 10mb, quiet, tls: { cert, key } })
             "listen" => {
                 let mut opts = fogu_http::ServerOptions { statics: self.state.borrow().statics.clone(), ..Default::default() };
                 match args.get(1) {
@@ -419,6 +419,10 @@ impl FoguObject for AppValue {
                         opts.quiet = o.get("quiet").is_some_and(|v| v.is_truthy());
                         if let Some(io) = o.get("socketio") {
                             opts.socketio = Some(crate::native::socketio::web_mount(io)?);
+                        }
+                        // HTTPS: { tls: { cert, key } } (fogu:tls; tls.selfSigned for development)
+                        if let Some(t) = o.get("tls").filter(|t| !matches!(t, Value::Nil)) {
+                            opts.tls = Some(crate::native::tls::server_config(t, "listen", &["http/1.1"])?);
                         }
                     }
                     Some(other) => return Err(format!("listen: options must be a map, got '{}'", other.type_name())),

@@ -156,6 +156,9 @@ fn install(ctx: &mut NativeContext) {
     #[cfg(feature = "network")]
     #[cfg(not(target_family = "wasm"))]
     ctx.define_lazy("security", crate::native::security::build);
+    #[cfg(feature = "network")]
+    #[cfg(not(target_family = "wasm"))]
+    ctx.define_lazy("tls", crate::native::tls::build);
     #[cfg(feature = "messaging")]
     #[cfg(not(target_family = "wasm"))]
     ctx.define_lazy("broker", crate::native::broker::build);

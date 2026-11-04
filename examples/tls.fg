@@ -1,0 +1,47 @@
+// fogu:tls — an encrypted echo server, a client, and an HTTPS site.
+//
+//   fogu examples/tls.fg
+//   (another terminal) openssl s_client -connect 127.0.0.1:9444
+//   curl -k https://127.0.0.1:8443/
+//
+// For development the certificate is self-signed (tls.selfSigned); in
+// production pass the PEM files of a real one: { cert: "fullchain.pem", key: "privkey.pem" }.
+import tls from "fogu:tls"
+import web from "fogu:web"
+import time from "fogu:time"
+
+const pair = tls.selfSigned(["localhost", "127.0.0.1"])?
+const info = tls.parseCert(pair.cert)?
+print("certificate:", info.commonName, info.names, "expires", info.notAfter)
+
+// TLS echo server on 9444: same API as net.tcpListen
+const server = tls.listen("127.0.0.1:9444", { cert: pair.cert, key: pair.key })?
+print("tls echo on", server.addr)
+fg fn() {
+    for conn in server {
+        fg fn() {
+            print("client", conn.peer, conn.protocol, conn.cipher)
+            while true {
+                const line = conn.readLine()?
+                if line == nil { break }
+                conn.writeLine("echo: " + line)?
+            }
+            conn.close()
+        }()
+    }
+}()
+
+// a client that trusts our certificate (ca); verify: false would accept any
+const c = tls.connect("127.0.0.1:9444", { ca: pair.cert, serverName: "localhost" })?
+c.writeLine("hello over TLS")?
+print(c.readLine()?)
+print("server certificate sha256:", c.peerCert.sha256)
+c.close()
+
+// HTTPS: the same pair as the `tls` option of app.listen (or http.serve)
+const app = web.app()
+app.get("/", (ctx) => ({ hello: "https", path: ctx.path }))
+app.listen(8443, { tls: pair })
+while true {
+    time.delay(100ms)
+}

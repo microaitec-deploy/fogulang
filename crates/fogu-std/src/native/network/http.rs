@@ -33,7 +33,6 @@ use crate::runtime::interpreter::Interpreter;
 use crate::runtime::sched;
 use crate::runtime::value::{ModuleValue, NativeFnValue, Value};
 
-use crate::native::math::nfn;
 use crate::native::object::{FoguObject, NativeObjectRef};
 
 // ================= "PLAIN" TYPES (Send) =================
@@ -95,11 +94,13 @@ pub struct ServerOptions {
     pub quiet: bool,
     /// Socket.IO served on the same port (`app.listen(port, { socketio: io })`)
     pub socketio: Option<crate::native::socketio::WebMount>,
+    /// HTTPS: the `tls: { cert, key }` option (`fogu:tls`)
+    pub tls: Option<std::sync::Arc<rustls::ServerConfig>>,
 }
 
 impl Default for ServerOptions {
     fn default() -> Self {
-        ServerOptions { host: "127.0.0.1".into(), max_body: 10 * 1024 * 1024, statics: Vec::new(), quiet: false, socketio: None }
+        ServerOptions { host: "127.0.0.1".into(), max_body: 10 * 1024 * 1024, statics: Vec::new(), quiet: false, socketio: None, tls: None }
     }
 }
 
@@ -366,9 +367,31 @@ pub fn build() -> ModuleValue {
     exports.insert("file".into(), crate::native::util::nfn_var("file", 1, hc::file));
     exports.insert(
         "serve".into(),
-        // serve(8080 | "ip:port", handler)
-        nfn("serve", 2, |args| {
+        // serve(8080 | "ip:port", handler, { tls: { cert, key }, quiet, maxBody }?)
+        crate::native::util::nfn_var("serve", 2, |args| {
+            crate::native::util::max_args(args, 3, "serve")?;
             let mut opts = ServerOptions::default();
+            match args.get(2) {
+                None | Some(Value::Nil) => {}
+                Some(Value::Map(o)) => {
+                    let o = o.borrow();
+                    for k in o.keys() {
+                        if !matches!(k.as_str(), "tls" | "quiet" | "maxBody") {
+                            return Err(format!("serve: unknown option '{}' (tls quiet maxBody)", k));
+                        }
+                    }
+                    match o.get("maxBody") {
+                        Some(Value::Int(n)) if *n > 0 => opts.max_body = *n as usize,
+                        None | Some(Value::Nil) => {}
+                        Some(other) => return Err(format!("serve: maxBody must be a number of bytes, got {}", other.to_display_string())),
+                    }
+                    opts.quiet = o.get("quiet").is_some_and(|v| v.is_truthy());
+                    if let Some(t) = o.get("tls").filter(|t| !matches!(t, Value::Nil)) {
+                        opts.tls = Some(crate::native::tls::server_config(t, "serve", &["http/1.1"])?);
+                    }
+                }
+                Some(other) => return Err(format!("serve: options must be a map, got '{}'", other.type_name())),
+            }
             let (host, port) = listen_addr(args.first(), &opts.host, "serve")?;
             opts.host = host;
             start_server(port, args[1].clone(), opts)
@@ -416,8 +439,9 @@ fn start_server(port: u16, handler: Value, opts: ServerOptions) -> Result<Value,
                 }
             };
             if !opts.quiet {
-                println!("[http] server listening on http://{}", addr);
+                println!("[http] server listening on {}://{}", if opts.tls.is_some() { "https" } else { "http" }, addr);
             }
+            let tls = opts.tls.clone().map(tokio_rustls::TlsAcceptor::from);
             let opts = std::sync::Arc::new(opts);
             loop {
                 let (stream, remote) = match listener.accept().await {
@@ -427,12 +451,21 @@ fn start_server(port: u16, handler: Value, opts: ServerOptions) -> Result<Value,
                         continue;
                     }
                 };
-                let io = TokioIo::new(stream);
                 let tx = tx_to_main.clone();
                 let opts = std::sync::Arc::clone(&opts);
+                let tls = tls.clone();
                 tokio::spawn(async move {
                     let service = service_fn(move |req| handle_request(req, tx.clone(), std::sync::Arc::clone(&opts), remote));
-                    let _ = http1::Builder::new().serve_connection(io, service).with_upgrades().await;
+                    match tls {
+                        // HTTPS: the handshake first (a client that stalls is dropped after 10s)
+                        Some(acceptor) => {
+                            let Ok(Ok(s)) = tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)).await else { return };
+                            let _ = http1::Builder::new().serve_connection(TokioIo::new(s), service).with_upgrades().await;
+                        }
+                        None => {
+                            let _ = http1::Builder::new().serve_connection(TokioIo::new(stream), service).with_upgrades().await;
+                        }
+                    }
                 });
             }
         });

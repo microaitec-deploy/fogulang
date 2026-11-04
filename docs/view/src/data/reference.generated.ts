@@ -8,7 +8,7 @@ export const REFERENCE: Record<string, RefData> = {
   "group": "Standard library",
   "title": "Overview",
   "import": null,
-  "intro": "Modules are imported with <code>import name from \"fogu:name\"</code> (or by name: <code>import { parse } from \"fogu:json\"</code>). Each section below lists every function with its parameters and return value, and shows an example with its <strong>real output</strong> (the examples are run when this page is generated). <div class=\"overflow-x-auto mt-4\"><table class=\"w-full text-sm\"><tbody class=\"[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60\"><tr><td class=\"py-2 pr-4 font-medium whitespace-nowrap\">Core</td><td class=\"py-2\"><a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-math\"><code>fogu:math</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-json\"><code>fogu:json</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-time\"><code>fogu:time</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-system\"><code>fogu:system</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-fs\"><code>fogu:fs</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-path\"><code>fogu:path</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-process\"><code>fogu:process</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-sync\"><code>fogu:sync</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-test\"><code>fogu:test</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-log\"><code>fogu:log</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-regex\"><code>fogu:regex</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-crypto\"><code>fogu:crypto</code></a></td></tr><tr><td class=\"py-2 pr-4 font-medium whitespace-nowrap\">Data formats</td><td class=\"py-2\"><a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-csv\"><code>fogu:csv</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-excel\"><code>fogu:excel</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-yaml\"><code>fogu:yaml</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-toml\"><code>fogu:toml</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-xml\"><code>fogu:xml</code></a></td></tr><tr><td class=\"py-2 pr-4 font-medium whitespace-nowrap\">Storage</td><td class=\"py-2\"><a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-kv\"><code>fogu:kv</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-surrealkv\"><code>fogu:surrealkv</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-surrealdb\"><code>fogu:surrealdb</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-sql\"><code>fogu:sql</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-orm\"><code>fogu:orm</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-redis\"><code>fogu:redis</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-s3\"><code>fogu:s3</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-scylla\"><code>fogu:scylla</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-etcd\"><code>fogu:etcd</code></a></td></tr><tr><td class=\"py-2 pr-4 font-medium whitespace-nowrap\">Web &amp; network</td><td class=\"py-2\"><a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-http\"><code>fogu:http</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-web\"><code>fogu:web</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-jwt\"><code>fogu:jwt</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-topcoat\"><code>fogu:topcoat</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-websocket\"><code>fogu:websocket</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-socketio\"><code>fogu:socketio</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-grpc\"><code>fogu:grpc</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-net\"><code>fogu:net</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-security\"><code>fogu:security</code></a></td></tr><tr><td class=\"py-2 pr-4 font-medium whitespace-nowrap\">Messaging &amp; events</td><td class=\"py-2\"><a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-nats\"><code>fogu:nats</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-kafka\"><code>fogu:kafka</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-rabbitmq\"><code>fogu:rabbitmq</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-mqtt\"><code>fogu:mqtt</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-broker\"><code>fogu:broker</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-fogumq\"><code>fogu:fogumq</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-foguMQ-client\"><code>fogu:foguMQ-client</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-events\"><code>fogu:events</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-cron\"><code>fogu:cron</code></a></td></tr><tr><td class=\"py-2 pr-4 font-medium whitespace-nowrap\">Integrations</td><td class=\"py-2\"><a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-mail\"><code>fogu:mail</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-ai\"><code>fogu:ai</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-ssh\"><code>fogu:ssh</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-shell\"><code>fogu:shell</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-ffi\"><code>fogu:ffi</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-playbook\"><code>fogu:playbook</code></a></td></tr></tbody></table></div>",
+  "intro": "Modules are imported with <code>import name from \"fogu:name\"</code> (or by name: <code>import { parse } from \"fogu:json\"</code>). Each section below lists every function with its parameters and return value, and shows an example with its <strong>real output</strong> (the examples are run when this page is generated). <div class=\"overflow-x-auto mt-4\"><table class=\"w-full text-sm\"><tbody class=\"[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60\"><tr><td class=\"py-2 pr-4 font-medium whitespace-nowrap\">Core</td><td class=\"py-2\"><a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-math\"><code>fogu:math</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-json\"><code>fogu:json</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-time\"><code>fogu:time</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-types\"><code>fogu:types</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-system\"><code>fogu:system</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-fs\"><code>fogu:fs</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-path\"><code>fogu:path</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-process\"><code>fogu:process</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-sync\"><code>fogu:sync</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-test\"><code>fogu:test</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-log\"><code>fogu:log</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-regex\"><code>fogu:regex</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-crypto\"><code>fogu:crypto</code></a></td></tr><tr><td class=\"py-2 pr-4 font-medium whitespace-nowrap\">Data formats</td><td class=\"py-2\"><a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-csv\"><code>fogu:csv</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-excel\"><code>fogu:excel</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-yaml\"><code>fogu:yaml</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-toml\"><code>fogu:toml</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-xml\"><code>fogu:xml</code></a></td></tr><tr><td class=\"py-2 pr-4 font-medium whitespace-nowrap\">Storage</td><td class=\"py-2\"><a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-kv\"><code>fogu:kv</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-surrealkv\"><code>fogu:surrealkv</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-surrealdb\"><code>fogu:surrealdb</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-sql\"><code>fogu:sql</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-orm\"><code>fogu:orm</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-redis\"><code>fogu:redis</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-s3\"><code>fogu:s3</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-scylla\"><code>fogu:scylla</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-etcd\"><code>fogu:etcd</code></a></td></tr><tr><td class=\"py-2 pr-4 font-medium whitespace-nowrap\">Web &amp; network</td><td class=\"py-2\"><a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-http\"><code>fogu:http</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-web\"><code>fogu:web</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-jwt\"><code>fogu:jwt</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-topcoat\"><code>fogu:topcoat</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-websocket\"><code>fogu:websocket</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-socketio\"><code>fogu:socketio</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-grpc\"><code>fogu:grpc</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-net\"><code>fogu:net</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-tls\"><code>fogu:tls</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-security\"><code>fogu:security</code></a></td></tr><tr><td class=\"py-2 pr-4 font-medium whitespace-nowrap\">Messaging &amp; events</td><td class=\"py-2\"><a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-nats\"><code>fogu:nats</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-kafka\"><code>fogu:kafka</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-rabbitmq\"><code>fogu:rabbitmq</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-mqtt\"><code>fogu:mqtt</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-broker\"><code>fogu:broker</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-fogumq\"><code>fogu:fogumq</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-foguMQ-client\"><code>fogu:foguMQ-client</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-events\"><code>fogu:events</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-cron\"><code>fogu:cron</code></a></td></tr><tr><td class=\"py-2 pr-4 font-medium whitespace-nowrap\">Integrations</td><td class=\"py-2\"><a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-mail\"><code>fogu:mail</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-ai\"><code>fogu:ai</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-ssh\"><code>fogu:ssh</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-shell\"><code>fogu:shell</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-ffi\"><code>fogu:ffi</code></a> <a class=\"text-ember-600 dark:text-ember-400 underline\" href=\"#mod-playbook\"><code>fogu:playbook</code></a></td></tr></tbody></table></div>",
   "blocks": [
    {
     "h3": "Conventions",
@@ -466,38 +466,98 @@ export const REFERENCE: Record<string, RefData> = {
   "group": "Core modules",
   "title": "fogu:math",
   "import": "import math from \"fogu:math\"",
-  "intro": null,
+  "intro": "Numbers. Rounding to an int (<code>floor ceil trunc round</code>) keeps ints as they are; the other functions return floats. The JIT compiles these calls inside hot code with the same results.",
   "blocks": [
    {
     "api": [
      [
-      "math.PI · math.E",
+      "math.PI · E · TAU · LN2 · LN10 · SQRT2 · EPSILON · INF · NAN",
       "float",
       "Constants."
      ],
      [
-      "math.abs(x)",
-      "number",
-      "Absolute value (int stays int)."
-     ],
-     [
-      "math.sqrt(x)",
-      "float",
-      "Square root."
-     ],
-     [
-      "math.pow(base, exp)",
-      "number",
-      "Power."
-     ],
-     [
-      "math.floor(x) · math.ceil(x)",
+      "math.MAX_INT · math.MIN_INT",
       "int",
-      "Rounding down / up."
+      "The int range (64-bit)."
+     ],
+     [
+      "math.abs(x) · math.sign(x)",
+      "number",
+      "Ints stay ints; <code>sign</code> is -1, 0 or 1."
+     ],
+     [
+      "math.sqrt(x) · cbrt(x) · pow(base, exp) · hypot(x, y)",
+      "float",
+      ""
+     ],
+     [
+      "math.floor(x) · ceil(x) · trunc(x) · round(x)",
+      "int",
+      "<code>round</code> takes halves away from zero."
+     ],
+     [
+      "math.round(x, digits) · math.fract(x)",
+      "float",
+      "Rounded to <code>digits</code> decimals; the fractional part."
+     ],
+     [
+      "math.sin cos tan asin acos atan (x) · atan2(y, x)",
+      "float",
+      "Radians."
+     ],
+     [
+      "math.sinh cosh tanh asinh acosh atanh (x)",
+      "float",
+      "Hyperbolic."
+     ],
+     [
+      "math.exp(x) · exp2 · expm1 · log(x, base?) · log2 · log10 · log1p",
+      "float",
+      "<code>log(x)</code> is the natural logarithm."
+     ],
+     [
+      "math.degrees(rad) · math.radians(deg)",
+      "float",
+      ""
+     ],
+     [
+      "math.min(...) · math.max(...)",
+      "number",
+      "Of the arguments or of one list; keeps the winner's type."
+     ],
+     [
+      "math.clamp(x, lo, hi) · math.lerp(a, b, t)",
+      "number · float",
+      "<code>clamp</code> of ints is an int."
+     ],
+     [
+      "math.isNaN(x) · isInf(x) · isFinite(x)",
+      "bool",
+      ""
+     ],
+     [
+      "math.gcd(a, b) · lcm(a, b) · factorial(n) · isPrime(n)",
+      "int · bool",
+      "Ints; overflow is an error."
+     ],
+     [
+      "math.sum(list) · mean(list) · median(list)",
+      "number · float",
+      "<code>sum</code> of ints is an int."
+     ],
+     [
+      "math.random() · randomInt(min, max) · uniform(lo, hi)",
+      "float · int · float",
+      "<code>[0, 1)</code>; both ends included; <code>[lo, hi)</code>. Not for secrets: use <code>crypto</code>."
+     ],
+     [
+      "math.choice(list) · math.shuffle(list) · math.seed(n)",
+      "value · list · nil",
+      "A random element (<code>nil</code> if empty); shuffles in place and returns the list; a repeatable sequence."
      ]
     ],
-    "example": "import math from \"fogu:math\"\nprint(math.abs(-4), math.sqrt(16), math.pow(2, 10), math.floor(2.7), math.ceil(2.1))\nprint(math.PI)",
-    "output": "4 4.0 1024.0 2 3\n3.141592653589793",
+    "example": "import math from \"fogu:math\"\nprint(math.abs(-4), math.sqrt(16), math.pow(2, 10), math.floor(2.7), math.ceil(2.1))\nprint(math.round(math.sin(math.PI / 2), 6), math.atan2(1, 1) == math.PI / 4, math.hypot(3, 4))\nprint(math.log(math.E), math.log(8, 2), math.round(2.5), math.round(3.14159, 2))\nprint(math.min(3, 1, 2), math.max([4, 9, 2]), math.clamp(15, 0, 10), math.lerp(0, 10, 0.25))\nprint(math.gcd(12, 18), math.factorial(10), math.mean([1, 2, 3, 4]), math.median([5, 1, 3]))\nmath.seed(7)\nconst a = math.randomInt(1, 6)\nmath.seed(7)\nprint(a == math.randomInt(1, 6), math.random() < 1)",
+    "output": "4 4.0 1024.0 2 3\n1.0 true 5.0\n1.0 3.0 3 3.14\n1 9 10 2.5\n6 3628800 2.5 3.0\ntrue true",
     "outputTitle": "output"
    }
   ]
@@ -528,12 +588,83 @@ export const REFERENCE: Record<string, RefData> = {
    }
   ]
  },
+ "mod-types": {
+  "id": "mod-types",
+  "group": "Core modules",
+  "title": "fogu:types",
+  "import": "import types from \"fogu:types\"",
+  "intro": "Runtime type checks, lenient conversions and schemas for data that comes from outside (JSON bodies, query strings, environment variables, files).",
+  "blocks": [
+   {
+    "api": [
+     [
+      "types.isInt isFloat isNumber isStr isBool isNil isList isMap isBuffer isFn isError isDuration isRange isStruct isObject isChan (v)",
+      "bool",
+      ""
+     ],
+     [
+      "types.isEmpty(v)",
+      "bool",
+      "<code>nil</code>, <code>\"\"</code>, <code>[]</code>, <code>{}</code>, an empty buffer or range."
+     ],
+     [
+      "types.of(v)",
+      "str",
+      "Like <code>typeof</code>, but the name of a struct or native object (<code>\"User\"</code>, <code>\"Date\"</code>)."
+     ],
+     [
+      "types.toInt toFloat toBool toStr toList toMap (v, default?)",
+      "value · error",
+      "Lenient conversions: <code>\" 0x1F \"</code> → 31, <code>\"1_000\"</code> → 1000, <code>\"yes\"/\"off\"</code> → bool, a struct → map, pairs → map. When it can't convert: <code>default</code>, or an error value."
+     ],
+     [
+      "types.is(v, spec)",
+      "bool",
+      "Whether <code>v</code> matches the spec."
+     ],
+     [
+      "types.check(v, spec)",
+      "value · error",
+      "<code>v</code>, or an error value naming the first problem with its path (<code>tags[1]: expected str, got int 2</code>)."
+     ],
+     [
+      "types.validate(v, spec)",
+      "list",
+      "Every problem (empty when valid)."
+     ],
+     [
+      "types.assert(v, spec)",
+      "value",
+      "Like <code>check</code>, but a mismatch stops the program."
+     ],
+     [
+      "types.coerce(v, spec)",
+      "value · error",
+      "A copy where texts become the ints, floats and bools the spec asks for (query strings, forms, env vars), then checked."
+     ],
+     [
+      "types.equal(a, b) · types.clone(v)",
+      "bool · value",
+      "Deep equality (structs by fields); a deep copy."
+     ],
+     [
+      "spec",
+      "",
+      "A type name (<code>any nil bool int float number str list map buffer fn error duration range struct object chan</code>, or a struct/object name); <code>\"T?\"</code> also nil, <code>\"A|B\"</code>, <code>\"[T]\"</code> a list of T, <code>\"{T}\"</code> a map of T; <code>[spec]</code>; <code>{ field: spec, \"opt?\": spec }</code>; or <code>{ \"$type\": spec, min, max, minLen, maxLen, pattern, oneOf, nullable, fields, items, strict }</code>."
+     ]
+    ],
+    "example": "import types from \"fogu:types\"\nprint(types.isInt(3), types.of([]), types.toInt(\"0x1F\"), types.toBool(\"yes\"), types.toInt(\"x\", 0))\nconst User = { name: { \"$type\": \"str\", minLen: 1 }, \"age?\": { \"$type\": \"int\", min: 0 }, tags: \"[str]\" }\nprint(types.is({ name: \"Ana\", tags: [] }, User))\nfor p in types.validate({ name: \"\", age: -1, tags: [1] }, User) { print(p) }\nprint(types.coerce({ page: \"2\", debug: \"true\" }, { page: \"int\", debug: \"bool\" })?)",
+    "output": "true list 31 true 0\ntrue\nage: must be >= 0, got -1\nname: length must be >= 1, got 0\ntags[0]: expected str, got int 1\n{debug: true, page: 2}",
+    "outputTitle": "output"
+   }
+  ]
+ },
  "mod-time": {
   "id": "mod-time",
   "group": "Core modules",
   "title": "fogu:time",
   "import": "import time from \"fogu:time\"",
-  "intro": null,
+  "intro": "Clocks, waits and dates. A Date is an instant plus a time zone (UTC unless you choose another); its fields and <code>format</code> use that zone. The IANA time zone database is built in.",
   "blocks": [
    {
     "api": [
@@ -548,9 +679,34 @@ export const REFERENCE: Record<string, RefData> = {
       "Seconds from a fixed point; never goes backwards (the wall clock can jump): measure durations with it."
      ],
      [
-      "time.Date()",
-      "Date",
-      "The current instant (UTC)."
+      "time.Date(at?, zone?)",
+      "Date · error",
+      "The current instant; or <code>at</code> = milliseconds, a text (as <code>time.parse</code>) or a map <code>{ year, month, day, hour, minute, second, millis, zone }</code>."
+     ],
+     [
+      "time.zone() · time.setZone(name)",
+      "str · nil · error",
+      "The default zone of new dates (\"UTC\" at start): an IANA name (<code>\"America/Sao_Paulo\"</code>), <code>\"UTC\"</code> or <code>\"local\"</code> (the system's zone). An unknown name is an error value."
+     ],
+     [
+      "time.localZone() · time.zones()",
+      "str · list",
+      "The system's zone (<code>TZ</code>, then the OS); every IANA name."
+     ],
+     [
+      "time.parse(text, format?, zone?)",
+      "Date · error",
+      "RFC 3339 / ISO 8601, RFC 2822, <code>YYYY-MM-DD[ HH:MM[:SS]]</code>, or a strftime <code>format</code>. Texts without an offset are read in <code>zone</code> (default: the default zone)."
+     ],
+     [
+      "time.format(date | ms, format, zone?)",
+      "str",
+      "strftime: <code>%Y %m %d %H %M %S %3f %A %a %B %b %j %U %Z %z %s</code>…"
+     ],
+     [
+      "time.isLeapYear(y) · time.daysInMonth(y, m)",
+      "bool · int",
+      ""
      ],
      [
       "time.delay(d) · time.sleep(seconds)",
@@ -573,19 +729,44 @@ export const REFERENCE: Record<string, RefData> = {
       "Weekday 0 = Sunday."
      ],
      [
+      "d.zone · d.offset",
+      "str · int",
+      "The zone name; minutes east of UTC (São Paulo: -180)."
+     ],
+     [
+      "d.dayOfYear · d.week · d.isLeapYear · d.daysInMonth",
+      "int · bool",
+      "<code>week</code> is the ISO week."
+     ],
+     [
       "d.getTime()",
       "int",
       "Milliseconds since the epoch (also <code>d.ms</code>)."
      ],
      [
-      "d.toISOString()",
+      "d.toISOString() · d.iso()",
       "str",
-      "<code>2026-10-10T12:00:00.000Z</code>"
+      "UTC (<code>2026-10-10T12:00:00.000Z</code>); RFC 3339 with the zone's offset."
      ],
      [
-      "d.toString()",
+      "d.toString() · d.format(fmt)",
       "str",
-      "Human readable."
+      "Human readable; strftime."
+     ],
+     [
+      "d.setZone(name) · d.in(name)",
+      "nil · Date",
+      "The same instant in another zone: in place, or a copy."
+     ],
+     [
+      "d.add(units) · d.sub(units)",
+      "Date",
+      "A new Date. <code>units</code>: a duration (<code>90m</code>), ms, or <code>{ years, months, weeks, days, hours, minutes, seconds, millis }</code> — calendar units follow the zone's clock (a day can be 23 or 25 hours; Jan 31 + 1 month = Feb 28)."
+     ],
+     [
+      "d.startOf(unit) · d.clone()",
+      "Date",
+      "<code>year month week day hour minute second</code> (weeks start on Monday)."
      ],
      [
       "d.addMs(ms)",
@@ -593,18 +774,18 @@ export const REFERENCE: Record<string, RefData> = {
       "Moves the date by <code>ms</code> (in place)."
      ],
      [
-      "d.diff(other)",
-      "int",
-      "Milliseconds between the dates."
+      "d.diff(other) · before · after · equals · sameDay",
+      "int · bool",
+      "Milliseconds between the dates; comparisons (a Date or ms)."
      ],
      [
-      "getFullYear() getMonth() getDate() getDay() getHours() getMinutes() getSeconds() getMilliseconds()",
+      "getFullYear() getMonth() getDate() getDay() getHours() getMinutes() getSeconds() getMilliseconds() getTimezoneOffset()",
       "int",
       "JavaScript-style getters (month 0–11)."
      ]
     ],
-    "example": "import time from \"fogu:time\"\nconst start = time.now()\ntime.delay(20ms)\nprint(time.now() - start >= 20)\nconst d = time.Date()\nprint(d.year > 2000, d.month >= 1, d.toISOString().ends_with(\"Z\"))\nconst later = time.Date()\nlater.addMs(24 * 3600 * 1000)\nprint(later.diff(d) >= 86400000)",
-    "output": "true\ntrue true true\ntrue",
+    "example": "import time from \"fogu:time\"\nconst start = time.now()\ntime.delay(20ms)\nprint(time.now() - start >= 20)\nconst d = time.Date(1793793600000)\nprint(d.toISOString(), d.in(\"America/Sao_Paulo\").format(\"%d/%m/%Y %H:%M %Z\"))\ntime.setZone(\"America/New_York\")\nconst x = time.Date({ year: 2026, month: 1, day: 31, hour: 9 })\nprint(x.iso(), x.add({ months: 1 }).iso(), x.startOf(\"month\").format(\"%A\"))\nprint(time.parse(\"04/11/2026 08:05\", \"%d/%m/%Y %H:%M\", \"Europe/Lisbon\").toISOString())\ntime.setZone(\"UTC\")",
+    "output": "true\n2026-11-04T12:00:00.000Z 04/11/2026 09:00 -03\n2026-01-31T09:00:00.000-05:00 2026-02-28T09:00:00.000-05:00 Thursday\n2026-11-04T08:05:00.000Z",
     "outputTitle": "output"
    }
   ]
@@ -1108,9 +1289,24 @@ export const REFERENCE: Record<string, RefData> = {
       "Inclusive, unbiased."
      ],
      [
-      "crypto.uuid()",
+      "crypto.uuid(version = 4, namespace?, name?)",
       "str",
-      "Random UUID v4."
+      "<code>uuid()</code> / <code>uuid(4)</code> random, <code>uuid(7)</code> time-ordered, <code>uuid(5, namespace, name)</code> name-based."
+     ],
+     [
+      "crypto.uuidv4() · crypto.uuidv7()",
+      "str",
+      "v4: random. v7: the creation time in milliseconds followed by random bits — sorts by creation time (also within the same millisecond), good for database keys."
+     ],
+     [
+      "crypto.uuidv5(namespace, name)",
+      "str",
+      "SHA-1 of a namespace and a name: the same inputs always give the same UUID. <code>namespace</code>: <code>\"dns\"</code>, <code>\"url\"</code>, <code>\"oid\"</code>, <code>\"x500\"</code> or a UUID; <code>name</code>: str or bytes."
+     ],
+     [
+      "crypto.uuidInfo(text)",
+      "map · error",
+      "<code>{ version, variant, time }</code>; <code>time</code> is the creation time in ms since the epoch for v1/v6/v7, else nil. Text that is not a UUID → error value."
      ],
      [
       "crypto.base64(data, { url }) · crypto.fromBase64(text, { bytes })",
@@ -1128,8 +1324,8 @@ export const REFERENCE: Record<string, RefData> = {
       "Constant-time comparison."
      ]
     ],
-    "example": "import crypto from \"fogu:crypto\"\nprint(crypto.hash(\"sha256\", \"abc\"))\nprint(crypto.hmac(\"sha256\", \"key\", \"The quick brown fox jumps over the lazy dog\"))\nconst box = crypto.encrypt(\"card 4242\", \"my secret\")\nprint(crypto.decrypt(box, \"my secret\")?)\nconst [_, err] = crypto.decrypt(box, \"wrong\")\nprint(err)\nconst h = crypto.hashPassword(\"hunter2\")\nprint(crypto.verifyPassword(\"hunter2\", h), crypto.verifyPassword(\"hunter3\", h))\nprint(crypto.base64(\"olá\"), crypto.fromBase64(\"b2zDoQ==\"), crypto.hex(\"hi\"), len(crypto.uuid()))",
-    "output": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\nf7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8\ncard 4242\nerror: crypto.decrypt: wrong key or corrupted data\ntrue false\nb2zDoQ== olá 6869 36",
+    "example": "import crypto from \"fogu:crypto\"\nprint(crypto.hash(\"sha256\", \"abc\"))\nprint(crypto.hmac(\"sha256\", \"key\", \"The quick brown fox jumps over the lazy dog\"))\nconst box = crypto.encrypt(\"card 4242\", \"my secret\")\nprint(crypto.decrypt(box, \"my secret\")?)\nconst [_, err] = crypto.decrypt(box, \"wrong\")\nprint(err)\nconst h = crypto.hashPassword(\"hunter2\")\nprint(crypto.verifyPassword(\"hunter2\", h), crypto.verifyPassword(\"hunter3\", h))\nprint(crypto.base64(\"olá\"), crypto.fromBase64(\"b2zDoQ==\"), crypto.hex(\"hi\"), len(crypto.uuid()))\nprint(crypto.uuidv5(\"dns\", \"example.com\"), crypto.uuidv5(\"url\", \"https://fogu.dev\") == crypto.uuid(5, \"url\", \"https://fogu.dev\"))\nconst a = crypto.uuidv7()\nconst b = crypto.uuidv7()\nprint(a < b, crypto.uuidInfo(a)?.version, crypto.uuidInfo(crypto.uuidv4())?.time, crypto.uuidInfo(a)?.time > 0)\nprint(crypto.uuidInfo(\"not-a-uuid\"))",
+    "output": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\nf7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8\ncard 4242\nerror: crypto.decrypt: wrong key or corrupted data\ntrue false\nb2zDoQ== olá 6869 36\ncfbff0d1-9375-5685-968c-48ce8b15ae17 true\ntrue 7 nil true\nerror: uuidInfo: 'not-a-uuid' is not a UUID: invalid character: found `n` at 0",
     "outputTitle": "output"
    }
   ]
@@ -1847,9 +2043,9 @@ export const REFERENCE: Record<string, RefData> = {
       ""
      ],
      [
-      "opts: { headers, query, json, form, multipart, body, timeout, redirects = true, basicAuth: [user, pass], bearer }",
+      "opts: { headers, query, json, form, multipart, body, timeout, redirects = true, basicAuth: [user, pass], bearer, ca, insecure }",
       "",
-      "<code>form</code>: urlencoded fields. <code>multipart</code>: a map of fields — text values, <code>http.file(path)</code> (streamed from disk), <code>{ data, filename, type }</code> bytes, or a list (a repeated field). Map keys are sent in alphabetical order."
+      "<code>ca</code>: a PEM certificate (or its path) trusted for HTTPS, e.g. a self-signed one; <code>insecure: true</code> accepts any certificate (development only). <code>form</code>: urlencoded fields. <code>multipart</code>: a map of fields — text values, <code>http.file(path)</code> (streamed from disk), <code>{ data, filename, type }</code> bytes, or a list (a repeated field). Map keys are sent in alphabetical order."
      ],
      [
       "http.file(path, { filename, type })",
@@ -1878,9 +2074,9 @@ export const REFERENCE: Record<string, RefData> = {
     "title": "server.fg",
     "api": [
      [
-      "http.serve(port | \"ip:port\", fn(req))",
+      "http.serve(port | \"ip:port\", fn(req), { tls: { cert, key }, quiet, maxBody }?)",
       "nil",
-      "Requests are answered as soon as they arrive while the program is alive — waiting in <code>Fogu.signal.wait()</code>, <code>time.delay</code>, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or <code>\"0.0.0.0:8080\"</code>, <code>\"[::1]:8080\"</code>, <code>\":8080\"</code>."
+      "<code>tls</code> serves HTTPS (see <a class=\"underline\" href=\"#mod-tls\">fogu:tls</a>). Requests are answered as soon as they arrive while the program is alive — waiting in <code>Fogu.signal.wait()</code>, <code>time.delay</code>, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or <code>\"0.0.0.0:8080\"</code>, <code>\"[::1]:8080\"</code>, <code>\":8080\"</code>."
      ],
      [
       "req.method · req.path · req.query · req.headers · req.body",
@@ -1965,9 +2161,9 @@ export const REFERENCE: Record<string, RefData> = {
       "Shared state (<code>ctx.store</code>)."
      ],
      [
-      "app.listen(port | \"ip:port\", { host = \"127.0.0.1\", maxBody = 10 MB, quiet })",
+      "app.listen(port | \"ip:port\", { host = \"127.0.0.1\", maxBody = 10 MB, quiet, tls: { cert, key } })",
       "nil · error",
-      "<code>app.listen(\"0.0.0.0:3000\")</code> (or <code>host: \"0.0.0.0\"</code>) accepts other machines; IPv6 as <code>\"[::1]:3000\"</code>. A host in the string wins over <code>host</code>."
+      "<code>tls</code> serves HTTPS: PEM text or file paths (<code>tls.selfSigned([\"localhost\"])</code> for development; options as <code>tls.listen</code>). <code>app.listen(\"0.0.0.0:3000\")</code> (or <code>host: \"0.0.0.0\"</code>) accepts other machines; IPv6 as <code>\"[::1]:3000\"</code>. A host in the string wins over <code>host</code>."
      ],
      [
       "app.handler()",
@@ -2545,6 +2741,52 @@ export const REFERENCE: Record<string, RefData> = {
    }
   ]
  },
+ "mod-tls": {
+  "id": "mod-tls",
+  "group": "Web & network",
+  "title": "fogu:tls",
+  "import": "import tls from \"fogu:tls\"",
+  "intro": "TLS over TCP (rustls): encrypted clients and servers with the same API as <a class=\"underline\" href=\"#mod-net\">fogu:net</a> — a <code>TlsStream</code> has every method of a <code>TcpStream</code> and a <code>TlsListener</code> works like a <code>TcpListener</code> (including <code>for conn in listener</code>). Certificates and keys are PEM text, a buffer or the path of a PEM file. HTTPS servers take the same <code>{ cert, key }</code> as the <code>tls</code> option of <code>app.listen</code> / <code>http.serve</code>.",
+  "blocks": [
+   {
+    "api": [
+     [
+      "tls.connect(\"host:port\", { verify = true, ca, serverName, cert, key, alpn, timeout = 30s })",
+      "TlsStream · error",
+      "<code>ca</code>: the trusted certificates (default: the system's); <code>verify: false</code> accepts any (development only); <code>serverName</code> (alias <code>sni</code>): the name sent and checked (default: the host); <code>cert</code> + <code>key</code>: a client certificate (mutual TLS); <code>alpn</code>: a str or a list."
+     ],
+     [
+      "tls.listen(\"host:port\", { cert, key, ca, clientAuth = \"require\", alpn, timeout = 10s })",
+      "TlsListener · error",
+      "<code>ca</code> asks clients for a certificate signed by it (<code>clientAuth: \"optional\"</code> lets clients without one in). Handshakes run in the background (bounded by <code>timeout</code>): <code>accept(timeout?)</code> returns finished connections only; fields <code>addr port failedHandshakes lastError</code>."
+     ],
+     [
+      "stream.protocol · stream.cipher · stream.alpn · stream.serverName · stream.peerCert",
+      "",
+      "<code>TLSv1.3</code>, the cipher suite, the negotiated protocol, the SNI name, and the peer's certificate as <code>tls.parseCert</code> describes it (nil when there is none)."
+     ],
+     [
+      "tls.upgrade(conn, clientOptions?) · tls.upgradeServer(conn, { cert, key, ... })",
+      "TlsStream · error",
+      "STARTTLS: starts TLS on a plain <code>TcpStream</code> (which is closed afterwards); data received but not read yet is an error."
+     ],
+     [
+      "tls.selfSigned(names, { days = 365 })",
+      "{ cert, key } · error",
+      "A self-signed certificate (PEM) for development; names are DNS names or IPs."
+     ],
+     [
+      "tls.parseCert(pem | der)",
+      "map · error",
+      "<code>subject commonName issuer names serial notBefore notAfter daysLeft expired selfSigned ca signature keyType keyBits sha256</code>."
+     ]
+    ],
+    "example": "import tls from \"fogu:tls\"\nconst pair = tls.selfSigned([\"localhost\", \"127.0.0.1\"])?\nconst server = tls.listen(\"127.0.0.1:0\", { cert: pair.cert, key: pair.key })?\nfg fn() {\n    for conn in server {\n        conn.writeLine(\"hello \" + conn.readLine()?)?\n        conn.close()\n    }\n}()\nconst c = tls.connect(server.addr, { ca: pair.cert, serverName: \"localhost\" })?\nc.writeLine(\"tls\")?\nprint(c.readLine()?, c.protocol, c.peerCert.commonName)\nc.close()\nconst [_, err] = tls.connect(server.addr)       // the system roots do not trust it\nprint(typeof(err))",
+    "output": "hello tls TLSv1.3 localhost\nerror",
+    "outputTitle": "output"
+   }
+  ]
+ },
  "mod-events": {
   "id": "mod-events",
   "group": "Messaging & events",
@@ -2581,7 +2823,7 @@ export const REFERENCE: Record<string, RefData> = {
      ]
     ],
     "example": "import events from \"fogu:events\"\nconst bus = events.EventEmitter()\nbus.on(\"order\", (id, total) => print(\"order\", id, \"total\", total))\nbus.once(\"order\", (id, total) => print(\"first order only:\", id))\nprint(bus.emit(\"order\", 1, 9.9))\nprint(bus.emit(\"order\", 2, 15))\nprint(bus.emit(\"nobody-listens\"), bus.eventNames())",
-    "output": "order 1 total 9.9\nfirst order only: 1\ntrue\nfalse\nfalse []",
+    "output": "order 1 total 9.9\nfirst order only: 1\ntrue\norder 2 total 15\ntrue\nfalse [order]",
     "outputTitle": "output"
    }
   ]
@@ -3593,7 +3835,7 @@ export const REFERENCE: Record<string, RefData> = {
   "group": "Integrations",
   "title": "fogu:ffi",
   "import": "import ffi from \"fogu:ffi\"",
-  "intro": "Calls functions of native libraries (C ABI): <code>.dll</code>, <code>.so</code>, <code>.dylib</code>. <strong>Unsafe by nature</strong>: a wrong signature can crash the program. Supported signatures: up to 4 arguments mixing integers and floats, or up to 8 integer/pointer arguments.",
+  "intro": "Calls functions of native libraries (C ABI): <code>.dll</code>, <code>.so</code>, <code>.dylib</code>, and lets C call Fogu functions back. <strong>Unsafe by nature</strong>: a wrong signature can crash the program. Each signature gets a native stub generated with Cranelift: any number of arguments mixing integers, pointers, <code>f64</code> and <code>f32</code> (<code>ffi.native</code> is <code>true</code>). On 32-bit ARM, which has no Cranelift backend, a precompiled table is used instead (up to 4 arguments mixing integers and floats, or up to 8 integers; no <code>f32</code> arguments, no callbacks).",
   "blocks": [
    {
     "api": [
@@ -3608,28 +3850,54 @@ export const REFERENCE: Record<string, RefData> = {
       "A Fogu function that calls the symbol."
      ],
      [
-      "lib.has(symbol) · lib.name",
-      "bool · str",
-      ""
+      "lib.has(symbol) · lib.addr(symbol) · lib.name",
+      "bool · int · str",
+      "<code>addr</code>: the address of a function or a global variable (read it with <code>ffi.read</code>)."
      ],
      [
       "types",
       "",
-      "<code>i8 i16 i32 i64 u8 u16 u32 u64 isize usize bool f64 ptr str buffer</code>; results also <code>f32 void</code>. <code>str</code> passes a NUL-terminated copy; a <code>str</code> result reads a C string."
+      "<code>i8 i16 i32 i64 u8 u16 u32 u64 isize usize bool f32 f64 ptr str buffer</code>; results also <code>void</code>. <code>str</code> passes a NUL-terminated copy; a <code>str</code> result reads a C string. A <code>ptr</code> takes an int address, <code>nil</code> (NULL), a Buffer or a Callback."
      ],
      [
-      "ffi.alloc(size)",
+      "ffi.alloc(size) · ffi.cstring(text)",
       "Buffer",
-      "Memory for out-parameters: <code>text() bytes(start?, len?) write(offset, str | bytes) i32/u32/i64/f64(offset)</code>, fields <code>size address</code>."
+      "Memory for out-parameters and structs (zeroed), or a NUL-terminated copy of a text. Methods: <code>get(type, offset = 0)</code>, <code>set(type, offset, value)</code>, <code>ptr(offset = 0)</code>, <code>text()</code>, <code>bytes(start?, len?)</code>, <code>write(offset, str | bytes | buffer)</code>, <code>toBuffer()</code>, <code>i8 u8 i16 u16 i32 u32 i64 u64 f32 f64(offset)</code>; fields <code>size address</code>. Little-endian."
      ],
      [
-      "ffi.types · ffi.suffix",
-      "list · str",
+      "ffi.callback(fn, [argTypes], returnType = \"void\")",
+      "Callback",
+      "A C function pointer that runs <code>fn</code>: pass it as a <code>ptr</code> argument (<code>qsort</code>, <code>EnumWindows</code>, event loops…). Field <code>address</code>; <code>close()</code> releases the function (later calls return 0). Callbacks run on the interpreter's thread while a C function called through <code>fogu:ffi</code> is running; a call from another thread returns 0 and is reported on stderr. An error inside a callback makes the C call that ran it fail with that error."
+     ],
+     [
+      "ffi.read(ptr, type, offset = 0) · ffi.write(ptr, type, value, offset = 0)",
+      "value · nil",
+      "Raw memory at an address (or a Buffer)."
+     ],
+     [
+      "ffi.string(ptr, len?) · ffi.bytes(ptr, len)",
+      "str · buffer",
+      "A C string (<code>nil</code> for NULL), or a copy of <code>len</code> bytes."
+     ],
+     [
+      "ffi.sizeof(type) · ffi.NULL · ffi.lastError()",
+      "int",
+      "<code>lastError</code>: <code>errno</code> (<code>GetLastError</code> on Windows) right after the last ffi call."
+     ],
+     [
+      "ffi.types · ffi.suffix · ffi.native",
+      "list · str · bool",
       ""
      ]
     ],
     "example": "import ffi from \"fogu:ffi\"\nconst libc = ffi.open(\"c\")?\nconst strlen = libc.func(\"strlen\", [\"str\"], \"usize\")?\nconst atoi = libc.func(\"atoi\", [\"str\"], \"i32\")?\nprint(strlen(\"hello\"), strlen(\"olá\"), atoi(\"42abc\"))\nconst pow = ffi.open(\"m\")?.func(\"pow\", [\"f64\", \"f64\"], \"f64\")?\nprint(pow(2.0, 10))\nconst strcpy = libc.func(\"strcpy\", [\"buffer\", \"str\"], \"ptr\")?\nconst buf = ffi.alloc(16)\nstrcpy(buf, \"copied\")\nprint(buf.text(), buf.bytes(0, 3))",
     "output": "5 4 42\n1024.0\ncopied [99, 111, 112]",
+    "outputTitle": "output"
+   },
+   {
+    "h3": "Callbacks",
+    "example": "import ffi from \"fogu:ffi\"\n// qsort sorts C ints, calling a Fogu comparator for each pair\nconst qsort = ffi.open(\"c\")?.func(\"qsort\", [\"buffer\", \"usize\", \"usize\", \"ptr\"])?\nconst nums = [42, -7, 19, 3, 0]\nconst buf = ffi.alloc(4 * nums.len())\nfor i in 0..nums.len() { buf.set(\"i32\", 4 * i, nums[i]) }\nconst cmp = ffi.callback(fn(a, b) { return ffi.read(a, \"i32\") - ffi.read(b, \"i32\") }, [\"ptr\", \"ptr\"], \"i32\")\nqsort(buf, nums.len(), 4, cmp)\nconst out = []\nfor i in 0..nums.len() { out.push(buf.get(\"i32\", 4 * i)) }\nprint(out)",
+    "output": "[-7, 0, 3, 19, 42]",
     "outputTitle": "output"
    }
   ]

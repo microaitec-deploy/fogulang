@@ -108,7 +108,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 # Standard library areas (src/native/<area>); `base` and `io` are always built.
 # `cargo build --release --no-default-features --features network` builds a small binary.
 default = ["network", "database", "messaging", "ops", "ai", "media", "rpc"]
-network = ["dep:ammonia", "dep:ed25519-dalek", "dep:ego-tree", "dep:engineioxide", "dep:futures-lite", "dep:futures-util", "dep:http-body-util", "dep:hyper", "dep:hyper-util", "dep:ipnet", "dep:minijinja", "dep:pulldown-cmark", "dep:rcgen", "dep:scraper", "dep:socketioxide", "dep:socketioxide-core", "dep:tokio-tungstenite", "dep:x509-parser", "dep:zxcvbn", "dep:subtle", "dep:rustls", "dep:rustls-native-certs", "dep:bytes", "dep:http"]
+network = ["dep:ammonia", "dep:tokio-rustls", "dep:ed25519-dalek", "dep:ego-tree", "dep:engineioxide", "dep:futures-lite", "dep:futures-util", "dep:http-body-util", "dep:hyper", "dep:hyper-util", "dep:ipnet", "dep:minijinja", "dep:pulldown-cmark", "dep:rcgen", "dep:scraper", "dep:socketioxide", "dep:socketioxide-core", "dep:tokio-tungstenite", "dep:x509-parser", "dep:zxcvbn", "dep:subtle", "dep:rustls", "dep:rustls-native-certs", "dep:bytes", "dep:http"]
 database = ["rpc", "dep:async-trait", "dep:scylla", "dep:redb", "dep:surrealkv", "dep:sqlx", "dep:tonic", "dep:tokio-stream", "dep:prost-reflect", "dep:http"]
 messaging = ["dep:bullmq-rs", "dep:redis", "dep:rskafka", "dep:redb", "dep:surrealkv", "dep:bytes", "dep:rustls", "dep:rustls-native-certs", "dep:subtle"]
 ops = []
