@@ -1170,6 +1170,18 @@ fn extract(payload: &[u8], memory: bool) -> Result<Embedded, String> {
                 kept.push((rel.clone(), content.as_str().unwrap_or_default().to_string()));
             }
         }
+        // sources embedded with --embed (modules loaded at run time, e.g. workers)
+        if let Some(assets) = j["assets"].as_object() {
+            use base64::Engine as _;
+            for (rel, data) in assets {
+                if kept_in_memory(rel) && !rel.split('/').any(|c| c == ".." || c.is_empty()) {
+                    let decoded = base64::engine::general_purpose::STANDARD.decode(data.as_str().unwrap_or_default());
+                    if let Some(text) = decoded.ok().and_then(|b| String::from_utf8(b).ok()) {
+                        kept.push((rel.clone(), text));
+                    }
+                }
+            }
+        }
         crate::runtime::vfs::install_at(&dir, kept);
     }
     if !done.is_file() {
@@ -1192,6 +1204,9 @@ fn extract(payload: &[u8], memory: bool) -> Result<Embedded, String> {
             for (rel, data) in assets {
                 if rel.split('/').any(|c| c == ".." || c.is_empty()) {
                     return Err(format!("corrupted bundle: invalid path '{}'", rel));
+                }
+                if memory && kept_in_memory(rel) {
+                    continue;
                 }
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(data.as_str().unwrap_or_default())
