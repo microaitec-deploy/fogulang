@@ -31,7 +31,8 @@ print(c.emitWithAck("chat", "ack-me", { timeout: 2s })?)
 time.delay(300ms)
 c.disconnect()
 time.delay(300ms)
-print(got)
+// the client runs each handler in its own task: the two echoes may arrive in either order
+print(got[0], got.len(), got.contains("client got echo:hi"), got.contains("client got echo:ack-me"))
 print(log)
 
 // on a fogu:web app, same port

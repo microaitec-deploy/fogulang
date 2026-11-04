@@ -6,6 +6,8 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-11-04
+
 ### Added
 
 - `fogu:webrtc` (feature `network`, not on WebAssembly) — peer-to-peer data channels with other
