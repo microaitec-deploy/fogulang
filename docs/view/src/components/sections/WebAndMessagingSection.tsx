@@ -79,6 +79,9 @@ error: jwt: invalid signature error: jwt: token expired`}
       {/* ================= FOGU:NET (generated: docs/tools/reference) ================= */}
       <RefSection id="mod-net" onRun={onRun} />
 
+      {/* ================= FOGU:TLS (generated: docs/tools/reference) ================= */}
+      <RefSection id="mod-tls" onRun={onRun} />
+
       {/* ================= FOGU:EVENTS ================= */}
       <section id="mod-events" data-group="Messaging &amp; events" data-title="fogu:events" className="scroll-mt-20 mt-16">
         <h2 className="text-2xl font-bold"><code>fogu:events</code></h2>

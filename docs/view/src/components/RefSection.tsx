@@ -80,7 +80,12 @@ export const RefSection: React.FC<Props> = ({ id, onRun }) => {
             />
           )}
           {b.output && <DocCodeBlock lang="text" title={b.outputTitle ?? 'output'} code={b.output} />}
-          {b.note && <Html as="p" className="mt-4 text-sm text-slate-500" html={b.note} />}
+          {b.note && (
+            <div className="callout callout-note" role="note">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>
+              <Html as="div" html={b.note} />
+            </div>
+          )}
         </React.Fragment>
       ))}
     </section>

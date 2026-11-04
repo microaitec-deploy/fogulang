@@ -82,7 +82,7 @@ while true { time.delay(100ms) }`}
         <DocCodeBlock
           lang="bash"
           title="Linux / macOS"
-          code={`curl -fsSL https://github.com/microaitec-deploy/fogu-lang/raw/main/scripts/install.sh | sh
+          code={`curl -fsSL https://<fogu-server>/install.sh | sh     # the Fogu website shows the exact command
 # ~/.fogu/bin, added to ~/.bashrc / ~/.zshrc / ~/.profile (and fish)
 sh scripts/install.sh --system                      # /usr/local/bin, for every user (sudo)
 sh scripts/install.sh --from target/release/fogu    # install a local build
@@ -91,7 +91,7 @@ sh scripts/install.sh --uninstall`}
         <DocCodeBlock
           lang="powershell"
           title="Windows (PowerShell)"
-          code={`irm https://github.com/microaitec-deploy/fogu-lang/raw/main/scripts/install.ps1 | iex
+          code={`iex (irm https://<fogu-server>/install.ps1)
 # %LOCALAPPDATA%\\Fogu\\bin, added to your user PATH
 .\\scripts\\install.ps1 -System                     # Program Files + the system PATH (administrator)
 .\\scripts\\install.ps1 -From target\\release\\fogu.exe

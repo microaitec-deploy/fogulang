@@ -26,6 +26,7 @@ export const CoreModulesSection: React.FC<Props> = ({ onRun }) => {
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-math"><code>fogu:math</code></a>
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-json"><code>fogu:json</code></a>
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-time"><code>fogu:time</code></a>
+                  <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-types"><code>fogu:types</code></a>
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-system"><code>fogu:system</code></a>
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-fs"><code>fogu:fs</code></a>
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-path"><code>fogu:path</code></a>
@@ -35,6 +36,7 @@ export const CoreModulesSection: React.FC<Props> = ({ onRun }) => {
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-log"><code>fogu:log</code></a>
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-regex"><code>fogu:regex</code></a>
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-crypto"><code>fogu:crypto</code></a>
+                  <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-password"><code>fogu:password</code></a>
                 </td>
               </tr>
               <tr>
@@ -73,6 +75,7 @@ export const CoreModulesSection: React.FC<Props> = ({ onRun }) => {
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-socketio"><code>fogu:socketio</code></a>
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-grpc"><code>fogu:grpc</code></a>
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-net"><code>fogu:net</code></a>
+                  <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-tls"><code>fogu:tls</code></a>
                   <a className="text-amber-600 dark:text-amber-400 underline" href="#mod-security"><code>fogu:security</code></a>
                 </td>
               </tr>
@@ -287,6 +290,9 @@ true true true
 true`}
         />
       </section>
+
+      {/* ================= FOGU:TYPES (generated: docs/tools/reference) ================= */}
+      <RefSection id="mod-types" onRun={onRun} />
 
       {/* ================= FOGU:SYSTEM ================= */}
       <section id="mod-system" data-group="Core modules" data-title="fogu:system" className="scroll-mt-20 mt-16">
@@ -669,6 +675,9 @@ true false
 b2zDoQ== olá 6869 36`}
         />
       </section>
+
+      {/* ================= FOGU:PASSWORD (generated: docs/tools/reference) ================= */}
+      <RefSection id="mod-password" onRun={onRun} />
     </>
   );
 };

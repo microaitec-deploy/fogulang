@@ -1,289 +1,216 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
-export interface TocItem {
+export interface NavPage {
   id: string;
   title: string;
-}
-
-export interface TocGroup {
   group: string;
-  items: TocItem[];
 }
 
-export const TOC_GROUPS: TocGroup[] = [
-  {
-    group: 'Getting started',
-    items: [
-      { id: 'intro', title: 'Introduction' },
-      { id: 'install', title: 'Installation' },
-      { id: 'first-steps', title: 'First steps' }
-    ]
-  },
-  {
-    group: 'Enterprise & Automation',
-    items: [
-      { id: 'enterprise-arch', title: 'System Architecture' },
-      { id: 'automation-devops', title: 'Automation & Orchestration' },
-      { id: 'ai-agents', title: 'AI & Autonomous Agents' },
-      { id: 'scalability-distributed', title: 'Distributed Scalability' },
-      { id: 'enterprise-playground', title: 'Enterprise Scenarios Lab' }
-    ]
-  },
-  {
-    group: 'Language',
-    items: [
-      { id: 'variables', title: 'Variables and types' },
-      { id: 'types', title: 'Type annotations' },
-      { id: 'strings', title: 'Strings and templates' },
-      { id: 'durations', title: 'Durations' },
-      { id: 'operators', title: 'Operators' },
-      { id: 'control', title: 'Control flow' },
-      { id: 'functions', title: 'Functions' },
-      { id: 'collections', title: 'Lists and maps' },
-      { id: 'errors', title: 'Errors as values' },
-      { id: 'structs', title: 'Structs and interfaces' },
-      { id: 'modules', title: 'Modules and visibility' },
-      { id: 'concurrency', title: 'Concurrency' }
-    ]
-  },
-  {
-    group: 'Guides',
-    items: [
-      { id: 'guides', title: 'About the guides' },
-      { id: 'guide-cli', title: 'A command-line tool' },
-      { id: 'guide-rest-api', title: 'A REST API with SQL and JWT' },
-      { id: 'guide-topcoat', title: 'An interactive web app' },
-      { id: 'guide-concurrency', title: 'Concurrency in practice' },
-      { id: 'guide-errors', title: 'Error handling' },
-      { id: 'guide-storage', title: 'Storage and data' },
-      { id: 'guide-realtime', title: 'Realtime with WebSockets' },
-      { id: 'guide-broker', title: 'Messaging with the broker' },
-      { id: 'guide-automation', title: 'Automation and DevOps' },
-      { id: 'guide-ai', title: 'AI agents' },
-      { id: 'guide-mcp', title: 'MCP servers and clients' },
-      { id: 'guide-embedding', title: 'Embedding Fogu' },
-      { id: 'guide-deploy', title: 'Deploy everywhere' }
-    ]
-  },
-  {
-    group: 'Standard library',
-    items: [
-      { id: 'library', title: 'Overview' },
-      { id: 'globals', title: 'Global functions' },
-      { id: 'values', title: 'Strings, lists, maps and buffers' },
-      { id: 'fogu-object', title: 'The Fogu object' }
-    ]
-  },
-  {
-    group: 'Core modules',
-    items: [
-      { id: 'mod-math', title: 'fogu:math' },
-      { id: 'mod-json', title: 'fogu:json' },
-      { id: 'mod-time', title: 'fogu:time' },
-      { id: 'mod-system', title: 'fogu:system' },
-      { id: 'mod-fs', title: 'fogu:fs' },
-      { id: 'mod-path', title: 'fogu:path' },
-      { id: 'mod-process', title: 'fogu:process' },
-      { id: 'mod-sync', title: 'fogu:sync' },
-      { id: 'mod-test', title: 'fogu:test' },
-      { id: 'mod-log', title: 'fogu:log' },
-      { id: 'mod-regex', title: 'fogu:regex' },
-      { id: 'mod-crypto', title: 'fogu:crypto' }
-    ]
-  },
-  {
-    group: 'Data formats',
-    items: [
-      { id: 'mod-csv', title: 'fogu:csv' },
-      { id: 'mod-excel', title: 'fogu:excel' },
-      { id: 'mod-yaml', title: 'fogu:yaml' },
-      { id: 'mod-toml', title: 'fogu:toml' },
-      { id: 'mod-xml', title: 'fogu:xml' },
-      { id: 'mod-json5', title: 'fogu:json5' },
-      { id: 'mod-markdown', title: 'fogu:markdown' }
-    ]
-  },
-  {
-    group: 'Storage',
-    items: [
-      { id: 'mod-kv', title: 'fogu:kv' },
-      { id: 'mod-surrealkv', title: 'fogu:surrealkv' },
-      { id: 'mod-sql', title: 'fogu:sql' },
-      { id: 'mod-orm', title: 'fogu:orm' },
-      { id: 'mod-redis', title: 'fogu:redis' },
-      { id: 'mod-s3', title: 'fogu:s3' },
-      { id: 'mod-scylla', title: 'fogu:scylla' },
-      { id: 'mod-surrealdb', title: 'fogu:surrealdb' },
-      { id: 'mod-etcd', title: 'fogu:etcd' }
-    ]
-  },
-  {
-    group: 'Web & network',
-    items: [
-      { id: 'mod-http', title: 'fogu:http' },
-      { id: 'mod-web', title: 'fogu:web' },
-      { id: 'mod-topcoat', title: 'fogu:topcoat' },
-      { id: 'mod-jwt', title: 'fogu:jwt' },
-      { id: 'mod-websocket', title: 'fogu:websocket' },
-      { id: 'mod-webrtc', title: 'fogu:webrtc' },
-      { id: 'mod-net', title: 'fogu:net' }
-    ]
-  },
-  {
-    group: 'Messaging & events',
-    items: [
-      { id: 'mod-nats', title: 'fogu:nats' },
-      { id: 'mod-rabbitmq', title: 'fogu:rabbitmq' },
-      { id: 'mod-mqtt', title: 'fogu:mqtt' },
-      { id: 'mod-fogumq', title: 'fogu:fogumq' },
-      { id: 'mod-foguMQ-client', title: 'fogu:foguMQ-client' },
-      { id: 'mod-bullmq', title: 'fogu:bullmq' },
-      { id: 'mod-events', title: 'fogu:events' },
-      { id: 'mod-cron', title: 'fogu:cron' }
-    ]
-  },
-  {
-    group: 'Integrations',
-    items: [
-      { id: 'mod-mail', title: 'fogu:mail' },
-      { id: 'mod-ai', title: 'fogu:ai' },
-      { id: 'mod-ssh', title: 'fogu:ssh' },
-      { id: 'mod-shell', title: 'fogu:shell' },
-      { id: 'mod-ffi', title: 'fogu:ffi' },
-      { id: 'mod-playbook', title: 'fogu:playbook' },
-      { id: 'mod-vm', title: 'fogu:vm' },
-      { id: 'mod-cli', title: 'fogu:cli' }
-    ]
-  },
-  {
-    group: 'HTML & browser',
-    items: [
-      { id: 'mod-html', title: 'fogu:html' },
-      { id: 'mod-webview', title: 'fogu:webview' }
-    ]
-  },
-  {
-    group: 'Images & charts',
-    items: [
-      { id: 'mod-image', title: 'fogu:image' },
-      { id: 'mod-plot', title: 'fogu:plot' }
-    ]
-  },
-  {
-    group: 'Containers & services',
-    items: [
-      { id: 'mod-docker', title: 'fogu:docker' },
-      { id: 'mod-service', title: 'fogu:service' }
-    ]
-  },
-  {
-    group: 'Archives & serialization',
-    items: [
-      { id: 'mod-zip', title: 'fogu:zip' },
-      { id: 'mod-protobuf', title: 'fogu:protobuf' }
-    ]
-  },
-  {
-    group: 'Tools',
-    items: [
-      { id: 'cli', title: 'CLI' },
-      { id: 'diagnostics', title: 'Diagnostics' },
-      { id: 'testing', title: 'Testing' },
-      { id: 'packages', title: 'Packages' },
-      { id: 'build', title: 'Standalone executables' },
-      { id: 'jit', title: 'JIT' }
-    ]
-  },
-  {
-    group: 'Performance',
-    items: [{ id: 'benchmarks', title: 'Benchmarks vs Python & Bun' }]
-  },
-  {
-    group: 'Project',
-    items: [
-      { id: 'status', title: 'Status and roadmap' }
-    ]
-  }
+export interface NavGroup {
+  group: string;
+  pages: NavPage[];
+}
+
+/**
+ * The order of the sidebar's groups, and the sidebar titles of some pages.
+ * Every page of the docs is a top-level `<section id data-group data-title>`;
+ * the sidebar is built from them (App.tsx), so a new section shows up by itself.
+ */
+export const GROUP_ORDER = [
+  'Getting started',
+  'Enterprise & Automation',
+  'Language',
+  'Guides',
+  'Examples',
+  'Standard library',
+  'Core modules',
+  'Data formats',
+  'Storage',
+  'Web & network',
+  'Messaging & events',
+  'Integrations',
+  'HTML & browser',
+  'Images & charts',
+  'Containers & services',
+  'Archives & serialization',
+  'Tools',
+  'Performance',
+  'Project',
 ];
 
+export const TITLES: Record<string, string> = {
+  library: 'Overview',
+  guides: 'About the guides',
+  benchmarks: 'Benchmarks vs Python & Bun',
+};
+
+const Chevron: React.FC<{ open: boolean }> = ({ open }) => (
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+    className={`shrink-0 text-[var(--fg-faint)] transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
+  >
+    <path d="m9 6 6 6-6 6" />
+  </svg>
+);
+
 interface DocSidebarProps {
-  searchQuery: string;
-  onSearchChange: (q: string) => void;
+  groups: NavGroup[];
   activeId: string;
-  onNavigate: (id: string) => void;
   isMobileOpen: boolean;
   onCloseMobile: () => void;
+  onOpenSearch: () => void;
 }
 
-export const DocSidebar: React.FC<DocSidebarProps> = ({
-  searchQuery,
-  onSearchChange,
-  activeId,
-  onNavigate,
-  isMobileOpen,
-  onCloseMobile
-}) => {
-  const q = searchQuery.toLowerCase().trim();
+export const DocSidebar: React.FC<DocSidebarProps> = ({ groups, activeId, isMobileOpen, onCloseMobile, onOpenSearch }) => {
+  const activeGroup = groups.find((g) => g.pages.some((p) => p.id === activeId))?.group;
+  const [open, setOpen] = useState<Set<string>>(() => new Set(['Getting started']));
+  const scroller = useRef<HTMLDivElement>(null);
+  const closeBtn = useRef<HTMLButtonElement>(null);
+
+  // the group of the current page is always open
+  useEffect(() => {
+    if (activeGroup) setOpen((s) => (s.has(activeGroup) ? s : new Set(s).add(activeGroup)));
+  }, [activeGroup]);
+
+  // keep the current link in view inside the sidebar (without moving the page)
+  useEffect(() => {
+    const box = scroller.current;
+    const link = box?.querySelector<HTMLElement>('a[aria-current="page"]');
+    if (!box || !link) return;
+    const t = setTimeout(() => {
+      const top = link.offsetTop - box.offsetTop;
+      if (top < box.scrollTop + 40 || top > box.scrollTop + box.clientHeight - 60) {
+        box.scrollTo({ top: Math.max(0, top - box.clientHeight / 3) });
+      }
+    }, 60);
+    return () => clearTimeout(t);
+  }, [activeId, groups.length]);
+
+  // the drawer: Escape closes it, focus moves into it
+  useEffect(() => {
+    if (!isMobileOpen) return;
+    closeBtn.current?.focus();
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onCloseMobile();
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isMobileOpen, onCloseMobile]);
+
+  const toggle = (g: string) =>
+    setOpen((s) => {
+      const n = new Set(s);
+      if (n.has(g)) n.delete(g);
+      else n.add(g);
+      return n;
+    });
 
   return (
-    <aside
-      id="menu"
-      className={`${
-        isMobileOpen ? 'block' : 'hidden'
-      } lg:block fixed lg:sticky inset-0 top-14 z-20 lg:z-auto lg:h-[calc(100vh-3.5rem)] w-full lg:w-60 shrink-0 overflow-y-auto bg-white dark:bg-[#0b0d12] lg:bg-transparent px-4 lg:px-0 py-6 text-left border-r border-slate-100 dark:border-slate-800/40 lg:border-none`}
-    >
-      <input
-        type="search"
-        placeholder="Search…"
-        value={searchQuery}
-        onChange={(e) => onSearchChange(e.target.value)}
-        className="md:hidden mb-4 w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+    <>
+      {/* phones and tablets: a backdrop behind the drawer */}
+      <div
+        className={`fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] transition-opacity duration-200 lg:hidden ${isMobileOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+        onClick={onCloseMobile}
+        aria-hidden="true"
       />
-      <nav id="toc" className="text-sm space-y-6">
-        {TOC_GROUPS.map((group) => {
-          const matchingItems = group.items.filter((item) => {
-            if (!q) return true;
-            return (
-              item.title.toLowerCase().includes(q) ||
-              group.group.toLowerCase().includes(q)
-            );
-          });
+      <aside
+        id="menu"
+        aria-label="Documentation"
+        className={`sidebar fixed inset-y-0 left-0 z-50 flex w-[19rem] max-w-[86vw] flex-col border-r border-[var(--border)] bg-[var(--bg)] shadow-2xl transition-[transform,visibility] duration-250 ease-out lg:sticky lg:top-[var(--header-h)] lg:z-auto lg:h-[calc(100vh-var(--header-h))] lg:w-64 lg:max-w-none lg:shrink-0 lg:translate-x-0 lg:border-r-0 lg:bg-transparent lg:shadow-none lg:visible ${
+          isMobileOpen ? 'translate-x-0 visible' : '-translate-x-full invisible'
+        }`}
+      >
+        {/* drawer header (phones) */}
+        <div className="flex h-[var(--header-h)] items-center justify-between border-b border-[var(--border)] px-4 lg:hidden">
+          <span className="font-semibold">Documentation</span>
+          <button
+            ref={closeBtn}
+            type="button"
+            onClick={onCloseMobile}
+            className="grid size-9 place-items-center rounded-lg text-[var(--fg-muted)] hover:bg-[var(--bg-hover)]"
+            aria-label="Close the menu"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+          </button>
+        </div>
+        <div className="px-4 pt-4 lg:hidden">
+          <button
+            type="button"
+            onClick={() => {
+              onCloseMobile();
+              onOpenSearch();
+            }}
+            className="flex w-full items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] px-3 py-2 text-sm text-[var(--fg-faint)]"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+            Search the docs…
+          </button>
+        </div>
 
-          if (matchingItems.length === 0) return null;
-
-          return (
-            <div key={group.group}>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                {group.group}
-              </p>
-              <ul className="space-y-1 border-l border-slate-200 dark:border-slate-800">
-                {matchingItems.map((item) => {
-                  const isActive = activeId === item.id;
-                  return (
-                    <li key={item.id}>
-                      <a
-                        href={`#${item.id}`}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          onNavigate(item.id);
-                          onCloseMobile();
-                        }}
-                        className={`block -ml-px border-l pl-3 py-0.5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:border-slate-400 transition-colors ${
-                          isActive
-                            ? 'active border-amber-600 dark:border-amber-400 text-amber-600 dark:text-amber-400 font-semibold'
-                            : 'border-transparent'
-                        }`}
-                      >
-                        {item.title}
-                      </a>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          );
-        })}
-      </nav>
-    </aside>
+        <div ref={scroller} className="sidebar-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-10 pt-4 lg:pl-0 lg:pr-4 lg:pt-7">
+          <nav id="toc" className="space-y-0.5 text-[0.875rem]">
+            {groups.map((g) => {
+              const isOpen = open.has(g.group);
+              const hasActive = g.group === activeGroup;
+              const listId = 'nav-' + g.group.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+              return (
+                <div key={g.group} className="pb-1">
+                  <button
+                    type="button"
+                    onClick={() => toggle(g.group)}
+                    aria-expanded={isOpen}
+                    aria-controls={listId}
+                    className={`side-group flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-[0.8125rem] font-semibold transition-colors hover:bg-[var(--bg-hover)] ${
+                      hasActive ? 'text-[var(--fg)]' : 'text-[var(--fg-muted)]'
+                    }`}
+                  >
+                    <span className="truncate">{g.group}</span>
+                    <Chevron open={isOpen} />
+                  </button>
+                  <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${isOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
+                    <ul id={listId} className="overflow-hidden" inert={!isOpen}>
+                      <li className="h-1" aria-hidden="true" />
+                      {g.pages.map((p) => {
+                        const active = p.id === activeId;
+                        return (
+                          <li key={p.id}>
+                            <a
+                              href={`#${p.id}`}
+                              aria-current={active ? 'page' : undefined}
+                              onClick={() => {
+                                // the same page again: back to its top (no hashchange)
+                                if (location.hash === '#' + p.id) window.scrollTo({ top: 0, behavior: 'smooth' });
+                                onCloseMobile();
+                              }}
+                              className={`side-link ${active ? 'active' : ''}`}
+                            >
+                              {p.title.startsWith('fogu:') ? (
+                                <>
+                                  <span className="opacity-55">fogu:</span>
+                                  {p.title.slice(5)}
+                                </>
+                              ) : (
+                                p.title
+                              )}
+                            </a>
+                          </li>
+                        );
+                      })}
+                      <li className="h-1.5" aria-hidden="true" />
+                    </ul>
+                  </div>
+                </div>
+              );
+            })}
+          </nav>
+        </div>
+      </aside>
+    </>
   );
 };

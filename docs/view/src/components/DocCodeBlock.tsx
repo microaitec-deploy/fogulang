@@ -1,128 +1,114 @@
 import React, { useState } from 'react';
+import { highlight } from './highlight';
 
 interface DocCodeBlockProps {
   code: string;
   lang?: string;
   title?: string;
   onRun?: (code: string) => void;
+  /** Extra content in the header, on the right (e.g. a link to the source). */
+  actions?: React.ReactNode;
+  className?: string;
 }
 
-export const DocCodeBlock: React.FC<DocCodeBlockProps> = ({ code, lang = 'fogu', title, onRun }) => {
+const LANG_LABEL: Record<string, string> = {
+  fogu: 'Fogu',
+  bash: 'Shell',
+  sh: 'Shell',
+  powershell: 'PowerShell',
+  js: 'JavaScript',
+  json: 'JSON',
+  yaml: 'YAML',
+  text: 'Text',
+  markdown: 'Markdown',
+};
+
+/** Copies text to the clipboard (with a fallback for non-secure contexts). */
+export function copyText(text: string): Promise<void> {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.select();
+  try {
+    document.execCommand('copy');
+  } finally {
+    document.body.removeChild(area);
+  }
+  return Promise.resolve();
+}
+
+export const CopyButton: React.FC<{ text: string; compact?: boolean }> = ({ text, compact }) => {
   const [copied, setCopied] = useState(false);
-
-  const cleanCode = code.replace(/^\n/, '').replace(/\s+$/, '');
-
-  const handleCopy = () => {
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(cleanCode).then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      });
-    }
-  };
-
-  const highlight = (src: string) => {
-    const KEYWORDS = new Set([
-      'let', 'const', 'fn', 'return', 'if', 'else', 'for', 'in', 'while',
-      'break', 'continue', 'match', 'case', 'default', 'struct', 'interface',
-      'embed', 'new', 'this', 'import', 'export', 'from', 'as', 'true',
-      'false', 'nil', 'fg', 'chan', 'select'
-    ]);
-    const BUILTINS = new Set([
-      'print', 'len', 'typeof', 'str', 'int', 'float', 'clock', 'close',
-      'timeout', 'error', 'panic'
-    ]);
-    const TYPES = new Set([
-      'int', 'float', 'str', 'bool', 'duration', 'list', 'map', 'tuple',
-      'fn', 'chan', 'error', 'any'
-    ]);
-
-    const escapeHtml = (s: string) =>
-      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-    let out = '';
-    let i = 0;
-    let afterColon = false;
-    const n = src.length;
-
-    while (i < n) {
-      const c = src[i];
-      const rest = src.slice(i);
-      let m: RegExpExecArray | null;
-
-      if (rest.startsWith('//')) {
-        const end = src.indexOf('\n', i);
-        const j = end < 0 ? n : end;
-        out += '<span class="tk-com">' + escapeHtml(src.slice(i, j)) + '</span>';
-        i = j;
-      } else if (rest.startsWith('/*')) {
-        const end = src.indexOf('*/', i + 2);
-        const j = end < 0 ? n : end + 2;
-        out += '<span class="tk-com">' + escapeHtml(src.slice(i, j)) + '</span>';
-        i = j;
-      } else if (c === '"' || c === "'" || c === '`') {
-        let j = i + 1;
-        while (j < n && src[j] !== c) {
-          if (src[j] === '\\') j++;
-          j++;
-        }
-        j = Math.min(j + 1, n);
-        out += '<span class="tk-str">' + escapeHtml(src.slice(i, j)) + '</span>';
-        i = j;
-      } else if ((m = /^(0x[0-9a-fA-F_]+|0b[01_]+|\d[\d_]*(\.\d+)?(e[+-]?\d+)?(ns|us|ms|s|m|h|d)?)(?![A-Za-z_])/.exec(rest))) {
-        out += '<span class="tk-num">' + m[0] + '</span>';
-        i += m[0].length;
-      } else if ((m = /^[A-Za-z_À-ɏ][\wÀ-ɏ]*/.exec(rest))) {
-        const w = m[0];
-        const call = src.slice(i + w.length).match(/^\s*\(/);
-        if (KEYWORDS.has(w)) out += '<span class="tk-kw">' + w + '</span>';
-        else if (afterColon && TYPES.has(w)) out += '<span class="tk-ty">' + w + '</span>';
-        else if (BUILTINS.has(w) && call) out += '<span class="tk-bi">' + w + '</span>';
-        else if (call) out += '<span class="tk-fn">' + w + '</span>';
-        else out += w;
-        i += w.length;
-      } else if ((m = /^(<-|=>|\?\?|\?\.|\.\.\.|\.\.|\*\*|[+\-*\/%=!<>]=?|&&|\|\||\?)/.exec(rest))) {
-        out += '<span class="tk-op">' + escapeHtml(m[0]) + '</span>';
-        i += m[0].length;
-      } else {
-        out += escapeHtml(c);
-        i++;
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        copyText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1600);
+        })
       }
+      className={`code-btn ${copied ? 'is-done' : ''}`}
+      aria-label={copied ? 'Copied' : 'Copy code'}
+      title="Copy"
+    >
+      {copied ? (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
+      ) : (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+      )}
+      {!compact && <span>{copied ? 'Copied' : 'Copy'}</span>}
+    </button>
+  );
+};
 
-      if (c === ':') afterColon = true;
-      else if (c === '{' || c === '=' || c === ')' || c === '\n') afterColon = false;
-    }
-    return out;
-  };
+export const DocCodeBlock: React.FC<DocCodeBlockProps> = ({ code, lang = 'fogu', title, onRun, actions, className = '' }) => {
+  const clean = code.replace(/^\n/, '').replace(/\s+$/, '');
+  const html = highlight(clean, lang);
+  const isOutput = lang === 'text' && /output|stdout|prints/i.test(title ?? '');
 
-  const renderedHtml = lang === 'fogu' ? highlight(cleanCode) : cleanCode.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // a one-line import: a slim bar with the copy button
+  if (title === 'import' && !clean.includes('\n')) {
+    return (
+      <div className={`codeblock codeblock-inline group ${className}`}>
+        <pre><code dangerouslySetInnerHTML={{ __html: html }} /></pre>
+        <CopyButton text={clean} compact />
+      </div>
+    );
+  }
+
+  const label = isOutput ? 'Output' : LANG_LABEL[lang] ?? lang;
+  const name = title && title.toLowerCase() !== lang && title.toLowerCase() !== label.toLowerCase() && !isOutput ? title : null;
 
   return (
-    <div className="group relative mt-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#11141b] overflow-hidden text-left">
-      <div className="flex items-center justify-between px-4 py-1.5 border-b border-slate-200 dark:border-slate-800 text-xs text-slate-500">
-        <span className="font-mono">{title || lang}</span>
-        <div className="flex items-center gap-2">
+    <figure className={`codeblock ${isOutput ? 'codeblock-output' : ''} ${className}`}>
+      <figcaption className="codeblock-head">
+        <span className="flex min-w-0 items-center gap-2">
+          <span className={`codeblock-lang lang-${isOutput ? 'output' : lang}`}>
+            {isOutput ? (
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m4 17 6-6-6-6M12 19h8" /></svg>
+            ) : (
+              <span className="dot" aria-hidden="true" />
+            )}
+            {label}
+          </span>
+          {name && <span className="codeblock-title">{name}</span>}
+        </span>
+        <span className="flex shrink-0 items-center gap-1">
+          {actions}
           {onRun && lang === 'fogu' && (
-            <button
-              type="button"
-              onClick={() => onRun(cleanCode)}
-              className="rounded px-2 py-0.5 hover:bg-slate-200 dark:hover:bg-slate-700 text-ember-600 dark:text-ember-400 font-medium"
-            >
-              run
+            <button type="button" onClick={() => onRun(clean)} className="code-btn code-btn-run" aria-label="Run this example" title="Run">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5Z" /></svg>
+              <span>Run</span>
             </button>
           )}
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="rounded px-2 py-0.5 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-          >
-            {copied ? 'copied ✓' : 'copy'}
-          </button>
-        </div>
-      </div>
-      <pre className="overflow-x-auto p-4 text-[13px] leading-6 font-mono">
-        <code dangerouslySetInnerHTML={{ __html: renderedHtml }} />
-      </pre>
-    </div>
+          <CopyButton text={clean} />
+        </span>
+      </figcaption>
+      <pre tabIndex={0}><code dangerouslySetInnerHTML={{ __html: html }} /></pre>
+    </figure>
   );
 };
