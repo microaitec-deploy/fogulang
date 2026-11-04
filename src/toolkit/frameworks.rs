@@ -10,11 +10,13 @@ use crate::pkg;
 
 const DESKTOP_HELP: &str = "fogu desktop — desktop apps: a Tauri window whose backend is Fogu
 
-  fogu desktop create <dir> [--template vanilla|ts|react|vue|svelte] [--install]
+  fogu desktop create <dir> [--template vanilla|ts|react|vue|svelte|frameless] [--install]
   fogu desktop dev [dir] [--port N] [--target windows|native] [--no-watch] [--rebuild-host]
                                          Vite dev server + the window, live reload
   fogu desktop build [dir] [--target windows|<triple>] [--debug] [--installer] [--rebuild-host]
                                          the executable in <dir>/dist/
+  fogu desktop build [dir] --android|--ios [--apk] [--aab] [--mobile-target aarch64,…] [--debug] [--check] [--reinit]
+                                         a mobile package (experimental; --check lists the missing tools)
   fogu desktop update                    install the latest desktop library
   fogu desktop path                      where the library is
 
