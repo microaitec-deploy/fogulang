@@ -1,0 +1,6 @@
+// JSON5: comments, trailing commas, unquoted keys
+{
+  name: "five",
+  retries: 3,
+  list: [1, 2,],
+}

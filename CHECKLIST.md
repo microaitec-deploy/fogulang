@@ -104,6 +104,8 @@ Legend: `[x]` done · `[~]` partial · `[ ]` to do. `§` refers to the section o
 ## 10. Modules and packages (§38–41)
 
 - [x] `import { a, b as c } from "./x.fg"`, `import m from …`, `export`
+- [x] `export { a, b as c }`, `export const [a, b]`, `export default`, re-exports (`export { a } from`, `export *`, `export * as m`), `import x, { a } from` — `export_forms.fg`, `error_export_*.fg`
+- [x] Importing data files (`.json .json5 .yaml .toml .xml .csv` → value, text → `str`, binary → `buffer`), bundled by `build --compile` — `import_data.fg`, `error_import_*.fg`
 - [x] `fogu:*` modules
 - [x] Evaluated once per process, with a cache; cycles are an error
 - [x] `fogu.json` and `fogu.lock` (commit + sha256)

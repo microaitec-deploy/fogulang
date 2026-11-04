@@ -1,0 +1,46 @@
+// import loads data files by their extension (relative to this file, cached)
+import cfg from "./_data/config.json"
+import { name, port, db as database } from "./_data/config.json"
+import * as again from "./_data/config.json"
+import five from "./_data/config.json5"
+import yml from "./_data/config.yaml"
+import toml from "./_data/config.toml"
+import feed from "./_data/feed.xml"
+import people from "./_data/people.csv"
+import notes from "./_data/notes.txt"
+import readme from "./_data/readme.md"
+import page from "./_data/page.html"
+import css from "./_data/style.css"
+import sql from "./_data/query.sql"
+import icon from "./_data/icon.svg"
+import logo from "./_data/logo.png"
+import blob from "./_data/blob.bin"
+import numbers from "./_data/list.json"
+
+// .json: the parsed value; { … } picks keys of the map
+print(cfg.name, cfg.port, cfg.tags, cfg.db.host)
+print(name, port, database.host, typeof(cfg))
+// cached: every import of the same file shares the value
+print(again.name, again == cfg)
+print(numbers, typeof(numbers))
+
+// .json5 / .yaml / .toml / .xml / .csv: parsed by the standard library
+print(five.name, five.retries, five.list)
+print(yml.name, yml.port, yml.features)
+print(toml.title, toml.server.port)
+print(feed.name, feed.attrs.version, len(feed.children), feed.children[1].text)
+print(len(people), people[0].name, people[0].age, people[1].name, typeof(people[1].age))
+
+// text files: a str
+print(notes.trim(), typeof(notes))
+print(readme.split("\n")[0], page.trim(), css.trim(), sql.trim(), icon.starts_with("<svg"))
+
+// binary files: a buffer
+print(typeof(logo), len(logo), logo[1], logo[2], logo[3])
+print(blob)
+
+// import() works for data files too
+const dyn = import("./_data/config.yaml")
+print(dyn.port, dyn == yml)
+const [nope, err] = import("./_data/missing.json")
+print(nope, err != nil)

@@ -245,7 +245,7 @@ impl Interpreter {
             })
             .unwrap_or_else(|| self.base_dir.borrow().clone());
         match self.keep_loc(|| self.module_cache.resolve(spec, &from_dir, self)) {
-            Ok(module) => Value::Module(module),
+            Ok(imported) => imported.namespace(),
             Err(e) => {
                 let msg = e.strip_prefix(ERR_VALUE_PREFIX).unwrap_or(&e).to_string();
                 Value::Error(Rc::new(ErrorValue {
@@ -532,7 +532,7 @@ impl Interpreter {
                     Flow::Continue => return Err("'continue' outside a loop".into()),
                 }
             }
-            Ok(())
+            self.export_stars(program, &exports)
         })();
 
         *self.base_dir.borrow_mut() = prev_dir;
@@ -552,56 +552,128 @@ impl Interpreter {
         match stmt {
             Stmt::Import { kind, path } => {
                 let from_dir = self.base_dir.borrow().clone();
-                let module = self.module_cache.resolve(path, &from_dir, self)?;
-                self.module_cache.bind_import(kind, module, &env)?;
+                let imported = self.module_cache.resolve(path, &from_dir, self)?;
+                self.module_cache.bind_import(kind, &imported, &env)?;
                 Ok(Flow::Normal)
             }
-            Stmt::Export(inner) => match &**inner {
-                ExportKind::Fn { name, params, body } => {
-                    let f = Value::Fn(Rc::new(FnValue {
-                        name: name.clone(),
-                        params: params.clone(),
-                        param_syms: param_syms(params),
-                        body: Rc::clone(body),
-                        closure: Some(Rc::clone(&env)),
-                        module: env.borrow().module_name(),
-                    }));
-                    self.declare(&env, name, f.clone(), false)?;
-                    exports.exports.borrow_mut().insert(name.clone(), f);
-                    Ok(Flow::Normal)
-                }
-                ExportKind::Let {
-                    name,
-                    mutable,
-                    init,
-                    ty,
-                } => {
-                    let value = self.eval(init, env.clone())?;
-                    if let Some(t) = ty {
-                        self.check_var(name, &value, t, &env)?;
-                    }
-                    self.declare(&env, name, value.clone(), *mutable)?;
-                    exports.exports.borrow_mut().insert(name.clone(), value);
-                    Ok(Flow::Normal)
-                }
-                ExportKind::Interface(decl) => {
-                    let v = Value::Interface(Rc::new(decl.clone()));
-                    self.declare(&env, &decl.name, v.clone(), false)?;
-                    exports.exports.borrow_mut().insert(decl.name.clone(), v);
-                    Ok(Flow::Normal)
-                }
-                ExportKind::Struct(decl) => {
-                    let t = Value::StructType(Rc::new(StructTypeValue {
-                        decl: decl.clone(),
-                        env: Rc::clone(&env),
-                    }));
-                    self.declare(&env, &decl.name, t.clone(), false)?;
-                    exports.exports.borrow_mut().insert(decl.name.clone(), t);
-                    Ok(Flow::Normal)
-                }
-            },
+            Stmt::Export(inner) => {
+                self.exec_export(inner, env, exports)?;
+                Ok(Flow::Normal)
+            }
             other => self.exec(other, env),
         }
+    }
+
+    #[inline(never)]
+    fn exec_export(&self, kind: &ExportKind, env: Rc<RefCell<Environment>>, exports: &Rc<ModuleValue>) -> Result<(), String> {
+        let lookup = |name: &str| env.borrow().get(name);
+        match kind {
+            ExportKind::Fn { name, params, body } => {
+                let f = Value::Fn(Rc::new(FnValue {
+                    name: name.clone(),
+                    params: params.clone(),
+                    param_syms: param_syms(params),
+                    body: Rc::clone(body),
+                    closure: Some(Rc::clone(&env)),
+                    module: env.borrow().module_name(),
+                }));
+                self.declare(&env, name, f.clone(), false)?;
+                add_export(exports, name, f)
+            }
+            ExportKind::Let {
+                name,
+                mutable,
+                init,
+                ty,
+            } => {
+                let value = self.eval(init, env.clone())?;
+                if let Some(t) = ty {
+                    self.check_var(name, &value, t, &env)?;
+                }
+                self.declare(&env, name, value.clone(), *mutable)?;
+                add_export(exports, name, value)
+            }
+            ExportKind::LetList { names, mutable, init } => {
+                self.exec_let_list(names, mutable, init, env.clone())?;
+                for n in names.iter().filter(|n| *n != "_") {
+                    add_export(exports, n, lookup(n).unwrap_or(Value::Nil))?;
+                }
+                Ok(())
+            }
+            ExportKind::Interface(decl) => {
+                let v = Value::Interface(Rc::new(decl.clone()));
+                self.declare(&env, &decl.name, v.clone(), false)?;
+                add_export(exports, &decl.name, v)
+            }
+            ExportKind::Struct(decl) => {
+                let t = Value::StructType(Rc::new(StructTypeValue {
+                    decl: decl.clone(),
+                    env: Rc::clone(&env),
+                }));
+                self.declare(&env, &decl.name, t.clone(), false)?;
+                add_export(exports, &decl.name, t)
+            }
+            ExportKind::Names { names, from: None } => {
+                for (orig, alias) in names {
+                    let v = lookup(orig).ok_or_else(|| format!("cannot export '{}': it is not defined", orig))?;
+                    add_export(exports, alias, v)?;
+                }
+                Ok(())
+            }
+            ExportKind::Names { names, from: Some(path) } => {
+                let from_dir = self.base_dir.borrow().clone();
+                let imported = self.module_cache.resolve(path, &from_dir, self)?;
+                for (orig, alias) in names {
+                    add_export(exports, alias, imported.member(orig)?)?;
+                }
+                Ok(())
+            }
+            ExportKind::All { from, alias } => {
+                let from_dir = self.base_dir.borrow().clone();
+                let imported = self.module_cache.resolve(from, &from_dir, self)?;
+                match alias {
+                    Some(a) => add_export(exports, a, imported.namespace()),
+                    // the names are added when the module ends (`eval_module`):
+                    // its own exports win over them
+                    None => imported.all().map(|_| ()),
+                }
+            }
+            ExportKind::Default(e) => {
+                let v = self.eval(e, env.clone())?;
+                add_export(exports, super::module::DEFAULT_EXPORT, v)
+            }
+            ExportKind::DefaultDecl(decl) => {
+                self.exec(decl, env.clone())?;
+                let name = match &**decl {
+                    Stmt::FnDecl { name, .. } => name.clone(),
+                    Stmt::Struct(d) => d.name.clone(),
+                    _ => return Err("'export default' expects a value, a function or a struct".into()),
+                };
+                add_export(exports, super::module::DEFAULT_EXPORT, lookup(&name).unwrap_or(Value::Nil))
+            }
+        }
+    }
+
+    /// `export * from "m"`: once the module has run, the names of `m` that
+    /// it does not export itself (the first `export *` wins a name).
+    fn export_stars(&self, program: &[Stmt], exports: &Rc<ModuleValue>) -> Result<(), String> {
+        for stmt in program {
+            match stmt {
+                Stmt::Line(n) => self.cur_line.set(*n),
+                Stmt::Export(e) => {
+                    if let ExportKind::All { from, alias: None } = &**e {
+                        let from_dir = self.base_dir.borrow().clone();
+                        let imported = self.module_cache.resolve(from, &from_dir, self)?;
+                        let mut out = exports.exports.borrow_mut();
+                        for (k, v) in imported.all()? {
+                            out.entry(k).or_insert(v);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     /// Like `eval`: the heavier statements have their own `#[inline(never)]`
@@ -2779,4 +2851,14 @@ impl LoopScope {
         }
         Ok(Flow::Normal)
     }
+}
+
+/// Adds a name to a module's exports; a name exported twice is an error.
+fn add_export(exports: &Rc<ModuleValue>, name: &str, v: Value) -> Result<(), String> {
+    let mut out = exports.exports.borrow_mut();
+    if out.contains_key(name) {
+        return Err(format!("duplicate export '{}'", name));
+    }
+    out.insert(name.to_string(), v);
+    Ok(())
 }

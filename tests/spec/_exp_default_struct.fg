@@ -1,0 +1,8 @@
+export default struct Counter {
+    n = 0
+    inc() {
+        this.n += 1
+        return this.n
+    }
+}
+export const VERSION = "1.0"

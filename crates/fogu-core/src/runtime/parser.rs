@@ -19,6 +19,8 @@ pub struct Parser {
     /// Generic type parameters in scope (`fn f<T>`, `struct S<T>`); they are
     /// erased to `any` in annotations.
     type_params: Vec<Vec<String>>,
+    /// Names exported so far, with their line (duplicate exports are errors).
+    exported: Vec<(String, u32)>,
 }
 
 impl Parser {
@@ -27,6 +29,7 @@ impl Parser {
             tokens,
             pos: 0,
             type_params: Vec::new(),
+            exported: Vec::new(),
         }
     }
 
@@ -879,51 +882,107 @@ impl Parser {
 
     fn parse_import(&mut self) -> Result<Stmt, String> {
         self.advance();
-        let kind = if self.matches(&Token::LBrace) {
-            let mut members = Vec::new();
-            while !self.check(&Token::RBrace) {
-                let orig = self.expect_ident("a name")?;
-                let alias = if self.matches(&Token::As) {
-                    self.expect_ident("alias")?
-                } else {
-                    orig.clone()
-                };
-                members.push((orig, alias));
-                if !self.matches(&Token::Comma) {
-                    break;
-                }
-            }
-            self.expect(Token::RBrace, "expected '}'")?;
-            ImportKind::Members { members }
+        let kind = if self.check(&Token::LBrace) {
+            ImportKind::Members { members: self.parse_name_list("import")? }
         } else if self.matches(&Token::Star) {
             self.expect(Token::As, "expected 'as'")?;
             ImportKind::Namespace {
                 alias: self.expect_ident("alias")?,
             }
         } else {
-            ImportKind::Named {
-                alias: self.expect_ident("a name")?,
+            let alias = self.expect_ident("a name")?;
+            if self.matches(&Token::Comma) {
+                // import x, { a } from "m" / import x, * as ns from "m"
+                let rest = if self.check(&Token::LBrace) {
+                    ImportKind::Members { members: self.parse_name_list("import")? }
+                } else if self.matches(&Token::Star) {
+                    self.expect(Token::As, "expected 'as'")?;
+                    ImportKind::Namespace { alias: self.expect_ident("alias")? }
+                } else {
+                    return self.fail(format!("expected '{{' or '*' after 'import {},', found {:?}", alias, self.peek()));
+                };
+                ImportKind::Combined { alias, rest: Box::new(rest) }
+            } else {
+                ImportKind::Named { alias }
             }
         };
-        self.expect(Token::From, "expected 'from'")?;
-        let path = match self.peek().clone() {
-            Token::Str(s) => {
-                self.advance();
-                s
-            }
-            other => return self.fail(format!("expected a path, found {:?}", other)),
-        };
+        let path = self.parse_from_path()?;
         self.consume_semicolon();
         Ok(Stmt::Import { kind, path })
     }
 
-    fn parse_export(&mut self) -> Result<Stmt, String> {
-        self.advance();
+    /// `from "path"`.
+    fn parse_from_path(&mut self) -> Result<String, String> {
+        self.expect(Token::From, "expected 'from'")?;
         match self.peek().clone() {
+            Token::Str(s) => {
+                self.advance();
+                Ok(s)
+            }
+            other => self.fail(format!("expected a path, found {:?}", other)),
+        }
+    }
+
+    /// A name inside `{ … }` of an import/export: an identifier or `default`.
+    fn parse_member_name(&mut self, what: &str) -> Result<String, String> {
+        if self.matches(&Token::Default) {
+            return Ok("default".into());
+        }
+        self.expect_ident(what)
+    }
+
+    /// `{ a, b as c, default as d }` → [(a, a), (b, c), (default, d)], with
+    /// the position of each name it binds (or exports).
+    fn parse_name_list(&mut self, kw: &str) -> Result<Vec<(String, String)>, String> {
+        Ok(self.parse_name_list_at(kw)?.into_iter().map(|(o, a, _)| (o, a)).collect())
+    }
+
+    fn parse_name_list_at(&mut self, kw: &str) -> Result<Vec<(String, String, (u32, u32))>, String> {
+        self.expect(Token::LBrace, "expected '{'")?;
+        let mut members = Vec::new();
+        while !self.check(&Token::RBrace) {
+            let mut at = self.here();
+            let orig = self.parse_member_name("a name")?;
+            let alias = if self.matches(&Token::As) {
+                at = self.here();
+                // `export { f as default }`; an import binds a variable
+                if kw == "export" { self.parse_member_name("a name")? } else { self.expect_ident("alias")? }
+            } else {
+                orig.clone()
+            };
+            if kw == "import" && alias == "default" {
+                return Err(format!(
+                    "line {}:{}: syntax error: 'default' needs a name: import {{ default as name }}",
+                    at.0, at.1
+                ));
+            }
+            members.push((orig, alias, at));
+            if !self.matches(&Token::Comma) {
+                break;
+            }
+        }
+        self.expect(Token::RBrace, "expected '}'")?;
+        Ok(members)
+    }
+
+    /// Records an exported name; the same name exported twice is an error.
+    fn note_export(&mut self, name: &str, (line, col): (u32, u32)) -> Result<(), String> {
+        if let Some((_, first)) = self.exported.iter().find(|(n, _)| n == name) {
+            return Err(format!(
+                "line {}:{}: syntax error: duplicate export '{}'\n  help: '{}' is already exported on line {}",
+                line, col, name, name, first
+            ));
+        }
+        self.exported.push((name.to_string(), line));
+        Ok(())
+    }
+
+    fn parse_export(&mut self) -> Result<Stmt, String> {
+        let at = self.here();
+        self.advance();
+        let kind = match self.peek().clone() {
             Token::Fn => match self.parse_fn_decl()? {
-                Stmt::FnDecl { name, params, body } => Ok(Stmt::Export(Box::new(
-                    ExportKind::Fn { name, params, body },
-                ))),
+                Stmt::FnDecl { name, params, body } => ExportKind::Fn { name, params, body },
                 _ => unreachable!(),
             },
             Token::Let | Token::Const => {
@@ -934,28 +993,81 @@ impl Parser {
                         mutable,
                         init,
                         ty,
-                    } => Ok(Stmt::Export(Box::new(ExportKind::Let {
+                    } => ExportKind::Let {
                         name,
                         mutable,
                         init,
                         ty,
-                    }))),
+                    },
+                    Stmt::LetList { names, mutable, init } => ExportKind::LetList { names, mutable, init },
                     _ => unreachable!(),
                 }
             }
-            Token::Struct => {
-                let decl = self.parse_struct_decl()?;
-                Ok(Stmt::Export(Box::new(ExportKind::Struct(decl))))
+            Token::Struct => ExportKind::Struct(self.parse_struct_decl()?),
+            Token::Interface => ExportKind::Interface(self.parse_interface()?),
+            Token::LBrace => {
+                let list = self.parse_name_list_at("export")?;
+                let from = if self.check(&Token::From) { Some(self.parse_from_path()?) } else { None };
+                if from.is_none() && list.iter().any(|(o, _, _)| o == "default") {
+                    return self.fail(
+                        "'default' is not a name of this module: use 'export default <value>' or 'export { name as default }'",
+                    );
+                }
+                for (_, alias, pos) in &list {
+                    self.note_export(alias, *pos)?;
+                }
+                self.consume_semicolon();
+                let names = list.into_iter().map(|(o, a, _)| (o, a)).collect();
+                return Ok(Stmt::Export(Box::new(ExportKind::Names { names, from })));
             }
-            Token::Interface => {
-                let decl = self.parse_interface()?;
-                Ok(Stmt::Export(Box::new(ExportKind::Interface(decl))))
+            Token::Star => {
+                self.advance();
+                let alias = if self.matches(&Token::As) {
+                    let pos = self.here();
+                    let a = self.parse_member_name("a name")?;
+                    self.note_export(&a, pos)?;
+                    Some(a)
+                } else {
+                    None
+                };
+                let from = self.parse_from_path()?;
+                self.consume_semicolon();
+                return Ok(Stmt::Export(Box::new(ExportKind::All { from, alias })));
             }
-            other => self.fail(format!(
-                "expected 'fn', 'let', 'const' or 'struct' after export, found {:?}",
-                other
-            )),
+            Token::Default => {
+                self.advance();
+                self.note_export("default", at)?;
+                let kind = match self.peek() {
+                    Token::Fn if matches!(self.peek_n(1), Token::Ident(_)) => {
+                        ExportKind::DefaultDecl(Box::new(self.parse_fn_decl()?))
+                    }
+                    Token::Struct => ExportKind::DefaultDecl(Box::new(Stmt::Struct(Box::new(self.parse_struct_decl()?)))),
+                    _ => {
+                        let e = self.parse_expr()?;
+                        self.consume_semicolon();
+                        ExportKind::Default(e)
+                    }
+                };
+                return Ok(Stmt::Export(Box::new(kind)));
+            }
+            other => {
+                return self.fail(format!(
+                    "expected 'fn', 'let', 'const', 'struct', 'interface', '{{', '*' or 'default' after export, found {:?}",
+                    other
+                ))
+            }
+        };
+        let names: Vec<String> = match &kind {
+            ExportKind::Fn { name, .. } | ExportKind::Let { name, .. } => vec![name.clone()],
+            ExportKind::Struct(d) => vec![d.name.clone()],
+            ExportKind::Interface(d) => vec![d.name.clone()],
+            ExportKind::LetList { names, .. } => names.iter().filter(|n| *n != "_").cloned().collect(),
+            _ => Vec::new(),
+        };
+        for n in names {
+            self.note_export(&n, at)?;
         }
+        Ok(Stmt::Export(Box::new(kind)))
     }
 
     // ---------- Expressions ----------

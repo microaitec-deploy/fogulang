@@ -1,0 +1,3 @@
+// { … } needs a map: this file holds a list
+import { first } from "./_data/list.json"
+print("not reached", first)

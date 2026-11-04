@@ -1,0 +1,2 @@
+const items = [1, 2, 3]
+export default items.map(fn(x) { return x * 10 })

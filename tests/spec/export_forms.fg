@@ -1,0 +1,34 @@
+// export { … }, export const [..], export default, re-exports, combined imports
+import describe, { greeting, twice, settings, Point, origin, add, first, second } from "./_exp_lib.fg"
+import * as lib from "./_exp_lib.fg"
+import { default as describe2 } from "./_exp_lib.fg"
+import Counter, { VERSION } from "./_exp_default_struct.fg"
+import tens from "./_exp_default_value.fg"
+import re, * as reNs from "./_exp_reexport.fg"
+import { hi, PI, sum, lib as nested, appName, title } from "./_exp_reexport.fg"
+import util from "./_util.fg"
+
+print(greeting, twice(21), settings.level, add(2, 3), first, second)
+print(origin.x, origin.y, origin.sum(), typeof(origin))
+const p = new Point(3, 4)
+print(p.sum(), describe(p), describe2(origin))
+
+// import * keeps the module object; the default export is its `default`
+print(typeof(lib), lib.greeting, lib.default(p) == describe(p))
+
+// a default struct
+const c = new Counter()
+c.inc()
+print(c.inc(), VERSION)
+print(tens)
+
+// re-exports
+print(re.kind, hi, PI, sum(1, 2), nested.greeting, appName, title)
+print(reNs.describe(p), reNs.hi, typeof(reNs.lib), reNs.server.port)
+
+// a module without a default export still imports as the module object
+print(typeof(util), util.sum(5, 6))
+
+// import() returns the module object, default included
+const m = import("./_exp_lib.fg")
+print(typeof(m), m.twice(5), m.default(origin))

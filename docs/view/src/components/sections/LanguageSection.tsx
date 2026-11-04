@@ -412,7 +412,8 @@ fn _audit() { return true }           // private`}
           onRun={onRun}
           code={`import { Account, CURRENCY } from "./account.fg"
 import { Account as Acc } from "./account.fg"   // under another name
-import account from "./account.fg"             // namespace: account.CURRENCY
+import account from "./account.fg"             // the module (its default export, if it has one)
+import * as acc from "./account.fg"            // always the module: acc.CURRENCY
 import json from "fogu:json"                    // standard library
 // import greet from "greet"                    // a package installed with fogu add
 
@@ -420,6 +421,80 @@ const a = new Account("Ana", 10)
 a.deposit(5)
 print(a.balance(), CURRENCY)                    // 15 EUR
 // a._balance                                   // error[E0104]: '_balance' is private`}
+        />
+
+        <h3 className="text-lg font-semibold mt-8">Export lists, default exports and re-exports</h3>
+        <p>
+          Besides <code>export</code> in front of a declaration, a module can export names it already declared with
+          <code> export {'{'} a, b as c {'}'}</code> (any value: maps, struct types and instances, functions, imported names), one
+          <em> default</em> value with <code>export default</code>, and names of other modules (re-exports). An export takes
+          the value the name has at that point. <code>import x from</code> binds the default export when the module has one,
+          the module object otherwise; <code>import * as ns from</code> is always the module object (the default export is
+          <code> ns.default</code>). Exporting a name that is not defined, or the same name twice, is an error.
+        </p>
+        <DocCodeBlock
+          title="shapes.fg"
+          code={`import { sum } from "./util.fg"
+
+struct Point {
+    x = 0
+    y = 0
+}
+const origin = new Point()
+const settings = { precision: 2 }
+fn area(w, h) { return w * h }
+
+export { Point, origin, settings, area as rectArea, sum }   // names declared above
+export const [WIDTH, HEIGHT] = [800, 600]                    // destructuring
+export default fn describe(p) { return \`(\${p.x}, \${p.y})\` } // also: export default <expr>, export default struct S {}`}
+        />
+        <DocCodeBlock
+          title="index.fg"
+          code={`export { rectArea, default as describe } from "./shapes.fg"   // re-export some names
+export * from "./util.fg"                                       // every public name but default
+export * as shapes from "./shapes.fg"                           // the module under one name`}
+        />
+        <DocCodeBlock
+          title="main.fg"
+          code={`import describe, { Point, rectArea } from "./shapes.fg"   // the default and some names
+import { shapes } from "./index.fg"
+print(rectArea(2, 3), describe(new Point()), shapes.WIDTH)  // 6 (0, 0) 800`}
+        />
+
+        <h3 className="text-lg font-semibold mt-8">Importing data files</h3>
+        <p>
+          <code>import</code> also loads data files, chosen by their extension and resolved relative to the importing file
+          (loaded once, like modules). <code>import x from</code> and <code>import * as x from</code> bind the whole value;
+          <code> import {'{'} a, b {'}'} from</code> picks keys of a map (a missing key is an error). <code>import(path)</code> works
+          too, and <code>fogu build --compile</code> bundles every data file imported with a literal path. Any other
+          extension is an error (<code>unknown file type</code>); a path without an extension is a Fogu module.
+        </p>
+        <div className="overflow-x-auto mt-4">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="text-left border-b border-slate-200 dark:border-slate-800">
+                <th className="py-2 pr-4">Extension</th>
+                <th className="py-2">Value</th>
+              </tr>
+            </thead>
+            <tbody className="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60">
+              <tr><td className="py-2 pr-4"><code>.json .json5 .yaml .yml .toml</code></td><td>the parsed value (map, list…)</td></tr>
+              <tr><td className="py-2 pr-4"><code>.xml</code></td><td>the root element as <code>{'{'} name, attrs, children, text {'}'}</code> (as <code>xml.parse</code>)</td></tr>
+              <tr><td className="py-2 pr-4"><code>.csv</code></td><td>a list of maps, the header line as keys (as <code>csv.parse</code>)</td></tr>
+              <tr><td className="py-2 pr-4"><code>.txt .md .html .htm .css .svg .sql .js</code></td><td>the text (<code>str</code>)</td></tr>
+              <tr><td className="py-2 pr-4"><code>.png .jpg .jpeg .gif .webp .bmp .ico .avif .pdf .bin .wasm .woff .woff2 .ttf .otf</code></td><td>the bytes (<code>buffer</code>)</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <DocCodeBlock
+          title="server.fg"
+          code={`import config from "./config.json"          // { "port": 8080, "name": "api" }
+import { port } from "./config.json"         // one key
+import users from "./users.csv"              // [{ name: "Ana", age: 30 }, …]
+import banner from "./banner.txt"            // str
+import logo from "./logo.png"                // buffer
+
+print(config.name, port, users[0].name, banner.trim(), len(logo))`}
         />
       </section>
 

@@ -1,0 +1,6 @@
+{
+  "name": "fogu-app",
+  "port": 8080,
+  "tags": ["a", "b"],
+  "db": { "host": "localhost" }
+}

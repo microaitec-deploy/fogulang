@@ -1,0 +1,5 @@
+// the same name exported twice
+export const total = 1
+fn sum(a, b) { return a + b }
+export { sum as total }
+print("not reached")

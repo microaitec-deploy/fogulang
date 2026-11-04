@@ -1,0 +1,3 @@
+// a parse error of a format parsed by the standard library
+import cfg from "./_data/bad.yaml"
+print("not reached", cfg)

@@ -1,0 +1,3 @@
+// { … } of a data file picks keys of its map: a missing key is an error
+import { name, nope } from "./_data/config.json"
+print("not reached", name)

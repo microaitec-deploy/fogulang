@@ -1,0 +1,15 @@
+fogu-app 8080 [a, b] localhost
+fogu-app 8080 localhost map
+fogu-app true
+[1, 2, 3] list
+five 3 [1, 2]
+yaml-app 9000 [auth, cache]
+Fogu data 7000
+feed 2 2 two
+2 Ana 30 Bo int
+Hello from a text file. str
+# Title <h1>Hi</h1> body { color: red; } SELECT 1; true
+buffer 16 80 78 71
+<buffer 4 bytes: 00 01 02 ff>
+9000 true
+nil true

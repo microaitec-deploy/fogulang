@@ -8,6 +8,25 @@ be incompatible changes (spec §75).
 
 ### Added
 
+- More `export` forms: `export { a, b as c }` (names already declared: maps, struct types and
+  instances, functions, imported names — the value at that point), `export const [a, b] = …`,
+  `export default <expr>` / `export default fn f() {}` / `export default struct S {}`, and
+  re-exports `export { a, default as b } from "./m.fg"`, `export * from "./m.fg"` (every public
+  export but `default`; the module's own exports win) and `export * as m from "./m.fg"`.
+  `import x from "./m.fg"` binds the default export when the module has one (the module object
+  otherwise, as before); `import x, { a } from`, `import x, * as ns from` and
+  `import { default as x } from` also work; `import * as ns` is always the module. Exporting an
+  undefined name or the same name twice is an error (static, with line:column for duplicates).
+- `import` loads data files by extension, relative to the importing file and cached like
+  modules: `.json` (core parser), `.json5 .yaml .yml .toml .xml .csv` (the standard library's
+  parsers, through the new `Host::load_data`) → the parsed value; `.txt .md .html .htm .css .svg
+  .sql .js` → `str`; images (`.png .jpg .jpeg .gif .webp .bmp .ico .avif`), fonts, `.pdf .bin
+  .wasm` → `buffer`. `import { name, port } from "./config.json"` picks keys of a map (a missing
+  key is an error); `import * as x` and `import(path)` work too. Unknown extensions are an error
+  listing the supported ones; parse errors name the file and line. `fogu build --compile`
+  bundles imported data files (and follows `export … from`), and `fogu check` reports relative
+  imports whose file is missing or has an unknown type (without parsing data files).
+
 - `fogu:password` — password storage: `hash(pw, { algorithm, … })` with argon2id (default,
   OWASP m=19456 KiB t=2 p=1), argon2i/argon2d, bcrypt (cost 12), scrypt (N=2^17 r=8 p=1) and
   PBKDF2-SHA256/512 (600 000 / 210 000 iterations), always with a random salt; `verify(pw, hash)`

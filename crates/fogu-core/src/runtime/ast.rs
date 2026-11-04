@@ -204,6 +204,9 @@ pub enum ImportKind {
     Named { alias: String },
     Members { members: Vec<(String, String)> },
     Namespace { alias: String },
+    /// `import x, { a } from "m"` / `import x, * as ns from "m"`: the
+    /// default import, then `rest` (`Members` or `Namespace`).
+    Combined { alias: String, rest: Box<ImportKind> },
 }
 
 #[derive(Debug, Clone)]
@@ -221,6 +224,27 @@ pub enum ExportKind {
     },
     Struct(StructDecl),
     Interface(InterfaceDecl),
+    /// `export const [a, b] = expr`
+    LetList {
+        names: Vec<String>,
+        mutable: bool,
+        init: Expr,
+    },
+    /// `export { a, b as c }` (names of this module) or
+    /// `export { a, b as c } from "m"` (re-export): (name, exported as).
+    /// `default` is a valid exported name (`export { f as default }`).
+    Names {
+        names: Vec<(String, String)>,
+        from: Option<String>,
+    },
+    /// `export * from "m"` (every public export but `default`, added when the
+    /// module ends without replacing its own exports) or `export * as ns from "m"`.
+    All { from: String, alias: Option<String> },
+    /// `export default expr`
+    Default(Expr),
+    /// `export default fn f() {}` / `export default struct S {}`: declared in
+    /// the module (a `Stmt::FnDecl` / `Stmt::Struct`) and exported as `default`.
+    DefaultDecl(Box<Stmt>),
 }
 
 #[derive(Debug, Clone)]

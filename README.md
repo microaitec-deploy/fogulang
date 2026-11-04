@@ -349,10 +349,21 @@ fn _helper(x) { return x * 2 }         // `_` prefix = private to the module
 // main.fg
 import { sum, PI } from "./util.fg"
 import { sum as add } from "./util.fg"
-import util from "./util.fg"           // namespace
+import util from "./util.fg"           // the module (or its `export default` value)
+import * as u from "./util.fg"         // always the module
 import json from "fogu:json"           // standard library
 import greet from "greet"              // package (see Packages)
+
+// data files, by extension
+import config from "./config.json"     // .json .json5 .yaml .toml .xml .csv → value
+import { port } from "./config.json"   // a key of the map
+import banner from "./banner.txt"      // .txt .md .html .css .sql .svg → str
+import logo from "./logo.png"          // images, fonts, .bin → buffer
 ```
+
+Other export forms: `export { a, b as c }`, `export const [a, b] = …`, `export default <expr>`
+(`import x, { a } from "./m.fg"` takes both), and re-exports `export { a } from "./m.fg"`,
+`export * from "./m.fg"`, `export * as m from "./m.fg"`.
 
 Each module is evaluated once; cycles are a load error.
 

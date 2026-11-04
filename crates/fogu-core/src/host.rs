@@ -49,6 +49,14 @@ pub trait Host: Sync {
     /// Runs before every call (a server serves the requests it queued); it
     /// must be cheap when there is nothing to do.
     fn before_call(&self, it: &Interpreter, env: &Rc<RefCell<Environment>>);
+
+    /// Parses an imported data file the core cannot parse itself
+    /// (`import cfg from "./config.yaml"`): `ext` is the lowercase extension
+    /// (`json5`, `yaml`, `yml`, `toml`, `xml`, `csv`). `None` = not supported.
+    fn load_data(&self, path: &std::path::Path, ext: &str, bytes: &[u8]) -> Option<Result<Value, String>> {
+        let _ = (path, ext, bytes);
+        None
+    }
 }
 
 static HOST: OnceLock<&'static dyn Host> = OnceLock::new();

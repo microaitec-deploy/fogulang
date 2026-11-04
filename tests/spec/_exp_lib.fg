@@ -1,0 +1,24 @@
+// export { … } of names declared in the module, export const [..], export default fn
+import { sum } from "./_util.fg"
+
+const greeting = "hello"
+fn double(x) { return x * 2 }
+struct Point {
+    x = 0
+    y = 0
+    new(x, y) {
+        this.x = x
+        this.y = y
+    }
+    sum() { return this.x + this.y }
+}
+const settings = { debug: true, level: 2 }
+const origin = new Point(1, 2)
+const _hidden = 7
+
+export { greeting, double as twice, settings, Point, origin, sum as add }
+export const [first, second] = [10, 20]
+
+export default fn describe(p) {
+    return `Point(${p.x}, ${p.y})`
+}

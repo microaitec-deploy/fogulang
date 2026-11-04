@@ -1230,6 +1230,40 @@ export fn sum(a, b) {
 }
 ```
 
+Implemented (0.7.3) — every form below runs today:
+
+```fogu
+export const PI = 3.14                    // let/const, fn, struct, interface
+export const [W, H] = [800, 600]          // list destructuring
+export { a, b as c }                      // names already declared (their value at this point)
+export { a, default as main } from "./m.fg"   // re-export names (`default` included)
+export * from "./m.fg"                    // every public export of m except `default`
+export * as m from "./m.fg"               // m as one name
+export default <expr>                     // also `export default fn f() {}` / `export default struct S {}`
+
+import x from "./m.fg"                    // m's default export if it has one, else the module
+import x, { a } from "./m.fg"             // the default and some names
+import { default as x } from "./m.fg"
+import * as ns from "./m.fg"              // always the module (ns.default)
+```
+
+Exporting a name that is not defined, or the same name twice, is an error.
+A module's own exports win over names of `export *`.
+
+### Data files
+
+`import` also loads data files by extension, relative to the importing file and
+cached like modules: `.json .json5 .yaml .yml .toml .xml .csv` → the parsed value;
+`.txt .md .html .htm .css .svg .sql .js` → `str`; images, fonts, `.pdf .bin .wasm`
+→ `buffer`. `import { k } from "./x.json"` picks a key of a map. Other extensions
+are an error. `fogu build --compile` bundles them.
+
+```fogu
+import config from "./config.json"
+import { port } from "./config.yaml"
+import logo from "./logo.png"
+```
+
 ---
 
 ## 39. Module evaluation

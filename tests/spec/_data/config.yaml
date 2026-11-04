@@ -1,0 +1,5 @@
+name: yaml-app
+port: 9000
+features:
+  - auth
+  - cache

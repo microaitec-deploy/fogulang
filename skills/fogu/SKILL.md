@@ -144,7 +144,16 @@ import { readText, writeText } from "fogu:fs" // named imports
 import { sum } from "./util.fg"              // local file (in util.fg: export fn sum…)
 import greet from "greet"                    // package from fogu.json
 const app = import("./app.fg")?              // at run time: module or error value (path may be computed)
+import config from "./config.json"           // data files: .json .json5 .yaml .toml .xml .csv → value,
+import { port } from "./config.yaml"         //   .txt .md .html .css .sql .svg → str, images/.bin → buffer
 ```
+
+Exports: `export fn/const/let/struct/interface …`, `export const [a, b] = …`,
+`export { a, b as c }` (names declared above; their value at that point),
+`export default <expr>` (or `export default fn f() {}` / `struct S {}`), re-exports
+`export { a } from "./m.fg"`, `export * from "./m.fg"`, `export * as m from "./m.fg"`.
+`import x from "./m.fg"` binds m's default export when it has one, else the module;
+`import x, { a } from` combines both; `import * as ns from` is always the module.
 
 Globals (no import): `print len typeof str int float bytes clock close timeout error
 panic`, and the `Fogu` object: `Fogu.file(path).text()/.json()/.write(s)`,

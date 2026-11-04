@@ -1,0 +1,4 @@
+// exporting a name that does not exist
+const value = 1
+export { value, nope }
+print("not reached")

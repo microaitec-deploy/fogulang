@@ -729,6 +729,8 @@ fn collect(entry_arg: Option<&str>, extra_embed: &[String]) -> Result<Bundle, St
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let mut packages: BTreeMap<String, PathBuf> = BTreeMap::new();
     let mut modules: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // imported data files (`import cfg from "./config.json"`), base64
+    let mut data: BTreeMap<String, String> = BTreeMap::new();
     let mut queue: VecDeque<(PathBuf, Option<(String, PathBuf)>)> = VecDeque::new();
     queue.push_back((entry_path.clone(), None));
 
@@ -779,17 +781,46 @@ fn collect(entry_arg: Option<&str>, extra_embed: &[String]) -> Result<Bundle, St
                     continue;
                 }
             }
+            let target = crate::runtime::module::resolve_path(&spec, &dir)?;
+            if let Some(e) = crate::runtime::module::unknown_type(&target) {
+                return Err(format!("{}: {}", file.display(), e));
+            }
+            if crate::runtime::module::data_kind(&target).is_some() {
+                let target = target
+                    .canonicalize()
+                    .map_err(|e| format!("cannot resolve '{}' (from {}): {}", spec, file.display(), e))?;
+                let vpath = match &in_pkg {
+                    Some((pname, pdir)) => {
+                        let pdir = pdir.canonicalize().unwrap_or(pdir.clone());
+                        let rel = target.strip_prefix(&pdir).map_err(|_| {
+                            format!("'{}' is outside the package '{}'; it cannot be bundled", target.display(), pname)
+                        })?;
+                        format!("fogu_modules/{}/{}", pname, virtual_path(rel))
+                    }
+                    None => virtual_path(target.strip_prefix(&base).map_err(|_| {
+                        format!(
+                            "'{}' is outside the project folder '{}'; move it inside to bundle it",
+                            target.display(),
+                            base.display()
+                        )
+                    })?),
+                };
+                if !data.contains_key(&vpath) {
+                    use base64::Engine as _;
+                    let bytes = std::fs::read(&target).map_err(|e| format!("error reading '{}': {}", target.display(), e))?;
+                    data.insert(vpath, base64::engine::general_purpose::STANDARD.encode(bytes));
+                }
+                continue;
+            }
             match &in_pkg {
                 // a relative import inside a package stays inside that package
                 Some(owner) => {
-                    let target = crate::runtime::module::resolve_path(&spec, &dir)?;
                     let target = target
                         .canonicalize()
                         .map_err(|e| format!("cannot resolve '{}': {}", spec, e))?;
                     queue.push_back((target, Some(owner.clone())));
                 }
                 None => {
-                    let target = crate::runtime::module::resolve_path(&spec, &dir)?;
                     let target = target
                         .canonicalize()
                         .map_err(|e| format!("cannot resolve '{}' (from {}): {}", spec, file.display(), e))?;
@@ -822,7 +853,24 @@ fn collect(entry_arg: Option<&str>, extra_embed: &[String]) -> Result<Bundle, St
         .filter_map(|v| v.as_str().map(String::from))
         .collect();
     patterns.extend(extra_embed.iter().cloned());
-    let assets = collect_assets(&base, &patterns)?;
+    let mut assets = collect_assets(&base, &patterns)?;
+    // imported data files: text ones go with the sources (the in-memory file
+    // system of a WebAssembly build serves them), the others are assets
+    {
+        use base64::Engine as _;
+        for (vpath, b64) in data {
+            let bytes = base64::engine::general_purpose::STANDARD.decode(&b64).unwrap_or_default();
+            let binary = crate::runtime::module::data_kind(Path::new(&vpath)) == Some(crate::runtime::module::DataKind::Binary);
+            match String::from_utf8(bytes) {
+                Ok(text) if !binary => {
+                    files.insert(vpath, text);
+                }
+                _ => {
+                    assets.insert(vpath, b64);
+                }
+            }
+        }
+    }
 
     let dynamic = modules.contains("vm");
     let service = manifest.as_ref().map(|m| m.json["service"].clone()).unwrap_or(Json::Null);
@@ -882,12 +930,18 @@ fn collect_assets(base: &Path, patterns: &[String]) -> Result<BTreeMap<String, S
     Ok(out)
 }
 
-/// `import ... from "spec"` specifiers of a program (imports are top-level only).
+/// `import ... from "spec"` and `export ... from "spec"` specifiers of a
+/// program (imports are top-level only).
 fn imports(program: &[Stmt]) -> Vec<String> {
+    use crate::runtime::ast::ExportKind;
     program
         .iter()
         .filter_map(|s| match s {
             Stmt::Import { path, .. } => Some(path.clone()),
+            Stmt::Export(e) => match &**e {
+                ExportKind::Names { from: Some(path), .. } | ExportKind::All { from: path, .. } => Some(path.clone()),
+                _ => None,
+            },
             _ => None,
         })
         .collect()

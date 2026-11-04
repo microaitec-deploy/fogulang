@@ -104,7 +104,8 @@ fn check_file(f: &Path, builtins: &HashSet<String>) -> (Vec<String>, Vec<String>
         Ok(p) => p,
         Err(e) => return (vec![format!("{}: {}", name, e)], Vec::new()),
     };
-    let r = crate::runtime::resolver::analyze(&program, builtins);
+    let mut r = crate::runtime::resolver::analyze(&program, builtins);
+    r.errors.extend(missing_imports(f, &program));
     let mut warnings: Vec<(u32, String)> = r
         .warnings
         .into_iter()
@@ -113,6 +114,40 @@ fn check_file(f: &Path, builtins: &HashSet<String>) -> (Vec<String>, Vec<String>
     warnings.sort_by_key(|(l, _)| *l);
     let errors = r.errors.into_iter().map(|e| format!("{}: {}", name, e)).collect();
     (errors, warnings.into_iter().map(|(_, w)| w).collect())
+}
+
+/// Relative imports (`./x.fg`, `./config.json`, `export … from`) whose file
+/// does not exist or has an unknown type. Imported files are not parsed
+/// here: data files are not Fogu, and each module is checked on its own.
+fn missing_imports(f: &Path, program: &[crate::runtime::ast::Stmt]) -> Vec<String> {
+    use crate::runtime::ast::{ExportKind, Stmt};
+    let dir = f.parent().map(Path::to_path_buf).unwrap_or_default();
+    let mut line = 0;
+    let mut out = Vec::new();
+    for s in program {
+        let spec = match s {
+            Stmt::Line(n) => {
+                line = *n;
+                continue;
+            }
+            Stmt::Import { path, .. } => path,
+            Stmt::Export(e) => match &**e {
+                ExportKind::Names { from: Some(path), .. } | ExportKind::All { from: path, .. } => path,
+                _ => continue,
+            },
+            _ => continue,
+        };
+        if !(spec.starts_with("./") || spec.starts_with("../")) {
+            continue;
+        }
+        let Ok(target) = crate::runtime::module::resolve_path(spec, &dir) else { continue };
+        if let Some(e) = crate::runtime::module::unknown_type(&target) {
+            out.push(format!("line {}: name error: {}", line, e));
+        } else if !target.is_file() {
+            out.push(format!("line {}: name error: cannot find '{}' (imported from this file)", line, spec));
+        }
+    }
+    out
 }
 
 fn finding_json(text: &str, warning: bool) -> Json {

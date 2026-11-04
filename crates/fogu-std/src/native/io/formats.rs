@@ -379,6 +379,22 @@ pub fn xml_build() -> ModuleValue {
     )
 }
 
+/// Parses the text of an imported data file (`import cfg from "./config.yaml"`,
+/// `fogu_core::host::Host::load_data`): `ext` is the lowercase extension.
+/// `None` for an extension this module does not parse.
+pub fn load_data(ext: &str, text: &str) -> Option<Result<Value, String>> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let none = HashMap::new();
+    Some(match ext {
+        "json5" => crate::native::json5::parse_value(text),
+        "yaml" | "yml" => yaml_parse(text),
+        "toml" => toml_parse(text),
+        "xml" => xml_parse(text, &none),
+        "csv" => csv_parse(text, &none),
+        _ => return None,
+    })
+}
+
 /// The root element as `{ name, attrs, children, text }`; children are
 /// elements (maps) or text (str). `text` joins the direct text of the element.
 fn xml_parse(text: &str, o: &HashMap<String, Value>) -> Result<Value, String> {

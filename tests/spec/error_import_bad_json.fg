@@ -1,0 +1,3 @@
+// a parse error names the data file and the line
+import cfg from "./_data/bad.json"
+print("not reached", cfg)

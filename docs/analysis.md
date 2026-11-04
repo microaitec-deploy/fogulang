@@ -276,7 +276,26 @@
 - `tests/spec/error_type_param.fg` and `error_type_return.fg` now pass values the inference
   cannot see (`[x][0]`), so they still cover the run-time checks.
 
+## Sixteenth round (exports and data imports, 0.7.3)
+
+- New export forms (`ExportKind::LetList/Names/All/Default/DefaultDecl`) and
+  `ImportKind::Combined`. The default export lives under the key `default` of the module's
+  exports (a keyword, so no declared name collides); `import x from` binds it when present and
+  the module object otherwise, so every existing `import mod from "./x.fg"` keeps working.
+  `export *` is applied when the module ends (`Interpreter::export_stars`), so the module's own
+  exports win. Duplicate exports are a parse error (with the line of the first one); exporting an
+  undefined name is a resolver error; the interpreter has the same messages.
+- `ModuleCache::resolve` returns `Imported` (a module, or a data file's value). `.json` is parsed
+  by the core; `.json5 .yaml .toml .xml .csv` go through the new `Host::load_data` (fogu-std's
+  `formats::load_data`), since fogu-core cannot depend on fogu-std.
+
 ## Known gaps
+
+- Exports are values taken when the `export` runs, not live bindings: `export let n = 0` (or
+  `export { n }`) followed by `n += 1` does not change what importers see. A WebAssembly bundle
+  serves imported *text* data files from its in-memory file system, but binary ones (images,
+  `.bin`) are assets, which a WASI runtime only gets when the host gives access to a folder.
+  `fogu check` reports missing relative imports but does not check that imported names exist.
 
 - `fogu:foguMQ-client` (FlowMQ v6) is tested against an in-process mock broker only (Rust unit
   test); it was not run against a real FlowMQ server. `apikeyGet`/`apikeyList` return the raw

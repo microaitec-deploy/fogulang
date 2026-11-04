@@ -1,0 +1,3 @@
+// an extension that is neither .fg nor a data type
+import doc from "./_data/notes.docx"
+print("not reached", doc)

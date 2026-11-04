@@ -1,0 +1,4 @@
+title = "Fogu data"
+
+[server]
+port = 7000

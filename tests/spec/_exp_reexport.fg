@@ -1,0 +1,10 @@
+// re-exports: names, every name, a namespace, keys of data files
+export { greeting as hi, default as describe } from "./_exp_lib.fg"
+export * from "./_util.fg"
+export * as lib from "./_exp_lib.fg"
+export { name as appName } from "./_data/config.json"
+export * from "./_data/config.toml"
+
+// its own export wins over the one of `export *`
+export const PI = 3
+export default { kind: "reexport" }

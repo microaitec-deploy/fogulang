@@ -1,0 +1,10 @@
+hello 42 2 5 10 20
+1 2 3 struct
+7 Point(3, 4) Point(1, 2)
+module hello true
+2 1.0
+[10, 20, 30]
+reexport hello 3 3 hello fogu-app Fogu data
+Point(3, 4) hello module 7000
+module 11
+module 10 Point(1, 2)

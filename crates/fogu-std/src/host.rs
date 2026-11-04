@@ -132,6 +132,14 @@ impl Host for Std {
             crate::native::http::serve_pending(it, env);
         }
     }
+
+    fn load_data(&self, path: &std::path::Path, ext: &str, bytes: &[u8]) -> Option<Result<Value, String>> {
+        let _ = path;
+        match std::str::from_utf8(bytes) {
+            Ok(text) => crate::native::formats::load_data(ext, text),
+            Err(_) => Some(Err("it is not valid UTF-8 text".into())),
+        }
+    }
 }
 
 fn cron_tick(it: &Interpreter) -> Result<Value, String> {

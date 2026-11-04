@@ -1,0 +1,3 @@
+// a missing data file is an error, like a missing module
+import cfg from "./_data/missing.json"
+print("not reached", cfg)

@@ -354,11 +354,15 @@ fn declared_by(s: &Stmt) -> Vec<String> {
         Stmt::Struct(d) => vec![d.name.clone()],
         Stmt::Interface(d) => vec![d.name.clone()],
         Stmt::Import { kind, .. } => import_names(kind),
-        Stmt::Export(e) => vec![match &**e {
-            ExportKind::Fn { name, .. } | ExportKind::Let { name, .. } => name.clone(),
-            ExportKind::Struct(d) => d.name.clone(),
-            ExportKind::Interface(d) => d.name.clone(),
-        }],
+        Stmt::Export(e) => match &**e {
+            ExportKind::Fn { name, .. } | ExportKind::Let { name, .. } => vec![name.clone()],
+            ExportKind::Struct(d) => vec![d.name.clone()],
+            ExportKind::Interface(d) => vec![d.name.clone()],
+            ExportKind::LetList { names, .. } => names.iter().filter(|n| *n != "_").cloned().collect(),
+            ExportKind::DefaultDecl(s) => declared_by(s),
+            // re-exports and `export default <expr>` bind no name here
+            ExportKind::Names { .. } | ExportKind::All { .. } | ExportKind::Default(_) => Vec::new(),
+        },
         _ => Vec::new(),
     }
 }
@@ -393,6 +397,11 @@ fn import_names(kind: &ImportKind) -> Vec<String> {
     match kind {
         ImportKind::Named { alias } | ImportKind::Namespace { alias } => vec![alias.clone()],
         ImportKind::Members { members } => members.iter().map(|(_, a)| a.clone()).collect(),
+        ImportKind::Combined { alias, rest } => {
+            let mut out = vec![alias.clone()];
+            out.extend(import_names(rest));
+            out
+        }
     }
 }
 
@@ -436,7 +445,9 @@ fn walk_stmt(s: &Stmt, out: &mut HashSet<String>) {
             ExportKind::Fn { body, .. } => walk_stmts(body, out),
             ExportKind::Let { init, .. } => walk_expr(init, out),
             ExportKind::Struct(d) => walk_struct(d, out),
-            ExportKind::Interface(_) => {}
+            ExportKind::LetList { init, .. } | ExportKind::Default(init) => walk_expr(init, out),
+            ExportKind::DefaultDecl(s) => walk_stmt(s, out),
+            ExportKind::Interface(_) | ExportKind::Names { .. } | ExportKind::All { .. } => {}
         },
         Stmt::Struct(d) => walk_struct(d, out),
         Stmt::Select { cases, default } => {
@@ -698,6 +709,25 @@ impl Resolver<'_> {
     /// A type error that does not stop the analysis.
     fn report(&mut self, msg: String) {
         self.errors.push(format!("line {}: type error: {}", self.line, msg));
+    }
+
+    /// `export { name }`: the name must exist at this point (the export takes
+    /// its current value). Same message as the interpreter.
+    fn export_name(&mut self, name: &str) -> Result<(), String> {
+        let visible = self.scopes.last().is_some_and(|s| s.declared.contains(name))
+            || self.binding(name).is_some()
+            || self.builtins.contains(name);
+        if visible {
+            return self.use_name(name);
+        }
+        let later = self.scopes.last().is_some_and(|s| s.all.contains(name));
+        let mut msg = format!("cannot export '{}': it is not defined", name);
+        if later {
+            msg.push_str(&format!("\n  help: declare '{}' before this line (the export takes its current value)", name));
+        } else if let Some(s) = self.suggest(name) {
+            msg.push_str(&format!("\n  help: did you mean '{}'?", s));
+        }
+        self.fail(msg)
     }
 
     fn use_name(&mut self, name: &str) -> Result<(), String> {
@@ -976,6 +1006,21 @@ impl Resolver<'_> {
                     self.struct_decl(d)?;
                 }
                 ExportKind::Interface(d) => self.declare(&d.name),
+                ExportKind::LetList { names, init, .. } => {
+                    let r = self.expr(init);
+                    for n in names.iter().filter(|n| *n != "_") {
+                        self.declare(n);
+                    }
+                    r?;
+                }
+                ExportKind::Names { names, from: None } => {
+                    for (orig, _) in names {
+                        self.export_name(orig)?;
+                    }
+                }
+                ExportKind::Names { from: Some(_), .. } | ExportKind::All { .. } => {}
+                ExportKind::Default(e) => self.expr(e)?,
+                ExportKind::DefaultDecl(s) => self.stmt(s)?,
             },
             Stmt::Struct(d) => {
                 self.declare(&d.name);

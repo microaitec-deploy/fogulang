@@ -135,6 +135,62 @@ fn build_compile_makes_a_standalone_executable() {
 }
 
 #[test]
+fn build_compile_bundles_imported_data_files() {
+    let d = TempDir::new("build-data");
+    assert!(fogu(d.path(), &["init", "-y"]).status.success());
+    d.write("data.json", "{ \"name\": \"bundled\", \"port\": 8080 }\n");
+    d.write("lib/notes.txt", "hello from a text file\n");
+    fs::write(d.path().join("logo.png"), [0x89u8, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff]).unwrap();
+    // a data file imported by a module, and a re-export
+    d.write("lib/info.fg", "import notes from \"./notes.txt\"\nexport default notes.trim()\nexport { port } from \"../data.json\"\n");
+    d.write(
+        "main.fg",
+        "import data from \"./data.json\"\nimport logo from \"./logo.png\"\nimport info, { port } from \"./lib/info.fg\"\n\
+         print(data.name, port, typeof(logo), len(logo), logo[9], info)\n",
+    );
+    let o = fogu(d.path(), &["build", "--compile"]);
+    assert!(o.status.success(), "{}", text(&o));
+
+    let name = d.path().file_name().unwrap().to_string_lossy().to_string();
+    let exe = d
+        .path()
+        .join("dist")
+        .join(if cfg!(windows) { format!("{}.exe", name) } else { name });
+    // the data files travel inside the executable
+    let bundle = bundle_of(&exe);
+    assert!(bundle["files"]["data.json"].is_string(), "{}", bundle["files"]);
+    assert!(bundle["files"]["lib/notes.txt"].is_string(), "{}", bundle["files"]);
+    assert!(bundle["assets"]["logo.png"].is_string(), "{}", bundle["assets"]);
+
+    let elsewhere = TempDir::new("build-data-run");
+    let run = Command::new(&exe).current_dir(elsewhere.path()).output().unwrap();
+    assert_eq!(text(&run).trim(), "bundled 8080 buffer 10 255 hello from a text file");
+
+    // an unknown file type stops the build
+    d.write("main.fg", "import doc from \"./notes.docx\"\nprint(doc)\n");
+    d.write("notes.docx", "x");
+    let o = fogu(d.path(), &["build", "--compile"]);
+    assert!(!o.status.success());
+    assert!(text(&o).contains("unknown file type"), "{}", text(&o));
+}
+
+#[test]
+fn check_reports_missing_imported_files_without_parsing_data() {
+    let d = TempDir::new("check-imports");
+    d.write("config.json", "{ \"port\": 1 }\n");
+    d.write(
+        "main.fg",
+        "import cfg from \"./config.json\"\nimport gone from \"./gone.json\"\nimport m from \"./missing.fg\"\nprint(cfg, gone, m)\n",
+    );
+    let o = fogu(d.path(), &["check", "main.fg"]);
+    let out = text(&o);
+    assert!(!o.status.success(), "{}", out);
+    assert!(out.contains("cannot find './gone.json'"), "{}", out);
+    assert!(out.contains("cannot find './missing.fg'"), "{}", out);
+    assert!(!out.contains("config.json"), "{}", out);
+}
+
+#[test]
 fn fmt_formats_files_and_check_reports_them() {
     let dir = TempDir::new("fmt");
     dir.write("ugly.fg", "fn add(a,b){\nreturn a+b\n}\n\n\n\nprint( add(1,2) )   // three\n");
