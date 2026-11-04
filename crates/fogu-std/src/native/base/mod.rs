@@ -2,6 +2,7 @@
 //! cron, log, regex, crypto, vm, the `Fogu` object, signals, CLI helpers, FFI.
 
 pub mod time;
+pub mod types;
 pub mod sync;
 pub mod cron;
 pub mod log;

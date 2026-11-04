@@ -143,6 +143,7 @@ fn cron_tick(it: &Interpreter) -> Result<Value, String> {
 fn install(ctx: &mut NativeContext) {
     ctx.define_lazy("system", crate::native::system::build);
     ctx.define_lazy("time", crate::native::time::build);
+    ctx.define_lazy("types", crate::native::types::build);
     #[cfg(not(target_family = "wasm"))]
     ctx.define_lazy("net", crate::native::net::build);
     ctx.define_lazy("cron", crate::native::cron::build);

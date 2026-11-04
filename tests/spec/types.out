@@ -1,10 +1,21 @@
-5 1.5 2.5
-2 nil
-[42, nil] negative age
-set 2
-square 9
-map 1.5
-9 a nil
-2
-17711
-yes no
+true false true true true
+true true true true false
+int str User Date nil
+42 31 1000 7 1
+types.toInt: cannot convert str "4.5" to int
+-1 2.5 true false 12
+[a, b, c] [1, 2, 3] {a: 1, b: 2} {age: 0, name: }
+true Ana
+age: must be <= 150, got 200
+ - age: must be <= 150, got 200
+ - email: does not match /[^@]+@[^@]+/
+ - name: length must be >= 1, got 0
+ - role: must be one of admin, user, got root
+ - tags[1]: expected str, got int 2
+[id: missing] true true false
+true true true
+[x: unknown field]
+{debug: true, ids: [1, 2], page: 2, ratio: 0.5, size: 50}
+size: must be <= 100, got 500
+true false 2
+true

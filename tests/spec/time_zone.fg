@@ -1,0 +1,42 @@
+import time from "fogu:time"
+
+// dates are UTC unless a zone is given
+print(time.zone())
+const d = time.Date(1793793600000)
+print(d.toISOString(), d.hour, d.zone, d.offset)
+print(d.toString())
+
+// the same instant in other zones
+const sp = d.in("America/Sao_Paulo")
+print(sp.hour, sp.offset, sp.iso(), sp.toString())
+const ny = d.in("America/New_York")
+print(ny.hour, ny.offset, ny.format("%Y-%m-%d %H:%M %Z"))
+print(sp.equals(ny), sp.diff(ny))
+
+// setZone: the default zone of new dates
+time.setZone("Asia/Tokyo")
+print(time.zone(), time.Date(1793793600000).hour)
+time.setZone("UTC")
+const [_, bad] = time.setZone("Mars/Olympus")
+print(bad != nil, time.zone())
+
+// building, parsing and formatting
+const x = time.Date({ year: 2024, month: 2, day: 29, hour: 22, minute: 30, zone: "America/Sao_Paulo" })
+print(x.toISOString(), x.isLeapYear, x.dayOfYear, x.week, x.daysInMonth)
+print(time.parse("2026-03-08T10:15:00-03:00").toISOString())
+print(time.parse("04/11/2026 08:05", "%d/%m/%Y %H:%M", "Europe/Lisbon").iso())
+print(time.parse("2026-11-04").toISOString())
+const [_, perr] = time.parse("not a date")
+print(perr != nil)
+print(time.format(0, "%A %d %B %Y"), time.format(d, "%H:%M", "Asia/Kolkata"))
+
+// calendar arithmetic
+const jan31 = time.Date({ year: 2026, month: 1, day: 31 })
+print(jan31.add({ months: 1 }).toISOString(), jan31.add({ days: 1, hours: 2 }).toISOString())
+print(jan31.sub({ years: 1 }).toISOString(), jan31.add(90m).toISOString())
+// across a clock change: one calendar day is 23 hours in New York on 2026-03-08
+const before = time.Date({ year: 2026, month: 3, day: 7, hour: 12, zone: "America/New_York" })
+print(before.add({ days: 1 }).hour, before.add({ days: 1 }).diff(before) / 3600000)
+print(sp.startOf("day").iso(), sp.startOf("month").iso(), sp.startOf("week").iso())
+print(time.isLeapYear(2000), time.isLeapYear(1900), time.daysInMonth(2026, 2))
+print(time.zones().contains("Europe/Paris"), d.before(sp.add(1ms)), d.sameDay(ny))

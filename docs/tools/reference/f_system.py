@@ -8,18 +8,25 @@ SECTIONS = [
         "group": I,
         "title": "fogu:ffi",
         "import": 'import ffi from "fogu:ffi"',
-        "intro": "Calls functions of native libraries (C ABI): <code>.dll</code>, <code>.so</code>, <code>.dylib</code>. "
-        "<strong>Unsafe by nature</strong>: a wrong signature can crash the program. Supported signatures: up to 4 "
-        "arguments mixing integers and floats, or up to 8 integer/pointer arguments.",
+        "intro": "Calls functions of native libraries (C ABI): <code>.dll</code>, <code>.so</code>, <code>.dylib</code>, and "
+        "lets C call Fogu functions back. <strong>Unsafe by nature</strong>: a wrong signature can crash the program. "
+        "Each signature gets a native stub generated with Cranelift: any number of arguments mixing integers, pointers, "
+        "<code>f64</code> and <code>f32</code> (<code>ffi.native</code> is <code>true</code>). On 32-bit ARM, which has no "
+        "Cranelift backend, a precompiled table is used instead (up to 4 arguments mixing integers and floats, or up to "
+        "8 integers; no <code>f32</code> arguments, no callbacks).",
         "blocks": [
             {
                 "api": [
                     ("ffi.open(name)", "Library · error", "A path or a name; <code>\"c\"</code> and <code>\"m\"</code> are the C runtime and the math library. The same name works on every platform: without an extension it gets the platform's prefix and suffix (<code>\"native/mylib\"</code> → <code>native/libmylib.so</code> on Linux, <code>native/libmylib.dylib</code> on macOS, <code>native/mylib.dll</code> on Windows), and another platform's extension is mapped to the native one (<code>\"mylib.dll\"</code> on Linux also tries <code>libmylib.so</code>). The error lists every file tried."),
                     ("lib.func(symbol, [argTypes], returnType = \"void\")", "fn · error", "A Fogu function that calls the symbol."),
-                    ("lib.has(symbol) · lib.name", "bool · str", ""),
-                    ("types", "", "<code>i8 i16 i32 i64 u8 u16 u32 u64 isize usize bool f64 ptr str buffer</code>; results also <code>f32 void</code>. <code>str</code> passes a NUL-terminated copy; a <code>str</code> result reads a C string."),
-                    ("ffi.alloc(size)", "Buffer", "Memory for out-parameters: <code>text() bytes(start?, len?) write(offset, str | bytes) i32/u32/i64/f64(offset)</code>, fields <code>size address</code>."),
-                    ("ffi.types · ffi.suffix", "list · str", ""),
+                    ("lib.has(symbol) · lib.addr(symbol) · lib.name", "bool · int · str", "<code>addr</code>: the address of a function or a global variable (read it with <code>ffi.read</code>)."),
+                    ("types", "", "<code>i8 i16 i32 i64 u8 u16 u32 u64 isize usize bool f32 f64 ptr str buffer</code>; results also <code>void</code>. <code>str</code> passes a NUL-terminated copy; a <code>str</code> result reads a C string. A <code>ptr</code> takes an int address, <code>nil</code> (NULL), a Buffer or a Callback."),
+                    ("ffi.alloc(size) · ffi.cstring(text)", "Buffer", "Memory for out-parameters and structs (zeroed), or a NUL-terminated copy of a text. Methods: <code>get(type, offset = 0)</code>, <code>set(type, offset, value)</code>, <code>ptr(offset = 0)</code>, <code>text()</code>, <code>bytes(start?, len?)</code>, <code>write(offset, str | bytes | buffer)</code>, <code>toBuffer()</code>, <code>i8 u8 i16 u16 i32 u32 i64 u64 f32 f64(offset)</code>; fields <code>size address</code>. Little-endian."),
+                    ("ffi.callback(fn, [argTypes], returnType = \"void\")", "Callback", "A C function pointer that runs <code>fn</code>: pass it as a <code>ptr</code> argument (<code>qsort</code>, <code>EnumWindows</code>, event loops…). Field <code>address</code>; <code>close()</code> releases the function (later calls return 0). Callbacks run on the interpreter's thread while a C function called through <code>fogu:ffi</code> is running; a call from another thread returns 0 and is reported on stderr. An error inside a callback makes the C call that ran it fail with that error."),
+                    ("ffi.read(ptr, type, offset = 0) · ffi.write(ptr, type, value, offset = 0)", "value · nil", "Raw memory at an address (or a Buffer)."),
+                    ("ffi.string(ptr, len?) · ffi.bytes(ptr, len)", "str · buffer", "A C string (<code>nil</code> for NULL), or a copy of <code>len</code> bytes."),
+                    ("ffi.sizeof(type) · ffi.NULL · ffi.lastError()", "int", "<code>lastError</code>: <code>errno</code> (<code>GetLastError</code> on Windows) right after the last ffi call."),
+                    ("ffi.types · ffi.suffix · ffi.native", "list · str · bool", ""),
                 ],
                 "example": r'''
 import ffi from "fogu:ffi"
@@ -35,7 +42,24 @@ strcpy(buf, "copied")
 print(buf.text(), buf.bytes(0, 3))
 ''',
                 "run": True,
-            }
+            },
+            {
+                "h3": "Callbacks",
+                "example": r'''
+import ffi from "fogu:ffi"
+// qsort sorts C ints, calling a Fogu comparator for each pair
+const qsort = ffi.open("c")?.func("qsort", ["buffer", "usize", "usize", "ptr"])?
+const nums = [42, -7, 19, 3, 0]
+const buf = ffi.alloc(4 * nums.len())
+for i in 0..nums.len() { buf.set("i32", 4 * i, nums[i]) }
+const cmp = ffi.callback(fn(a, b) { return ffi.read(a, "i32") - ffi.read(b, "i32") }, ["ptr", "ptr"], "i32")
+qsort(buf, nums.len(), 4, cmp)
+const out = []
+for i in 0..nums.len() { out.push(buf.get("i32", 4 * i)) }
+print(out)
+''',
+                "run": True,
+            },
         ],
     },
     {

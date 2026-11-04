@@ -23,6 +23,10 @@ sha1 = "0.10"
 md-5 = "0.10"
 aes-gcm = "0.11"
 argon2 = "0.5"
+# fogu:time — dates in time zones (the IANA database is built in)
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = "0.10"
+iana-time-zone = "0.1"
 getrandom = "0.2"
 csv = "1"
 serde_yaml = "0.9"

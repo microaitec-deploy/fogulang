@@ -28,6 +28,8 @@ pub fn build() -> ModuleValue {
     // cores() → how many the runtime uses · cores(n) → use n threads · cores([0, 2]) → only those CPUs
     e.insert("cores".into(), nfn_var("cores", 0, cores));
     e.insert("os".into(), Value::Str(std::env::consts::OS.into()));
+    // the running executable: the fogu binary (or the app of `build --compile`); nil if unknown
+    e.insert("execPath".into(), std::env::current_exe().map_or(Value::Nil, |p| Value::Str(p.to_string_lossy().into_owned().into())));
     e.insert("env".into(), crate::native::process::env_map());
     e.insert("args".into(), str_list(crate::native::system::script_args()));
 

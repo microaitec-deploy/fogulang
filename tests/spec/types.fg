@@ -1,73 +1,51 @@
-// Type annotations, interfaces and generics (spec §9, §25, §27)
-fn add(a: int, b: int): int { return a + b }
-fn half(x: float): float { return x / 2.0 }
-print(add(2, 3), half(3), half(5.0))          // int is accepted where float is expected
+import types from "fogu:types"
+import time from "fogu:time"
 
-fn find(xs: list<int>, v: int): int? {
-    for i, x in xs { if x == v { return i } }
-    return nil
+struct User {
+    name = ""
+    age = 0
 }
-print(find([5, 6, 7], 7), find([], 1))
 
-fn parse_age(s: str): (int, error) {
-    const n = int(s)
-    if n < 0 { return 0, error("negative age") }
-    return n, nil
-}
-fn older(s: str): (int, error) {
-    const age = parse_age(s)?
-    return age + 1, nil
-}
-print(older("41"), older("-3")[1].message)
+// predicates and names
+print(types.isInt(3), types.isInt(3.0), types.isNumber(3.0), types.isStr("a"), types.isNil(nil))
+print(types.isList([]), types.isMap({}), types.isFn(print), types.isEmpty(""), types.isEmpty([1]))
+print(types.of(1), types.of("x"), types.of(new User()), types.of(time.Date(0)), types.of(nil))
 
-let label: str | nil = nil
-label = "set"
-const ratio: float = 2
-print(label, ratio)
+// lenient conversions: an error value, or the default given
+print(types.toInt("42"), types.toInt(" 0x1F "), types.toInt("1_000"), types.toInt(7.0), types.toInt(true))
+const [_, e1] = types.toInt("4.5")
+print(e1.message)
+print(types.toInt("abc", -1), types.toFloat("2.5"), types.toBool("yes"), types.toBool("off"), types.toStr(12))
+print(types.toList("abc"), types.toList(1..4), types.toMap([["a", 1], ["b", 2]]), types.toMap(new User()))
 
-interface Shape {
-    area(): float
-    name(): str
+// schemas
+const UserSpec = {
+    name: { "$type": "str", minLen: 1 },
+    "age?": { "$type": "int", min: 0, max: 150 },
+    email: { "$type": "str", pattern: "[^@]+@[^@]+" },
+    tags: "[str]",
+    role: { "$type": "str", oneOf: ["admin", "user"] },
 }
-struct Square {
-    side = 0
-    new(side) { this.side = side }
-    area() { return this.side * this.side }
-    name() { return "square" }
-}
-struct Point {
-    x = 0
-}
-fn describe(s: Shape): str { return `${s.name()} ${s.area()}` }
-print(describe(new Square(3)))
-print(describe({ area: () => 1.5, name: () => "map" }))   // structural: a map of functions
+const good = { name: "Ana", email: "ana@x.io", tags: ["a"], role: "user" }
+print(types.is(good, UserSpec), types.check(good, UserSpec)?.name)
+const bad = { name: "", age: 200, email: "nope", tags: ["a", 2], role: "root" }
+const [_, e2] = types.check(bad, UserSpec)
+print(e2.message)
+for p in types.validate(bad, UserSpec) { print(" -", p) }
+print(types.validate({}, { id: "int" }), types.is(5, "int|str"), types.is(nil, "str?"), types.is([1, "a"], "[int]"))
+print(types.is({ a: 1, b: 2 }, "{int}"), types.is(new User(), "User"), types.is(time.Date(0), "Date"))
+print(types.validate({ a: 1, x: 2 }, { "$type": "map", fields: { a: "int" }, strict: true }))
 
-fn first<T>(items: list<T>): T? {
-    if len(items) == 0 { return nil }
-    return items[0]
-}
-print(first([9, 8]), first(["a"]), first([]))
+// coerce: texts become the numbers and bools the spec asks for
+const q = types.coerce({ page: "2", size: "50", debug: "true", ratio: "0.5", ids: ["1", "2"] },
+    { page: "int", size: { "$type": "int", max: 100 }, debug: "bool", ratio: "float", ids: "[int]" })?
+print(q)
+const [_, e3] = types.coerce({ size: "500" }, { size: { "$type": "int", max: 100 } })
+print(e3.message)
 
-struct Stack<T> {
-    items = []
-    push(v: T) { this.items.push(v) }
-    size(): int { return len(this.items) }
-}
-const st = new Stack<int>()
-st.push(1)
-st.push(2)
-print(st.size())
-
-fn fib(n: int): int {
-    if n < 2 { return n }
-    return fib(n - 1) + fib(n - 2)
-}
-print(fib(22))
-
-fn check(b: bool): str {
-    return match b {
-        true => "yes"
-        false => "no"
-    }
-}
-print(check(true), check(false))
+// deep equality and copies
+const a = { xs: [1, { y: 2 }] }
+const b = types.clone(a)
+b.xs[1].y = 3
+print(types.equal(a, { xs: [1, { y: 2 }] }), types.equal(a, b), a.xs[1].y)
+print(types.equal(new User(), new User()))

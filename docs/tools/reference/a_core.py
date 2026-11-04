@@ -4,7 +4,7 @@ G = "Standard library"
 C = "Core modules"
 
 MODULE_TABLE = [
-    ("Core", "fogu:math fogu:json fogu:time fogu:system fogu:fs fogu:path fogu:process fogu:sync fogu:test fogu:log fogu:regex fogu:crypto"),
+    ("Core", "fogu:math fogu:json fogu:time fogu:types fogu:system fogu:fs fogu:path fogu:process fogu:sync fogu:test fogu:log fogu:regex fogu:crypto"),
     ("Data formats", "fogu:csv fogu:excel fogu:yaml fogu:toml fogu:xml"),
     ("Storage", "fogu:kv fogu:surrealkv fogu:surrealdb fogu:sql fogu:orm fogu:redis fogu:s3 fogu:scylla fogu:etcd"),
     ("Web &amp; network", "fogu:http fogu:web fogu:jwt fogu:topcoat fogu:websocket fogu:socketio fogu:grpc fogu:net fogu:security"),
@@ -297,19 +297,40 @@ while true {
         "group": C,
         "title": "fogu:math",
         "import": 'import math from "fogu:math"',
+        "intro": "Numbers. Rounding to an int (<code>floor ceil trunc round</code>) keeps ints as they are; "
+        "the other functions return floats. The JIT compiles these calls inside hot code with the same results.",
         "blocks": [
             {
                 "api": [
-                    ("math.PI · math.E", "float", "Constants."),
-                    ("math.abs(x)", "number", "Absolute value (int stays int)."),
-                    ("math.sqrt(x)", "float", "Square root."),
-                    ("math.pow(base, exp)", "number", "Power."),
-                    ("math.floor(x) · math.ceil(x)", "int", "Rounding down / up."),
+                    ("math.PI · E · TAU · LN2 · LN10 · SQRT2 · EPSILON · INF · NAN", "float", "Constants."),
+                    ("math.MAX_INT · math.MIN_INT", "int", "The int range (64-bit)."),
+                    ("math.abs(x) · math.sign(x)", "number", "Ints stay ints; <code>sign</code> is -1, 0 or 1."),
+                    ("math.sqrt(x) · cbrt(x) · pow(base, exp) · hypot(x, y)", "float", ""),
+                    ("math.floor(x) · ceil(x) · trunc(x) · round(x)", "int", "<code>round</code> takes halves away from zero."),
+                    ("math.round(x, digits) · math.fract(x)", "float", "Rounded to <code>digits</code> decimals; the fractional part."),
+                    ("math.sin cos tan asin acos atan (x) · atan2(y, x)", "float", "Radians."),
+                    ("math.sinh cosh tanh asinh acosh atanh (x)", "float", "Hyperbolic."),
+                    ("math.exp(x) · exp2 · expm1 · log(x, base?) · log2 · log10 · log1p", "float", "<code>log(x)</code> is the natural logarithm."),
+                    ("math.degrees(rad) · math.radians(deg)", "float", ""),
+                    ("math.min(...) · math.max(...)", "number", "Of the arguments or of one list; keeps the winner's type."),
+                    ("math.clamp(x, lo, hi) · math.lerp(a, b, t)", "number · float", "<code>clamp</code> of ints is an int."),
+                    ("math.isNaN(x) · isInf(x) · isFinite(x)", "bool", ""),
+                    ("math.gcd(a, b) · lcm(a, b) · factorial(n) · isPrime(n)", "int · bool", "Ints; overflow is an error."),
+                    ("math.sum(list) · mean(list) · median(list)", "number · float", "<code>sum</code> of ints is an int."),
+                    ("math.random() · randomInt(min, max) · uniform(lo, hi)", "float · int · float", "<code>[0, 1)</code>; both ends included; <code>[lo, hi)</code>. Not for secrets: use <code>crypto</code>."),
+                    ("math.choice(list) · math.shuffle(list) · math.seed(n)", "value · list · nil", "A random element (<code>nil</code> if empty); shuffles in place and returns the list; a repeatable sequence."),
                 ],
                 "example": r'''
 import math from "fogu:math"
 print(math.abs(-4), math.sqrt(16), math.pow(2, 10), math.floor(2.7), math.ceil(2.1))
-print(math.PI)
+print(math.round(math.sin(math.PI / 2), 6), math.atan2(1, 1) == math.PI / 4, math.hypot(3, 4))
+print(math.log(math.E), math.log(8, 2), math.round(2.5), math.round(3.14159, 2))
+print(math.min(3, 1, 2), math.max([4, 9, 2]), math.clamp(15, 0, 10), math.lerp(0, 10, 0.25))
+print(math.gcd(12, 18), math.factorial(10), math.mean([1, 2, 3, 4]), math.median([5, 1, 3]))
+math.seed(7)
+const a = math.randomInt(1, 6)
+math.seed(7)
+print(a == math.randomInt(1, 6), math.random() < 1)
 ''',
                 "run": True,
             }
@@ -337,16 +358,57 @@ print(json.stringify({ ok: true, list: [1, 2.5, nil] }))
         ],
     },
     {
+        "id": "mod-types",
+        "group": C,
+        "title": "fogu:types",
+        "import": 'import types from "fogu:types"',
+        "intro": "Runtime type checks, lenient conversions and schemas for data that comes from outside "
+        "(JSON bodies, query strings, environment variables, files).",
+        "blocks": [
+            {
+                "api": [
+                    ("types.isInt isFloat isNumber isStr isBool isNil isList isMap isBuffer isFn isError isDuration isRange isStruct isObject isChan (v)", "bool", ""),
+                    ("types.isEmpty(v)", "bool", "<code>nil</code>, <code>\"\"</code>, <code>[]</code>, <code>{}</code>, an empty buffer or range."),
+                    ("types.of(v)", "str", "Like <code>typeof</code>, but the name of a struct or native object (<code>\"User\"</code>, <code>\"Date\"</code>)."),
+                    ("types.toInt toFloat toBool toStr toList toMap (v, default?)", "value · error", "Lenient conversions: <code>\" 0x1F \"</code> → 31, <code>\"1_000\"</code> → 1000, <code>\"yes\"/\"off\"</code> → bool, a struct → map, pairs → map. When it can't convert: <code>default</code>, or an error value."),
+                    ("types.is(v, spec)", "bool", "Whether <code>v</code> matches the spec."),
+                    ("types.check(v, spec)", "value · error", "<code>v</code>, or an error value naming the first problem with its path (<code>tags[1]: expected str, got int 2</code>)."),
+                    ("types.validate(v, spec)", "list", "Every problem (empty when valid)."),
+                    ("types.assert(v, spec)", "value", "Like <code>check</code>, but a mismatch stops the program."),
+                    ("types.coerce(v, spec)", "value · error", "A copy where texts become the ints, floats and bools the spec asks for (query strings, forms, env vars), then checked."),
+                    ("types.equal(a, b) · types.clone(v)", "bool · value", "Deep equality (structs by fields); a deep copy."),
+                    ("spec", "", "A type name (<code>any nil bool int float number str list map buffer fn error duration range struct object chan</code>, or a struct/object name); <code>\"T?\"</code> also nil, <code>\"A|B\"</code>, <code>\"[T]\"</code> a list of T, <code>\"{T}\"</code> a map of T; <code>[spec]</code>; <code>{ field: spec, \"opt?\": spec }</code>; or <code>{ \"$type\": spec, min, max, minLen, maxLen, pattern, oneOf, nullable, fields, items, strict }</code>."),
+                ],
+                "example": r'''
+import types from "fogu:types"
+print(types.isInt(3), types.of([]), types.toInt("0x1F"), types.toBool("yes"), types.toInt("x", 0))
+const User = { name: { "$type": "str", minLen: 1 }, "age?": { "$type": "int", min: 0 }, tags: "[str]" }
+print(types.is({ name: "Ana", tags: [] }, User))
+for p in types.validate({ name: "", age: -1, tags: [1] }, User) { print(p) }
+print(types.coerce({ page: "2", debug: "true" }, { page: "int", debug: "bool" })?)
+''',
+                "run": True,
+            }
+        ],
+    },
+    {
         "id": "mod-time",
         "group": C,
         "title": "fogu:time",
         "import": 'import time from "fogu:time"',
+        "intro": "Clocks, waits and dates. A Date is an instant plus a time zone (UTC unless you choose another); "
+        "its fields and <code>format</code> use that zone. The IANA time zone database is built in.",
         "blocks": [
             {
                 "api": [
                     ("time.now()", "int", "Milliseconds since the UNIX epoch."),
                     ("time.monotonic()", "float", "Seconds from a fixed point; never goes backwards (the wall clock can jump): measure durations with it."),
-                    ("time.Date()", "Date", "The current instant (UTC)."),
+                    ("time.Date(at?, zone?)", "Date · error", "The current instant; or <code>at</code> = milliseconds, a text (as <code>time.parse</code>) or a map <code>{ year, month, day, hour, minute, second, millis, zone }</code>."),
+                    ("time.zone() · time.setZone(name)", "str · nil · error", "The default zone of new dates (\"UTC\" at start): an IANA name (<code>\"America/Sao_Paulo\"</code>), <code>\"UTC\"</code> or <code>\"local\"</code> (the system's zone). An unknown name is an error value."),
+                    ("time.localZone() · time.zones()", "str · list", "The system's zone (<code>TZ</code>, then the OS); every IANA name."),
+                    ("time.parse(text, format?, zone?)", "Date · error", "RFC 3339 / ISO 8601, RFC 2822, <code>YYYY-MM-DD[ HH:MM[:SS]]</code>, or a strftime <code>format</code>. Texts without an offset are read in <code>zone</code> (default: the default zone)."),
+                    ("time.format(date | ms, format, zone?)", "str", "strftime: <code>%Y %m %d %H %M %S %3f %A %a %B %b %j %U %Z %z %s</code>…"),
+                    ("time.isLeapYear(y) · time.daysInMonth(y, m)", "bool · int", ""),
                     ("time.delay(d) · time.sleep(seconds)", "nil", "Waits; other <code>fg</code> tasks keep running."),
                 ],
             },
@@ -355,23 +417,30 @@ print(json.stringify({ ok: true, list: [1, 2.5, nil] }))
                 "api": [
                     ("d.year · d.month · d.day", "int", "Month 1–12."),
                     ("d.hour · d.minute · d.second · d.millis · d.weekday", "int", "Weekday 0 = Sunday."),
+                    ("d.zone · d.offset", "str · int", "The zone name; minutes east of UTC (São Paulo: -180)."),
+                    ("d.dayOfYear · d.week · d.isLeapYear · d.daysInMonth", "int · bool", "<code>week</code> is the ISO week."),
                     ("d.getTime()", "int", "Milliseconds since the epoch (also <code>d.ms</code>)."),
-                    ("d.toISOString()", "str", "<code>2026-10-10T12:00:00.000Z</code>"),
-                    ("d.toString()", "str", "Human readable."),
+                    ("d.toISOString() · d.iso()", "str", "UTC (<code>2026-10-10T12:00:00.000Z</code>); RFC 3339 with the zone's offset."),
+                    ("d.toString() · d.format(fmt)", "str", "Human readable; strftime."),
+                    ("d.setZone(name) · d.in(name)", "nil · Date", "The same instant in another zone: in place, or a copy."),
+                    ("d.add(units) · d.sub(units)", "Date", "A new Date. <code>units</code>: a duration (<code>90m</code>), ms, or <code>{ years, months, weeks, days, hours, minutes, seconds, millis }</code> — calendar units follow the zone's clock (a day can be 23 or 25 hours; Jan 31 + 1 month = Feb 28)."),
+                    ("d.startOf(unit) · d.clone()", "Date", "<code>year month week day hour minute second</code> (weeks start on Monday)."),
                     ("d.addMs(ms)", "nil", "Moves the date by <code>ms</code> (in place)."),
-                    ("d.diff(other)", "int", "Milliseconds between the dates."),
-                    ("getFullYear() getMonth() getDate() getDay() getHours() getMinutes() getSeconds() getMilliseconds()", "int", "JavaScript-style getters (month 0–11)."),
+                    ("d.diff(other) · before · after · equals · sameDay", "int · bool", "Milliseconds between the dates; comparisons (a Date or ms)."),
+                    ("getFullYear() getMonth() getDate() getDay() getHours() getMinutes() getSeconds() getMilliseconds() getTimezoneOffset()", "int", "JavaScript-style getters (month 0–11)."),
                 ],
                 "example": r'''
 import time from "fogu:time"
 const start = time.now()
 time.delay(20ms)
 print(time.now() - start >= 20)
-const d = time.Date()
-print(d.year > 2000, d.month >= 1, d.toISOString().ends_with("Z"))
-const later = time.Date()
-later.addMs(24 * 3600 * 1000)
-print(later.diff(d) >= 86400000)
+const d = time.Date(1793793600000)
+print(d.toISOString(), d.in("America/Sao_Paulo").format("%d/%m/%Y %H:%M %Z"))
+time.setZone("America/New_York")
+const x = time.Date({ year: 2026, month: 1, day: 31, hour: 9 })
+print(x.iso(), x.add({ months: 1 }).iso(), x.startOf("month").format("%A"))
+print(time.parse("04/11/2026 08:05", "%d/%m/%Y %H:%M", "Europe/Lisbon").toISOString())
+time.setZone("UTC")
 ''',
                 "run": True,
             },

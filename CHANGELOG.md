@@ -6,6 +6,42 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
+### Added
+
+- `fogu:math`: `sin cos tan asin acos atan atan2 sinh cosh tanh asinh acosh atanh exp exp2 expm1
+  log(x, base?) log2 log10 log1p cbrt hypot trunc round(x, digits?) fract sign min max clamp lerp
+  degrees radians isNaN isInf isFinite gcd lcm factorial isPrime sum mean median`, a seedable
+  random generator (`random randomInt uniform choice shuffle seed`, xoshiro256\*\*) and the
+  constants `TAU LN2 LN10 SQRT2 EPSILON INF NAN MAX_INT MIN_INT`. The JIT compiles them in hot code
+  (calling the same Rust functions, so results are identical) and inlines `floor ceil trunc round
+  min max lerp` (`tests/spec/math_more.fg`).
+- `fogu:ffi`: **callbacks** — `ffi.callback(fn, types, ret)` is a C function pointer that runs a
+  Fogu function (`qsort` comparators, `EnumWindows`, event loops); an error inside it fails the C
+  call that ran it. Every signature now gets a native stub generated with Cranelift
+  (`runtime/ffi_stub.rs`): any number of arguments, `f32` arguments; the precompiled table stays as
+  the fallback on 32-bit ARM. New helpers: `ffi.cstring`, `ffi.string`, `ffi.bytes`, `ffi.read`,
+  `ffi.write`, `ffi.sizeof`, `ffi.lastError`, `ffi.NULL`, `ffi.native`, `Library.addr`, and on
+  buffers `get(type, offset)`, `set(type, offset, value)`, `ptr(offset)`, `toBuffer()` and the
+  `i8 u8 i16 u16 u64 f32` reads (`tests/spec/ffi_callback.fg`).
+- `fogu:time`: time zones (the IANA database is built in) — `time.setZone(name | "local")`,
+  `time.zone()`, `time.localZone()`, `time.zones()`; `time.Date(ms | text | {year, month, …}, zone?)`,
+  `time.parse(text, format?, zone?)`, `time.format(date, format, zone?)`, `time.isLeapYear`,
+  `time.daysInMonth`; on dates `zone offset dayOfYear week isLeapYear daysInMonth`, `setZone`,
+  `in`, `iso`, `format`, `add`/`sub` with calendar units (DST-aware), `startOf`, `clone`, `before`,
+  `after`, `equals`, `sameDay`, `getTimezoneOffset` (`tests/spec/time_zone.fg`). Dates stay UTC
+  unless a zone is chosen.
+- `fogu:types`: predicates (`isInt isStr isMap … isEmpty`), `types.of` (struct and object names),
+  lenient conversions with defaults (`toInt toFloat toBool toStr toList toMap`), schemas
+  (`is check validate assert coerce`: type names, `T?`, `A|B`, `[T]`, `{T}`, field maps with
+  optional fields, `$type` constraints `min max minLen maxLen pattern oneOf nullable strict`),
+  deep `equal` and `clone` (`tests/spec/types.fg`).
+- `Fogu.execPath`: the running executable. The test runners of the libraries in `libs/` use it by
+  default, so `fogu tests/run.fg` tests with the same binary.
+
+### Changed
+
+- ffi calls are checked first in the standard library's intercept chain.
+
 ## [0.7.2] - 2026-10-30
 
 ### Added

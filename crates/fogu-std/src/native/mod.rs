@@ -22,6 +22,7 @@ pub mod media;
 #[cfg(feature = "rpc")]
 pub mod rpc;
 pub use base::time;
+pub use base::types;
 pub use base::sync;
 pub use base::cron;
 pub use base::log;
