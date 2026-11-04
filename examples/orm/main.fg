@@ -53,33 +53,33 @@ let mary = db.user.create({
 
 db.post.create({ data: { title: "Hello ORM", body: "...", authorId: john.id, published: true } })
 db.post.create({ data: { title: "Draft",     body: "...", authorId: john.id } })
-db.post.create({ data: { title: "Notas",     body: "...", authorId: mary.id } })
+db.post.create({ data: { title: "Notes",     body: "...", authorId: mary.id } })
 
 // ---------- INCLUDE one-to-many ----------
-print("--- users com posts ---")
+print("--- users with posts ---")
 let users = db.user.findMany({
     include: { posts: true },
     orderBy: { id: "asc" }
 })
 for u in users {
-    print(`${u.name} tem ${len(u.posts)} posts:`)
+    print(`${u.name} has ${len(u.posts)} posts:`)
     for p in u.posts {
         print(`   - ${p.title}`)
     }
 }
 
 // ---------- INCLUDE many-to-one ----------
-print("--- posts com author ---")
+print("--- posts with author ---")
 let posts = db.post.findMany({
     include: { author: true },
     orderBy: { id: "asc" }
 })
 for p in posts {
-    print(`"${p.title}" por ${p.author.name}`)
+    print(`"${p.title}" by ${p.author.name}`)
 }
 
-// ---------- INCLUDE aninhado ----------
-print("--- aninhado ---")
+// ---------- nested INCLUDE ----------
+print("--- nested ---")
 let nested = db.user.findMany({
     where: { email: "john@x.com" },
     include: { posts: { include: { author: true } } }

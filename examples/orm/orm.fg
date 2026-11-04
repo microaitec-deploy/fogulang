@@ -162,7 +162,7 @@ fn migrate_diff(db, schema) {
             let want_type = normalize_type(sql_type(def.type))
             if real_type != want_type {
                 plan.warnings.push(
-                    `${table}.${field_name}: tipo difere (banco=${real_type}, schema=${want_type})`
+                    `${table}.${field_name}: type differs (database=${real_type}, schema=${want_type})`
                 )
             }
         }
@@ -197,12 +197,12 @@ fn migrate_apply(db, schema, opts = {}) {
     let log  = opts.log    ?? true
 
     if log {
-        print("[migrate] === plano ===")
+        print("[migrate] === plan ===")
         for c in plan.creates { print(`  CREATE ${c.table}`) }
         for a in plan.alters  { print(`  ALTER  ${a.table}  ->  ${a.sql}`) }
         for w in plan.warnings { print(`  WARN   ${w}`) }
         if len(plan.creates) == 0 && len(plan.alters) == 0 {
-            print("  (nada a fazer — banco em sincronia)")
+            print("  (nothing to do — the database is in sync)")
         }
     }
 
@@ -211,7 +211,7 @@ fn migrate_apply(db, schema, opts = {}) {
     for c in plan.creates { db.exec(c.sql)? }
     for a in plan.alters  { db.exec(a.sql)? }
 
-    if log { print("[migrate] aplicado") }
+    if log { print("[migrate] applied") }
     return plan
 }
 
@@ -253,7 +253,7 @@ fn resolve_includes(client_ref, schema, model_name, rows, include) {
 
         let rel = model.relations[rel_name]
         if rel == nil {
-            print(`[include] aviso: relação '${rel_name}' não existe em ${model_name}`)
+            print(`[include] warning: relation '${rel_name}' does not exist in ${model_name}`)
             continue
         }
 
@@ -314,11 +314,11 @@ fn make_delegate(client_ref, schema, db, model_name, model) {
                     cols.push(field); ph.push("?"); vals.push(def.defaultValue)
                 }
             }
-            let r = db.run(
-                `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${ph.join(", ")})`,
+            // RETURNING * gives the new row (with its generated id) in one statement
+            let row = db.one(
+                `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${ph.join(", ")}) RETURNING *`,
                 vals
             )?
-            let row = db.one(`SELECT * FROM ${table} WHERE id = ?`, [r.lastInsertId])
             if args.include != nil {
                 resolve_includes(client_ref, schema, model_name, [row], args.include)
             }
@@ -409,10 +409,10 @@ fn make_delegate(client_ref, schema, db, model_name, model) {
 export fn create_client(opts = {}) {
     let schema = opts.schema
     if schema == nil {
-        throw "create_client: parâmetro 'schema' é obrigatório"
+        panic("create_client: the 'schema' argument is required")
     }
     if schema.url == nil {
-        throw "create_client: schema.url é obrigatório"
+        panic("create_client: schema.url is required")
     }
 
     let db = sql.open(schema.url)?
@@ -451,15 +451,16 @@ export fn create_client(opts = {}) {
         client[model_name.lower()] = delegates[model_name.lower()]
     }
 
-    client.transaction = (fn) => {
+    // transaction(work): commits when work() succeeds, rolls back when it returns an error
+    client.transaction = (work) => {
         db.exec("BEGIN")?
-        try {
-            fn()
-            db.exec("COMMIT")?
-        } catch e {
+        const [result, err] = work()
+        if err != nil {
             db.exec("ROLLBACK")?
-            throw e
+            return nil, err
         }
+        db.exec("COMMIT")?
+        return result
     }
 
     client.disconnect = (unused) => {
