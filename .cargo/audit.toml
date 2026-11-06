@@ -1,0 +1,18 @@
+# cargo audit (RustSec): advisories that cannot be fixed from this repository
+# yet, each with the reason and what would close it. Run `cargo audit` from
+# lang/; review this list at every release (`cargo audit --ignore` is not used).
+
+[advisories]
+ignore = [
+    # rsa 0.9 (Marvin attack, timing side channel in PKCS#1 v1.5 decryption):
+    # transitive through sqlx-mysql (MySQL's caching_sha2_password sends the
+    # password RSA-encrypted when the connection is not TLS). RustSec lists no
+    # patched version (0.10 is a release candidate). Exposure: a MySQL login
+    # without TLS to a server an attacker can time. Use TLS for MySQL.
+    "RUSTSEC-2023-0071",
+]
+# unmaintained crates stay as warnings (paste: a proc-macro helper pinned by rav1e / pulp, the image codecs,
+# dependencies; ttf-parser: via ab_glyph for fogu:image text, the maintained
+# replacement skrifa would need a new text renderer). serde_yaml was replaced
+# by serde_norway (the maintained fork, same API, parser unsafe-libyaml-norway).
+informational_warnings = ["unmaintained", "unsound"]

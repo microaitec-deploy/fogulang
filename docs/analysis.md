@@ -311,6 +311,22 @@
   rooms with Chrome as caller and as callee, and the HTTP POST variant; text and binary echo,
   nominated pair `succeeded`; and `examples/webrtc_chat.fg` end to end (page → Fogu → page).
 
+## Dependency audit (cargo audit, 0.7.3)
+
+`cargo audit` on 2026-11-06, 764 dependencies, 7 advisories:
+
+| Advisory | Crate | Fix |
+| --- | --- | --- |
+| RUSTSEC-2026-0436 | calamine 0.37 (OOM on a malformed CFB/OLE2 file) | 0.38.0 |
+| RUSTSEC-2026-0391 | zstd 0.13.3 (data of an abandoned stream leaks into the next) | 0.13.4 |
+| RUSTSEC-2026-0398, -0403 and 9 unsound warnings | zstd-safe 7.3 (Vec length past capacity, uninitialized memory, use-after-free…) | 7.4.0 |
+| RUSTSEC-2026-0433 | pulldown-cmark 0.13.5 (quadratic wikilinks) | 0.13.6 |
+| RUSTSEC-2026-0387 | crypto-bigint 0.5 (timing variability) via str0m → dimpl → ecdsa 0.16 | str0m 0.25 (dimpl 0.9, ecdsa 0.17, crypto-bigint 0.7); no code change |
+| yanked | clipboard-win 5.4.1 (rustyline, Windows) | 5.4.3 |
+| RUSTSEC-2023-0071 | rsa 0.9 (Marvin attack) via sqlx-mysql | **open**: no patched release (0.10 is a release candidate; sqlx 0.9 pins it but RustSec lists no fixed version). Exposure: a MySQL login without TLS (`caching_sha2_password` sends the password RSA-encrypted). Ignored in `.cargo/audit.toml` with the reason |
+
+Unmaintained: `unsafe-libyaml` via serde_yaml → **replaced** by `serde_norway` 0.9 (the maintained fork: same API, parser `unsafe-libyaml-norway`; `serde-yaml-ng` and `serde_yml` still use the unmaintained one). Left as warnings, no fix available: `paste` (a proc-macro helper pinned by dependencies), `ttf-parser` (via ab_glyph for `fogu:image` text; the maintained replacement, skrifa, would need a new text renderer).
+
 ## Known gaps
 
 - Exports are values taken when the `export` runs, not live bindings: `export let n = 0` (or

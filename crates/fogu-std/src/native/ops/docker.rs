@@ -465,7 +465,7 @@ pub fn build() -> ModuleValue {
     f("readCompose", 1, |a| {
         let path = str_arg(a, 0, "docker.readCompose")?;
         let text = std::fs::read_to_string(&path).map_err(|e| io_err!("docker.readCompose: {}: {}", path, e))?;
-        let j: serde_json::Value = serde_yaml::from_str(&text).map_err(|e| io_err!("docker.readCompose: {}: {}", path, e))?;
+        let j: serde_json::Value = serde_norway::from_str(&text).map_err(|e| io_err!("docker.readCompose: {}: {}", path, e))?;
         Ok(json_to_value(&j))
     });
     f("composeString", 1, |a| compose_yaml(&a[0]).map(Value::str));
@@ -548,7 +548,7 @@ fn compose_yaml(v: &Value) -> Result<String, String> {
             *s = reorder(s.take(), &svc_order);
         }
     }
-    serde_yaml::to_string(&top).map_err(|e| io_err!("docker: {}", e))
+    serde_norway::to_string(&top).map_err(|e| io_err!("docker: {}", e))
 }
 
 // ================= COMPOSE PROJECT =================

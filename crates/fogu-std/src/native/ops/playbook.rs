@@ -73,7 +73,7 @@ fn load_data(v: &J, what: &str) -> Result<J, String> {
     match v {
         J::String(path) => {
             let text = std::fs::read_to_string(path).map_err(|e| io_err!("{}: {}: {}", what, path, e))?;
-            serde_yaml::from_str::<J>(&text).map_err(|e| io_err!("{}: {}: {}", what, path, e))
+            serde_norway::from_str::<J>(&text).map_err(|e| io_err!("{}: {}: {}", what, path, e))
         }
         other => Ok(other.clone()),
     }
@@ -1927,10 +1927,10 @@ pub fn play_cli(args: &[String]) -> i32 {
                         // key=value or JSON/YAML
                         match v.split_once('=') {
                             Some((k, val)) if !v.trim_start().starts_with('{') => {
-                                let parsed = serde_yaml::from_str::<J>(val).unwrap_or(J::String(val.to_string()));
+                                let parsed = serde_norway::from_str::<J>(val).unwrap_or(J::String(val.to_string()));
                                 extra.insert(k.to_string(), parsed);
                             }
-                            _ => match serde_yaml::from_str::<J>(&v) {
+                            _ => match serde_norway::from_str::<J>(&v) {
                                 Ok(J::Object(m)) => extra.extend(m),
                                 _ => {
                                     eprintln!("error: -e expects key=value or a map");

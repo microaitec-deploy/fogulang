@@ -14,6 +14,12 @@ be incompatible changes (spec §75).
   virtual file wins over the disk; the folder's other files stay on disk), `vfs::clear()`;
   `embed::Runtime::run_file` reads through it; `toolkit::build::embedded_in_memory()` extracts a
   bundle without writing the program's own `.fg` files (the desktop host runs apps this way).
+- Dependency audit (`cargo audit`, RustSec): calamine 0.38 (OOM on malformed .xls), zstd 0.13.4 /
+  zstd-safe 7.4 (stream leaks, unsound decompression), pulldown-cmark 0.13.6 (quadratic wikilinks),
+  str0m 0.25 (crypto-bigint 0.7: constant-time ECDSA for `fogu:webrtc`'s DTLS), clipboard-win 5.4.3
+  (yanked); serde_yaml (unmaintained) replaced by serde_norway, its maintained fork with the same API.
+  Left, documented in `.cargo/audit.toml`: rsa 0.9 (Marvin) through sqlx-mysql — no patched
+  release; use TLS for MySQL.
 - The `wasm32-wasip1` build (the browser tour) compiles again: the bundle extraction helpers are desktop-only.
 - `crypto.hashFile(algo, path, { base64 })` — the digest of a file's bytes (executables, archives).
 - `crypto.encryptFile(src, dst, key)` / `crypto.decryptFile(src, dst, key)` — files (binary too), AES-256-GCM, the format of `crypto.encrypt` without base64; a wrong key writes nothing.

@@ -33,10 +33,10 @@ scrypt = { version = "0.11", default-features = false, features = ["simple"] }
 pbkdf2 = { version = "0.12", default-features = false, features = ["simple"] }
 getrandom = "0.2"
 csv = "1"
-serde_yaml = "0.9"
+serde_norway = "0.9"
 toml = "0.8"
 quick-xml = "0.42"
-calamine = "0.37"
+calamine = "0.38"
 rust_xlsxwriter = "0.102"
 flate2 = "1"
 tar = "0.4"
@@ -102,7 +102,7 @@ engineioxide = { version = "0.17", optional = true }
 socketioxide-core = { version = "0.19", optional = true }
 rskafka = { version = "0.6.0", features = ["transport-tls"], optional = true }
 # fogu:webrtc — sans-IO WebRTC (ICE, DTLS, SCTP data channels); pure-Rust crypto (no OpenSSL / aws-lc)
-str0m = { version = "0.24.1", default-features = false, features = ["rust-crypto"], optional = true }
+str0m = { version = "0.25", default-features = false, features = ["rust-crypto"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

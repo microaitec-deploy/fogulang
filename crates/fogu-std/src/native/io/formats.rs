@@ -254,7 +254,7 @@ pub fn yaml_build() -> ModuleValue {
                 max_args(a, 1, "yaml.parseAll")?;
                 let text = str_arg(a, 0, "yaml.parseAll")?;
                 let mut docs = Vec::new();
-                for d in serde_yaml::Deserializer::from_str(&text) {
+                for d in serde_norway::Deserializer::from_str(&text) {
                     let v: J = <J as serde::Deserialize>::deserialize(d).map_err(|e| io_err!("yaml: {}", e))?;
                     docs.push(json_to_value(&v));
                 }
@@ -262,7 +262,7 @@ pub fn yaml_build() -> ModuleValue {
             }),
             ("stringify", 1, |a| {
                 max_args(a, 1, "yaml.stringify")?;
-                serde_yaml::to_string(&to_json(&a[0])).map(Value::str).map_err(|e| io_err!("yaml: {}", e))
+                serde_norway::to_string(&to_json(&a[0])).map(Value::str).map_err(|e| io_err!("yaml: {}", e))
             }),
             ("read", 1, |a| {
                 max_args(a, 1, "yaml.read")?;
@@ -270,7 +270,7 @@ pub fn yaml_build() -> ModuleValue {
             }),
             ("write", 2, |a| {
                 max_args(a, 2, "yaml.write")?;
-                let text = serde_yaml::to_string(&to_json(&a[1])).map_err(|e| io_err!("yaml: {}", e))?;
+                let text = serde_norway::to_string(&to_json(&a[1])).map_err(|e| io_err!("yaml: {}", e))?;
                 write_text(&str_arg(a, 0, "yaml.write")?, &text, "yaml.write")
             }),
         ],
@@ -278,7 +278,7 @@ pub fn yaml_build() -> ModuleValue {
 }
 
 pub(crate) fn yaml_parse(text: &str) -> Result<Value, String> {
-    let v: J = serde_yaml::from_str(text).map_err(|e| io_err!("yaml: {}", e))?;
+    let v: J = serde_norway::from_str(text).map_err(|e| io_err!("yaml: {}", e))?;
     Ok(json_to_value(&v))
 }
 

@@ -23,6 +23,7 @@ cargo run -- test                     # run *.test.fg files (fogu:test)
 cargo run -- fmt --check              # formatting (toolkit/fmt.rs)
 cargo run -- play site.yml -i inv.yml # playbooks (fogu-std native/ops/playbook.rs)
 cargo ffi                             # libfogu_rt .so/.dll/.dylib (ffi/, header ffi/fogu.h)
+cargo audit                           # RustSec advisories of the dependencies (.cargo/audit.toml lists the accepted ones, with reasons)
 cargo run --                          # REPL
 cargo test --release                  # unit tests of every crate + tests/spec (with and without JIT)
 cargo build --release --no-default-features --features network   # a smaller binary (features below)
