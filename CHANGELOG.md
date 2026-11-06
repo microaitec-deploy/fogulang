@@ -14,6 +14,7 @@ be incompatible changes (spec §75).
   virtual file wins over the disk; the folder's other files stay on disk), `vfs::clear()`;
   `embed::Runtime::run_file` reads through it; `toolkit::build::embedded_in_memory()` extracts a
   bundle without writing the program's own `.fg` files (the desktop host runs apps this way).
+- The `wasm32-wasip1` build (the browser tour) compiles again: the bundle extraction helpers are desktop-only.
 - `crypto.hashFile(algo, path, { base64 })` — the digest of a file's bytes (executables, archives).
 - `crypto.encryptFile(src, dst, key)` / `crypto.decryptFile(src, dst, key)` — files (binary too), AES-256-GCM, the format of `crypto.encrypt` without base64; a wrong key writes nothing.
 - Several `embed::Runtime`s in one process run in parallel, each with its own globals (tested).

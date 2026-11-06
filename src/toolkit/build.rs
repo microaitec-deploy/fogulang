@@ -1126,6 +1126,7 @@ pub fn embedded() -> Option<Result<Embedded, String>> {
 
 
 /// Reads the executable only when it ends with the bundle trailer.
+#[cfg(not(target_family = "wasm"))]
 fn read_tail(exe: &Path) -> Option<Vec<u8>> {
     use std::io::{Read, Seek, SeekFrom};
     let mut f = std::fs::File::open(exe).ok()?;
@@ -1146,6 +1147,7 @@ fn read_tail(exe: &Path) -> Option<Vec<u8>> {
     Some(payload)
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn extract(payload: &[u8], memory: bool) -> Result<Embedded, String> {
     let j: Json = serde_json::from_slice(payload).map_err(|e| format!("corrupted bundle: {}", e))?;
     let entry = j["entry"].as_str().ok_or("corrupted bundle: no entry")?.to_string();
