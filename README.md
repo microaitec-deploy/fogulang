@@ -6,6 +6,9 @@ integration and small services**. This repository is the reference
 implementation in Rust: interpreter + **JIT compiler (Cranelift)**, REPL, CLI,
 git-based package manager and standalone executables.
 
+The name comes from **Fôgu** — *fire* in Forro, the creole of São Tomé and
+Príncipe — a mark of the identity of STP.
+
 ```fogu
 import http from "fogu:http"
 import time from "fogu:time"
