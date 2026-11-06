@@ -19,3 +19,18 @@ true true true
 size: must be <= 100, got 500
 true false 2
 true
+true
+Ana user [] nil
+false
+ - email: does not match /[^\s@]+@[^\s@]+\.[^\s@]+/
+ - name: length must be >= 1, got 0
+ - role: must be one of admin, user, got root
+ - site: missing
+ - tags: length must be <= 3, got 4
+ - extra: unknown field
+{debug: true, page: 2, size: 20}
+true false false
+value: no variant matched (must be >= 1, got 0 / expected str, got int 0)
+true false {$type: str, max: 3}
+true [a: expected int, got str "x"]
+true true true

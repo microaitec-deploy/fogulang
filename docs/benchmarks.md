@@ -7,7 +7,7 @@ Versions: bun 1.4.2, fogu 0.7.2, go version go1.26.0 linux/amd64, Python 3.10.12
 Each number is the **median of 5 runs**, in milliseconds, of the whole process
 (start-up included). Lower is better. The languages are interleaved (each repetition runs
 every language once), so changes in the machine's load affect all of them alike. Every
-program prints the same result in every language; the runner checks it. Bun is the main rival, Go the ceiling.
+program prints the same result in every language; the runner checks it. Bun is another scripting runtime, Go the ceiling.
 
 | benchmark | what it measures | Fogu | Fogu (no JIT) | Bun | Go | Python |
 |---|---|---:|---:|---:|---:|---:|

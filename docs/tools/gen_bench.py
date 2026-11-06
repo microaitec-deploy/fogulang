@@ -55,7 +55,7 @@ ABOUT = {
     "records": "JSON: stringify and parse 50k records.",
     "sort": "Generate and sort 300k pseudo-random integers.",
 }
-# Bun is the main rival (a scripting runtime); Go is the ceiling
+# Bun is the other scripting runtime; Go is the ceiling
 LANGS = ["Fogu", "Fogu (no JIT)", "Bun", "Go", "Python"]
 
 # what was optimized, in order (shown on every benchmark page)
@@ -119,7 +119,7 @@ def main():
         f"Each number is the **median of {r['runs']} runs**, in milliseconds, of the whole process",
         "(start-up included). Lower is better. The languages are interleaved (each repetition runs",
         "every language once), so changes in the machine's load affect all of them alike. Every",
-        "program prints the same result in every language; the runner checks it. Bun is the main rival, Go the ceiling.",
+        "program prints the same result in every language; the runner checks it. Bun is another scripting runtime, Go the ceiling.",
         "",
         "| benchmark | what it measures | " + " | ".join(LANGS) + " |",
         "|---|---|" + "|".join("---:" for _ in LANGS) + "|",

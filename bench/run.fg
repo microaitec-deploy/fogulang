@@ -1,6 +1,6 @@
 // Fogu vs Bun vs Go vs Python: runs each benchmark in every language, checks
 // that they print the same thing, and writes bench/results.json and bench/RESULTS.md.
-// Bun is the primary rival (a scripting runtime); Go is the performance ceiling.
+// Bun is the other scripting runtime; Go is the performance ceiling.
 //
 //   fogu bench/run.fg                 // 5 runs per case (the median is kept)
 //   fogu bench/run.fg 3 fib loop      // 3 runs, only fib and loop

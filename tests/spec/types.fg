@@ -49,3 +49,30 @@ const b = types.clone(a)
 b.xs[1].y = 3
 print(types.equal(a, { xs: [1, { y: 2 }] }), types.equal(a, b), a.xs[1].y)
 print(types.equal(new User(), new User()))
+
+// schemas in the builder style (as Zod): every method returns a new schema
+const Signup = types.object({
+    name: types.str().min(1).max(40),
+    age: types.int().min(0).max(150).optional(),
+    email: types.str().email(),
+    tags: types.list(types.str()).max(3).default([]),
+    role: types.enum(["admin", "user"]).default("user"),
+    site: types.str().url().nullable(),
+}, { strict: true })
+print(Signup.is({ name: "Ana", email: "ana@x.io", site: nil }))
+const [u, perr] = Signup.parse({ name: "Ana", email: "ana@x.io", site: nil })
+print(u.name, u.role, u.tags, perr)
+const r = Signup.safeParse({ name: "", email: "nope", tags: ["a", "b", "c", "d"], role: "root", extra: 1 })
+print(r.ok)
+for p in r.errors { print(" -", p) }
+const Q = types.object({ page: types.int().default(1), size: types.int().max(100).default(20), debug: types.bool().optional() })
+print(Q.coerce({ page: "2", debug: "true" })?)
+const Id = types.union([types.int().min(1), types.str().uuid()])
+print(Id.is(7), Id.is("x"), Id.is(0))
+const [_, uerr] = Id.parse(0)
+print(uerr.message)
+const Base = types.str()
+const Short = Base.max(3)
+print(Base.is("hello"), Short.is("hello"), Short.spec())
+print(types.is({ a: 1 }, types.map(types.int())), types.validate({ a: "x" }, types.map(types.int())))
+print(types.literal("on").is("on"), types.instance("Date").is(time.Date(0)), types.schema("[int]").is([1, 2]))

@@ -14,6 +14,13 @@ be incompatible changes (spec §75).
   virtual file wins over the disk; the folder's other files stay on disk), `vfs::clear()`;
   `embed::Runtime::run_file` reads through it; `toolkit::build::embedded_in_memory()` extracts a
   bundle without writing the program's own `.fg` files (the desktop host runs apps this way).
+- `fogu:types` schemas in the style of Zod: `types.object({ name: types.str().min(1), age: types.int().optional() })`,
+  `types.list(item)`, `types.map(values)`, `types.enum([…])`, `types.literal(v)`, `types.union([…])`,
+  `types.instance("Date")`; constraints as methods (`min max minLen maxLen length pattern email url uuid
+  oneOf optional nullable default strict describe`), and `parse` (value with defaults, or the first
+  problem as an error value), `safeParse` (`{ ok, value }` / `{ ok: false, errors }`), `is`, `validate`,
+  `assert`, `coerce`, `spec()`. A schema is accepted wherever a spec is; specs gain `default`, `anyOf`
+  (a list of specs) and `values` (the spec of a map's values).
 - Dependency audit (`cargo audit`, RustSec): calamine 0.38 (OOM on malformed .xls), zstd 0.13.4 /
   zstd-safe 7.4 (stream leaks, unsound decompression), pulldown-cmark 0.13.6 (quadratic wikilinks),
   str0m 0.25 (crypto-bigint 0.7: constant-time ECDSA for `fogu:webrtc`'s DTLS), clipboard-win 5.4.3

@@ -474,6 +474,13 @@ Runtime type checks, lenient conversions and schemas for data that comes from ou
 - `types.coerce(v, spec)` → value · error — A copy where texts become the ints, floats and bools the spec asks for (query strings, forms, env vars), then checked.
 - `types.equal(a, b) · types.clone(v)` → bool · value — Deep equality (structs by fields); a deep copy.
 - `spec` — A type name (`any nil bool int float number str list map buffer fn error duration range struct object chan`, or a struct/object name); `"T?"` also nil, `"A|B"`, `"[T]"` a list of T, `"{T}"` a map of T; `[spec]`; `{ field: spec, "opt?": spec }`; or `{ "$type": spec, min, max, minLen, maxLen, pattern, oneOf, nullable, fields, items, strict }`.
+- `types.str() int() float() number() bool() any() duration() buffer()` → Schema — Schemas in the style of Zod: a spec with methods. Every method returns a new schema.
+- `types.object({ field: schema | spec, … }, { strict }) · types.list(item) · types.map(values)` → Schema — A map with those fields (a field made with `.optional()` may be missing or nil; `strict` refuses unknown fields); a list of `item`; a map whose values match `values`.
+- `types.enum([values]) · types.literal(v) · types.union([schemas]) · types.instance("Date") · types.schema(spec)` → Schema — One of the values; exactly `v`; a value that matches one of the schemas; a struct or native object by name; a plain spec as a schema.
+- `schema.min(n) max(n) minLen(n) maxLen(n) length(n) pattern(re) email() url() uuid() oneOf([…]) optional() nullable() default(v) strict() describe(text)` → Schema — The constraints of the spec table (`min`/`max` are the value of a number or the length of a text, list or map); `default(v)` fills a missing field in `parse` and `coerce`.
+- `schema.parse(v)` → value · error — `v` with its defaults, or an error value with the first problem (`const [u, err] = User.parse(body)`).
+- `schema.safeParse(v)` → map — `{ ok: true, value }`, or `{ ok: false, errors: [every problem] }`.
+- `schema.is(v) · validate(v) · assert(v) · coerce(v) · spec()` → bool · list · value · value · error · map — As the module functions, for this schema; `spec()` is the plain spec it stands for (usable anywhere a spec is).
 
 ```fogu
 import types from "fogu:types"
@@ -482,6 +489,14 @@ const User = { name: { "$type": "str", minLen: 1 }, "age?": { "$type": "int", mi
 print(types.is({ name: "Ana", tags: [] }, User))
 for p in types.validate({ name: "", age: -1, tags: [1] }, User) { print(p) }
 print(types.coerce({ page: "2", debug: "true" }, { page: "int", debug: "bool" })?)
+const Signup = types.object({
+    name: types.str().min(1).max(40),
+    email: types.str().email(),
+    age: types.int().min(13).optional(),
+    role: types.enum(["admin", "user"]).default("user"),
+})
+print(Signup.parse({ name: "Ana", email: "ana@x.io" })?)
+print(Signup.safeParse({ name: "", email: "nope", age: 9 }))
 ```
 
 output:
@@ -493,6 +508,8 @@ age: must be >= 0, got -1
 name: length must be >= 1, got 0
 tags[0]: expected str, got int 1
 {debug: true, page: 2}
+{email: ana@x.io, name: Ana, role: user}
+{errors: [age: must be >= 13, got 9, email: does not match /[^\s@]+@[^\s@]+\.[^\s@]+/, name: length must be >= 1, got 0], ok: false}
 ```
 
 ## fogu:time
@@ -1940,7 +1957,7 @@ output:
 
 ```text
 {ok: true}
-[echo:ack me, echo:hi] [bye]
+[echo:hi, echo:ack me] [bye]
 ```
 
 ## fogu:grpc

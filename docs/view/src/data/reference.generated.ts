@@ -651,10 +651,45 @@ export const REFERENCE: Record<string, RefData> = {
       "spec",
       "",
       "A type name (<code>any nil bool int float number str list map buffer fn error duration range struct object chan</code>, or a struct/object name); <code>\"T?\"</code> also nil, <code>\"A|B\"</code>, <code>\"[T]\"</code> a list of T, <code>\"{T}\"</code> a map of T; <code>[spec]</code>; <code>{ field: spec, \"opt?\": spec }</code>; or <code>{ \"$type\": spec, min, max, minLen, maxLen, pattern, oneOf, nullable, fields, items, strict }</code>."
+     ],
+     [
+      "types.str() int() float() number() bool() any() duration() buffer()",
+      "Schema",
+      "Schemas in the style of Zod: a spec with methods. Every method returns a new schema."
+     ],
+     [
+      "types.object({ field: schema | spec, … }, { strict }) · types.list(item) · types.map(values)",
+      "Schema",
+      "A map with those fields (a field made with <code>.optional()</code> may be missing or nil; <code>strict</code> refuses unknown fields); a list of <code>item</code>; a map whose values match <code>values</code>."
+     ],
+     [
+      "types.enum([values]) · types.literal(v) · types.union([schemas]) · types.instance(\"Date\") · types.schema(spec)",
+      "Schema",
+      "One of the values; exactly <code>v</code>; a value that matches one of the schemas; a struct or native object by name; a plain spec as a schema."
+     ],
+     [
+      "schema.min(n) max(n) minLen(n) maxLen(n) length(n) pattern(re) email() url() uuid() oneOf([…]) optional() nullable() default(v) strict() describe(text)",
+      "Schema",
+      "The constraints of the spec table (<code>min</code>/<code>max</code> are the value of a number or the length of a text, list or map); <code>default(v)</code> fills a missing field in <code>parse</code> and <code>coerce</code>."
+     ],
+     [
+      "schema.parse(v)",
+      "value · error",
+      "<code>v</code> with its defaults, or an error value with the first problem (<code>const [u, err] = User.parse(body)</code>)."
+     ],
+     [
+      "schema.safeParse(v)",
+      "map",
+      "<code>{ ok: true, value }</code>, or <code>{ ok: false, errors: [every problem] }</code>."
+     ],
+     [
+      "schema.is(v) · validate(v) · assert(v) · coerce(v) · spec()",
+      "bool · list · value · value · error · map",
+      "As the module functions, for this schema; <code>spec()</code> is the plain spec it stands for (usable anywhere a spec is)."
      ]
     ],
-    "example": "import types from \"fogu:types\"\nprint(types.isInt(3), types.of([]), types.toInt(\"0x1F\"), types.toBool(\"yes\"), types.toInt(\"x\", 0))\nconst User = { name: { \"$type\": \"str\", minLen: 1 }, \"age?\": { \"$type\": \"int\", min: 0 }, tags: \"[str]\" }\nprint(types.is({ name: \"Ana\", tags: [] }, User))\nfor p in types.validate({ name: \"\", age: -1, tags: [1] }, User) { print(p) }\nprint(types.coerce({ page: \"2\", debug: \"true\" }, { page: \"int\", debug: \"bool\" })?)",
-    "output": "true list 31 true 0\ntrue\nage: must be >= 0, got -1\nname: length must be >= 1, got 0\ntags[0]: expected str, got int 1\n{debug: true, page: 2}",
+    "example": "import types from \"fogu:types\"\nprint(types.isInt(3), types.of([]), types.toInt(\"0x1F\"), types.toBool(\"yes\"), types.toInt(\"x\", 0))\nconst User = { name: { \"$type\": \"str\", minLen: 1 }, \"age?\": { \"$type\": \"int\", min: 0 }, tags: \"[str]\" }\nprint(types.is({ name: \"Ana\", tags: [] }, User))\nfor p in types.validate({ name: \"\", age: -1, tags: [1] }, User) { print(p) }\nprint(types.coerce({ page: \"2\", debug: \"true\" }, { page: \"int\", debug: \"bool\" })?)\nconst Signup = types.object({\n    name: types.str().min(1).max(40),\n    email: types.str().email(),\n    age: types.int().min(13).optional(),\n    role: types.enum([\"admin\", \"user\"]).default(\"user\"),\n})\nprint(Signup.parse({ name: \"Ana\", email: \"ana@x.io\" })?)\nprint(Signup.safeParse({ name: \"\", email: \"nope\", age: 9 }))",
+    "output": "true list 31 true 0\ntrue\nage: must be >= 0, got -1\nname: length must be >= 1, got 0\ntags[0]: expected str, got int 1\n{debug: true, page: 2}\n{email: ana@x.io, name: Ana, role: user}\n{errors: [age: must be >= 13, got 9, email: does not match /[^\\s@]+@[^\\s@]+\\.[^\\s@]+/, name: length must be >= 1, got 0], ok: false}",
     "outputTitle": "output"
    }
   ]
@@ -2631,7 +2666,7 @@ export const REFERENCE: Record<string, RefData> = {
      ]
     ],
     "example": "import socketio from \"fogu:socketio\"\nconst log = []\nconst io = socketio.server()\nio.on(\"connection\", fn(socket) {\n    socket.join(\"lobby\")\n    socket.on(\"chat\", fn(msg, ack) {\n        io.to(\"lobby\").emit(\"chat\", \"echo:\" + msg)\n        if ack != nil { ack({ ok: true }) }\n    })\n    socket.on(\"disconnect\", fn(reason) { log.push(\"bye\") })\n})\nconst port = io.listen(\"127.0.0.1:0\")\n\nconst got = []\nconst c = socketio.connect(\"http://127.0.0.1:\" + str(port), { auth: { token: \"t1\" } })?\nc.on(\"chat\", fn(m) { got.push(m) })\nc.emit(\"chat\", \"hi\")\nprint(c.emitWithAck(\"chat\", \"ack me\", { timeout: 2s })?)\nFogu.sleep(200ms)\nc.disconnect()\nFogu.sleep(200ms)\nprint(got, log)\nio.close()",
-    "output": "{ok: true}\n[echo:ack me, echo:hi] [bye]",
+    "output": "{ok: true}\n[echo:hi, echo:ack me] [bye]",
     "outputTitle": "output"
    }
   ]

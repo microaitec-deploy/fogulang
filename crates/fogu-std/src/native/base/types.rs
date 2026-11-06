@@ -18,7 +18,22 @@
 //! - a map `{ field: spec }`: a map (or struct) with those fields; `"field?"` is optional;
 //! - a map with `"$type"`: constraints on a value — `min max` (numbers, or lengths of str/list/map),
 //!   `minLen maxLen`, `pattern` (a regex the whole text must match), `oneOf` (allowed values),
-//!   `nullable`, `fields`/`items` (as above), `strict` (no unknown fields).
+//!   `nullable`, `default` (for a missing field), `fields`/`items`/`values` (as above),
+//!   `anyOf` (a list of specs, one must match), `strict` (no unknown fields);
+//! - a **schema** built in the style of Zod, which is the same spec with methods:
+//!
+//! ```fogu
+//! const User = types.object({
+//!     name: types.str().min(1).max(40),
+//!     age: types.int().min(0).optional(),
+//!     email: types.str().email(),
+//!     tags: types.list(types.str()).default([]),
+//!     role: types.enum(["admin", "user"]).default("user"),
+//! }, { strict: true })
+//! const [u, err] = User.parse(json.parse(body)?)       // the value with its defaults, or the first problem
+//! const r = User.safeParse(input)                      // { ok, value } · { ok: false, errors: [...] }
+//! const q = User.coerce(request.query)?                // texts become ints, floats and bools
+//! ```
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -26,7 +41,8 @@ use ahash::AHashMap as HashMap;
 
 use crate::runtime::value::{ModuleValue, StructInstance, Value};
 
-use crate::native::util::{list, max_args, nfn_var};
+use crate::native::object::{FoguObject, NativeObjectRef};
+use crate::native::util::{list, map, max_args, nfn_var, str_arg};
 
 type R = Result<Value, String>;
 
@@ -68,6 +84,7 @@ pub fn build() -> ModuleValue {
             Some(e) => Err(format!("types.assert: {}", e)),
         }
     }));
+    install_schema(&mut e);
     e.insert("coerce".into(), nfn_var("coerce", 2, |a| {
         max_args(a, 2, "types.coerce")?;
         let mut errs = Vec::new();
@@ -309,6 +326,10 @@ fn check(v: &Value, spec: &Value, path: &str, errs: &mut Vec<String>, all: bool,
                 check_fields(v, &m, false, path, errs, all, out)
             }
         }
+        Value::Object(o) if o.name() == "Schema" => {
+            let spec = schema_of(spec).map(|sc| sc.spec_value()).unwrap_or(Value::Nil);
+            check(v, &spec, path, errs, all, out)
+        }
         Value::StructType(t) => {
             if !matches!(v, Value::Struct(s) if s.borrow().type_name == t.decl.name) {
                 errs.push(format!("{}: expected {}, got {}", at(path), t.decl.name, describe(v)));
@@ -469,7 +490,13 @@ fn check_fields(
             None => (key.clone(), false),
         };
         known.push(name.clone());
+        let dflt = default_of(&fspec);
         match fields.get(&name) {
+            None | Some(Value::Nil) if dflt.is_some() => {
+                if out.is_some() {
+                    built.insert(name, dflt.unwrap_or(Value::Nil));
+                }
+            }
             None | Some(Value::Nil) if optional => {}
             None => errs.push(format!("{}: missing", join(path, &name))),
             Some(x) => {
@@ -512,7 +539,7 @@ fn check_constrained(
     all: bool,
     out: &mut Option<Value>,
 ) -> Result<(), String> {
-    const KEYS: &[&str] = &["$type", "min", "max", "minLen", "maxLen", "pattern", "oneOf", "nullable", "fields", "items", "strict"];
+    const KEYS: &[&str] = &["$type", "min", "max", "minLen", "maxLen", "pattern", "oneOf", "nullable", "default", "fields", "items", "values", "anyOf", "strict", "description"];
     for k in m.keys() {
         if !KEYS.contains(&k.as_str()) {
             return Err(format!("types: unknown constraint '{}' ({})", k, KEYS.join(" ")));
@@ -524,11 +551,45 @@ fn check_constrained(
         }
         return Ok(());
     }
+    if matches!(v, Value::Nil) {
+        if let Some(d) = m.get("default").filter(|d| !matches!(d, Value::Nil)) {
+            if let Some(o) = out {
+                *o = d.clone();
+            }
+            return Ok(());
+        }
+    }
     let before = errs.len();
     let strict = matches!(m.get("strict"), Some(Value::Bool(true)));
-    match (m.get("fields"), m.get("items")) {
-        (Some(Value::Map(f)), _) => check_fields(v, &*f.borrow(), strict, path, errs, all, out)?,
-        (_, Some(item)) => check_list(v, item, path, errs, all, out)?,
+    match (m.get("fields"), m.get("items"), m.get("values"), m.get("anyOf")) {
+        (Some(Value::Map(f)), ..) => check_fields(v, &*f.borrow(), strict, path, errs, all, out)?,
+        (_, Some(item), ..) => check_list(v, item, path, errs, all, out)?,
+        (_, _, Some(item), _) => check_map_values(v, item, path, errs, all, out)?,
+        (_, _, _, Some(variants)) => {
+            let Value::List(vs) = variants else {
+                return Err("types: 'anyOf' must be a list of specs".into());
+            };
+            let vs: Vec<Value> = vs.borrow().clone();
+            let mut firsts = Vec::new();
+            let mut matched = false;
+            for spec in &vs {
+                let mut e = Vec::new();
+                let mut o = out.as_ref().map(|_| Value::Nil);
+                check(v, spec, path, &mut e, false, &mut o)?;
+                if e.is_empty() {
+                    if let (Some(dst), Some(o)) = (out.as_mut(), o) {
+                        *dst = o;
+                    }
+                    matched = true;
+                    break;
+                }
+                let prefix = format!("{}: ", at(path));
+                firsts.push(e[0].strip_prefix(&prefix).unwrap_or(&e[0]).to_string());
+            }
+            if !matched {
+                errs.push(format!("{}: no variant matched ({})", at(path), firsts.join(" / ")));
+            }
+        }
         _ => {
             let t = m.get("$type").cloned().unwrap_or(Value::Str("any".into()));
             check(v, &t, path, errs, all, out)?;
@@ -603,6 +664,380 @@ fn check_constrained(
         }
     }
     Ok(())
+}
+
+/// Every value of a map against one spec (`{ "$type": "map", values: spec }`).
+fn check_map_values(v: &Value, item: &Value, path: &str, errs: &mut Vec<String>, all: bool, out: &mut Option<Value>) -> Result<(), String> {
+    let Value::Map(m) = v else {
+        errs.push(format!("{}: expected map, got {}", at(path), describe(v)));
+        return Ok(());
+    };
+    let mut keys: Vec<String> = m.borrow().keys().cloned().collect();
+    keys.sort();
+    let mut built = HashMap::new();
+    for k in keys {
+        let x = m.borrow()[&k].clone();
+        let mut o = out.as_ref().map(|_| Value::Nil);
+        check(&x, item, &join(path, &k), errs, all, &mut o)?;
+        built.insert(k, o.unwrap_or(x));
+    }
+    if let Some(o) = out {
+        *o = new_map(built);
+    }
+    Ok(())
+}
+
+/// The `default` of a constrained spec (or of a schema), if any.
+fn default_of(spec: &Value) -> Option<Value> {
+    match spec {
+        Value::Map(m) => m.borrow().get("default").filter(|d| !matches!(d, Value::Nil)).cloned(),
+        Value::Object(o) if o.name() == "Schema" => schema_of(spec).and_then(|s| s.spec.get("default").cloned()).filter(|d| !matches!(d, Value::Nil)),
+        _ => None,
+    }
+}
+
+/// Fills the defaults of missing fields (after a successful check without coercion):
+/// `parse` returns the value as Zod's does, defaults included.
+fn apply_defaults(v: &Value, spec: &Value) -> Value {
+    let spec = match spec {
+        Value::Object(o) if o.name() == "Schema" => schema_of(spec).map(|s| s.spec_value()).unwrap_or(Value::Nil),
+        other => other.clone(),
+    };
+    let Value::Map(sm) = &spec else { return v.clone() };
+    let sm = sm.borrow();
+    if let Some(Value::Map(fields)) = sm.get("fields") {
+        let Some(mut built) = fields_of(v) else { return v.clone() };
+        if matches!(v, Value::Struct(_)) {
+            return v.clone();
+        }
+        for (key, fspec) in sorted(&fields.borrow()) {
+            let name = key.strip_suffix('?').unwrap_or(&key).to_string();
+            match built.get(&name) {
+                None | Some(Value::Nil) => {
+                    if let Some(d) = default_of(&fspec) {
+                        built.insert(name, d);
+                    }
+                }
+                Some(x) => {
+                    let filled = apply_defaults(x, &fspec);
+                    built.insert(name, filled);
+                }
+            }
+        }
+        return new_map(built);
+    }
+    if !sm.contains_key("$type") {
+        // a plain { field: spec } map
+        drop(sm);
+        let wrapped = map(vec![("$type", Value::Str("map".into())), ("fields", spec.clone())]);
+        return apply_defaults(v, &wrapped);
+    }
+    if let (Some(item), Value::List(l)) = (sm.get("items"), v) {
+        let items: Vec<Value> = l.borrow().iter().map(|x| apply_defaults(x, item)).collect();
+        return list(items);
+    }
+    v.clone()
+}
+
+// ---------- schemas in the builder style: types.str().min(1), types.object({ … }) ----------
+
+/// A spec with methods: `types.str()`, `types.object({...})`… Every builder
+/// method returns a new schema (the original is unchanged, as in Zod).
+#[derive(Clone)]
+pub struct Schema {
+    /// the constrained spec (`$type` and the constraints)
+    spec: HashMap<String, Value>,
+    /// `.optional()`: as a field of `types.object`, the key becomes `"name?"`
+    optional: bool,
+}
+
+impl Schema {
+    fn of_type(t: Value) -> Schema {
+        let mut spec = HashMap::new();
+        spec.insert("$type".to_string(), t);
+        Schema { spec, optional: false }
+    }
+
+    fn with(&self, key: &str, v: Value) -> Value {
+        let mut s = self.clone();
+        s.spec.insert(key.to_string(), v);
+        NativeObjectRef::new(s).to_value()
+    }
+
+    /// The plain spec map this schema stands for.
+    fn spec_value(&self) -> Value {
+        new_map(self.spec.clone())
+    }
+
+    fn run(&self, v: &Value, all: bool, coerce: bool) -> Result<(Vec<String>, Value), String> {
+        let spec = self.spec_value();
+        let mut errs = Vec::new();
+        let mut out = if coerce { Some(Value::Nil) } else { None };
+        check(v, &spec, "", &mut errs, all, &mut out)?;
+        let value = match out {
+            Some(o) => o,
+            None => apply_defaults(v, &spec),
+        };
+        Ok((errs, value))
+    }
+}
+
+/// The schema behind a `Schema` value.
+fn schema_of(v: &Value) -> Option<Schema> {
+    match v {
+        Value::Object(o) if o.name() == "Schema" => o.inner().borrow().as_any().downcast_ref::<Schema>().cloned(),
+        _ => None,
+    }
+}
+
+/// A spec argument: a schema (its spec, and whether it is optional) or a plain spec.
+fn spec_arg(v: &Value) -> (Value, bool) {
+    match schema_of(v) {
+        Some(s) => (s.spec_value(), s.optional),
+        None => (v.clone(), false),
+    }
+}
+
+fn num_arg(a: &[Value], i: usize, what: &str) -> Result<Value, String> {
+    match a.get(i) {
+        Some(Value::Int(n)) => Ok(Value::Int(*n)),
+        Some(Value::Float(f)) => Ok(Value::Float(*f)),
+        other => Err(format!("{} expects a number, got '{}'", what, other.map(|v| v.type_name()).unwrap_or("nothing"))),
+    }
+}
+
+impl FoguObject for Schema {
+    fn name(&self) -> &str {
+        "Schema"
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    // no fields: `schema.optional` must stay the method (`.optional()`), not a value
+    fn call(&mut self, method: &str, a: &[Value]) -> Result<Value, String> {
+        let what = format!("schema.{}", method);
+        match method {
+            "min" | "max" | "minLen" | "maxLen" => {
+                max_args(a, 1, &what)?;
+                Ok(self.with(method, num_arg(a, 0, &what)?))
+            }
+            "length" => {
+                max_args(a, 1, &what)?;
+                let n = num_arg(a, 0, &what)?;
+                let mut s = self.clone();
+                s.spec.insert("minLen".into(), n.clone());
+                s.spec.insert("maxLen".into(), n);
+                Ok(NativeObjectRef::new(s).to_value())
+            }
+            "pattern" => {
+                max_args(a, 1, &what)?;
+                Ok(self.with("pattern", Value::Str(str_arg(a, 0, &what)?.into())))
+            }
+            "email" => Ok(self.with("pattern", Value::Str(r"[^\s@]+@[^\s@]+\.[^\s@]+".into()))),
+            "url" => Ok(self.with("pattern", Value::Str(r"https?://[^\s/$.?#][^\s]*".into()))),
+            "uuid" => Ok(self.with("pattern", Value::Str("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}".into()))),
+            "oneOf" => {
+                max_args(a, 1, &what)?;
+                match a.first() {
+                    Some(v @ Value::List(_)) => Ok(self.with("oneOf", v.clone())),
+                    _ => Err(format!("{} expects a list of the allowed values", what)),
+                }
+            }
+            "optional" => {
+                max_args(a, 0, &what)?;
+                let mut s = self.clone();
+                s.optional = true;
+                Ok(NativeObjectRef::new(s).to_value())
+            }
+            "nullable" => {
+                max_args(a, 0, &what)?;
+                Ok(self.with("nullable", Value::Bool(true)))
+            }
+            "default" => {
+                max_args(a, 1, &what)?;
+                Ok(self.with("default", a.first().cloned().unwrap_or(Value::Nil)))
+            }
+            "strict" => {
+                max_args(a, 0, &what)?;
+                Ok(self.with("strict", Value::Bool(true)))
+            }
+            "describe" => {
+                max_args(a, 1, &what)?;
+                Ok(self.with("description", Value::Str(str_arg(a, 0, &what)?.into())))
+            }
+            "spec" => {
+                max_args(a, 0, &what)?;
+                Ok(self.spec_value())
+            }
+            "is" => {
+                max_args(a, 1, &what)?;
+                let (errs, _) = self.run(a.first().unwrap_or(&Value::Nil), false, false)?;
+                Ok(Value::Bool(errs.is_empty()))
+            }
+            "validate" => {
+                max_args(a, 1, &what)?;
+                let (errs, _) = self.run(a.first().unwrap_or(&Value::Nil), true, false)?;
+                Ok(list(errs.into_iter().map(|e| Value::Str(e.into())).collect()))
+            }
+            // parse: the value with its defaults, or an error value with the first problem
+            "parse" => {
+                max_args(a, 1, &what)?;
+                let (errs, value) = self.run(a.first().unwrap_or(&Value::Nil), false, false)?;
+                match errs.first() {
+                    None => Ok(value),
+                    Some(e) => Err(io_err!("{}", e)),
+                }
+            }
+            // safeParse: { ok: true, value } or { ok: false, errors }
+            "safeParse" => {
+                max_args(a, 1, &what)?;
+                let (errs, value) = self.run(a.first().unwrap_or(&Value::Nil), true, false)?;
+                if errs.is_empty() {
+                    Ok(map(vec![("ok", Value::Bool(true)), ("value", value)]))
+                } else {
+                    Ok(map(vec![("ok", Value::Bool(false)), ("errors", list(errs.into_iter().map(|e| Value::Str(e.into())).collect()))]))
+                }
+            }
+            "assert" => {
+                max_args(a, 1, &what)?;
+                let (errs, value) = self.run(a.first().unwrap_or(&Value::Nil), false, false)?;
+                match errs.first() {
+                    None => Ok(value),
+                    Some(e) => Err(format!("schema.assert: {}", e)),
+                }
+            }
+            // coerce: texts become the numbers and bools the schema asks for, defaults filled in
+            "coerce" => {
+                max_args(a, 1, &what)?;
+                let (errs, value) = self.run(a.first().unwrap_or(&Value::Nil), false, true)?;
+                match errs.first() {
+                    None => Ok(value),
+                    Some(e) => Err(io_err!("{}", e)),
+                }
+            }
+            other => Err(format!("method '{}' does not exist on Schema ({})", other, self.methods().join(" "))),
+        }
+    }
+
+    fn methods(&self) -> Vec<&'static str> {
+        vec![
+            "min", "max", "minLen", "maxLen", "length", "pattern", "email", "url", "uuid", "oneOf", "optional", "nullable", "default",
+            "strict", "describe", "spec", "is", "validate", "parse", "safeParse", "assert", "coerce",
+        ]
+    }
+}
+
+fn schema_value(s: Schema) -> Value {
+    NativeObjectRef::new(s).to_value()
+}
+
+/// The schema builders of the module: `types.str()`, `types.int()`, …, `types.object(fields, { strict })`,
+/// `types.list(item)`, `types.map(values)`, `types.union([a, b])`, `types.enum([...])`, `types.literal(v)`,
+/// `types.instance("Date")`, `types.schema(spec)`.
+fn install_schema(e: &mut HashMap<String, Value>) {
+    macro_rules! typed {
+        ($($name:literal),*) => {
+            $(
+                e.insert($name.into(), nfn_var($name, 0, |a| {
+                    max_args(a, 0, concat!("types.", $name))?;
+                    Ok(schema_value(Schema::of_type(Value::Str($name.into()))))
+                }));
+            )*
+        };
+    }
+    typed!("str", "int", "float", "number", "bool", "any", "duration", "buffer");
+    e.insert("literal".into(), nfn_var("literal", 1, |a| {
+        max_args(a, 1, "types.literal")?;
+        let mut s = Schema::of_type(Value::Str("any".into()));
+        s.spec.insert("oneOf".into(), list(vec![a[0].clone()]));
+        Ok(schema_value(s))
+    }));
+    e.insert("enum".into(), nfn_var("enum", 1, |a| {
+        max_args(a, 1, "types.enum")?;
+        let Value::List(_) = &a[0] else {
+            return Err("types.enum expects a list of the allowed values".into());
+        };
+        let mut s = Schema::of_type(Value::Str("any".into()));
+        s.spec.insert("oneOf".into(), a[0].clone());
+        Ok(schema_value(s))
+    }));
+    e.insert("list".into(), nfn_var("list", 0, |a| {
+        max_args(a, 1, "types.list")?;
+        let mut s = Schema::of_type(Value::Str("list".into()));
+        if let Some(item) = a.first() {
+            s.spec.insert("items".into(), spec_arg(item).0);
+        }
+        Ok(schema_value(s))
+    }));
+    e.insert("map".into(), nfn_var("map", 0, |a| {
+        max_args(a, 1, "types.map")?;
+        let mut s = Schema::of_type(Value::Str("map".into()));
+        if let Some(item) = a.first() {
+            s.spec.insert("values".into(), spec_arg(item).0);
+        }
+        Ok(schema_value(s))
+    }));
+    e.insert("object".into(), nfn_var("object", 1, |a| {
+        max_args(a, 2, "types.object")?;
+        let Value::Map(fields) = &a[0] else {
+            return Err("types.object expects a map of field schemas".into());
+        };
+        let mut built = HashMap::new();
+        for (k, v) in fields.borrow().iter() {
+            let (spec, optional) = spec_arg(v);
+            let key = if optional && !k.ends_with('?') { format!("{}?", k) } else { k.clone() };
+            built.insert(key, spec);
+        }
+        let mut s = Schema::of_type(Value::Str("map".into()));
+        s.spec.insert("fields".into(), new_map(built));
+        if let Some(Value::Map(o)) = a.get(1) {
+            if matches!(o.borrow().get("strict"), Some(Value::Bool(true))) {
+                s.spec.insert("strict".into(), Value::Bool(true));
+            }
+        }
+        Ok(schema_value(s))
+    }));
+    e.insert("union".into(), nfn_var("union", 1, |a| {
+        max_args(a, 1, "types.union")?;
+        let Value::List(l) = &a[0] else {
+            return Err("types.union expects a list of schemas".into());
+        };
+        let variants: Vec<Value> = l.borrow().iter().map(|v| spec_arg(v).0).collect();
+        let mut s = Schema::of_type(Value::Str("any".into()));
+        s.spec.insert("anyOf".into(), list(variants));
+        Ok(schema_value(s))
+    }));
+    e.insert("instance".into(), nfn_var("instance", 1, |a| {
+        max_args(a, 1, "types.instance")?;
+        Ok(schema_value(Schema::of_type(Value::Str(str_arg(a, 0, "types.instance")?.into()))))
+    }));
+    e.insert("schema".into(), nfn_var("schema", 1, |a| {
+        max_args(a, 1, "types.schema")?;
+        let (spec, _) = spec_arg(&a[0]);
+        let s = match &spec {
+            Value::Map(m) if m.borrow().contains_key("$type") => Schema { spec: m.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect(), optional: false },
+            Value::Map(_) => {
+                let mut s = Schema::of_type(Value::Str("map".into()));
+                s.spec.insert("fields".into(), spec.clone());
+                s
+            }
+            Value::List(l) => {
+                let mut s = Schema::of_type(Value::Str("list".into()));
+                if let Some(item) = l.borrow().first() {
+                    s.spec.insert("items".into(), item.clone());
+                }
+                s
+            }
+            other => Schema::of_type(other.clone()),
+        };
+        Ok(schema_value(s))
+    }));
 }
 
 fn fmt_num(f: f64) -> String {
