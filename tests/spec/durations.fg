@@ -6,7 +6,9 @@ const d = 1500ms
 print(d.ns, d.us, d.ms, d.seconds, 90s.minutes, 30m.hours)
 print(`waiting ${250ms}`)
 import time from "fogu:time"
-const t0 = time.now()
+// measured with the monotonic clock: the wall clock (time.now) may be set
+// back by the system while the test runs
+const t0 = time.monotonic()
 time.delay(20ms)
 time.sleep(10ms)
-print(time.now() - t0 >= 30)
+print(time.monotonic() - t0 >= 0.03)

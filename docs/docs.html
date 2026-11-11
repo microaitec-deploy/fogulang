@@ -426,6 +426,22 @@ print(uint8("255"), typeof(int8(1)))       // 255 int</script>
       <script type="text/x-fogu" data-lang="text">let bad: uint8 = 300
 
 error[E0207]: type mismatch: variable 'bad' is declared as uint8, got int out of range (uint8 is 0..255)</script>
+      <h3 class="text-lg font-semibold mt-8">char</h3>
+      <p><code>char</code> is one character: a <code>str</code> of length 1. <code>char(x)</code> makes one from its
+      code point or checks that a text is one character long; <code>s.code()</code> gives the code point of a text's
+      first character.</p>
+      <script type="text/x-fogu">const a: char = "A"
+print(a, char(66), a.code(), char(128293))     // A B 65 🔥
+
+fn next(c: char): char { return char(c.code() + 1) }
+print(next("a"), next("z"))                    // b {
+
+let out = ""
+for c in "fogu".chars() { out = out + next(c) }
+print(out)                                     // gphv</script>
+      <script type="text/x-fogu" data-lang="text">let c: char = "ab"
+
+error[E0207]: type mismatch: variable 'c' is declared as char, got str of 2 characters (a char is one character)</script>
     </section>
 
     <section id="strings" data-group="Language" data-title="Strings and templates" class="scroll-mt-20 mt-16">
@@ -548,9 +564,9 @@ print(uint32(2166136261 * 16777619) ^ 255)         // with a sized conversion: 8
       <p>Not reserved: they are functions and types every program starts with, and a program may declare its own
       with the same name (<code>fn len(x) { … }</code> replaces the built-in in that file).</p>
       <ul>
-        <li><strong>Functions:</strong> <code>print len str int float typeof bytes error panic close timeout clock</code>, and the
+        <li><strong>Functions:</strong> <code>print len str int float char typeof bytes error panic close timeout clock</code>, and the
         sized conversions <code>int8 int16 int32 int64 uint8 uint16 uint32 uint64 uint uintptr byte rune float32 float64</code>.</li>
-        <li><strong>Type names</strong> (in annotations): <code>int float str bool nil duration list map buffer tuple range chan fn
+        <li><strong>Type names</strong> (in annotations): <code>int float str char bool nil duration list map buffer tuple range chan fn
         struct object error any</code>, the sized types above, and the structs and interfaces of the program.</li>
         <li><strong>The global object:</strong> <code>Fogu</code> (<code>Fogu.args</code>, <code>Fogu.env</code>, <code>Fogu.signal</code>, <code>Fogu.cores</code>…).</li>
       </ul>

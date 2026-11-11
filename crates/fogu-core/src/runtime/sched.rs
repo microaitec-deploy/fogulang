@@ -292,6 +292,21 @@ static WAKE_CV: Condvar = Condvar::new();
 /// futex call.
 static SLEEPERS: AtomicUsize = AtomicUsize::new(0);
 
+thread_local! {
+    /// In-flight operations that are *this thread's own work*, seen from the
+    /// thread that asked for it (see [`set_served`]).
+    static SERVED: Cell<usize> = const { Cell::new(0) };
+}
+
+/// An interpreter that runs on behalf of another thread (a `sync.Worker`
+/// serving a call) is itself the in-flight operation its caller waits for:
+/// its caller's [`IoGuard`] must not make this thread believe something is
+/// still coming, or a deadlock of its own tasks would hang both forever
+/// instead of being reported. `n` is how many such guards are held for it.
+pub fn set_served(n: usize) {
+    SERVED.with(|s| s.set(n));
+}
+
 /// Wakes the interpreter thread: something it may be waiting for is ready.
 /// Callable from any thread.
 ///
@@ -546,7 +561,8 @@ pub fn wait_until(mut ready: impl FnMut() -> bool) -> Result<(), String> {
             return Ok(());
         }
         if progress() == before {
-            let busy = IN_FLIGHT.load(Ordering::SeqCst) > 0;
+            // operations of this thread's own caller do not count (see `set_served`)
+            let busy = IN_FLIGHT.load(Ordering::SeqCst) > SERVED.with(|s| s.get());
             if let Some(deadline) = take_next_timer() {
                 // a completion (wake) ends the sleep early; the deadline
                 // stays pending until it passes

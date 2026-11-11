@@ -206,6 +206,11 @@ pub fn on_exit(hook: fn(i32)) {
 
 /// Ends the program: `cleanup`, the exit hook, then the process exits.
 pub fn exit(code: i32) -> ! {
+    // one exit at a time: a second one (another signal, `process.exit` in a
+    // task) must not end the process while the first is still flushing a
+    // store or unmounting a folder in `cleanup`
+    static EXITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _only = EXITING.lock().unwrap_or_else(|e| e.into_inner());
     cleanup();
     if let Some(hook) = EXIT_HOOK.get() {
         hook(code);

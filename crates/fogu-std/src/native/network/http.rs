@@ -119,6 +119,11 @@ static WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 
 thread_local! {
     static PUMP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// This thread's interpreter owns the server (its request queue lives
+    /// here). Other interpreter threads — a `sync.Worker` — also see the
+    /// process-wide flag, and must leave it alone: taking it would clear it
+    /// without serving anything, and the request would wait for the next one.
+    static HAS_SERVER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Marks the pump task as started; true the first time only.
@@ -129,7 +134,7 @@ pub fn start_pump() -> bool {
 /// Did the server queue requests since they were last taken?
 #[inline]
 pub fn requests_waiting() -> bool {
-    WAITING.load(std::sync::atomic::Ordering::Acquire)
+    WAITING.load(std::sync::atomic::Ordering::SeqCst) && HAS_SERVER.with(|h| h.get())
 }
 
 // ================= MAIN THREAD GLOBAL STATE =================
@@ -145,7 +150,7 @@ thread_local! {
 
 /// Is a request waiting for the main thread?
 pub fn has_pending_request() -> bool {
-    WAITING.store(false, std::sync::atomic::Ordering::Release);
+    WAITING.swap(false, std::sync::atomic::Ordering::SeqCst);
     SERVER_RX.with(|r| {
         if let Some(rx) = r.borrow().as_ref() {
             while let Ok(msg) = rx.try_recv() {
@@ -158,7 +163,7 @@ pub fn has_pending_request() -> bool {
 
 /// Returns the next pending request, already as a `Value::Object(Request)`.
 pub fn take_pending_request() -> Option<(Value, Reply)> {
-    WAITING.store(false, std::sync::atomic::Ordering::Release);
+    WAITING.swap(false, std::sync::atomic::Ordering::SeqCst);
     SERVER_RX.with(|r| {
         let guard = r.borrow();
         if let Some(rx) = guard.as_ref() {
@@ -426,8 +431,9 @@ fn start_server(port: u16, handler: Value, opts: ServerOptions) -> Result<Value,
     SERVER_HANDLER.with(|h| *h.borrow_mut() = Some(handler));
     let (tx_to_main, rx_from_server) = std_mpsc::channel::<ServerToMain>();
     SERVER_RX.with(|r| *r.borrow_mut() = Some(rx_from_server));
+    HAS_SERVER.with(|h| h.set(true));
     // the interpreter's next call notices the flag and starts the pump task
-    WAITING.store(true, std::sync::atomic::Ordering::Release);
+    WAITING.store(true, std::sync::atomic::Ordering::SeqCst);
 
     // the server runs on the shared I/O runtime
     {
@@ -525,7 +531,9 @@ async fn handle_request(
     if tx.send(ServerToMain { req: plain, reply: reply_tx }).is_err() {
         return Ok(plain_response(PlainResponse::text(500, "server offline")).await);
     }
-    WAITING.store(true, std::sync::atomic::Ordering::Release);
+    // SeqCst on both sides: the flag is cleared *before* the queue is read, so
+    // a request queued while it is read always leaves the flag set
+    WAITING.store(true, std::sync::atomic::Ordering::SeqCst);
     // a main thread idling in the scheduler (Fogu.signal.wait) serves it now
     crate::runtime::sched::wake();
     // the Fogu handler runs on the main thread; this task just awaits the reply
@@ -550,8 +558,13 @@ async fn handle_request(
             }
             // the upgraded connection itself goes to the WebSocket task (fogu:websocket)
             tokio::spawn(async move {
-                if let Ok(upgraded) = on_upgrade.await {
-                    let _ = sock_tx.send(Box::new(TokioIo::new(upgraded)));
+                // the socket (or the closed channel of a failed upgrade) is
+                // visible before the waiting task is woken
+                match on_upgrade.await {
+                    Ok(upgraded) => {
+                        let _ = sock_tx.send(Box::new(TokioIo::new(upgraded)));
+                    }
+                    Err(_) => drop(sock_tx),
                 }
                 crate::runtime::sched::wake();
             });
@@ -762,6 +775,11 @@ pub fn serve_pending(it: &Interpreter, env: &Rc<RefCell<Environment>>) {
     }
     let text = |code, msg: &str| NativeObjectRef::new(ResponseValue::text(code, msg)).to_value();
     while let Some((req, tx)) = take_pending_request() {
+        // nobody waits for the answer any more (the client left, or the server
+        // already answered 504): running the handler would only add load
+        if tx.is_closed() {
+            continue;
+        }
         let Some(handler) = current_handler() else {
             send_response(text(500, "no handler"), tx);
             continue;

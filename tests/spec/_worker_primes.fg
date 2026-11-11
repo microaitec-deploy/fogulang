@@ -29,3 +29,8 @@ fn fail(msg) {
 fn boom() {
     return 1 / 0
 }
+
+fn stuck() {
+    const c = chan()
+    return <-c
+}

@@ -19,6 +19,10 @@ be incompatible changes (spec §75).
   conversion) with the interpreter's messages. The same names work in `fogu:types`
   (`types.uint8()`, `"int32"` in a spec, with coercion from text), in `fogu:ffi` signatures and as
   buffer accessors (`buf.readUint16(0)`, `buf.writeFloat32(4, x)`).
+- **`char`**: one character. As a type it is a str of length 1 (`let c: char = "A"`); `char(65)`
+  makes one from a code point, `char(s)` checks a text is one character long, and the new
+  `s.code()` gives the code point of a text's first character. Also in `fogu:types`
+  (`types.char()`, `"char"`).
 - **Bit operators** on ints: `&`, `|`, `^`, `~`, `<<`, `>>` and `&= |= ^= <<= >>=`, with Go's
   precedence (`<< >> &` like `*`; `| ^` like `+`). `>>` keeps the sign; a negative shift count is an
   error; compiled natively. `|` still separates alternatives in patterns and types, and `>>` still
@@ -68,6 +72,28 @@ be incompatible changes (spec §75).
   (a database commit, a request) finished exactly between the scheduler's pass over the tasks and
   its deadlock check. The completion is now seen (`IoGuard` moves the wake generation before it
   stops counting as in flight, and the scheduler looks again when the generation moved).
+
+- From an audit of the code that hands work between threads (the scheduler, the I/O pool, the JIT's
+  watchdog, HTTP, signals, the broker, the file watcher):
+  - a `fogu:vm` timeout could never fire when its deadline was armed at the instant the watchdog
+    thread went to sleep;
+  - two blocking jobs queued back to back could share one idle thread, the second waiting for the
+    first to finish (forever, if the first was a blocking read);
+  - a panic in background native work left its caller waiting; it is an error now, and the pool
+    keeps its thread;
+  - with a `sync.Worker` running, an HTTP request could wait for the next request (the worker's
+    interpreter cleared the server's "request waiting" flag); requests whose client already left
+    are no longer run;
+  - a deadlock inside a worker hung the worker and its caller; it is reported to the caller;
+    `sync.Worker(...)` no longer stops the other tasks while the worker's top level runs;
+  - a signal that arrived between two `Fogu.signal.wait()` calls was lost;
+  - two exits at once (a signal and `process.exit`) could end the process while a store was still
+    being flushed;
+  - the broker's key-value store could keep different values in memory and on disk after two
+    concurrent writes of one key;
+  - `watcher.next()` never returned when another task closed the watcher.
+- The interpreter reuses the scope of a finished call and gives no scope to a block that declares
+  nothing: about 10% on interpreted calls and `if` blocks (`fib(27)` without the JIT: 181 → 164 ms).
 
 ### Removed
 

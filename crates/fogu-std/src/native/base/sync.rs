@@ -427,15 +427,20 @@ mod worker {
 
         let (tx, rx) = channel::<Call>();
         let (ready_tx, ready_rx) = channel::<Result<(), String>>();
+        // until it has started the worker is an operation in flight (it wakes this thread)
+        let starting = IoGuard::new();
         let name = file.clone();
         std::thread::Builder::new()
             .name("fogu-worker".into())
             .stack_size(MAIN_STACK)
             .spawn(move || {
                 sched::init_main_stack(MAIN_STACK);
+                // while it starts, the creator's guard is this thread's own work
+                sched::set_served(1);
                 if let Some(c) = core {
                     if let Err(e) = crate::native::rt::pin_current_thread(c) {
-                        let _ = ready_tx.send(Err(format!("sync.Worker: {}", e)));
+                        let _ = ready_tx.send(Err(e));
+                        drop(starting);
                         return;
                     }
                 }
@@ -455,13 +460,17 @@ mod worker {
                     });
                 let ok = loaded.is_ok();
                 let _ = ready_tx.send(loaded);
+                drop(starting); // wakes the creator, after the answer is there
+                sched::set_served(0);
                 if !ok {
                     return;
                 }
                 let globals = interp.globals_env();
                 // one call at a time, until the Worker value is dropped or closed
                 for call in rx {
-                    let out = (|| {
+                    // this call's own guard is not "something still coming" for this thread
+                    sched::set_served(1);
+                    let run = std::panic::AssertUnwindSafe(|| {
                         let f = interp.global(&call.name).ok_or_else(|| format!("the worker has no function '{}'", call.name))?;
                         let args = match crate::native::json::parse_value(&call.args)? {
                             Value::List(l) => l.borrow().clone(),
@@ -472,17 +481,31 @@ mod worker {
                             Ok(v) => Ok(crate::native::json::stringify_value(&v)),
                             Err(e) => Err(plain(e)),
                         }
-                    })();
+                    });
+                    // a panic in native code must still answer the caller
+                    let out = std::panic::catch_unwind(run).unwrap_or_else(|_| Err("the worker panicked".to_string()));
+                    sched::set_served(0);
                     *call.slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(out);
                     drop(call.guard); // wakes the caller, after the result is in place
                 }
                 sched::shutdown();
             })
             .map_err(|e| io_err!("sync.Worker: cannot start the thread: {}", e))?;
-        match ready_rx.recv() {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(io_err!("sync.Worker: {}", e)),
-            Err(_) => return Err(io_err!("sync.Worker: the worker thread stopped while starting")),
+        // the worker's top level may take a while (or need something this
+        // program serves): wait for it without stopping the other tasks
+        let mut started = None;
+        sched::wait_until(|| {
+            if started.is_none() {
+                started = match ready_rx.try_recv() {
+                    Ok(r) => Some(r),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err("the worker thread stopped while starting".to_string())),
+                };
+            }
+            started.is_some()
+        })?;
+        if let Some(Err(e)) = started {
+            return Err(io_err!("sync.Worker: {}", e));
         }
         Ok(NativeObjectRef::new(WorkerValue { tx: Some(tx), core, source: file }).to_value())
     }

@@ -366,12 +366,16 @@ impl Store {
 
     fn set(&self, key: &str, value: Json, ttl: Option<u64>) {
         let exp = ttl.map(|t| now_secs() + t);
+        // memory and disk change under the same lock: two writers of one key
+        // cannot leave them holding different values
+        let mut kv = self.kv.lock().unwrap_or_else(|e| e.into_inner());
         self.persist(T_KV, key, Some(&json!({ "data": value, "expires_at": exp }).to_string()));
-        self.kv.lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_string(), (value, exp));
+        kv.insert(key.to_string(), (value, exp));
     }
 
     fn del(&self, key: &str) -> bool {
-        let had = self.kv.lock().unwrap_or_else(|e| e.into_inner()).remove(key).is_some();
+        let mut kv = self.kv.lock().unwrap_or_else(|e| e.into_inner());
+        let had = kv.remove(key).is_some();
         if had {
             self.persist(T_KV, key, None);
         }
@@ -388,8 +392,9 @@ impl Store {
         };
         let new = cur.checked_add(delta).ok_or("integer overflow")?;
         kv.insert(key.to_string(), (json!(new), None));
-        drop(kv);
+        // still under the lock: the order on disk is the order in memory
         self.persist(T_KV, key, Some(&json!({ "data": new, "expires_at": null }).to_string()));
+        drop(kv);
         Ok(new)
     }
 

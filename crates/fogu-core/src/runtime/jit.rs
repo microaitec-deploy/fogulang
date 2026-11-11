@@ -943,10 +943,21 @@ fn watchdog_loop() {
             std::thread::sleep(std::time::Duration::from_millis(1));
             continue;
         }
-        // nothing armed for a while: sleep until the next deadline is armed
+        // nothing armed for a while: sleep until the next deadline is armed.
+        // The decision is taken holding `parked`: a deadline armed since the
+        // scan above either is seen by the scan below, or finds `parked` set
+        // (its `watch_wake` waits for this lock) and wakes this thread.
         idle = 0;
         let mut parked = wd.parked.lock().unwrap_or_else(|p| p.into_inner());
         *parked = true;
+        let armed_now = {
+            let ws = wd.watches.lock().unwrap_or_else(|p| p.into_inner());
+            ws.iter().filter_map(std::sync::Weak::upgrade).any(|w| w.armed.lock().unwrap_or_else(|p| p.into_inner()).is_some())
+        };
+        if armed_now {
+            *parked = false;
+            continue;
+        }
         while *parked {
             parked = wd.wake.wait(parked).unwrap_or_else(|p| p.into_inner());
         }

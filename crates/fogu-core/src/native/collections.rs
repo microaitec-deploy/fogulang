@@ -383,6 +383,11 @@ fn str_method(s: &str, name: &str, args: &[Value]) -> Option<Result<Value, Strin
             }
             "lines" => list(s.lines().map(|p| Value::Str(p.to_string().into())).collect()),
             "chars" => list(s.chars().map(|c| Value::Str(c.to_string().into())).collect()),
+            // code(): the code point of the first character ("A".code() == 65; char(65) == "A")
+            "code" => match s.chars().next() {
+                Some(c) => Value::Int(c as i64),
+                None => return Err("str.code(): the text is empty".into()),
+            },
             "contains" => Value::Bool(s.contains(str_arg(args, 0, name)?)),
             "starts_with" => Value::Bool(s.starts_with(str_arg(args, 0, name)?)),
             "ends_with" => Value::Bool(s.ends_with(str_arg(args, 0, name)?)),

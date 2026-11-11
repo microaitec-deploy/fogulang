@@ -211,10 +211,15 @@ fn pool_spawn(job: Job) {
     let p = pool();
     let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
     q.0.push_back(job);
-    if q.1 > 0 {
+    // an idle thread per queued job: one of them takes this one. (Counting
+    // only "is anyone idle" would let two jobs queued back to back share the
+    // one idle thread: the second would wait for the first to finish, which a
+    // blocking job may never do.)
+    if q.1 >= q.0.len() {
         p.cv.notify_one();
         return;
     }
+    p.cv.notify_one();
     // with Fogu.cores set: at most 4 blocking threads per core
     let max = match CORES.load(std::sync::atomic::Ordering::SeqCst) {
         0 => MAX_THREADS,
@@ -244,7 +249,9 @@ fn worker(p: &Pool) {
     loop {
         if let Some(job) = q.0.pop_front() {
             drop(q);
-            job();
+            // a job that panics must not take the thread (and its place in the
+            // pool's count) with it; its `Pending` reports the lost result
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
             q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
             continue;
         }
@@ -271,6 +278,12 @@ pub struct Pending<T> {
 impl<T> Pending<T> {
     pub fn try_take(&self) -> Option<T> {
         self.slot.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+
+    /// Did the work end without leaving a result (it panicked, or its task
+    /// was dropped)? Nothing will ever arrive then.
+    pub fn abandoned(&self) -> bool {
+        Arc::strong_count(&self.slot) == 1 && self.slot.lock().unwrap_or_else(|e| e.into_inner()).is_none()
     }
 }
 
@@ -312,13 +325,16 @@ pub fn concurrent() -> bool {
 /// Waits cooperatively for `p`.
 pub fn wait<T>(p: Pending<T>) -> Result<T, String> {
     let mut out = None;
+    let mut lost = false;
     sched::wait_until(|| {
         if out.is_none() {
             out = p.try_take();
+            // checked after the take: the producer fills the slot before it lets go of it
+            lost = out.is_none() && p.abandoned();
         }
-        out.is_some()
+        out.is_some() || lost
     })?;
-    Ok(out.expect("ready"))
+    out.ok_or_else(|| "background work stopped without a result (it panicked)".to_string())
 }
 
 /// Runs blocking `work` (a network call, a child process…) without stopping

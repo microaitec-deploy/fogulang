@@ -894,6 +894,10 @@ impl Interpreter {
 
     #[inline(never)]
     fn exec_scoped_block(&self, stmts: &[Stmt], env: Rc<RefCell<Environment>>) -> Result<Flow, String> {
+        // a block that declares nothing needs no scope of its own
+        if !declares(stmts) {
+            return self.exec_block(stmts, env);
+        }
         let block_env = Environment::with_parent(env);
         for s in stmts {
             match self.exec(s, block_env.clone())? {
@@ -2087,9 +2091,11 @@ impl Interpreter {
         }
 
         let parent = f.closure.clone().unwrap_or_else(|| self.globals.clone());
-        let fn_env = Environment::with_parent(parent);
+        let fn_env = Environment::call_scope(parent);
         bind_params(&mut fn_env.borrow_mut(), &f.params, &f.param_syms, arg_vals);
-        let r = self.run_body(&f.name, &f.body, fn_env);
+        let r = self.run_body(&f.name, &f.body, Rc::clone(&fn_env));
+        // the scope goes back for the next call, unless a closure kept it
+        Environment::release(fn_env);
         if r.is_ok() {
             self.leave(saved);
         }
@@ -2158,7 +2164,7 @@ impl Interpreter {
             return Err(ops::ERR_STACK.into());
         }
         let saved = self.enter(f.module.as_ref());
-        let fn_env = Environment::with_parent(
+        let fn_env = Environment::call_scope(
             f.closure.clone().unwrap_or_else(|| self.globals.clone()),
         );
         {
@@ -2166,7 +2172,8 @@ impl Interpreter {
             e.define("this", Value::Struct(Rc::clone(&receiver)), false);
             bind_params(&mut e, &f.params, &f.param_syms, arg_vals);
         }
-        let r = self.run_body(&f.name, &f.body, fn_env);
+        let r = self.run_body(&f.name, &f.body, Rc::clone(&fn_env));
+        Environment::release(fn_env);
         if r.is_ok() {
             self.leave(saved);
         }
@@ -2300,6 +2307,8 @@ impl Interpreter {
                 _ => false,
             },
             "str" | "string" => matches!(v, Value::Str(_)),
+            // one character
+            "char" => matches!(v, Value::Str(s) if s.char_len() == 1),
             "bool" => matches!(v, Value::Bool(_)),
             "nil" | "void" => matches!(v, Value::Nil),
             "duration" => matches!(v, Value::Duration(_)),
@@ -2547,6 +2556,11 @@ fn describe_for(v: &Value, ty: &TypeExpr) -> String {
         TypeExpr::Optional(t) => &**t,
         t => t,
     };
+    if let (Value::Str(s), TypeExpr::Named(n)) = (v, named) {
+        if n == "char" {
+            return format!("str of {} characters (a char is one character)", s.char_len());
+        }
+    }
     if let (Value::Int(_), TypeExpr::Named(n)) = (v, named) {
         if let Some(k) = ops::Sized::from_name(n).filter(|k| !k.is_float()) {
             return ops::out_of_range(n, k);
@@ -2980,6 +2994,10 @@ impl LoopScope {
         let Stmt::Block(stmts) = body else {
             return it.exec(body, Rc::clone(env));
         };
+        // a body that declares nothing runs in the loop's own scope
+        if !declares(stmts) {
+            return it.exec_block(stmts, Rc::clone(env));
+        }
         let block = match &mut self.block {
             Some(b) => {
                 LoopScope::recycle(b, env);
@@ -2999,6 +3017,23 @@ impl LoopScope {
         }
         Ok(Flow::Normal)
     }
+}
+
+/// Does a block bind a name in its own scope (so it needs one)? Nested blocks,
+/// loops and `match` arms have theirs.
+fn declares(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|s| {
+        matches!(
+            s,
+            Stmt::Let { .. }
+                | Stmt::LetList { .. }
+                | Stmt::FnDecl { .. }
+                | Stmt::Struct(_)
+                | Stmt::Interface(_)
+                | Stmt::Import { .. }
+                | Stmt::Export(_)
+        )
+    })
 }
 
 /// Adds a name to a module's exports; a name exported twice is an error.

@@ -1,0 +1,26 @@
+// char: one character — a type, a conversion and its code
+import types from "fogu:types"
+
+const a: char = "A"
+print(a, char(66), char(a), a.code(), "é".code(), char(233), char(128293))
+print(typeof(a), a.len(), char(97) + char(98))
+
+fn next(c: char): char {
+    return char(c.code() + 1)
+}
+print(next("a"), next("z"), next(next("0")))
+
+// the letters of a word, shifted (compiled or not: the same)
+let out = ""
+for c in "fogu".chars() {
+    out = out + next(c)
+}
+print(out)
+
+let grade: char? = nil
+grade = "B"
+print(grade)
+
+print(types.is("x", "char"), types.is("xy", "char"), types.is(7, "char"), types.char().safeParse("ok").ok)
+
+print(char("ab"))

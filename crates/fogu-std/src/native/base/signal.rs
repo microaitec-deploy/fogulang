@@ -67,6 +67,10 @@ struct State {
     /// while OS signals are listened to, waiting is not a deadlock
     guard: Option<IoGuard>,
     last: Option<(String, Value)>,
+    /// Where the last `wait()` stopped reading the log: the next one starts
+    /// there, so a signal that arrives *between* two waits (while the program
+    /// handles the first) is not lost.
+    wait_mark: Option<u64>,
 }
 
 thread_local! {
@@ -414,9 +418,10 @@ fn call(method: &str, args: &[Value], interp: &Interpreter, env: &Rc<RefCell<Env
             let from = STATE.with(|s| {
                 let s = s.borrow();
                 s.waiters.set(s.waiters.get() + 1);
-                s.seq
+                s.wait_mark.unwrap_or(s.seq)
             });
             let mut got: Option<String> = None;
+            let mut got_seq: Option<u64> = None;
             let r = loop {
                 #[allow(unused_mut)]
                 let mut http = false;
@@ -426,6 +431,7 @@ fn call(method: &str, args: &[Value], interp: &Interpreter, env: &Rc<RefCell<Env
                         let mut s = s.borrow_mut();
                         let e = s.log.iter_mut().find(|e| e.seq > from && names.contains(&e.name))?;
                         e.claimed = true;
+                        got_seq = Some(e.seq);
                         Some(e.name.clone())
                     });
                     if got.is_some() {
@@ -453,8 +459,11 @@ fn call(method: &str, args: &[Value], interp: &Interpreter, env: &Rc<RefCell<Env
                 crate::native::http::serve_pending(interp, env);
             };
             STATE.with(|s| {
-                let s = s.borrow();
+                let mut s = s.borrow_mut();
                 s.waiters.set(s.waiters.get().saturating_sub(1));
+                // the next wait reads on from the event this one took; one that
+                // ended without an event (a timeout) has read everything so far
+                s.wait_mark = Some(got_seq.unwrap_or(s.seq));
             });
             r?;
             Ok(got.map(Value::str).unwrap_or(Value::Nil))

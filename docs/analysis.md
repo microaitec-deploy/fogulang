@@ -362,6 +362,28 @@ Unmaintained: `unsafe-libyaml` via serde_yaml → **replaced** by `serde_norway`
 - **Workers**: the worker's top level runs once on its thread; calls are served one at a time
   (its own `fg` tasks only run during a call).
 
+## Concurrency audit (0.7.4)
+
+Three read-only reviews of every module that hands work between threads; the confirmed findings
+that were fixed are in the changelog. **Found and not fixed yet** (each has its interleaving in the
+review; none is new in 0.7.4):
+
+- `fogu:net`: a `setTimeout` that fires in the middle of `readLine` / `readExact` / `readAll` drops
+  the bytes already read (they live in the cancelled future); `close()` does not cancel a pending
+  `accept` / `read` of another task (the port stays bound until it returns).
+- `fogu:websocket`: the connection task does not read while it flushes a write — two Fogu peers
+  that both send more than the socket buffers hold, without reading, block each other.
+- No backpressure: WebSocket inbox / outbox, SSE `send`, the watcher, `fogumq` / `nats` / `mqtt`
+  subscriptions and the broker's per-client queue grow without bound while the consumer is slow.
+- `Fogu.signal`: once the program listens to SIGINT / SIGTERM, Ctrl+C only acts when the program
+  waits cooperatively — a CPU-bound loop cannot be interrupted (a second signal should force the exit).
+- `fogumq` / `nats` clients that are dropped without `close()` keep their reader thread and socket.
+- Broker: a call whose handler never answers keeps the caller's connection open after the caller
+  left; a connection accepted in the same instant as `close()` can outlive it.
+- `sched::IN_FLIGHT` is process-wide: an operation in flight on one interpreter thread (a
+  `sync.Worker`) can hide a deadlock on another until it finishes (the worker's own call is
+  discounted with `sched::set_served`).
+
 ## Known gaps
 
 - **Not in 0.7.4**: a bytecode VM for non-numeric code (interpreted calls are still ~150–300 ns:

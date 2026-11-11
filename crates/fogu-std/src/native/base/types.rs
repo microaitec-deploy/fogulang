@@ -420,6 +420,7 @@ fn check_name(v: &Value, s: &str, path: &str, errs: &mut Vec<String>, all: bool,
         | "rune" => matches!((v, Sized::from_name(s)), (Value::Int(n), Some(k)) if k.fits(*n)),
         "number" => matches!(v, Value::Int(_) | Value::Float(_)),
         "str" => matches!(v, Value::Str(_)),
+        "char" => matches!(v, Value::Str(s) if s.char_len() == 1),
         "list" => matches!(v, Value::List(_)),
         "map" => matches!(v, Value::Map(_)),
         "buffer" => matches!(v, Value::Buffer(_)),
@@ -964,6 +965,7 @@ fn install_schema(e: &mut HashMap<String, Value>) {
     }
     typed!("str", "int", "float", "number", "bool", "any", "duration", "buffer");
     // types.int8() … types.float32(): the sized numbers of the language
+    typed!("char");
     typed!("int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "uint", "byte", "rune", "float32", "float64");
     e.insert("literal".into(), nfn_var("literal", 1, |a| {
         max_args(a, 1, "types.literal")?;

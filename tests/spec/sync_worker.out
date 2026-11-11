@@ -6,6 +6,8 @@ error: Worker.call boom: division by zero
 error: Worker.call missing: the worker has no function 'missing'
 [2262, 4203, 6057] 1
 1
+error: Worker.call stuck: deadlock: all tasks are blocked waiting on channels
+25
 144 nil
 true error: Worker.call: the worker is closed
 error: sync.Worker: ./_no_such_worker.fg: No such file or directory (os error 2)

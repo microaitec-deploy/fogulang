@@ -35,6 +35,8 @@ struct Ev {
 struct State {
     queue: VecDeque<Ev>,
     error: Option<String>,
+    /// `close()` was called: a `next()` that is waiting returns nil.
+    closed: bool,
 }
 
 fn kind_of(k: &EventKind) -> Option<&'static str> {
@@ -159,6 +161,7 @@ impl FoguObject for WatchValue {
             }
             "close" => {
                 self._watcher = None;
+                self.state.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
                 Ok(Value::Nil)
             }
             other => Err(format!("method '{}' does not exist on Watcher (next tryNext close)", other)),
@@ -186,8 +189,15 @@ impl FoguObject for WatchValue {
             if let Some(e) = take(&state, debounce) {
                 return Some(Ok(event_value(e)));
             }
-            if let Some(err) = state.lock().unwrap().error.take() {
-                return Some(Err(io_err!("Fogu.watch: {}", err)));
+            {
+                let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(err) = s.error.take() {
+                    return Some(Err(io_err!("Fogu.watch: {}", err)));
+                }
+                // closed by another task while this one waited
+                if s.closed {
+                    return Some(Ok(Value::Nil));
+                }
             }
             if deadline.is_some_and(|d| Instant::now() >= d) {
                 return Some(Ok(Value::Nil));

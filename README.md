@@ -178,6 +178,9 @@ let bad: uint8 = 300
 // error[E0207]: type mismatch: variable 'bad' is declared as uint8, got int out of range (uint8 is 0..255)
 ```
 
+`char` is one character: `let c: char = "A"`, `char(65) == "A"`, `"A".code() == 65`
+(a str of any other length is a type mismatch).
+
 Arithmetic itself stays 64-bit and checked: write `uint8(a + b)` where Go would
 wrap. `uint64`, `uint` and `uintptr` hold `0..9223372036854775807` (a negative
 number is an error, not a wrap). Text converted with `uint8("300")` must fit.

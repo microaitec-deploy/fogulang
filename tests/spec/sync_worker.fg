@@ -30,6 +30,10 @@ print(results, ticks)
 // its globals live between calls, apart from this program's
 print(w.call("describe", { name: "Bia", tags: [] })?.calls)
 
+// a deadlock inside the worker is reported to the caller (it does not hang both)
+print(w.call("stuck"))
+print(w.call("countPrimes", 100)?)
+
 // code instead of a file
 const sq = sync.Worker("fn square(n) { return n * n }")?
 print(sq.call("square", 12)?, sq.core)

@@ -38,6 +38,8 @@ const BUILTIN_TYPES: &[&str] = &[
     // sized numbers, as in Go (`ops::SIZED_NAMES`)
     "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "uint", "uintptr",
     "byte", "rune", "float32", "float64",
+    // one character (a str of length 1)
+    "char",
 ];
 
 /// Arity of the core globals (`native/context.rs`, `native/collections.rs`):
@@ -64,6 +66,7 @@ const CORE_GLOBALS: &[(&str, usize, bool, Ty)] = &[
     ("rune", 1, false, Ty::Int),
     ("float32", 1, false, Ty::Float),
     ("float64", 1, false, Ty::Float),
+    ("char", 1, false, Ty::Str),
     ("clock", 0, false, Ty::Any),
     ("error", 1, true, Ty::Any),
 ];
@@ -119,7 +122,7 @@ impl Ty {
                 "int" => Ty::Int,
                 "float" | "float32" | "float64" => Ty::Num,
                 n if super::ops::Sized::from_name(n).is_some() => Ty::Int,
-                "str" | "string" => Ty::Str,
+                "str" | "string" | "char" => Ty::Str,
                 "bool" => Ty::Bool,
                 "duration" => Ty::Duration,
                 "list" | "tuple" => Ty::List,
@@ -153,6 +156,13 @@ impl Ty {
                         false
                     }
                     "str" | "string" => self == Ty::Str,
+                    // a str: whether it is one character is only known at run time
+                    "char" => {
+                        if self == Ty::Str {
+                            return None;
+                        }
+                        false
+                    }
                     "bool" => self == Ty::Bool,
                     "nil" | "void" => self == Ty::Nil,
                     "duration" => self == Ty::Duration,

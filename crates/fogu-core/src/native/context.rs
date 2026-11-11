@@ -187,6 +187,19 @@ impl NativeContext {
             )),
         });
 
+        // char(x): one character — from its code point (char(65) == "A") or
+        // from a text that is exactly one character long
+        self.define_global("char", 1, |args| match &args[0] {
+            Value::Int(n) => u32::try_from(*n)
+                .ok()
+                .and_then(char::from_u32)
+                .map(Value::str)
+                .ok_or_else(|| format!("cannot convert {} to char: not a Unicode character", n)),
+            Value::Str(s) if s.char_len() == 1 => Ok(Value::Str(s.clone())),
+            Value::Str(s) => Err(format!("cannot convert a str of {} characters to char (a char is one character)", s.char_len())),
+            other => Err(format!("cannot convert '{}' to char", other.type_name())),
+        });
+
         // int8(x) … uint64(x), byte(x), rune(x), float32(x), float64(x): the
         // conversions of Go (an integer keeps its low bits: int8(200) == -56)
         macro_rules! sized {

@@ -15,6 +15,14 @@ pub fn redefine_epoch() -> u64 {
     REDEFINE_EPOCH.load(Ordering::Relaxed)
 }
 
+thread_local! {
+    /// Call scopes waiting to be reused ([`Environment::call_scope`]).
+    static POOL: RefCell<Vec<Rc<RefCell<Environment>>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// How many call scopes are kept for reuse (a deeper recursion allocates).
+const POOL_MAX: usize = 64;
+
 /// A scope with more names than this moves from the vector to the map.
 const SMALL_MAX: usize = 16;
 
@@ -82,6 +90,44 @@ impl Environment {
             builtins: FxHashSet::default(),
             module: None,
         }))
+    }
+
+    /// The scope of a function call: a recycled one when there is one (see
+    /// [`release`](Self::release)), else a new one.
+    pub fn call_scope(parent: Rc<RefCell<Environment>>) -> Rc<RefCell<Self>> {
+        match POOL.with(|p| p.borrow_mut().pop()) {
+            Some(env) => {
+                env.borrow_mut().parent = Some(parent);
+                env
+            }
+            None => Self::with_parent(parent),
+        }
+    }
+
+    /// Gives the scope of a finished call back for the next call. Only when
+    /// nothing else holds it (a closure or a task that captured it keeps it)
+    /// and it stayed small: its bindings are dropped, its storage is kept, so
+    /// the next call allocates nothing.
+    pub fn release(env: Rc<RefCell<Self>>) {
+        if Rc::strong_count(&env) != 1 || Rc::weak_count(&env) != 0 {
+            return;
+        }
+        {
+            let Ok(mut e) = env.try_borrow_mut() else { return };
+            if !e.is_small || e.stable || e.module.is_some() || !e.builtins.is_empty() {
+                return;
+            }
+            // dropping the bindings may run arbitrary drops (closing a file…):
+            // the parent first, so the scope is already detached from the chain
+            e.parent = None;
+            e.small.clear();
+        }
+        POOL.with(|p| {
+            let mut p = p.borrow_mut();
+            if p.len() < POOL_MAX {
+                p.push(env);
+            }
+        });
     }
 
     pub fn set_module(&mut self, name: &str) {
