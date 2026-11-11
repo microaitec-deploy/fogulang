@@ -1,0 +1,2 @@
+type mismatch: parameter 'x' expects int8, got int out of range (int8 is -128..127)
+sized_types_range.fg:9

@@ -273,6 +273,7 @@ pub(crate) fn nfn_opts(name: &str, f: fn(&[Value]) -> Result<Value, String>) -> 
         variadic: true,
         func: f,
         intercept: Default::default(),
+        typed: None,
     }))
 }
 

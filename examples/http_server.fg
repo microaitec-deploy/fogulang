@@ -1,5 +1,4 @@
 import http from "fogu:http"
-import time from "fogu:time"
 
 http.serve(3000, fn(req) {
     if req.path == "/ping" {
@@ -17,8 +16,5 @@ http.serve(3000, fn(req) {
 print("server at http://127.0.0.1:3000")
 print("Ctrl+C to stop")
 
-// Infinite loop: keeps the process alive; pending HTTP requests are
-// handled while the main program waits.
-while true {
-    time.delay(100ms)
-}
+// Keeps the process alive: requests are handled while the program waits.
+Fogu.signal.wait()    // serves requests until Ctrl+C / SIGTERM

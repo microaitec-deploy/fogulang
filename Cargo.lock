@@ -2156,9 +2156,8 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "fogu"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
- "ahash",
  "base64 0.22.1",
  "dotenvy",
  "fogu-core",
@@ -2176,7 +2175,7 @@ dependencies = [
 
 [[package]]
 name = "fogu-core"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "ahash",
  "base64 0.22.1",
@@ -2195,15 +2194,14 @@ dependencies = [
 
 [[package]]
 name = "fogu-ffi"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
- "ahash",
  "fogu",
 ]
 
 [[package]]
 name = "fogu-pkg"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "flate2",
  "reqwest",
@@ -2214,7 +2212,7 @@ dependencies = [
 
 [[package]]
 name = "fogu-std"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "ab_glyph",
  "aes-gcm",
@@ -2239,7 +2237,6 @@ dependencies = [
  "engineioxide",
  "flate2",
  "fogu-core",
- "fogu-pkg",
  "futures-lite",
  "futures-util",
  "getrandom 0.2.17",
@@ -2252,7 +2249,6 @@ dependencies = [
  "image",
  "indicatif",
  "ipnet",
- "libc",
  "libloading",
  "md-5",
  "minijinja",
@@ -2271,6 +2267,7 @@ dependencies = [
  "regex",
  "reqwest",
  "resvg",
+ "rsa",
  "rskafka",
  "rust_xlsxwriter",
  "rustls",

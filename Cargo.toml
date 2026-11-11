@@ -1,6 +1,6 @@
 [package]
 name = "fogu"
-version = "0.7.3"
+version = "0.7.4"
 edition = "2024"
 description = "Reference implementation of the Fogu language: interpreter, Cranelift JIT, REPL and package manager"
 authors = ["Edmilson Soares"]
@@ -21,8 +21,6 @@ path = "src/main.rs"
 [dependencies]
 pprof = { version = "0.14", optional = true }
 libc = { version = "0.2", optional = true }
-# hash maps of Fogu values: fast and resistant to collision attacks (random seed)
-ahash = "0.8"
 fogu-core = { path = "crates/fogu-core" }
 fogu-std = { path = "crates/fogu-std", default-features = false }
 fogu-pkg = { path = "crates/fogu-pkg" }
@@ -34,7 +32,9 @@ dotenvy = "0.15.7"
 # a faster allocator for the many small objects of Fogu programs (not on Windows:
 # mimalloc's C code needs newer mingw headers than cross toolchains ship)
 [target.'cfg(all(not(windows), not(target_family = "wasm")))'.dependencies]
-mimalloc = { version = "0.1", default-features = false }
+# no_thp: the allocator does not ask for transparent huge pages (where the system leaves them
+# opt-in they cost megabytes of resident memory per process and no measurable speed)
+mimalloc = { version = "0.1", default-features = false, features = ["no_thp"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 rustyline = "14"

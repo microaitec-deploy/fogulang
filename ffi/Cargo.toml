@@ -1,6 +1,6 @@
 [package]
 name = "fogu-ffi"
-version = "0.7.3"
+version = "0.7.4"
 edition = "2024"
 description = "C API of the Fogu runtime: libfogu_rt (.so / .dll / .dylib) to embed Fogu in other programs"
 license = "MIT"
@@ -11,6 +11,4 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
-# hash maps of Fogu values: fast and resistant to collision attacks (random seed)
-ahash = "0.8"
 fogu = { path = ".." }

@@ -8,7 +8,6 @@
 // production pass the PEM files of a real one: { cert: "fullchain.pem", key: "privkey.pem" }.
 import tls from "fogu:tls"
 import web from "fogu:web"
-import time from "fogu:time"
 
 const pair = tls.selfSigned(["localhost", "127.0.0.1"])?
 const info = tls.parseCert(pair.cert)?
@@ -42,6 +41,4 @@ c.close()
 const app = web.app()
 app.get("/", (ctx) => ({ hello: "https", path: ctx.path }))
 app.listen(8443, { tls: pair })
-while true {
-    time.delay(100ms)
-}
+Fogu.signal.wait()    // serves requests until Ctrl+C / SIGTERM

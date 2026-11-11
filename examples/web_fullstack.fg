@@ -70,6 +70,4 @@ app.static("/", "dist", { spa: true, maxAge: 365d })
 
 app.listen(3000, { host: "127.0.0.1", maxBody: 50 * 1024 * 1024 })?
 print("open http://127.0.0.1:3000")
-while true {
-    time.delay(50ms)
-}
+Fogu.signal.wait()    // serves requests until Ctrl+C / SIGTERM

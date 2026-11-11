@@ -375,7 +375,7 @@ export default function App() {
               )}
 
               <footer className="mt-14 flex flex-col gap-2 border-t border-[var(--border)] pt-6 text-[0.8rem] text-[var(--fg-faint)] sm:flex-row sm:justify-between">
-                <span>Fogu v0.7.3 · MIT License · © 2026 Edmilson Soares</span>
+                <span>Fogu v0.7.4 · MIT License · © 2026 Edmilson Soares</span>
                 <span>Documentation for the Rust reference implementation.</span>
               </footer>
             </div>

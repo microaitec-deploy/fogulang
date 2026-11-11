@@ -62,7 +62,8 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
     messages shared** by the interpreter and the JIT); `jit.rs` (Cranelift; only the
     numeric subset — int/float/bool, if/while/for a..b, match, JIT-able calls, basic
     `math.*`; see `docs/jit.md`); `sched.rs` (cooperative `fg` tasks on corosensei,
-    pooled stacks — 32 MB virtual, 2 MB on 32-bit —, wake-ups from I/O threads,
+    pooled stacks — 32 MB virtual, 2 MB on 32-bit; beyond 8192 live tasks they come from shared
+    mappings without guard pages (`sched::slab`) —, wake-ups from I/O threads,
     channels, deadlock detection, `timeout`, `--strict`); `module.rs` (loading/cache:
     `./x.fg`, `fogu:*`, packages).
   - `native/`: what every program has — `object.rs` (`FoguObject`, `NativeObjectRef`),
@@ -151,6 +152,17 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
   server sets an atomic flag and wakes the scheduler; `Host::before_call` and a pump
   task (`http::serve_pending`) start each request's handler in its own `fg` task, so
   requests are served even while the program waits in `time.delay` or on a channel.
+- A native function that only takes and returns numbers and cannot fail may get a typed entry:
+  `util::with_typed(nfn(...), TypedNative { params, ret, entry })`, where `entry` is an
+  `extern "C" fn` over `i64` / `f64` / `u8` computing exactly the same. Compiled code then calls it
+  directly (`time.monotonic`, the `math` bit functions); anything with an error path stays untyped.
+- Sized numbers (`int8` … `float64`) live in `runtime/ops.rs` (`Sized`): ranges for annotations,
+  Go's wrapping for conversions. Use it wherever a type name is read (`fogu:types`, `fogu:ffi`,
+  buffers) instead of a new table.
+- Release builds for Linux x64 link OpenSSL statically (`X86_64_UNKNOWN_LINUX_GNU_OPENSSL_STATIC=1`
+  with `…_OPENSSL_LIB_DIR` / `…_OPENSSL_INCLUDE_DIR`, set by `../server/publish-all.sh`); a plain
+  `cargo build` links the system's shared libraries. `build.rs` links the executable non-PIE on
+  Linux (`FOGU_PIE=1` to keep a PIE).
 - Binary data is a `buffer` (`Value::Buffer`): return `Value::buffer(vec)` /
   `util::bytes_value`, accept `util::bytes_of` (buffer, str or list of byte ints).
 - Strings: `Value::Str(Str)`; build with `Value::str(x)` / `x.into()`, read through

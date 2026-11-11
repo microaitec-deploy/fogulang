@@ -1,0 +1,38 @@
+// Bit operations on ints (fogu:math), also in compiled code
+import math from "fogu:math"
+
+print(math.band(12, 10), math.bor(12, 10), math.bxor(12, 10), math.bnot(0), math.bnot(-1))
+print(math.shl(1, 10), math.shl(1, 63), math.shl(1, 64), math.shl(-1, 4))
+print(math.shr(-16, 2), math.shr(16, 2), math.shr(-1, 100), math.shr(1, 100))
+print(math.ushr(-1, 60), math.ushr(-1, 64), math.shl(256, -4), math.shr(1, -4))
+print(math.popcount(255), math.popcount(-1), math.clz(1), math.ctz(8), math.ctz(0))
+
+// flags
+const READ = 1
+const WRITE = 2
+const EXEC = 4
+let mode = math.bor(READ, EXEC)
+print(math.band(mode, WRITE) != 0, math.band(mode, EXEC) != 0)
+
+// a hot loop: FNV-1a over the numbers 0..n, kept in 32 bits
+fn fnv(n) {
+    let h = 2166136261
+    for i in 0..n {
+        h = math.bxor(h, math.band(i, 255))
+        h = uint32(h * 16777619)
+    }
+    return h
+}
+print(fnv(10), fnv(100000))
+
+// xorshift
+let x = 88172645463325252
+let acc = 0
+for i in 0..1000 {
+    x = math.bxor(x, math.shl(x, 13))
+    x = math.bxor(x, math.ushr(x, 7))
+    x = math.bxor(x, math.shl(x, 17))
+    acc = math.bxor(acc, x)
+}
+print(x, acc)
+math.band(1, 2.5)

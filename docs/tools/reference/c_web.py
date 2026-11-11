@@ -34,7 +34,6 @@ SECTIONS = [
                 ],
                 "example": r'''
 import http from "fogu:http"
-import time from "fogu:time"
 
 http.serve(8080, (req) => {
     if req.path == "/hello" {
@@ -42,7 +41,7 @@ http.serve(8080, (req) => {
     }
     return http.text("not found", { status: 404 })
 })
-while true { time.delay(50ms) }
+Fogu.signal.wait()    // serves requests until Ctrl+C / SIGTERM
 ''',
                 "title": "server.fg",
             },
@@ -166,7 +165,7 @@ app.ws("/chat", (ws, ctx) => {
 })
 app.static("/", "dist", { spa: true, maxAge: 1d })
 app.listen(3000)?
-while true { time.delay(50ms) }
+Fogu.signal.wait()    // serves requests until Ctrl+C / SIGTERM
 ''',
                 "title": "app.fg",
             },

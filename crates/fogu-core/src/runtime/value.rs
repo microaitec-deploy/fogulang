@@ -97,6 +97,31 @@ pub struct NativeFnValue {
     /// Cache of [`Host::may_intercept_native`](crate::host::Host::may_intercept_native)
     /// for this function: 0 = not asked yet, 1 = never intercepted, 2 = may be.
     pub intercept: std::cell::Cell<u8>,
+    /// The typed entry, when the function only takes and returns numbers:
+    /// compiled code calls it directly, with no `Value` built (see [`TypedNative`]).
+    pub typed: Option<TypedNative>,
+}
+
+/// A number as native code passes it: in a register, with no tag.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Num {
+    /// `int`: an `i64`.
+    Int,
+    /// `float`: an `f64` (an `int` argument is converted, as `fn(x: float)` does).
+    Float,
+    /// `bool`: a `u8` (0 or 1).
+    Bool,
+}
+
+/// The typed entry of a native function: `entry` is an `extern "C" fn` whose
+/// parameters are `params` (`i64` / `f64` / `u8`) and whose result is `ret`.
+/// It must compute exactly what `func` computes for those argument types and
+/// can never fail (a function with an error path has no typed entry).
+#[derive(Clone, Copy, Debug)]
+pub struct TypedNative {
+    pub params: &'static [Num],
+    pub ret: Num,
+    pub entry: usize,
 }
 
 /// Cooperative channel (single-thread). `buffer == 0` is a rendezvous: the

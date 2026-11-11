@@ -23,6 +23,7 @@ impl NativeFunction {
             variadic: false,
             func: f,
             intercept: Default::default(),
+            typed: None,
         })
     }
 
@@ -38,6 +39,7 @@ impl NativeFunction {
             variadic: true,
             func: f,
             intercept: Default::default(),
+            typed: None,
         })
     }
 

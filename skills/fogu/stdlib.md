@@ -404,6 +404,9 @@ Numbers. Rounding to an int (`floor ceil trunc round`) keeps ints as they are; t
 - `math.clamp(x, lo, hi) · math.lerp(a, b, t)` → number · float — `clamp` of ints is an int.
 - `math.isNaN(x) · isInf(x) · isFinite(x)` → bool
 - `math.gcd(a, b) · lcm(a, b) · factorial(n) · isPrime(n)` → int · bool — Ints; overflow is an error.
+- `math.band(a, b) · bor(a, b) · bxor(a, b) · bnot(a)` → int — Bit operations on ints (64-bit two's complement): and, or, exclusive or, complement.
+- `math.shl(a, n) · shr(a, n) · ushr(a, n)` → int — Shifts: left, right keeping the sign, right filling with zeros. 64 or more shifts everything out; a negative `n` shifts the other way. With the sized conversions: `uint32(math.shl(x, 8))`.
+- `math.popcount(a) · clz(a) · ctz(a)` → int — Bits set, leading zeros, trailing zeros (64 for 0). Compiled code calls every bit function natively.
 - `math.sum(list) · mean(list) · median(list)` → number · float — `sum` of ints is an int.
 - `math.random() · randomInt(min, max) · uniform(lo, hi)` → float · int · float — `[0, 1)`; both ends included; `[lo, hi)`. Not for secrets: use `crypto`.
 - `math.choice(list) · math.shuffle(list) · math.seed(n)` → value · list · nil — A random element (`nil` if empty); shuffles in place and returns the list; a repeatable sequence.
@@ -890,6 +893,7 @@ import crypto from "fogu:crypto"
 - `crypto.hashPassword(password)` → str — argon2id PHC string (OWASP parameters), for storing passwords. [`fogu:password`](#fogupassword) adds bcrypt, scrypt, PBKDF2, peppers and rehash checks.
 - `crypto.verifyPassword(password, hash)` → bool · error — Any hash `password.verify` understands; a malformed hash → error value.
 - `crypto.randomBytes(n) · crypto.randomHex(n)` → list · str — Secure random.
+- `crypto.generateKeyPair(algorithm = "ed25519", { bits }?)` → { algorithm, bits, privateKey, publicKey } — A new key pair as PEM text (private: PKCS#8, public: SPKI — what OpenSSL, JWT libraries and `fogu:tls` read). Algorithms: `ed25519`, `p256` (ECDSA, also `es256`), `p384` (`es384`) and `rsa` with `bits` 2048 (default), 3072 or 4096 (also written `"rsa-4096"`; big RSA keys take a moment). Certificates: `tls.selfSigned`.
 - `crypto.randomInt(min, max)` → int — Inclusive, unbiased.
 - `crypto.uuid(version = 4, namespace?, name?)` → str — `uuid()` / `uuid(4)` random, `uuid(7)` time-ordered, `uuid(5, namespace, name)` name-based.
 - `crypto.uuidv4() · crypto.uuidv7()` → str — v4: random. v7: the creation time in milliseconds followed by random bits — sorts by creation time (also within the same millisecond), good for database keys.
@@ -1622,7 +1626,6 @@ A minimal HTTP server (one handler for every request) and an HTTP client. For ro
 
 ```fogu
 import http from "fogu:http"
-import time from "fogu:time"
 
 http.serve(8080, (req) => {
     if req.path == "/hello" {
@@ -1630,7 +1633,7 @@ http.serve(8080, (req) => {
     }
     return http.text("not found", { status: 404 })
 })
-while true { time.delay(50ms) }
+Fogu.signal.wait()    // serves requests until Ctrl+C / SIGTERM
 ```
 
 ```fogu
@@ -1759,7 +1762,7 @@ app.ws("/chat", (ws, ctx) => {
 })
 app.static("/", "dist", { spa: true, maxAge: 1d })
 app.listen(3000)?
-while true { time.delay(50ms) }
+Fogu.signal.wait()    // serves requests until Ctrl+C / SIGTERM
 ```
 
 Without a network, through `app.handler()`:

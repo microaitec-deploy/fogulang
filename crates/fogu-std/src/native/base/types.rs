@@ -39,6 +39,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use ahash::AHashMap as HashMap;
 
+use crate::runtime::ops::Sized;
 use crate::runtime::value::{ModuleValue, StructInstance, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef};
@@ -400,7 +401,12 @@ fn check_name(v: &Value, s: &str, path: &str, errs: &mut Vec<String>, all: bool,
                 _ => f,
             }),
             "bool" => to_bool(v),
-            _ => None,
+            // sized numbers: the text must be a number that fits (float32 rounds)
+            _ => match (Sized::from_name(s)?, to_int(v), to_float(v)) {
+                (k, _, Some(Value::Float(f))) if k.is_float() => Some(Value::Float(k.round(f))),
+                (k, Some(Value::Int(n)), _) if k.fits(n) => Some(Value::Int(n)),
+                _ => None,
+            },
         }
     };
     let ok = match s {
@@ -408,7 +414,10 @@ fn check_name(v: &Value, s: &str, path: &str, errs: &mut Vec<String>, all: bool,
         "nil" => matches!(v, Value::Nil),
         "bool" => matches!(v, Value::Bool(_)),
         "int" => matches!(v, Value::Int(_)),
-        "float" => matches!(v, Value::Float(_) | Value::Int(_)),
+        "float" | "float32" | "float64" => matches!(v, Value::Float(_) | Value::Int(_)),
+        // sized integers, as in the language's annotations: an int in the type's range
+        "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" | "uint64" | "uint" | "uintptr" | "byte"
+        | "rune" => matches!((v, Sized::from_name(s)), (Value::Int(n), Some(k)) if k.fits(*n)),
         "number" => matches!(v, Value::Int(_) | Value::Float(_)),
         "str" => matches!(v, Value::Str(_)),
         "list" => matches!(v, Value::List(_)),
@@ -428,7 +437,9 @@ fn check_name(v: &Value, s: &str, path: &str, errs: &mut Vec<String>, all: bool,
         if let Some(o) = out {
             // a float spec turns ints into floats
             *o = match (s, v) {
-                ("float", Value::Int(n)) => Value::Float(*n as f64),
+                ("float" | "float64", Value::Int(n)) => Value::Float(*n as f64),
+                ("float32", Value::Int(n)) => Value::Float(Sized::F32.round(*n as f64)),
+                ("float32", Value::Float(f)) => Value::Float(Sized::F32.round(*f)),
                 _ => v.clone(),
             };
         }
@@ -952,6 +963,8 @@ fn install_schema(e: &mut HashMap<String, Value>) {
         };
     }
     typed!("str", "int", "float", "number", "bool", "any", "duration", "buffer");
+    // types.int8() … types.float32(): the sized numbers of the language
+    typed!("int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "uint", "byte", "rune", "float32", "float64");
     e.insert("literal".into(), nfn_var("literal", 1, |a| {
         max_args(a, 1, "types.literal")?;
         let mut s = Schema::of_type(Value::Str("any".into()));

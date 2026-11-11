@@ -6,6 +6,50 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-11-11
+
+### Added
+
+- **Sized numbers, as in Go**: `int8 int16 int32 int64`, `uint8 uint16 uint32 uint64 uint uintptr`,
+  `byte`, `rune`, `float32`, `float64` are type names and conversion functions. An annotation checks
+  the range (`let x: uint8 = 300` is a type mismatch, reported by `fogu check` for literals); a
+  conversion keeps the low bits (`uint8(300) == 44`, `int8(200) == -56`), truncates floats toward zero
+  and rounds `float32` to single precision. Values stay `int` / `float` at run time; `uint64` holds
+  `0..9223372036854775807`. The JIT compiles both (one compare per annotation, a truncation per
+  conversion) with the interpreter's messages. The same names work in `fogu:types`
+  (`types.uint8()`, `"int32"` in a spec, with coercion from text), in `fogu:ffi` signatures and as
+  buffer accessors (`buf.readUint16(0)`, `buf.writeFloat32(4, x)`).
+- `fogu:math` bit operations: `band bor bxor bnot shl shr ushr popcount clz ctz` (total: no shift
+  count is an error), called natively by compiled code.
+- `crypto.generateKeyPair(algorithm, { bits })`: PEM key pairs — `ed25519`, `p256`, `p384`, `rsa`
+  (2048 / 3072 / 4096).
+- `fogu .` (or `fogu <folder>`) runs a project: its `start` script, or its `entry`.
+- Typed native functions: a native with a `TypedNative` entry (numbers in, a number out) is called
+  directly by compiled code — `time.monotonic()`, `time.now()` and the bit functions.
+
+### Changed
+
+- **Compiled calls are cheaper**: the stack limit is one compare of the stack pointer (no depth
+  counter in memory) and the line number is written only when an error leaves native code.
+  `fib(40)`: 1.25 s → 0.68 s (Go: 0.48 s; best of 7, CPU time).
+- **Tasks (`fg`) scale past 32 000**: beyond 8192 live tasks, stacks come from shared mappings (one
+  mapping per 64 stacks instead of two per stack, no system call per task), so the limit is memory,
+  not `vm.max_map_count`. 100 000 parked tasks: an error before, 1.96 s and 5 KB each now.
+- **Start-up and base memory** (Linux): the executable is linked at a fixed address (no ~160 000
+  load-time relocations; `FOGU_PIE=1 cargo build` keeps a PIE), the allocator no longer asks for
+  transparent huge pages, and the release is linked with OpenSSL statically (no libssl / libcrypto to
+  load when the program never uses TLS; the binary no longer depends on the machine's OpenSSL
+  version). `print(1)`: 9.4 ms → 5.5–6 ms and 21.8 MB → 15 MB resident on the reference machine.
+- `fogu:vm`: isolated contexts share one read-only copy of the global natives —
+  `vm.runInNewContext` 13.7 µs → 6.9 µs, `script.runInNewContext` 11.4 µs → 5.6 µs.
+- `fogu:ffi`: no heap allocation and no name search per call.
+- The HTTP / web examples and reference keep the process alive with `Fogu.signal.wait()` instead of
+  a `while true { time.delay(…) }` loop.
+
+### Removed
+
+- Unused dependencies: `ahash` (CLI and `ffi/`), `fogu-pkg` and `libc` (`fogu-std`).
+
 ## [0.7.3] - 2026-11-04
 
 ### Added

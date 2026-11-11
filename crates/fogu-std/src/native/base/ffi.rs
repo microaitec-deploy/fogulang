@@ -125,17 +125,18 @@ enum Ty {
 
 fn ty(name: &str) -> Result<Ty, String> {
     Ok(match name {
-        "i8" | "char" => Ty::I8,
-        "i16" | "short" => Ty::I16,
-        "i32" | "int" => Ty::I32,
-        "i64" | "long long" | "isize" => Ty::I64,
-        "u8" | "uchar" => Ty::U8,
-        "u16" | "ushort" => Ty::U16,
-        "u32" | "uint" => Ty::U32,
-        "u64" | "usize" | "size_t" => Ty::U64,
+        // the C names, the Rust names and the language's sized types (int8 … float64)
+        "i8" | "char" | "int8" => Ty::I8,
+        "i16" | "short" | "int16" => Ty::I16,
+        "i32" | "int" | "int32" | "rune" => Ty::I32,
+        "i64" | "long long" | "isize" | "int64" => Ty::I64,
+        "u8" | "uchar" | "uint8" | "byte" => Ty::U8,
+        "u16" | "ushort" | "uint16" => Ty::U16,
+        "u32" | "uint" | "uint32" => Ty::U32,
+        "u64" | "usize" | "size_t" | "uint64" | "uintptr" => Ty::U64,
         "bool" => Ty::Bool,
-        "f32" | "float" => Ty::F32,
-        "f64" | "double" => Ty::F64,
+        "f32" | "float" | "float32" => Ty::F32,
+        "f64" | "double" | "float64" => Ty::F64,
         "ptr" | "pointer" | "callback" => Ty::Ptr,
         "str" | "string" | "cstring" => Ty::Str,
         "buffer" => Ty::Buffer,
@@ -339,7 +340,7 @@ impl FoguObject for LibValue {
                     if params.len() > 8 || (params.len() > 4 && floats > 0) {
                         return Err("func: up to 4 arguments when floats are used, up to 8 integers/pointers otherwise".into());
                     }
-                } else if params.len() > 32 {
+                } else if params.len() > MAX_PARAMS {
                     return Err("func: up to 32 arguments".into());
                 }
                 let addr = self.symbol(&symbol, "func")?;
@@ -368,6 +369,9 @@ impl FoguObject for LibValue {
 // ---------------------------------------------------------------------
 // Functions
 // ---------------------------------------------------------------------
+
+/// The most parameters a C function called through `fogu:ffi` may have.
+const MAX_PARAMS: usize = 32;
 
 struct FnInfo {
     /// keeps the library loaded while the function exists
@@ -403,6 +407,7 @@ fn native_fn(f: FnInfo) -> Value {
         variadic: false,
         func: call_ffi_placeholder,
         intercept: Default::default(),
+        typed: None,
     }))
 }
 
@@ -411,8 +416,19 @@ fn call_ffi_placeholder(_: &[Value]) -> Result<Value, String> {
 }
 
 /// Is this native function an ffi function? (name `symbol#ffiN`)
+///
+/// Runs on every ffi call: reads the digits from the end, no search.
+#[inline]
 pub fn ffi_id(name: &str) -> Option<usize> {
-    name.rsplit_once("#ffi").and_then(|(_, id)| id.parse().ok())
+    let b = name.as_bytes();
+    let mut i = b.len();
+    let (mut id, mut mult) = (0usize, 1usize);
+    while i > 0 && b[i - 1].is_ascii_digit() {
+        id = id.checked_add((b[i - 1] - b'0') as usize * mult)?;
+        mult = mult.checked_mul(10)?;
+        i -= 1;
+    }
+    (i < b.len() && i >= 4 && &b[i - 4..i] == b"#ffi").then_some(id)
 }
 
 /// Values a call must keep alive until the C function returns.
@@ -493,9 +509,11 @@ pub fn call_ffi(id: usize, args: &[Value], it: &Interpreter, env: &Rc<RefCell<En
         return Err(format!("{} expects {} arguments, got {}", f.name, f.params.len(), args.len()));
     }
     let mut keep = KeepAlive::default();
-    let mut words: Vec<u64> = Vec::with_capacity(args.len());
+    // the argument words live on the stack (a signature has at most 32 parameters)
+    let mut buf = [0u64; MAX_PARAMS];
+    let words = &mut buf[..args.len()];
     for (i, (t, v)) in f.params.iter().zip(args).enumerate() {
-        words.push(to_word(*t, v, &mut keep, &|| format!("{}: argument {}", f.name, i + 1))?);
+        words[i] = to_word(*t, v, &mut keep, &|| format!("{}: argument {}", f.name, i + 1))?;
     }
     let _active = Active::enter(it, env);
     let mut out = 0u64;
@@ -508,7 +526,7 @@ pub fn call_ffi(id: usize, args: &[Value], it: &Interpreter, env: &Rc<RefCell<En
                 let raw: Vec<Arg> = f
                     .params
                     .iter()
-                    .zip(&words)
+                    .zip(words.iter())
                     .map(|(t, w)| if *t == Ty::F64 { Arg::F(f64::from_bits(*w)) } else { Arg::I(*w as i64) })
                     .collect();
                 let addr = f.addr as *const c_void;

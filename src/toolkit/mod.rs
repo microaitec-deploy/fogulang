@@ -34,6 +34,7 @@ fn help() -> String {
 {usage}
   fogu <file.fg> [args...]         run a file (shortcut for 'run')
   fogu <script> [args...]          run a script from fogu.json
+  fogu . [args...]                 run the project in this folder (its start script, or its entry; also 'fogu <folder>')
 
 {cmds}
   run <file|script>       run a file or a script from fogu.json
@@ -342,6 +343,29 @@ fn real_main(mut args: Vec<String>, flags: RunFlags) -> i32 {
     if !Path::new(&cmd).is_file() {
         if let Some(code) = commands::try_script(&cmd, rest) {
             return code;
+        }
+        // a project folder: `fogu .` (or `fogu path/to/app`) is `fogu start` there
+        if !forced_run && Path::new(&cmd).is_dir() {
+            if let Err(e) = std::env::set_current_dir(&cmd) {
+                ui::error(&format!("cannot enter '{}': {}", cmd, e));
+                return 1;
+            }
+            if let Some(code) = commands::try_script("start", rest) {
+                return code;
+            }
+            return match commands::default_entry() {
+                Some(entry) => {
+                    crate::native::system::set_script_args(rest.to_vec());
+                    finish(cli::run_file(&entry))
+                }
+                None => {
+                    ui::error(&format!(
+                        "'{}' has no \"start\" script and no \"entry\" in fogu.json\n  'fogu init' creates a project",
+                        cmd
+                    ));
+                    1
+                }
+            };
         }
         // a file of an installed package: `fogu desktop/build.fg <app>`
         if cmd.contains('/') && !cmd.starts_with(['.', '/']) {

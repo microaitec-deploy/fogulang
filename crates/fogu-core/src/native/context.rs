@@ -42,6 +42,7 @@ impl NativeContext {
                 variadic: false,
                 func: f,
                 intercept: Default::default(),
+                typed: None,
             })),
         );
     }
@@ -60,6 +61,7 @@ impl NativeContext {
                 variadic: true,
                 func: f,
                 intercept: Default::default(),
+                typed: None,
             })),
         );
     }
@@ -185,6 +187,15 @@ impl NativeContext {
             )),
         });
 
+        // int8(x) … uint64(x), byte(x), rune(x), float32(x), float64(x): the
+        // conversions of Go (an integer keeps its low bits: int8(200) == -56)
+        macro_rules! sized {
+            ($($name:literal),*) => {$(
+                self.define_global($name, 1, |args| sized_convert($name, &args[0]));
+            )*};
+        }
+        sized!("int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "uint", "uintptr", "byte", "rune", "float32", "float64");
+
         crate::native::collections::install(self);
 
         self.define_global("clock", 0, |_| {
@@ -200,5 +211,37 @@ impl NativeContext {
 impl Default for NativeContext {
     fn default() -> Self {
         Self::new()
+    }
+}
+/// `int8(x)` … `float64(x)` (see `runtime::ops::Sized`).
+fn sized_convert(name: &'static str, v: &Value) -> Result<Value, String> {
+    use crate::runtime::ops::{self, Sized};
+    let kind = Sized::from_name(name).expect("a sized type name");
+    if kind.is_float() {
+        return match v {
+            Value::Float(f) => Ok(Value::Float(kind.round(*f))),
+            // through f64, like the JIT (one rounding rule everywhere)
+            Value::Int(n) => Ok(Value::Float(kind.round(*n as f64))),
+            Value::Str(s) => s
+                .trim()
+                .parse::<f64>()
+                .map(|f| Value::Float(kind.round(f)))
+                .map_err(|_| format!("cannot convert '{}' to {}", s, name)),
+            other => Err(format!("cannot convert '{}' to {}", other.type_name(), name)),
+        };
+    }
+    let wrap = |n: i64| kind.wrap(n).map(Value::Int).ok_or_else(|| ops::err_negative(name));
+    match v {
+        Value::Int(n) => wrap(*n),
+        // toward zero, then the low bits (int() saturates the same way)
+        Value::Float(f) => wrap(*f as i64),
+        Value::Bool(b) => Ok(Value::Int(*b as i64)),
+        // text is a number being read, not bits: it must fit
+        Value::Str(s) => match s.trim().parse::<i64>() {
+            Ok(n) if kind.fits(n) => Ok(Value::Int(n)),
+            Ok(_) => Err(format!("cannot convert '{}' to {}: out of range", s, name)),
+            Err(_) => Err(format!("cannot convert '{}' to {}", s, name)),
+        },
+        other => Err(format!("cannot convert '{}' to {}", other.type_name(), name)),
     }
 }

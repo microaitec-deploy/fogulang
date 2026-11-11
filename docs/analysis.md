@@ -327,7 +327,33 @@
 
 Unmaintained: `unsafe-libyaml` via serde_yaml → **replaced** by `serde_norway` 0.9 (the maintained fork: same API, parser `unsafe-libyaml-norway`; `serde-yaml-ng` and `serde_yml` still use the unmaintained one). Left as warnings, no fix available: `paste` (a proc-macro helper pinned by dependencies), `ttf-parser` (via ab_glyph for `fogu:image` text; the maintained replacement, skrifa, would need a new text renderer).
 
+## Seventeenth round (sized numbers, runtime cost, 0.7.4)
+
+- **Sized numbers** are ranges and conversions over `int` / `float`, not new run-time types: every
+  native keeps matching `Value::Int` / `Value::Float`. `ops::Sized` holds the ranges and Go's
+  wrapping; the interpreter, the resolver, the JIT, `fogu:types`, `fogu:ffi` and the buffer accessors
+  share it. Arithmetic does not wrap by itself (it stays checked 64-bit): `uint8(a + b)`.
+- **JIT errors with a program-specific message** (`parameter 'x' expects int8…`) go through
+  `ops::custom_code` (interned, leaked once per distinct message).
+- **The line of a JIT error** is a register value passed to the cold error block; `JitCtx::line` is 0
+  when native code failed before its first statement, and the interpreter then keeps its own line
+  (the call), exactly as when it runs the parameter checks itself.
+- **Task stacks**: guarded stacks up to `GUARDED_MAX` (8192), then `sched::slab`. Slab stacks have
+  no guard page — their protection is the software stack limit (`STACK_MARGIN` = 512 KB) checked by
+  the interpreter and by compiled code on every call. A finished slab stack gives all its pages back
+  unless it is one of the first 256 free ones.
+- **Start-up**: of ~6 ms for `print(1)`, the program itself takes ~1.5 ms (0.5 ms registering the
+  lazy module table and `Fogu`); the rest is process creation, page faults of the 70 MB image and,
+  where transparent huge pages are set to `always`, zeroing the allocator's first 2 MB pages.
+
 ## Known gaps
+
+- **Not in 0.7.4** (asked for, not done): a bytecode VM for non-numeric code (interpreted calls are
+  still ~150–300 ns); running Fogu code on several cores (values are `Rc`: tasks share one thread, so a
+  task cannot be given a core — `Fogu.cores` sizes and pins the I/O threads); the JIT under a
+  `fogu:vm` timeout (code with a deadline is interpreted: ~100× slower in numeric loops); bit
+  operators as syntax (`&`, `|`, `<<` — today `math.band`…); a direct JIT call into `fogu:ffi`
+  functions (errno capture and callbacks need the interpreter's context).
 
 - Exports are values taken when the `export` runs, not live bindings: `export let n = 0` (or
   `export { n }`) followed by `n += 1` does not change what importers see. A WebAssembly bundle

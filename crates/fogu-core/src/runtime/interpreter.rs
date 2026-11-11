@@ -48,6 +48,9 @@ pub struct Interpreter {
     deadline_count: Cell<usize>,
     /// The scheduler's task-switch hook is installed (see `install_switch_hook`).
     switch_hook: Cell<bool>,
+    /// The global natives alone, shared by every isolated `fogu:vm` context
+    /// (built on the first one: copying them per context was most of its cost).
+    vm_globals: RefCell<Option<Rc<RefCell<Environment>>>>,
 }
 
 impl Drop for Interpreter {
@@ -104,6 +107,7 @@ impl Interpreter {
             deadlines: RefCell::new(HashMap::new()),
             deadline_count: Cell::new(0),
             switch_hook: Cell::new(false),
+            vm_globals: RefCell::new(None),
             rng: Cell::new(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -437,11 +441,15 @@ impl Interpreter {
     /// (`isolated`), or a child of this program's globals.
     pub fn vm_env(&self, isolated: bool, file: &str) -> Rc<RefCell<Environment>> {
         let parent = if isolated {
-            let g = Environment::new();
-            for (name, value) in self.module_cache.natives().globals() {
-                g.borrow_mut().define_builtin(name, value);
-            }
-            g
+            // nothing writes to this environment: a context declares (and may
+            // redeclare a native) in its own module environment, below it
+            Rc::clone(self.vm_globals.borrow_mut().get_or_insert_with(|| {
+                let g = Environment::new();
+                for (name, value) in self.module_cache.natives().globals() {
+                    g.borrow_mut().define_builtin(name, value);
+                }
+                g
+            }))
         } else {
             Rc::clone(&self.globals)
         };
@@ -798,7 +806,7 @@ impl Interpreter {
                 "type mismatch: parameter '{}' expects {}, got {}",
                 name,
                 ty,
-                describe(&v)
+                describe_for(&v, ty)
             ));
         }
         Ok(Flow::Normal)
@@ -2117,7 +2125,7 @@ impl Interpreter {
                     "type mismatch: function '{}' must return {}, got {}",
                     name,
                     ty,
-                    describe(v)
+                    describe_for(v, ty)
                 ));
             }
         }
@@ -2140,7 +2148,7 @@ impl Interpreter {
             "type mismatch: variable '{}' is declared as {}, got {}",
             name,
             ty,
-            describe(v)
+            describe_for(v, ty)
         ))
     }
 
@@ -2197,7 +2205,13 @@ impl Interpreter {
         Ok(match name {
             "int" => matches!(v, Value::Int(_)),
             // int → float promotion (spec §10)
-            "float" => matches!(v, Value::Float(_) | Value::Int(_)),
+            "float" | "float64" | "float32" => matches!(v, Value::Float(_) | Value::Int(_)),
+            // sized integers (as in Go): an int inside the type's range
+            "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" | "uint64" | "uint"
+            | "uintptr" | "byte" | "rune" => match (v, ops::Sized::from_name(name)) {
+                (Value::Int(n), Some(k)) => k.fits(*n),
+                _ => false,
+            },
             "str" | "string" => matches!(v, Value::Str(_)),
             "bool" => matches!(v, Value::Bool(_)),
             "nil" | "void" => matches!(v, Value::Nil),
@@ -2440,6 +2454,20 @@ impl Interpreter {
 // ---------- Types ----------
 
 /// Type of a value for error messages (struct name for instances).
+/// `describe`, saying why an int does not match a sized annotation (`int8`…).
+fn describe_for(v: &Value, ty: &TypeExpr) -> String {
+    let named = match ty {
+        TypeExpr::Optional(t) => &**t,
+        t => t,
+    };
+    if let (Value::Int(_), TypeExpr::Named(n)) = (v, named) {
+        if let Some(k) = ops::Sized::from_name(n).filter(|k| !k.is_float()) {
+            return ops::out_of_range(n, k);
+        }
+    }
+    describe(v)
+}
+
 fn describe(v: &Value) -> String {
     match v {
         Value::Struct(s) => s.borrow().type_name.clone(),

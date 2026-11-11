@@ -35,6 +35,9 @@ use super::ast::*;
 const BUILTIN_TYPES: &[&str] = &[
     "int", "float", "str", "string", "bool", "nil", "void", "duration", "list", "map", "tuple",
     "range", "chan", "error", "fn", "struct", "object", "any", "buffer",
+    // sized numbers, as in Go (`ops::SIZED_NAMES`)
+    "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "uint", "uintptr",
+    "byte", "rune", "float32", "float64",
 ];
 
 /// Arity of the core globals (`native/context.rs`, `native/collections.rs`):
@@ -47,6 +50,20 @@ const CORE_GLOBALS: &[(&str, usize, bool, Ty)] = &[
     ("str", 1, false, Ty::Str),
     ("int", 1, false, Ty::Any),
     ("float", 1, false, Ty::Any),
+    ("int8", 1, false, Ty::Int),
+    ("int16", 1, false, Ty::Int),
+    ("int32", 1, false, Ty::Int),
+    ("int64", 1, false, Ty::Int),
+    ("uint8", 1, false, Ty::Int),
+    ("uint16", 1, false, Ty::Int),
+    ("uint32", 1, false, Ty::Int),
+    ("uint64", 1, false, Ty::Int),
+    ("uint", 1, false, Ty::Int),
+    ("uintptr", 1, false, Ty::Int),
+    ("byte", 1, false, Ty::Int),
+    ("rune", 1, false, Ty::Int),
+    ("float32", 1, false, Ty::Float),
+    ("float64", 1, false, Ty::Float),
     ("clock", 0, false, Ty::Any),
     ("error", 1, true, Ty::Any),
 ];
@@ -100,7 +117,8 @@ impl Ty {
         match t {
             TypeExpr::Named(n) | TypeExpr::Generic(n, _) => match n.as_str() {
                 "int" => Ty::Int,
-                "float" => Ty::Num,
+                "float" | "float32" | "float64" => Ty::Num,
+                n if super::ops::Sized::from_name(n).is_some() => Ty::Int,
                 "str" | "string" => Ty::Str,
                 "bool" => Ty::Bool,
                 "duration" => Ty::Duration,
@@ -126,7 +144,14 @@ impl Ty {
                 let ok = match n.as_str() {
                     "int" if self == Ty::Num => return None,
                     "int" => self == Ty::Int,
-                    "float" => self.numeric(),
+                    "float" | "float32" | "float64" => self.numeric(),
+                    // a sized integer: whether an int fits is only known at run time
+                    n if super::ops::Sized::from_name(n).is_some() => {
+                        if matches!(self, Ty::Int | Ty::Num) {
+                            return None;
+                        }
+                        false
+                    }
                     "str" | "string" => self == Ty::Str,
                     "bool" => self == Ty::Bool,
                     "nil" | "void" => self == Ty::Nil,
@@ -914,6 +939,17 @@ impl Resolver<'_> {
                         init_ty.name()
                     ));
                 }
+                // `let x: uint8 = 300`: a literal that can never fit
+                if let (TypeExpr::Named(n), Some(v)) = (t, int_literal(init)) {
+                    if let Some(k) = super::ops::Sized::from_name(n).filter(|k| !k.is_float() && !k.fits(v)) {
+                        self.report(format!(
+                            "type mismatch: variable '{}' is declared as {}, got {}",
+                            name,
+                            t,
+                            super::ops::out_of_range(n, k)
+                        ));
+                    }
+                }
                 Ty::of_annotation(t)
             }
             None => init_ty,
@@ -1304,6 +1340,18 @@ impl Resolver<'_> {
             }
             None => Ok(Ty::Any),
         }
+    }
+}
+
+/// The value of an integer literal (`300`, `-1`).
+fn int_literal(e: &Expr) -> Option<i64> {
+    match e {
+        Expr::Int(n) => Some(*n),
+        Expr::Unary { op: UnaryOp::Neg, right } => match &**right {
+            Expr::Int(n) => n.checked_neg(),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

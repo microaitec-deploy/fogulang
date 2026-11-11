@@ -541,6 +541,21 @@ export const REFERENCE: Record<string, RefData> = {
       "Ints; overflow is an error."
      ],
      [
+      "math.band(a, b) · bor(a, b) · bxor(a, b) · bnot(a)",
+      "int",
+      "Bit operations on ints (64-bit two's complement): and, or, exclusive or, complement."
+     ],
+     [
+      "math.shl(a, n) · shr(a, n) · ushr(a, n)",
+      "int",
+      "Shifts: left, right keeping the sign, right filling with zeros. 64 or more shifts everything out; a negative <code>n</code> shifts the other way. With the sized conversions: <code>uint32(math.shl(x, 8))</code>."
+     ],
+     [
+      "math.popcount(a) · clz(a) · ctz(a)",
+      "int",
+      "Bits set, leading zeros, trailing zeros (64 for 0). Compiled code calls every bit function natively."
+     ],
+     [
       "math.sum(list) · mean(list) · median(list)",
       "number · float",
       "<code>sum</code> of ints is an int."
@@ -1327,6 +1342,11 @@ export const REFERENCE: Record<string, RefData> = {
       "crypto.randomBytes(n) · crypto.randomHex(n)",
       "list · str",
       "Secure random."
+     ],
+     [
+      "crypto.generateKeyPair(algorithm = \"ed25519\", { bits }?)",
+      "{ algorithm, bits, privateKey, publicKey }",
+      "A new key pair as PEM text (private: PKCS#8, public: SPKI — what OpenSSL, JWT libraries and <code>fogu:tls</code> read). Algorithms: <code>ed25519</code>, <code>p256</code> (ECDSA, also <code>es256</code>), <code>p384</code> (<code>es384</code>) and <code>rsa</code> with <code>bits</code> 2048 (default), 3072 or 4096 (also written <code>\"rsa-4096\"</code>; big RSA keys take a moment). Certificates: <code>tls.selfSigned</code>."
      ],
      [
       "crypto.randomInt(min, max)",
@@ -2278,7 +2298,7 @@ export const REFERENCE: Record<string, RefData> = {
       "<code>opts: { status, headers }</code>."
      ]
     ],
-    "example": "import http from \"fogu:http\"\nimport time from \"fogu:time\"\n\nhttp.serve(8080, (req) => {\n    if req.path == \"/hello\" {\n        return http.json({ hello: \"world\", method: req.method })\n    }\n    return http.text(\"not found\", { status: 404 })\n})\nwhile true { time.delay(50ms) }"
+    "example": "import http from \"fogu:http\"\n\nhttp.serve(8080, (req) => {\n    if req.path == \"/hello\" {\n        return http.json({ hello: \"world\", method: req.method })\n    }\n    return http.text(\"not found\", { status: 404 })\n})\nFogu.signal.wait()    // serves requests until Ctrl+C / SIGTERM"
    },
    {
     "title": "client.fg",
@@ -2426,7 +2446,7 @@ export const REFERENCE: Record<string, RefData> = {
       "<code>save(\"uploads/\")</code> keeps a sanitized file name."
      ]
     ],
-    "example": "import web from \"fogu:web\"\nimport time from \"fogu:time\"\n\nconst app = web.app()\napp.use(web.logger())\napp.use(\"/api\", (ctx) => {\n    if ctx.headers[\"x-key\"] != \"secret\" { return web.json({ error: \"forbidden\" }, { status: 403 }) }\n})\napp.get(\"/api/users/:id\", (ctx) => ({ id: ctx.params.id, page: ctx.query.page ?? \"1\" }))\napp.post(\"/api/upload\", (ctx) => {\n    const form = ctx.req.form()?\n    return { saved: form.file.save(\"uploads/\")?, size: form.file.size }\n})\napp.get(\"/events\", (ctx) => {\n    const stream = web.sse()\n    fg fn() {\n        for i in 1..4 { stream.send({ n: i }, { event: \"tick\" }); time.delay(1s) }\n        stream.close()\n    }()\n    return stream\n})\napp.ws(\"/chat\", (ws, ctx) => {\n    while true {\n        const m = ws.next()?\n        if m == nil { break }\n        ws.send(`echo: ${m.data}`)\n    }\n})\napp.static(\"/\", \"dist\", { spa: true, maxAge: 1d })\napp.listen(3000)?\nwhile true { time.delay(50ms) }"
+    "example": "import web from \"fogu:web\"\nimport time from \"fogu:time\"\n\nconst app = web.app()\napp.use(web.logger())\napp.use(\"/api\", (ctx) => {\n    if ctx.headers[\"x-key\"] != \"secret\" { return web.json({ error: \"forbidden\" }, { status: 403 }) }\n})\napp.get(\"/api/users/:id\", (ctx) => ({ id: ctx.params.id, page: ctx.query.page ?? \"1\" }))\napp.post(\"/api/upload\", (ctx) => {\n    const form = ctx.req.form()?\n    return { saved: form.file.save(\"uploads/\")?, size: form.file.size }\n})\napp.get(\"/events\", (ctx) => {\n    const stream = web.sse()\n    fg fn() {\n        for i in 1..4 { stream.send({ n: i }, { event: \"tick\" }); time.delay(1s) }\n        stream.close()\n    }()\n    return stream\n})\napp.ws(\"/chat\", (ws, ctx) => {\n    while true {\n        const m = ws.next()?\n        if m == nil { break }\n        ws.send(`echo: ${m.data}`)\n    }\n})\napp.static(\"/\", \"dist\", { spa: true, maxAge: 1d })\napp.listen(3000)?\nFogu.signal.wait()    // serves requests until Ctrl+C / SIGTERM"
    },
    {
     "text": "Without a network, through <code>app.handler()</code>:",

@@ -5,6 +5,7 @@ fogu                         REPL (history, multi-line input, value echo)
 fogu <file.fg> [args]        run (the args are in system.info.args())
 fogu run [file|script]       run; without a target uses "entry" from fogu.json
 fogu <script>                script from fogu.json (e.g. fogu dev)
+fogu .                       the project in this folder: its "start" script, or its "entry" (also fogu <folder>)
 fogu -e '<code>'             run code;  fogu -p '1+2*3' prints the result
 fogu --watch <file>          restart when *.fg / fogu.json change
 fogu check [paths] [opts]    syntax, names and types (files or folders; no args: every .fg here)

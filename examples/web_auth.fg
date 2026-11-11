@@ -5,7 +5,6 @@
 
 import web from "fogu:web"
 import jwt from "fogu:jwt"
-import time from "fogu:time"
 
 const SECRET = Fogu.env.JWT_SECRET ?? "dev-secret-change-me"
 const app = web.app()
@@ -41,6 +40,4 @@ app.onError((ctx, err) => web.json({ error: err.message }, { status: 500 }))
 print("server at http://127.0.0.1:3000")
 app.listen(3000)
 
-while true {
-    time.delay(100ms)
-}
+Fogu.signal.wait()    // serves requests until Ctrl+C / SIGTERM

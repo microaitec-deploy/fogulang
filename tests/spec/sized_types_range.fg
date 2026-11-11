@@ -1,0 +1,11 @@
+// An int outside a sized annotation is a type mismatch (reported at the call).
+fn half(x: int8): int8 {
+    return x / 2
+}
+print(half(100))
+print(half(-128))
+let total = 0
+for i in 0..5 {
+    total = total + half(i * 60)
+}
+print(total)

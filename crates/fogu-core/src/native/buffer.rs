@@ -124,15 +124,16 @@ fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 fn width(name: &str) -> Option<(usize, bool, bool)> {
     // (bytes, signed, float)
     Some(match name {
-        "U8" => (1, false, false),
-        "I8" => (1, true, false),
-        "U16" => (2, false, false),
-        "I16" => (2, true, false),
-        "U32" => (4, false, false),
-        "I32" => (4, true, false),
-        "I64" => (8, true, false),
-        "F32" => (4, true, true),
-        "F64" => (8, true, true),
+        // the short names and the language's sized types (readUint16, writeFloat32…)
+        "U8" | "Uint8" | "Byte" => (1, false, false),
+        "I8" | "Int8" => (1, true, false),
+        "U16" | "Uint16" => (2, false, false),
+        "I16" | "Int16" => (2, true, false),
+        "U32" | "Uint32" => (4, false, false),
+        "I32" | "Int32" | "Rune" => (4, true, false),
+        "I64" | "Int64" => (8, true, false),
+        "F32" | "Float32" => (4, true, true),
+        "F64" | "Float64" => (8, true, true),
         _ => return None,
     })
 }

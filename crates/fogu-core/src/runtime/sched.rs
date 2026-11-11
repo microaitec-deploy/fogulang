@@ -40,7 +40,147 @@ const POOL_KEEP: usize = 64 * 1024;
 /// Safety margin before the end of the stack.
 const STACK_MARGIN: usize = 512 * 1024;
 
-type Task = Coroutine<(), (), Result<(), String>, DefaultStack>;
+type Task = Coroutine<(), (), Result<(), String>, TaskStack>;
+
+/// Tasks alive on stacks of their own mapping (with a guard page) before the
+/// next ones share big mappings. Each guarded stack costs the process two
+/// memory mappings and Linux allows 65530 of them (`vm.max_map_count`): a
+/// program with tens of thousands of tasks would run out of mappings — for its
+/// stacks and for everything else (the heap, threads).
+#[cfg(unix)]
+const GUARDED_MAX: usize = 8192;
+
+/// The stack of a task.
+pub enum TaskStack {
+    /// Its own mapping, ending in a guard page.
+    Guarded(DefaultStack),
+    /// A slice of a mapping shared with other tasks ([`slab`]).
+    #[cfg(unix)]
+    Slab(slab::SlabStack),
+}
+
+// SAFETY: `Guarded` is corosensei's own stack. A `Slab` stack is `TASK_STACK`
+// bytes of mapped memory below `base`; it has no guard page, so its overflow
+// protection is the stack limit the interpreter and compiled code check on
+// every call (`stack_ok`, `STACK_MARGIN` before the end).
+unsafe impl corosensei::stack::Stack for TaskStack {
+    fn base(&self) -> corosensei::stack::StackPointer {
+        match self {
+            TaskStack::Guarded(s) => s.base(),
+            #[cfg(unix)]
+            TaskStack::Slab(s) => s.base(),
+        }
+    }
+
+    fn limit(&self) -> corosensei::stack::StackPointer {
+        match self {
+            TaskStack::Guarded(s) => s.limit(),
+            #[cfg(unix)]
+            TaskStack::Slab(s) => s.limit(),
+        }
+    }
+
+    #[cfg(windows)]
+    fn teb_fields(&self) -> corosensei::stack::StackTebFields {
+        match self {
+            TaskStack::Guarded(s) => s.teb_fields(),
+        }
+    }
+
+    #[cfg(windows)]
+    fn update_teb_fields(&mut self, stack_limit: usize, guaranteed_stack_bytes: usize) {
+        match self {
+            TaskStack::Guarded(s) => s.update_teb_fields(stack_limit, guaranteed_stack_bytes),
+        }
+    }
+}
+
+/// Task stacks carved out of big mappings: no system call to create one, and
+/// one memory mapping per [`CHUNK`] stacks instead of two per stack, so the
+/// number of tasks is bounded by memory, not by `vm.max_map_count`.
+#[cfg(unix)]
+mod slab {
+    use super::TASK_STACK;
+    use corosensei::stack::StackPointer;
+    use std::cell::RefCell;
+
+    /// Stacks per mapping.
+    const CHUNK: usize = 64;
+
+    thread_local! {
+        /// Bases (highest addresses) of the free stacks of this thread.
+        static FREE: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub struct SlabStack {
+        base: usize,
+    }
+
+    impl SlabStack {
+        pub fn base(&self) -> StackPointer {
+            StackPointer::new(self.base).expect("a mapped stack")
+        }
+
+        pub fn limit(&self) -> StackPointer {
+            StackPointer::new(self.base - TASK_STACK).expect("a mapped stack")
+        }
+
+        /// Gives the pages below the top `keep` bytes back to the system.
+        pub fn trim(&self, keep: usize) {
+            // SAFETY: the range is inside this stack's own slice of the mapping.
+            unsafe {
+                libc::madvise((self.base - TASK_STACK) as *mut libc::c_void, TASK_STACK - keep, libc::MADV_DONTNEED);
+            }
+        }
+    }
+
+    impl Drop for SlabStack {
+        fn drop(&mut self) {
+            // the mapping stays; the slice is free for the next task
+            let _ = FREE.try_with(|f| f.borrow_mut().push(self.base));
+        }
+    }
+
+    /// Free stacks waiting for a task.
+    pub fn free() -> usize {
+        FREE.with(|f| f.borrow().len())
+    }
+
+    pub fn take() -> Result<SlabStack, String> {
+        FREE.with(|f| {
+            let mut f = f.borrow_mut();
+            if let Some(base) = f.pop() {
+                return Ok(SlabStack { base });
+            }
+            let len = CHUNK * TASK_STACK;
+            // SAFETY: a fresh anonymous mapping; only the pages a task touches use memory.
+            let p = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    len,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
+                    -1,
+                    0,
+                )
+            };
+            if p == libc::MAP_FAILED {
+                return Err(format!("could not create the task stack: {}", std::io::Error::last_os_error()));
+            }
+            // no transparent huge pages (see `take_stack`)
+            #[cfg(target_os = "linux")]
+            // SAFETY: the mapping just created.
+            unsafe {
+                libc::madvise(p, len, libc::MADV_NOHUGEPAGE);
+            }
+            let start = p as usize;
+            for i in (1..CHUNK).rev() {
+                f.push(start + (i + 1) * TASK_STACK);
+            }
+            Ok(SlabStack { base: start + TASK_STACK })
+        })
+    }
+}
 
 #[derive(Clone, Copy)]
 struct Ctx {
@@ -57,15 +197,31 @@ thread_local! {
     /// every time they are checked (each wake-up), so equal ones must collapse.
     static TIMERS: RefCell<std::collections::BTreeSet<Instant>> = const { RefCell::new(std::collections::BTreeSet::new()) };
     static STACKS: RefCell<Vec<DefaultStack>> = const { RefCell::new(Vec::new()) };
+    /// Guarded stacks in use by tasks of this thread.
+    static GUARDED: Cell<usize> = const { Cell::new(0) };
 }
 
 /// A task stack: a pooled one, or a new one.
-fn take_stack() -> Result<DefaultStack, String> {
-    if let Some(s) = STACKS.with(|p| p.borrow_mut().pop()) {
-        return Ok(s);
+fn take_stack() -> Result<TaskStack, String> {
+    #[cfg(unix)]
+    if GUARDED.with(|g| g.get()) >= GUARDED_MAX {
+        return slab::take().map(TaskStack::Slab);
     }
-    let stack = DefaultStack::new(TASK_STACK)
-        .map_err(|e| format!("could not create the task stack: {}", e))?;
+    GUARDED.with(|g| g.set(g.get() + 1));
+    if let Some(s) = STACKS.with(|p| p.borrow_mut().pop()) {
+        return Ok(TaskStack::Guarded(s));
+    }
+    let stack = match DefaultStack::new(TASK_STACK) {
+        Ok(s) => s,
+        Err(e) => {
+            GUARDED.with(|g| g.set(g.get() - 1));
+            // out of mappings before the threshold (other code uses them too)
+            #[cfg(unix)]
+            return slab::take().map(TaskStack::Slab).map_err(|_| format!("could not create the task stack: {}", e));
+            #[cfg(not(unix))]
+            return Err(format!("could not create the task stack: {}", e));
+        }
+    };
     // no transparent huge pages: the kernel would otherwise give some stacks a whole 2 MB page
     // on their first fault, and a parked task only needs a few 4 KB pages
     #[cfg(target_os = "linux")]
@@ -73,7 +229,7 @@ fn take_stack() -> Result<DefaultStack, String> {
         let top = { use corosensei::stack::Stack; stack.base().get() };
         libc::madvise((top - TASK_STACK) as *mut libc::c_void, TASK_STACK, libc::MADV_NOHUGEPAGE);
     }
-    Ok(stack)
+    Ok(TaskStack::Guarded(stack))
 }
 
 /// Gives the stack of a finished task back to the pool.
@@ -81,7 +237,19 @@ fn recycle(task: Task) {
     if task.started() && !task.done() {
         return; // still holds frames: never reused
     }
-    let stack = task.into_stack();
+    let stack = match task.into_stack() {
+        TaskStack::Guarded(s) => s,
+        #[cfg(unix)]
+        TaskStack::Slab(s) => {
+            // back to its slab (on drop). The first free ones keep their top
+            // pages for the next task; the rest give every page back, or a
+            // burst of tasks would leave its stacks resident forever (a slab
+            // is never unmapped)
+            s.trim(if slab::free() < POOL_MAX { POOL_KEEP } else { 0 });
+            return;
+        }
+    };
+    GUARDED.with(|g| g.set(g.get().saturating_sub(1)));
     STACKS.with(|p| {
         let mut p = p.borrow_mut();
         if p.len() >= POOL_MAX {
@@ -260,6 +428,12 @@ pub fn init_main_stack(size: usize) {
 #[inline]
 pub fn stack_ok() -> bool {
     sp() > CTX.with(|c| c.get().stack_limit)
+}
+
+/// The lowest address the stack of the running thread / task may reach
+/// (0 if unknown).
+pub fn stack_limit() -> usize {
+    CTX.with(|c| c.get().stack_limit)
 }
 
 /// Bytes of stack still available (0 if unknown/exhausted).

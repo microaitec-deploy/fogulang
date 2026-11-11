@@ -53,6 +53,9 @@ pub fn build() -> ModuleValue {
         Ok(Value::Str(hex(&random(count(a, "randomHex")?)?).into()))
     });
     f("randomInt", 2, random_int);
+    // generateKeyPair("ed25519" | "p256" | "p384" | "rsa", { bits }) → { algorithm, bits, privateKey, publicKey } (PEM)
+    #[cfg(all(feature = "network", not(target_family = "wasm")))]
+    f("generateKeyPair", 0, generate_key_pair);
     // uuid(version = 4, namespace?, name?) · uuidv4() · uuidv5(namespace, name) · uuidv7()
     f("uuid", 0, |a| {
         max_args(a, 3, "uuid")?;
@@ -488,4 +491,71 @@ mod uuid_tests {
         assert!(v4.contains("version: 4") && v4.contains("time: nil"), "{v4}");
         assert!(uuid_info(&[Value::Str("zzz".into())]).is_err());
     }
+}
+
+/// `crypto.generateKeyPair(algorithm = "ed25519", { bits })` → `{ algorithm, bits, privateKey, publicKey }`:
+/// the private key as PKCS#8 PEM and the public key as SPKI PEM (what OpenSSL, JWT libraries and
+/// `fogu:tls` read). Algorithms: `ed25519`, `p256` (ECDSA, also `es256`), `p384` (`es384`) and `rsa`
+/// with `bits` 2048 (default), 3072 or 4096 — also written `rsa-4096`.
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
+fn generate_key_pair(a: &[Value]) -> Result<Value, String> {
+    max_args(a, 2, "crypto.generateKeyPair")?;
+    let mut name = match a.first() {
+        None | Some(Value::Nil) => "ed25519".to_string(),
+        Some(Value::Str(s)) => s.to_lowercase(),
+        Some(other) => return Err(format!("crypto.generateKeyPair: the algorithm must be a str, got '{}'", other.type_name())),
+    };
+    let mut bits = match a.get(1) {
+        None | Some(Value::Nil) => None,
+        Some(Value::Int(n)) => Some(*n),
+        Some(Value::Map(m)) => match m.borrow().get("bits") {
+            None | Some(Value::Nil) => None,
+            Some(Value::Int(n)) => Some(*n),
+            Some(other) => return Err(format!("crypto.generateKeyPair: 'bits' must be an int, got '{}'", other.type_name())),
+        },
+        Some(other) => return Err(format!("crypto.generateKeyPair: options must be a map, got '{}'", other.type_name())),
+    };
+    // rsa-4096, rsa4096
+    if let Some(n) = name.strip_prefix("rsa").map(|r| r.trim_start_matches('-')).filter(|r| !r.is_empty()) {
+        bits = Some(n.parse::<i64>().map_err(|_| format!("crypto.generateKeyPair: unknown algorithm '{}'", name))?);
+        name = "rsa".into();
+    }
+    let pair = |alg: &'static rcgen::SignatureAlgorithm, label: &str, size: i64| -> Result<Value, String> {
+        if bits.is_some_and(|b| b != size) {
+            return Err(format!("crypto.generateKeyPair: {} keys have {} bits", label, size));
+        }
+        let k = rcgen::KeyPair::generate_for(alg).map_err(|e| io_err!("crypto.generateKeyPair: {}", e))?;
+        Ok(key_pair_value(label, size, k.serialize_pem(), k.public_key_pem()))
+    };
+    match name.as_str() {
+        "ed25519" | "eddsa" => pair(&rcgen::PKCS_ED25519, "ed25519", 256),
+        "p256" | "p-256" | "ecdsa-p256" | "es256" | "prime256v1" | "secp256r1" => pair(&rcgen::PKCS_ECDSA_P256_SHA256, "p256", 256),
+        "p384" | "p-384" | "ecdsa-p384" | "es384" | "secp384r1" => pair(&rcgen::PKCS_ECDSA_P384_SHA384, "p384", 384),
+        "rsa" => {
+            use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+            let bits = bits.unwrap_or(2048);
+            if !matches!(bits, 2048 | 3072 | 4096) {
+                return Err(format!("crypto.generateKeyPair: rsa keys have 2048, 3072 or 4096 bits, got {}", bits));
+            }
+            let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, bits as usize)
+                .map_err(|e| io_err!("crypto.generateKeyPair: {}", e))?;
+            let private = key.to_pkcs8_pem(LineEnding::LF).map_err(|e| io_err!("crypto.generateKeyPair: {}", e))?;
+            let public = key
+                .to_public_key()
+                .to_public_key_pem(LineEnding::LF)
+                .map_err(|e| io_err!("crypto.generateKeyPair: {}", e))?;
+            Ok(key_pair_value("rsa", bits, private.to_string(), public))
+        }
+        other => Err(format!("crypto.generateKeyPair: unknown algorithm '{}' (ed25519 p256 p384 rsa)", other)),
+    }
+}
+
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
+fn key_pair_value(algorithm: &str, bits: i64, private: String, public: String) -> Value {
+    map(vec![
+        ("algorithm", Value::Str(algorithm.to_string().into())),
+        ("bits", Value::Int(bits)),
+        ("privateKey", Value::Str(private.into())),
+        ("publicKey", Value::Str(public.into())),
+    ])
 }

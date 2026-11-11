@@ -14,7 +14,18 @@ use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::math::nfn;
 use crate::native::object::{FoguObject, NativeObjectRef};
-use crate::native::util::{max_args, nfn_var, str_arg, str_list};
+use crate::native::util::{max_args, nfn_var, str_arg, str_list, with_typed, Num, TypedNative};
+
+/// Seconds since the first call (`time.monotonic()`).
+extern "C" fn monotonic_secs() -> f64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()
+}
+
+/// Milliseconds since the Unix epoch (`time.now()`).
+extern "C" fn now_ms() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
 
 // ---------- Module ----------
 
@@ -28,22 +39,20 @@ pub fn build() -> ModuleValue {
     // unlike the wall clock (`now`, `clock`): use it to measure durations.
     exports.insert(
         "monotonic".into(),
-        nfn("monotonic", 0, |_| {
-            static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-            Ok(Value::Float(START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()))
-        }),
+        // typed entry: compiled loops read the clock with no `Value` in between
+        with_typed(
+            nfn("monotonic", 0, |_| Ok(Value::Float(monotonic_secs()))),
+            TypedNative { params: &[], ret: Num::Float, entry: monotonic_secs as *const () as usize },
+        ),
     );
 
     // `now()` — current timestamp in ms, like JS's `Date.now()`.
     exports.insert(
         "now".into(),
-        nfn("now", 0, |_| {
-            let ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(|e| e.to_string())?
-                .as_millis() as i64;
-            Ok(Value::Int(ms))
-        }),
+        with_typed(
+            nfn("now", 0, |_| Ok(Value::Int(now_ms()))),
+            TypedNative { params: &[], ret: Num::Int, entry: now_ms as *const () as usize },
+        ),
     );
 
     // `delay(d)` — sleeps for a duration (or an int number of milliseconds).
@@ -316,10 +325,6 @@ fn new_date(a: &[Value]) -> Result<Value, String> {
         Some(other) => return Err(format!("time.Date expects ms, a text or a map, got '{}'", other.type_name())),
     };
     Ok(d.to_value())
-}
-
-fn now_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 // ---------- Date object ----------

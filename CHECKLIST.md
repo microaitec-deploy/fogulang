@@ -195,7 +195,7 @@ Fundamental API (§44):
 - [ ] Fuzzing with `cargo-fuzz` (lexer, parser, VM) (§71)
 - [ ] Formal grammar `spec/grammar.ebnf`
 - [ ] Workspace split into crates (§72) — optional, may be left for the end
-- [ ] Startup of an empty program < 10 ms (measure) (§74)
+- [x] Startup of an empty program < 10 ms (§74) — measured 2026-11-11 (0.7.4): `print(1)` ≈ 6 ms, `--version` ≈ 2 ms (non-PIE executable, static OpenSSL, no huge-page request)
 - [ ] FEP process documented (§76)
 
 ---

@@ -1,6 +1,6 @@
 [package]
 name = "fogu-std"
-version = "0.7.3"
+version = "0.7.4"
 edition = "2024"
 description = "Standard library of the Fogu language (fogu:* modules), grouped by area behind cargo features"
 authors = ["Edmilson Soares"]
@@ -10,7 +10,6 @@ license = "MIT"
 # hash maps of Fogu values: fast and resistant to collision attacks (random seed)
 ahash = "0.8"
 fogu-core = { path = "../fogu-core" }
-fogu-pkg = { path = "../fogu-pkg" }
 bytes = { version = "1", optional = true }
 base64 = "0.22"
 regex = "1"
@@ -93,6 +92,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # fogu:security — certificates, password strength, signatures, IP ranges (DNS: native/dns.rs)
 x509-parser = { version = "0.18.1", optional = true }
 rcgen = { version = "0.14.10", optional = true }
+# crypto.generateKeyPair("rsa"): pure Rust, already in the tree through sqlx
+rsa = { version = "0.9", features = ["getrandom"], optional = true }
 zxcvbn = { version = "3.1.1", optional = true }
 ed25519-dalek = { version = "3.0.0", optional = true }
 ipnet = { version = "2.12.2", optional = true }
@@ -104,9 +105,6 @@ rskafka = { version = "0.6.0", features = ["transport-tls"], optional = true }
 # fogu:webrtc — sans-IO WebRTC (ICE, DTLS, SCTP data channels); pure-Rust crypto (no OpenSSL / aws-lc)
 str0m = { version = "0.25", default-features = false, features = ["rust-crypto"], optional = true }
 
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
 [target.'cfg(all(target_os = "linux", any(target_arch = "aarch64", target_arch = "arm")))'.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 
@@ -114,7 +112,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 # Standard library areas (src/native/<area>); `base` and `io` are always built.
 # `cargo build --release --no-default-features --features network` builds a small binary.
 default = ["network", "database", "messaging", "ops", "ai", "media", "rpc"]
-network = ["dep:ammonia", "dep:tokio-rustls", "dep:ed25519-dalek", "dep:ego-tree", "dep:engineioxide", "dep:futures-lite", "dep:futures-util", "dep:http-body-util", "dep:hyper", "dep:hyper-util", "dep:ipnet", "dep:minijinja", "dep:rcgen", "dep:scraper", "dep:socketioxide", "dep:socketioxide-core", "dep:tokio-tungstenite", "dep:x509-parser", "dep:zxcvbn", "dep:subtle", "dep:rustls", "dep:rustls-native-certs", "dep:bytes", "dep:http", "dep:str0m"]
+network = ["dep:ammonia", "dep:tokio-rustls", "dep:ed25519-dalek", "dep:ego-tree", "dep:engineioxide", "dep:futures-lite", "dep:futures-util", "dep:http-body-util", "dep:hyper", "dep:hyper-util", "dep:ipnet", "dep:minijinja", "dep:rcgen", "dep:rsa", "dep:scraper", "dep:socketioxide", "dep:socketioxide-core", "dep:tokio-tungstenite", "dep:x509-parser", "dep:zxcvbn", "dep:subtle", "dep:rustls", "dep:rustls-native-certs", "dep:bytes", "dep:http", "dep:str0m"]
 database = ["rpc", "dep:async-trait", "dep:scylla", "dep:redb", "dep:surrealkv", "dep:sqlx", "dep:tonic", "dep:tokio-stream", "dep:prost-reflect", "dep:http"]
 messaging = ["dep:bullmq-rs", "dep:redis", "dep:rskafka", "dep:redb", "dep:surrealkv", "dep:bytes", "dep:rustls", "dep:rustls-native-certs", "dep:subtle"]
 ops = []

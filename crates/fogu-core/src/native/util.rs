@@ -5,6 +5,7 @@ use ahash::AHashMap as HashMap;
 use std::rc::Rc;
 
 use crate::runtime::value::{NativeFnValue, Value};
+pub use crate::runtime::value::{Num, TypedNative};
 
 /// Native function with at least `min` arguments (the rest are optional).
 pub fn nfn_var(name: &str, min: usize, f: fn(&[Value]) -> Result<Value, String>) -> Value {
@@ -14,7 +15,24 @@ pub fn nfn_var(name: &str, min: usize, f: fn(&[Value]) -> Result<Value, String>)
         variadic: true,
         func: f,
         intercept: Default::default(),
+        typed: None,
     }))
+}
+
+/// `f` with a typed entry for compiled code (see [`TypedNative`]): `entry` is
+/// an `extern "C" fn` over plain numbers that computes the same as `f`.
+pub fn with_typed(f: Value, typed: TypedNative) -> Value {
+    match f {
+        Value::NativeFn(nf) => Value::NativeFn(Rc::new(NativeFnValue {
+            name: nf.name.clone(),
+            arity: nf.arity,
+            variadic: nf.variadic,
+            func: nf.func,
+            intercept: Default::default(),
+            typed: Some(typed),
+        })),
+        other => other,
+    }
 }
 
 /// Argument `i` as a string (`what` names the function in the error).

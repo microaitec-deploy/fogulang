@@ -33,6 +33,38 @@ pub fn build() -> ModuleValue {
     e.insert("MAX_INT".into(), Value::Int(i64::MAX));
     e.insert("MIN_INT".into(), Value::Int(i64::MIN));
 
+    // bit operations on ints (64-bit two's complement); compiled code calls
+    // the typed entries directly
+    {
+        use crate::native::util::{with_typed, Num, TypedNative};
+        const II: &[Num] = &[Num::Int, Num::Int];
+        const I: &[Num] = &[Num::Int];
+        macro_rules! bits2 {
+            ($($name:literal => $f:ident),*) => {$(
+                e.insert($name.into(), with_typed(
+                    nfn($name, 2, |a| match (&a[0], &a[1]) {
+                        (Value::Int(x), Value::Int(y)) => Ok(Value::Int($f(*x, *y))),
+                        (x, y) => Err(format!(concat!("math.", $name, " expects two ints, got '{}' and '{}'"), x.type_name(), y.type_name())),
+                    }),
+                    TypedNative { params: II, ret: Num::Int, entry: $f as *const () as usize },
+                ));
+            )*};
+        }
+        macro_rules! bits1 {
+            ($($name:literal => $f:ident),*) => {$(
+                e.insert($name.into(), with_typed(
+                    nfn($name, 1, |a| match &a[0] {
+                        Value::Int(x) => Ok(Value::Int($f(*x))),
+                        x => Err(format!(concat!("math.", $name, " expects an int, got '{}'"), x.type_name())),
+                    }),
+                    TypedNative { params: I, ret: Num::Int, entry: $f as *const () as usize },
+                ));
+            )*};
+        }
+        bits2!("band" => bit_and, "bor" => bit_or, "bxor" => bit_xor, "shl" => bit_shl, "shr" => bit_shr, "ushr" => bit_ushr);
+        bits1!("bnot" => bit_not, "popcount" => bit_count, "clz" => bit_clz, "ctz" => bit_ctz);
+    }
+
     let fixed: &[(&str, usize, fn(&[Value]) -> R)] = &[
         ("abs", 1, abs),
         ("sqrt", 1, sqrt),
@@ -99,6 +131,59 @@ pub fn build() -> ModuleValue {
     }
 }
 
+extern "C" fn bit_and(a: i64, b: i64) -> i64 {
+    a & b
+}
+extern "C" fn bit_or(a: i64, b: i64) -> i64 {
+    a | b
+}
+extern "C" fn bit_xor(a: i64, b: i64) -> i64 {
+    a ^ b
+}
+extern "C" fn bit_not(a: i64) -> i64 {
+    !a
+}
+/// `a << n`: bits shifted out are lost; 64 or more gives 0; a negative count
+/// shifts right (the functions are total: no count is an error).
+extern "C" fn bit_shl(a: i64, n: i64) -> i64 {
+    match n {
+        0..=63 => ((a as u64) << n) as i64,
+        64.. => 0,
+        _ => bit_shr(a, n.checked_neg().unwrap_or(i64::MAX)),
+    }
+}
+/// `a >> n`, keeping the sign (arithmetic shift).
+extern "C" fn bit_shr(a: i64, n: i64) -> i64 {
+    match n {
+        0..=63 => a >> n,
+        64.. => {
+            if a < 0 {
+                -1
+            } else {
+                0
+            }
+        }
+        _ => bit_shl(a, n.checked_neg().unwrap_or(i64::MAX)),
+    }
+}
+/// `a >>> n`: zeros come in from the left (logical shift).
+extern "C" fn bit_ushr(a: i64, n: i64) -> i64 {
+    match n {
+        0..=63 => ((a as u64) >> n) as i64,
+        64.. => 0,
+        _ => bit_shl(a, n.checked_neg().unwrap_or(i64::MAX)),
+    }
+}
+extern "C" fn bit_count(a: i64) -> i64 {
+    a.count_ones() as i64
+}
+extern "C" fn bit_clz(a: i64) -> i64 {
+    a.leading_zeros() as i64
+}
+extern "C" fn bit_ctz(a: i64) -> i64 {
+    a.trailing_zeros() as i64
+}
+
 pub fn nfn(name: &str, arity: usize, f: fn(&[Value]) -> R) -> Value {
     Value::NativeFn(Rc::new(NativeFnValue {
         name: name.into(),
@@ -106,6 +191,7 @@ pub fn nfn(name: &str, arity: usize, f: fn(&[Value]) -> R) -> Value {
         variadic: false,
         func: f,
         intercept: Default::default(),
+        typed: None,
     }))
 }
 
@@ -116,6 +202,7 @@ fn var(name: &str, min: usize, f: fn(&[Value]) -> R) -> Value {
         variadic: true,
         func: f,
         intercept: Default::default(),
+        typed: None,
     }))
 }
 

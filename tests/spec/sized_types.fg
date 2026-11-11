@@ -1,0 +1,67 @@
+// Sized numeric types, as in Go: conversions wrap, annotations are ranges.
+
+// integer conversions keep the low bits (two's complement)
+print(int8(127), int8(128), int8(200), int8(-129))
+print(uint8(255), uint8(256), uint8(-1), byte(300))
+print(int16(32767), int16(32768), uint16(65536), uint16(-1))
+print(int32(2147483647), int32(2147483648), uint32(-1), rune(97))
+print(int64(9223372036854775807), uint64(42), uint(7))
+
+// floats are truncated toward zero first; bools are 0 or 1
+print(int8(3.99), int8(-3.99), uint8(257.5), int32(true), uint8(false))
+
+// float32 rounds to single precision; float64 is float
+print(float32(0.1), float64(0.1), float32(16777217), float32(2))
+print(typeof(int8(1)), typeof(float32(1)))
+
+// text is read as a number and must fit
+print(int8("-5"), uint16(" 65535 "), float32("1.5"))
+
+// annotations: variables, parameters, results
+let a: int8 = -128
+let b: uint8 = 255
+let c: float32 = 1.5
+let d: byte = 65
+let e: int64 = 9223372036854775807
+let f: uint32? = nil
+print(a, b, c, d, e, f)
+
+fn add8(x: int8, y: int8): int8 {
+    return int8(x + y)
+}
+print(add8(100, 27), add8(100, 100), add8(-100, -100))
+
+// hot code: the same results when compiled
+fn checksum(n: int32): uint16 {
+    let h: uint16 = 0
+    for i in 0..n {
+        h = uint16(h * 31 + i)
+    }
+    return h
+}
+print(checksum(1000), checksum(100000))
+
+let acc = 0
+for i in 0..1000 {
+    acc = acc + int8(i) + uint8(i * 7) + int16(i * 1000)
+}
+print(acc)
+
+let facc = 0.0
+for i in 0..1000 {
+    facc = facc + float32(i / 3.0)
+}
+print(facc)
+
+// the same names in buffers and in fogu:types
+import types from "fogu:types"
+const buf = bytes(8)
+buf.writeUint16(0, 65535)
+buf.writeInt8(2, -2)
+buf.writeFloat32(4, 1.5)
+print(buf.readUint16(0), buf.readInt16(0), buf.readInt8(2), buf.readUint8(2), buf.readFloat32(4), buf.readByte(0))
+print(types.is(255, "uint8"), types.is(256, "uint8"), types.is(-1, "int8"), types.is(1.5, "float32"), types.is("x", "int32"))
+const Pixel = types.object({ r: types.uint8(), g: types.uint8(), b: types.uint8() })
+print(Pixel.safeParse({ r: 255, g: 0, b: 12 }).ok, Pixel.safeParse({ r: 300, g: 0, b: 12 }).errors)
+print(types.coerce({ port: "8080", ratio: "0.1" }, { port: "uint16", ratio: "float32" })?)
+print(types.coerce({ port: "70000" }, { port: "uint16" }))

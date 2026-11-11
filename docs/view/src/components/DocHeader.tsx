@@ -70,7 +70,7 @@ export const DocHeader: React.FC<DocHeaderProps> = ({ onToggleMobileMenu, onOpen
           <span className="hidden text-[var(--fg-faint)] sm:inline">docs</span>
         </a>
         <span className="ml-1 hidden rounded-full border border-[var(--border)] bg-[var(--bg-subtle)] px-2 py-0.5 font-mono text-[0.68rem] font-medium text-[var(--fg-muted)] sm:inline">
-          v0.7.3
+          v0.7.4
         </span>
 
         <nav className="ml-5 hidden items-center gap-0.5 text-[0.875rem] xl:flex" aria-label="Main">

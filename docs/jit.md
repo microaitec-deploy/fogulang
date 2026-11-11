@@ -41,6 +41,18 @@ Environment: `FOGU_JIT=0`, `FOGU_JIT_DEBUG`, `FOGU_JIT_CALLS` (default 2), `FOGU
 - **Type annotations** cost nothing: specializations are per argument type, so
   a matching `x: int` / `: float` annotation is checked at compile time; a
   mismatch makes the JIT give up and the interpreter reports the error.
+- **Sized numbers** (`int8` … `uint64`, `float32`): an annotation is one
+  unsigned compare (`range_guard`) whose failure raises the interpreter's own
+  message (`ops::custom_code`); a conversion is a truncation plus a sign or
+  zero extension (`float32`: `fdemote` + `fpromote`).
+- **Calls** are a plain native call: the stack limit is one compare of the
+  stack pointer (`get_stack_pointer`) against `JitCtx::stack_limit`, with no
+  counter to update, and the current line lives in a register — it is written
+  to `JitCtx::line` only by the cold block of an error (0 = the function had
+  not reached its first statement: the caller's line stands).
+- **Typed natives**: a native function with a `TypedNative` entry (numbers in,
+  a number out, cannot fail — e.g. `time.monotonic`, `time.now`) is called
+  directly with `call_indirect`; no `Value` is built.
 
 ## Supported subset
 

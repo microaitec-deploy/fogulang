@@ -56,6 +56,8 @@ const size = match count {
 }
 
 fn area(w: float, h: float = 1.0): float { return w * h }   // annotations are optional
+fn mix(a: uint8, b: uint8): uint8 { return uint8(a + b) }   // sized numbers as in Go: int8…uint64 byte rune float32;
+                                                            // an annotation checks the range, uint8(300) == 44 wraps
 const double = (x) => x * 2                                 // arrow function
 const add = fn(a, b) { return a + b }                       // anonymous function
 fn total(...xs) { return xs.reduce((a, b) => a + b, 0) }    // variadic

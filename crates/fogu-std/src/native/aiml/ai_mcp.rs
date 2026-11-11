@@ -28,6 +28,7 @@ fn native(name: &str) -> Value {
         variadic: true,
         func: |_| Err("this function runs through the interpreter".into()),
         intercept: Default::default(),
+        typed: None,
     }))
 }
 

@@ -178,8 +178,11 @@ fn bail_msg(b: &Bail) -> String {
 #[repr(C)]
 struct JitCtx {
     err: i64,
-    depth: i64,
-    depth_limit: i64,
+    /// (unused: kept so the offsets below stay as they are)
+    _reserved: i64,
+    /// Lowest address the stack pointer may reach (0 = unknown: no limit).
+    stack_limit: i64,
+    /// Line of the error that left the native code (0 = the caller's line).
     line: i64,
     /// Set by a helper whose speculation failed (wrong type, missing key,
     /// index out of range): the loop leaves and the interpreter redoes the
@@ -192,7 +195,6 @@ const OFF_LINE: i32 = 24;
 const OFF_DEOPT: i32 = 32;
 const OFF_RESUME: i32 = 40;
 const OFF_ERR: i32 = 0;
-const OFF_DEPTH: i32 = 8;
 const OFF_LIMIT: i32 = 16;
 
 // ---------- helpers called by native code ----------
@@ -951,7 +953,7 @@ impl Inner {
             tent: HashMap::new(),
             guess_fails: HashMap::new(),
             loops: HashMap::new(),
-            ctx: Box::new(JitCtx { err: 0, depth: 0, depth_limit: 0, line: 0, deopt: 0, resume: 0 }),
+            ctx: Box::new(JitCtx { err: 0, _reserved: 0, stack_limit: 0, line: 0, deopt: 0, resume: 0 }),
             epoch: redefine_epoch(),
             counter: 0,
             debug,
@@ -1171,6 +1173,7 @@ impl Inner {
         {
             let b = FunctionBuilder::new(&mut ctx.func, &mut fbc);
             let mut g = Gen::new(self, b, env, Some(ret), Some(me));
+            g.fn_name = f.name.clone();
             g.prologue_fn(&f.params, tys)?;
             for s in f.body.iter() {
                 g.stmt(s)?;
@@ -1316,16 +1319,36 @@ impl Inner {
 
 /// Does a numeric JIT type satisfy a type annotation?
 fn annotation_ok(ty: &TypeExpr, t: Ty) -> bool {
+    matches!(annotation_check(ty, t), Ann::Ok)
+}
+
+/// What a type annotation asks of a value of a numeric JIT type.
+enum Ann {
+    /// Always satisfied.
+    Ok,
+    /// Never (or not decidable here): the interpreter runs it and reports.
+    No,
+    /// A sized integer (`int8`…): satisfied when the int is in `lo..=hi`.
+    Range(i64, i64, String, ops::Sized),
+}
+
+fn annotation_check(ty: &TypeExpr, t: Ty) -> Ann {
     match ty {
-        TypeExpr::Any => true,
-        TypeExpr::Named(n) => matches!(
-            (n.as_str(), t),
-            ("int", Ty::Int) | ("float", Ty::Float) | ("float", Ty::Int) | ("bool", Ty::Bool)
-        ),
+        TypeExpr::Any => Ann::Ok,
+        TypeExpr::Named(n) => match (n.as_str(), t, ops::Sized::from_name(n)) {
+            ("int", Ty::Int, _) | ("float", Ty::Float | Ty::Int, _) | ("bool", Ty::Bool, _) => Ann::Ok,
+            (_, Ty::Float | Ty::Int, Some(k)) if k.is_float() => Ann::Ok,
+            (_, Ty::Int, Some(ops::Sized::I64)) => Ann::Ok,
+            (_, Ty::Int, Some(k)) => match k.range() {
+                Some((lo, hi)) => Ann::Range(lo, hi, n.clone(), k),
+                None => Ann::No,
+            },
+            _ => Ann::No,
+        },
         // numbers are never nil
-        TypeExpr::Optional(inner) => annotation_ok(inner, t),
-        TypeExpr::Union(ts) => ts.iter().any(|x| annotation_ok(x, t)),
-        _ => false,
+        TypeExpr::Optional(inner) => annotation_check(inner, t),
+        TypeExpr::Union(ts) if ts.iter().any(|x| annotation_ok(x, t)) => Ann::Ok,
+        _ => Ann::No,
     }
 }
 
@@ -1459,6 +1482,10 @@ enum Callee {
     Print,
     ToInt,
     ToFloat,
+    /// `int8(x)` … `float32(x)`: the name and its sized type.
+    Sized(&'static str, ops::Sized),
+    /// A native function with a typed entry: called directly.
+    Typed(String, super::value::TypedNative),
 }
 
 struct Gen<'a, 'f> {
@@ -1470,9 +1497,17 @@ struct Gen<'a, 'f> {
     /// (`continue` target, `break` target)
     loops: Vec<(ir::Block, ir::Block)>,
     ret: Option<Ty>,
+    /// A sized return annotation: (lo, hi, error code) checked at each `return`.
+    ret_range: Option<(i64, i64, i64)>,
+    /// The function being compiled (for its error messages).
+    fn_name: String,
     me: Option<FnKey>,
     err_blocks: HashMap<i64, ir::Block>,
     prop_block: Option<ir::Block>,
+    /// The line being executed, kept in a register: it is only written to
+    /// the context when an error leaves the native code (0 = before the
+    /// first statement: the caller's line stands).
+    line_var: Variable,
     helper_refs: HashMap<Helper, FuncRef>,
     dead: bool,
     slots_assigned: Vec<bool>,
@@ -1512,6 +1547,9 @@ impl<'a, 'f> Gen<'a, 'f> {
         b.append_block_params_for_function_params(entry);
         b.switch_to_block(entry);
         let ctx_ptr = b.block_params(entry)[0];
+        let line_var = b.declare_var(types::I64);
+        let z = b.ins().iconst(types::I64, 0);
+        b.def_var(line_var, z);
         Gen {
             inner,
             b,
@@ -1520,9 +1558,12 @@ impl<'a, 'f> Gen<'a, 'f> {
             env,
             loops: Vec::new(),
             ret,
+            ret_range: None,
+            fn_name: String::new(),
             me,
             err_blocks: HashMap::new(),
             prop_block: None,
+            line_var,
             helper_refs: HashMap::new(),
             dead: false,
             slots_assigned: Vec::new(),
@@ -1550,12 +1591,11 @@ impl<'a, 'f> Gen<'a, 'f> {
             self.b.def_var(var, ps[i + 1]);
             self.scopes[0].insert(name.clone(), Local { var, ty, mutable: true, slot: None });
         }
-        // depth += 1; if depth > limit -> stack error
-        let d = self.b.ins().load(types::I64, MemFlagsData::trusted(), self.ctx_ptr, OFF_DEPTH);
-        let d1 = self.b.ins().iadd_imm_s(d, 1);
-        self.b.ins().store(MemFlagsData::trusted(), d1, self.ctx_ptr, OFF_DEPTH);
+        // the stack pointer against the limit of this thread / task: one
+        // load and one compare per call, nothing to undo on return
+        let sp = self.b.ins().get_stack_pointer(types::I64);
         let lim = self.b.ins().load(types::I64, MemFlagsData::trusted(), self.ctx_ptr, OFF_LIMIT);
-        let over = self.b.ins().icmp(IntCC::SignedGreaterThan, d1, lim);
+        let over = self.b.ins().icmp(IntCC::UnsignedLessThan, sp, lim);
         self.trap_if(over, ops::CODE_STACK);
         Ok(())
     }
@@ -1698,6 +1738,8 @@ impl<'a, 'f> Gen<'a, 'f> {
         let errs: Vec<(i64, ir::Block)> = self.err_blocks.iter().map(|(k, v)| (*k, *v)).collect();
         for (code, blk) in errs {
             self.b.switch_to_block(blk);
+            let line = self.b.block_params(blk)[0];
+            self.b.ins().store(MemFlagsData::trusted(), line, self.ctx_ptr, OFF_LINE);
             let c = self.b.ins().iconst(types::I64, code);
             self.b.ins().store(MemFlagsData::trusted(), c, self.ctx_ptr, OFF_ERR);
             self.write_back();
@@ -1705,7 +1747,13 @@ impl<'a, 'f> Gen<'a, 'f> {
             self.b.ins().return_(&[z]);
         }
         if let Some(blk) = self.prop_block {
+            // an error of a callee: its line stands, unless it failed before
+            // its first statement (or it is a helper, which records none)
             self.b.switch_to_block(blk);
+            let mine = self.b.block_params(blk)[0];
+            let theirs = self.b.ins().load(types::I64, MemFlagsData::trusted(), self.ctx_ptr, OFF_LINE);
+            let line = self.b.ins().select(theirs, theirs, mine);
+            self.b.ins().store(MemFlagsData::trusted(), line, self.ctx_ptr, OFF_LINE);
             self.write_back();
             let z = self.zero_ret();
             self.b.ins().return_(&[z]);
@@ -1737,15 +1785,30 @@ impl<'a, 'f> Gen<'a, 'f> {
             return *b;
         }
         let b = self.b.create_block();
+        self.b.append_block_param(b, types::I64);
         self.b.set_cold_block(b);
         self.err_blocks.insert(code, b);
         b
     }
 
+    /// The current line, as the argument of an error block.
+    fn line_arg(&mut self) -> ir::BlockArg {
+        ir::BlockArg::Value(self.b.use_var(self.line_var))
+    }
+
+    /// Raises the error `code` unless `lo <= v <= hi` (one unsigned compare).
+    fn range_guard(&mut self, v: ir::Value, lo: i64, hi: i64, code: i64) {
+        let d = if lo == 0 { v } else { self.b.ins().iadd_imm_s(v, lo.wrapping_neg()) };
+        let span = self.b.ins().iconst(types::I64, hi.wrapping_sub(lo));
+        let out = self.b.ins().icmp(IntCC::UnsignedGreaterThan, d, span);
+        self.trap_if(out, code);
+    }
+
     fn trap_if(&mut self, cond: ir::Value, code: i64) {
         let eb = self.err_block(code);
         let cont = self.b.create_block();
-        self.b.ins().brif(cond, eb, &[], cont, &[]);
+        let line = self.line_arg();
+        self.b.ins().brif(cond, eb, &[line], cont, &[]);
         self.b.switch_to_block(cont);
     }
 
@@ -1754,6 +1817,7 @@ impl<'a, 'f> Gen<'a, 'f> {
             Some(b) => b,
             None => {
                 let b = self.b.create_block();
+                self.b.append_block_param(b, types::I64);
                 self.b.set_cold_block(b);
                 self.prop_block = Some(b);
                 b
@@ -1761,7 +1825,8 @@ impl<'a, 'f> Gen<'a, 'f> {
         };
         let e = self.b.ins().load(types::I64, MemFlagsData::trusted(), self.ctx_ptr, OFF_ERR);
         let cont = self.b.create_block();
-        self.b.ins().brif(e, pb, &[], cont, &[]);
+        let line = self.line_arg();
+        self.b.ins().brif(e, pb, &[line], cont, &[]);
         self.b.switch_to_block(cont);
     }
 
@@ -1822,14 +1887,24 @@ impl<'a, 'f> Gen<'a, 'f> {
         match s {
             Stmt::Line(n) => {
                 let l = self.b.ins().iconst(types::I64, *n as i64);
-                self.b.ins().store(MemFlagsData::trusted(), l, self.ctx_ptr, OFF_LINE);
+                self.b.def_var(self.line_var, l);
                 Ok(())
             }
             Stmt::Let { name, mutable, init, ty } => {
                 let (v, t) = self.expr(init)?;
                 if let Some(ty) = ty {
-                    if !annotation_ok(ty, t) {
-                        return bail(format!("'{}' does not match its annotation {}", name, ty));
+                    match annotation_check(ty, t) {
+                        Ann::Ok => {}
+                        Ann::No => return bail(format!("'{}' does not match its annotation {}", name, ty)),
+                        Ann::Range(lo, hi, n, k) => {
+                            let msg = format!(
+                                "type mismatch: variable '{}' is declared as {}, got {}",
+                                name,
+                                ty,
+                                ops::out_of_range(&n, k)
+                            );
+                            self.range_guard(v, lo, hi, ops::custom_code(&msg));
+                        }
                     }
                 }
                 self.declare_local(name, t, *mutable, v)
@@ -1837,14 +1912,34 @@ impl<'a, 'f> Gen<'a, 'f> {
             // Specializations are per argument type, so a matching
             // annotation costs nothing; otherwise the interpreter reports it.
             Stmt::CheckType { name, ty } => {
-                let (_, t) = self.ident(name)?;
-                if !annotation_ok(ty, t) {
-                    return bail(format!("parameter '{}' does not match its annotation {}", name, ty));
+                let (v, t) = self.ident(name)?;
+                match annotation_check(ty, t) {
+                    Ann::Ok => {}
+                    Ann::No => return bail(format!("parameter '{}' does not match its annotation {}", name, ty)),
+                    Ann::Range(lo, hi, n, k) => {
+                        let msg = format!(
+                            "type mismatch: parameter '{}' expects {}, got {}",
+                            name,
+                            ty,
+                            ops::out_of_range(&n, k)
+                        );
+                        self.range_guard(v, lo, hi, ops::custom_code(&msg));
+                    }
                 }
                 Ok(())
             }
-            Stmt::ReturnType(ty) => match self.ret {
-                Some(r) if annotation_ok(ty, r) => Ok(()),
+            Stmt::ReturnType(ty) => match self.ret.map(|r| annotation_check(ty, r)) {
+                Some(Ann::Ok) => Ok(()),
+                Some(Ann::Range(lo, hi, n, k)) => {
+                    let msg = format!(
+                        "type mismatch: function '{}' must return {}, got {}",
+                        self.fn_name,
+                        ty,
+                        ops::out_of_range(&n, k)
+                    );
+                    self.ret_range = Some((lo, hi, ops::custom_code(&msg)));
+                    Ok(())
+                }
                 _ => bail(format!("return type does not match the annotation {}", ty)),
             },
             Stmt::Expr(e) => {
@@ -1922,10 +2017,9 @@ impl<'a, 'f> Gen<'a, 'f> {
                 if t != want {
                     return Err(Bail::Ret(t));
                 }
-                // depth -= 1
-                let d = self.b.ins().load(types::I64, MemFlagsData::trusted(), self.ctx_ptr, OFF_DEPTH);
-                let d1 = self.b.ins().iadd_imm_s(d, -1);
-                self.b.ins().store(MemFlagsData::trusted(), d1, self.ctx_ptr, OFF_DEPTH);
+                if let Some((lo, hi, code)) = self.ret_range {
+                    self.range_guard(v, lo, hi, code);
+                }
                 self.b.ins().return_(&[v]);
                 self.dead = true;
                 Ok(())
@@ -2207,7 +2301,8 @@ impl<'a, 'f> Gen<'a, 'f> {
 
         // no arm matched
         let eb = self.err_block(ops::CODE_MATCH);
-        self.b.ins().jump(eb, &[]);
+        let line = self.line_arg();
+        self.b.ins().jump(eb, &[line]);
         self.b.switch_to_block(done);
         self.dead = false;
         if want_value {
@@ -2867,11 +2962,19 @@ impl<'a, 'f> Gen<'a, 'f> {
                 if let Some(n) = self.inner.math_fns.get(&(nf.func as usize)) {
                     return Ok(Callee::Math(n));
                 }
+                if let Some(t) = nf.typed {
+                    return Ok(Callee::Typed(nf.name.clone(), t));
+                }
                 if !via_module {
                     match (nf.name.as_str(), nf.arity, nf.variadic) {
                         ("print", 0, true) => return Ok(Callee::Print),
                         ("int", 1, false) => return Ok(Callee::ToInt),
                         ("float", 1, false) => return Ok(Callee::ToFloat),
+                        (n, 1, false) => {
+                            if let Some(name) = ops::SIZED_NAMES.iter().find(|s| **s == n) {
+                                return Ok(Callee::Sized(name, ops::Sized::from_name(name).unwrap()));
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -2912,6 +3015,87 @@ impl<'a, 'f> Gen<'a, 'f> {
                         _ => bail("float() of bool/nil not supported"),
                     }
                 }
+            }
+            Callee::Sized(name, kind) => {
+                if args.len() != 1 {
+                    return bail("a conversion expects 1 argument");
+                }
+                let (v, t) = self.expr(&args[0])?;
+                if kind.is_float() {
+                    let f = match t {
+                        Ty::Float => v,
+                        Ty::Int => self.to_f64(v),
+                        _ => return bail("float conversion of bool/nil not supported"),
+                    };
+                    return Ok(match kind {
+                        ops::Sized::F32 => {
+                            let s = self.b.ins().fdemote(types::F32, f);
+                            (self.b.ins().fpromote(types::F64, s), Ty::Float)
+                        }
+                        _ => (f, Ty::Float),
+                    });
+                }
+                let n = match t {
+                    Ty::Int => v,
+                    Ty::Float => self.b.ins().fcvt_to_sint_sat(types::I64, v),
+                    // 0 or 1: already inside every range
+                    Ty::Bool => return Ok((self.b.ins().uextend(types::I64, v), Ty::Int)),
+                    _ => return bail("integer conversion of a value the JIT does not compile"),
+                };
+                // Go's conversion: the low bits, sign- or zero-extended
+                let narrow = |g: &mut Self, ty: types::Type, signed: bool| {
+                    let r = g.b.ins().ireduce(ty, n);
+                    if signed { g.b.ins().sextend(types::I64, r) } else { g.b.ins().uextend(types::I64, r) }
+                };
+                Ok((
+                    match kind {
+                        ops::Sized::I8 => narrow(self, types::I8, true),
+                        ops::Sized::I16 => narrow(self, types::I16, true),
+                        ops::Sized::I32 => narrow(self, types::I32, true),
+                        ops::Sized::U8 => narrow(self, types::I8, false),
+                        ops::Sized::U16 => narrow(self, types::I16, false),
+                        ops::Sized::U32 => narrow(self, types::I32, false),
+                        ops::Sized::U64 => {
+                            let code = ops::custom_code(&ops::err_negative(name));
+                            self.range_guard(n, 0, i64::MAX, code);
+                            n
+                        }
+                        _ => n,
+                    },
+                    Ty::Int,
+                ))
+            }
+            Callee::Typed(name, t) => {
+                use super::value::Num;
+                if args.len() != t.params.len() {
+                    return bail(format!("'{}' expects {} argument(s)", name, t.params.len()));
+                }
+                let mut sig = self.inner.module.make_signature();
+                let mut vals = Vec::with_capacity(args.len());
+                for (a, p) in args.iter().zip(t.params) {
+                    let (v, at) = self.expr(a)?;
+                    let (v, ct) = match (p, at) {
+                        (Num::Int, Ty::Int) => (v, types::I64),
+                        (Num::Float, Ty::Float) => (v, types::F64),
+                        (Num::Float, Ty::Int) => (self.to_f64(v), types::F64),
+                        (Num::Bool, Ty::Bool) => (v, types::I8),
+                        _ => return bail(format!("'{}': argument type not covered by its typed entry", name)),
+                    };
+                    sig.params.push(AbiParam::new(ct));
+                    vals.push(v);
+                }
+                let (ct, rt) = match t.ret {
+                    Num::Int => (types::I64, Ty::Int),
+                    Num::Float => (types::F64, Ty::Float),
+                    Num::Bool => (types::I8, Ty::Bool),
+                };
+                sig.returns.push(AbiParam::new(ct));
+                // it may read a clock or change state: an effect of the iteration
+                self.effect();
+                let sr = self.b.import_signature(sig);
+                let f = self.b.ins().iconst(types::I64, t.entry as i64);
+                let inst = self.b.ins().call_indirect(sr, f, &vals);
+                Ok((self.b.inst_results(inst)[0], rt))
             }
             Callee::Math(name) => self.gen_math(name, args),
             Callee::User(f) => {
@@ -3241,9 +3425,10 @@ impl Jit {
         inner.ctx.err = 0;
         inner.ctx.deopt = 0;
         inner.ctx.resume = 0;
-        inner.ctx.depth = 0;
-        let rem = sched::stack_remaining() as i64;
-        inner.ctx.depth_limit = (rem / 1024).min(50_000_000);
+        inner.ctx.line = 0;
+        // native frames may go down to the limit of this thread / task (it
+        // already leaves a margin for the helpers and the error path)
+        inner.ctx.stack_limit = sched::stack_limit() as i64;
     }
 
     /// Last line recorded by native code (for error messages).

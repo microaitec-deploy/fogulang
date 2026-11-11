@@ -1,0 +1,17 @@
+// crypto.generateKeyPair: PEM key pairs of several algorithms and sizes
+import crypto from "fogu:crypto"
+
+for alg in ["ed25519", "p256", "p384", "rsa"] {
+    const k = crypto.generateKeyPair(alg)?
+    print(k.algorithm, k.bits,
+        k.privateKey.starts_with("-----BEGIN PRIVATE KEY-----"),
+        k.publicKey.starts_with("-----BEGIN PUBLIC KEY-----"))
+}
+const a = crypto.generateKeyPair()?
+const b = crypto.generateKeyPair("ed25519")?
+print(a.algorithm, a.privateKey != b.privateKey)
+const big = crypto.generateKeyPair("rsa", { bits: 3072 })?
+const small = crypto.generateKeyPair("rsa-2048")?
+print(big.bits, small.bits, big.publicKey.len() > small.publicKey.len())
+print(crypto.generateKeyPair("es256")?.algorithm)
+crypto.generateKeyPair("rsa", { bits: 512 })

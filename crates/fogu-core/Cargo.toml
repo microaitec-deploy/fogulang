@@ -1,6 +1,6 @@
 [package]
 name = "fogu-core"
-version = "0.7.3"
+version = "0.7.4"
 edition = "2024"
 description = "Core of the Fogu language: lexer, parser, resolver, interpreter, Cranelift JIT and the fg task scheduler"
 authors = ["Edmilson Soares"]

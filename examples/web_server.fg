@@ -1,5 +1,4 @@
 import web from "fogu:web"
-import time from "fogu:time"
 
 let app = web.app()
 
@@ -33,6 +32,4 @@ for r in app.routes() {
 print("server at http://127.0.0.1:3000")
 app.listen(3000)
 
-while true {
-    time.delay(100ms)
-}
+Fogu.signal.wait()    // serves requests until Ctrl+C / SIGTERM

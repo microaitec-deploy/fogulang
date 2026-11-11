@@ -25,7 +25,7 @@ while true { time.delay(100ms) }
 
 > 📖 **Official documentation:** open [docs/docs.html](docs/docs.html) in a browser.
 >
-> Version **0.7.3** — in development. The full language specification
+> Version **0.7.4** — in development. The full language specification
 > (Draft 0.4) is in [docs/spec.md](docs/spec.md); the status of every feature
 > is tracked in [CHECKLIST.md](CHECKLIST.md).
 
@@ -158,6 +158,31 @@ add(1, "2")
 
 Generic arguments (`list<int>`) document the intent; only the outer kind is
 checked. Annotated numeric functions are still compiled by the JIT.
+
+### Sized numbers
+
+The sized types of Go are type names and conversion functions: `int8 int16
+int32 int64`, `uint8 uint16 uint32 uint64 uint uintptr`, `byte` (= `uint8`),
+`rune` (= `int32`), `float32 float64`. At run time a number is still an `int`
+(64-bit signed) or a `float` (64-bit): a sized type is a **range** when it
+annotates and a **conversion** when it is called.
+
+```fogu
+let level: uint8 = 255          // an annotation checks the range
+fn mix(a: uint8, b: uint8): uint8 { return uint8(a + b) }
+
+print(uint8(300), int8(200))    // 44 -56: a conversion keeps the low bits, as in Go
+print(int16(3.99), float32(0.1))  // 3 0.10000000149011612
+
+let bad: uint8 = 300
+// error[E0207]: type mismatch: variable 'bad' is declared as uint8, got int out of range (uint8 is 0..255)
+```
+
+Arithmetic itself stays 64-bit and checked: write `uint8(a + b)` where Go would
+wrap. `uint64`, `uint` and `uintptr` hold `0..9223372036854775807` (a negative
+number is an error, not a wrap). Text converted with `uint8("300")` must fit.
+The same names work in `fogu:types` (`types.uint8()`, `"int32"` in a spec) and
+in `fogu:ffi` signatures. Compiled code checks and converts them natively.
 
 ### Operators
 
@@ -475,6 +500,7 @@ fogu                         REPL (history, multi-line, value echo)
 fogu <file.fg> [args]        run (the args are in system.info.args())
 fogu run [file|script]       run; without a target uses "entry" from fogu.json
 fogu <script>                script from fogu.json (e.g. fogu dev)
+fogu .                       the project in this folder: its "start" script, or its "entry" (also fogu <folder>)
 fogu -e '<code>'             run code
 fogu -p '<expr>'             evaluate and print the result
 fogu --watch <file>          restart when *.fg / fogu.json change
