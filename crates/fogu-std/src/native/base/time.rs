@@ -42,7 +42,7 @@ pub fn build() -> ModuleValue {
         // typed entry: compiled loops read the clock with no `Value` in between
         with_typed(
             nfn("monotonic", 0, |_| Ok(Value::Float(monotonic_secs()))),
-            TypedNative { params: &[], ret: Num::Float, entry: monotonic_secs as *const () as usize },
+            TypedNative { params: &[], ret: Num::Float, entry: monotonic_secs as *const () as usize, fallible: false },
         ),
     );
 
@@ -51,7 +51,7 @@ pub fn build() -> ModuleValue {
         "now".into(),
         with_typed(
             nfn("now", 0, |_| Ok(Value::Int(now_ms()))),
-            TypedNative { params: &[], ret: Num::Int, entry: now_ms as *const () as usize },
+            TypedNative { params: &[], ret: Num::Int, entry: now_ms as *const () as usize, fallible: false },
         ),
     );
 

@@ -46,7 +46,7 @@ pub fn build() -> ModuleValue {
                         (Value::Int(x), Value::Int(y)) => Ok(Value::Int($f(*x, *y))),
                         (x, y) => Err(format!(concat!("math.", $name, " expects two ints, got '{}' and '{}'"), x.type_name(), y.type_name())),
                     }),
-                    TypedNative { params: II, ret: Num::Int, entry: $f as *const () as usize },
+                    TypedNative { params: II, ret: Num::Int, entry: $f as *const () as usize, fallible: false },
                 ));
             )*};
         }
@@ -57,7 +57,7 @@ pub fn build() -> ModuleValue {
                         Value::Int(x) => Ok(Value::Int($f(*x))),
                         x => Err(format!(concat!("math.", $name, " expects an int, got '{}'"), x.type_name())),
                     }),
-                    TypedNative { params: I, ret: Num::Int, entry: $f as *const () as usize },
+                    TypedNative { params: I, ret: Num::Int, entry: $f as *const () as usize, fallible: false },
                 ));
             )*};
         }

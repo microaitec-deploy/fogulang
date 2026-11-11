@@ -1,0 +1,70 @@
+// C functions with numeric signatures are called directly by compiled code:
+// same results, errno and callbacks as through the interpreter.
+import ffi from "fogu:ffi"
+
+const libc = ffi.open("c")?
+const libm = ffi.open("m")?
+const abs = libc.func("abs", ["i32"], "i32")?
+const abs8 = libc.func("abs", ["i32"], "i8")?        // the result takes its declared width
+const labs = libc.func("labs", ["i64"], "i64")?
+const toupper = libc.func("toupper", ["i32"], "u8")?
+const pow = libm.func("pow", ["f64", "f64"], "f64")?
+const fabsf = libm.func("fabsf", ["f32"], "f32")?    // f32 arguments stay with the interpreter
+const close = libc.func("close", ["i32"], "i32")?
+
+let s = 0
+for i in 0..2000 {
+    s = s + abs(0 - i) + labs(i - 5000) + toupper(97 + i % 26) + abs8(i % 300)
+}
+print(s)
+
+let f = 0.0
+for i in 0..200 {
+    f = f + pow(2, i % 8) + pow(1.5, 2.0)
+}
+print(f)
+
+fn total(n) {
+    let t = 0
+    for i in 0..n { t = t + abs(i - n) }
+    return t
+}
+print(total(1000), total(10))
+
+let g = 0.0
+for i in 0..50 { g = g + fabsf(0.5 - i) }
+print(g)
+
+// errno of the last call
+let r = 0
+for i in 0..20 { r = r + close(0 - 1 - i) }
+print(r, ffi.lastError())
+
+// a callback run by a C function that compiled code called
+const bsearch = libc.func("bsearch", ["ptr", "ptr", "usize", "usize", "ptr"], "ptr")?
+const memset = libc.func("memset", ["ptr", "i32", "usize"], "ptr")?
+const arr = ffi.alloc(4 * 8)
+for i in 0..8 { arr.set("i32", 4 * i, i * 10) }
+const key = ffi.alloc(4)
+let calls = 0
+const cmp = ffi.callback(fn(a, b) {
+    calls = calls + 1
+    return ffi.read(a, "i32") - ffi.read(b, "i32")
+}, ["ptr", "ptr"], "i32")
+const base = arr.address
+const kp = key.address
+const cp = cmp.address
+let found = 0
+for i in 0..80 {
+    memset(kp, i, 1)
+    if bsearch(kp, base, 8, 4, cp) != 0 { found = found + 1 }
+}
+print(found, calls > 80)
+
+// an error inside such a callback stops the loop
+const bad = ffi.callback(fn(a, b) { return 1 / 0 }, ["ptr", "ptr"], "i32")
+const bp = bad.address
+for i in 0..80 {
+    bsearch(kp, base, 8, 4, bp)
+}
+print("not reached")

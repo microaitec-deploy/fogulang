@@ -25,6 +25,44 @@ pub enum Flow {
     Return(Value),
 }
 
+thread_local! {
+    /// The interpreter whose native code is running on this thread.
+    static NATIVE: Cell<*const Interpreter> = const { Cell::new(std::ptr::null()) };
+}
+
+/// The interpreter whose compiled code is running on this thread, if any: a
+/// C function called directly by compiled code (`fogu:ffi`) runs its Fogu
+/// callbacks on it.
+///
+/// # Safety
+/// The pointer is valid only while that native code is on the stack: use it
+/// right away, on this thread, and do not keep it.
+pub fn native_interpreter() -> Option<*const Interpreter> {
+    let p = NATIVE.with(|n| n.get());
+    (!p.is_null()).then_some(p)
+}
+
+/// Marks native code of an interpreter as running until dropped.
+struct NativeGuard<'a> {
+    interp: &'a Interpreter,
+    prev: *const Interpreter,
+}
+
+impl<'a> NativeGuard<'a> {
+    fn new(interp: &'a Interpreter) -> Self {
+        interp.in_native.set(true);
+        let prev = NATIVE.with(|n| n.replace(interp as *const _));
+        NativeGuard { interp, prev }
+    }
+}
+
+impl Drop for NativeGuard<'_> {
+    fn drop(&mut self) {
+        self.interp.in_native.set(false);
+        NATIVE.with(|n| n.set(self.prev));
+    }
+}
+
 pub struct Interpreter {
     globals: Rc<RefCell<Environment>>,
     module_cache: ModuleCache,
@@ -48,6 +86,8 @@ pub struct Interpreter {
     deadline_count: Cell<usize>,
     /// The scheduler's task-switch hook is installed (see `install_switch_hook`).
     switch_hook: Cell<bool>,
+    /// Native (compiled) code of this interpreter is on the stack.
+    in_native: Cell<bool>,
     /// The global natives alone, shared by every isolated `fogu:vm` context
     /// (built on the first one: copying them per context was most of its cost).
     vm_globals: RefCell<Option<Rc<RefCell<Environment>>>>,
@@ -107,6 +147,7 @@ impl Interpreter {
             deadlines: RefCell::new(HashMap::new()),
             deadline_count: Cell::new(0),
             switch_hook: Cell::new(false),
+            in_native: Cell::new(false),
             vm_globals: RefCell::new(None),
             rng: Cell::new(
                 std::time::SystemTime::now()
@@ -116,6 +157,11 @@ impl Interpreter {
                     | 1,
             ),
         }
+    }
+
+    /// Line of the last executed statement.
+    pub fn current_line(&self) -> u32 {
+        self.cur_line.get()
     }
 
     /// File and line of the last executed statement (for errors).
@@ -426,7 +472,9 @@ impl Interpreter {
     /// deadline (`jit::deadline_ns`) if the running `fogu:vm` code has one.
     #[inline]
     fn jit_gate(&self) -> Option<Option<u64>> {
-        if !self.jit_enabled {
+        // not while native code is already running on this interpreter (a C
+        // function it called is running a Fogu callback)
+        if !self.jit_enabled || self.in_native.get() {
             return None;
         }
         if self.deadline_count.get() == 0 {
@@ -931,10 +979,10 @@ impl Interpreter {
             if let Some(deadline) = self.jit_gate() {
                 iters = iters.saturating_add(1);
                 if iters == self.jit_loop_threshold {
-                    let out = self
-                        .jit
-                        .borrow_mut()
-                        .run_loop(id, LoopKind::While { cond, body }, &env, deadline);
+                    let out = {
+                        let _native = NativeGuard::new(self);
+                        self.jit.borrow_mut().run_loop(id, LoopKind::While { cond, body }, &env, deadline)
+                    };
                     match out {
                         LoopOutcome::Done => return Ok(Flow::Normal),
                         LoopOutcome::Err(e) => {
@@ -1000,17 +1048,20 @@ impl Interpreter {
                 if let Some(deadline) =
                     self.jit_gate().filter(|_| end.saturating_sub(start) >= self.jit_loop_threshold as i64)
                 {
-                    let out = self.jit.borrow_mut().run_loop(
-                        id,
-                        LoopKind::For {
-                            var,
-                            body,
-                            lo: start,
-                            hi: end,
-                        },
-                        &env,
-                        deadline,
-                    );
+                    let out = {
+                        let _native = NativeGuard::new(self);
+                        self.jit.borrow_mut().run_loop(
+                            id,
+                            LoopKind::For {
+                                var,
+                                body,
+                                lo: start,
+                                hi: end,
+                            },
+                            &env,
+                            deadline,
+                        )
+                    };
                     match out {
                         LoopOutcome::Done => return Ok(Flow::Normal),
                         LoopOutcome::Err(e) => {
@@ -1038,12 +1089,15 @@ impl Interpreter {
                 let snapshot: Vec<Value> = list.borrow().clone();
                 let mut from = 0usize;
                 if let Some(deadline) = self.jit_gate().filter(|_| snapshot.len() >= self.jit_loop_threshold as usize) {
-                    let out = self.jit.borrow_mut().run_loop(
-                        id,
-                        LoopKind::ForList { var, body, items: &snapshot },
-                        &env,
-                        deadline,
-                    );
+                    let out = {
+                        let _native = NativeGuard::new(self);
+                        self.jit.borrow_mut().run_loop(
+                            id,
+                            LoopKind::ForList { var, body, items: &snapshot },
+                            &env,
+                            deadline,
+                        )
+                    };
                     match out {
                         LoopOutcome::Done => return Ok(Flow::Normal),
                         LoopOutcome::Err(e) => {
@@ -2010,7 +2064,10 @@ impl Interpreter {
 
         // Try native execution (hot numeric functions).
         if let Some(deadline) = self.jit_gate() {
-            let r = self.jit.borrow_mut().call_fn(&f, &arg_vals, deadline);
+            let r = {
+                let _native = NativeGuard::new(self);
+                self.jit.borrow_mut().call_fn(&f, &arg_vals, deadline)
+            };
             if let Some(r) = r {
                 if r.is_err() {
                     self.sync_jit_line();

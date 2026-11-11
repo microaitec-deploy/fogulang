@@ -35,6 +35,22 @@ pub fn with_typed(f: Value, typed: TypedNative) -> Value {
     }
 }
 
+thread_local! {
+    /// The error of the last call of a fallible typed entry ([`TypedNative`]).
+    static TYPED_ERROR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Called by a fallible typed entry that failed: compiled code raises `msg`
+/// as soon as the entry returns.
+pub fn set_typed_error(msg: String) {
+    TYPED_ERROR.with(|e| *e.borrow_mut() = Some(msg));
+}
+
+/// The error a fallible typed entry left, if any.
+pub fn take_typed_error() -> Option<String> {
+    TYPED_ERROR.with(|e| e.borrow_mut().take())
+}
+
 /// Argument `i` as a string (`what` names the function in the error).
 pub fn str_arg(args: &[Value], i: usize, what: &str) -> Result<String, String> {
     match args.get(i) {

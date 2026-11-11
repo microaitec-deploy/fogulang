@@ -191,3 +191,101 @@ pub fn callback(params: &[Kind], ret: Kind, dispatch: Dispatch, id: u64) -> Resu
         })
     })
 }
+
+/// A parameter of a [`direct`] entry.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DirectParam {
+    /// Any C integer or pointer, passed as an `i64` (the callee reads the low bits).
+    Int,
+    F64,
+    /// A C `bool`, passed as a `u8` (0 or 1).
+    Bool,
+}
+
+/// What the C function returns, and how it becomes an `i64` / `f64` / `u8`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DirectRet {
+    /// A signed integer of this many bytes (sign-extended).
+    Signed(u8),
+    /// An unsigned integer of this many bytes (zero-extended).
+    Unsigned(u8),
+    /// A C `bool`: its low byte, as 0 or 1 (`u8`).
+    Bool,
+    F64,
+    /// A `float`, widened to `f64`.
+    F32,
+}
+
+/// A function with a plain numeric signature — `extern "C" fn(i64 | f64 |
+/// u8 …) -> i64 | f64 | u8` — that calls the C function at `addr`, widens
+/// its result as `ret` says and then calls `after()` (the caller's
+/// bookkeeping: `errno`, a pending callback error). Compiled code calls it
+/// directly. Each call builds a new entry (they are never freed).
+pub fn direct(addr: usize, params: &[DirectParam], ret: DirectRet, after: extern "C" fn()) -> Result<usize, String> {
+    with_stubs(|st| {
+        let mut outer = st.module.make_signature();
+        let mut inner = st.module.make_signature();
+        for p in params {
+            let (o, i) = match p {
+                DirectParam::Int => (types::I64, types::I64),
+                DirectParam::F64 => (types::F64, types::F64),
+                DirectParam::Bool => (types::I8, types::I64),
+            };
+            outer.params.push(AbiParam::new(o));
+            inner.params.push(AbiParam::new(i));
+        }
+        let (o, i) = match ret {
+            DirectRet::Signed(_) | DirectRet::Unsigned(_) => (types::I64, types::I64),
+            DirectRet::Bool => (types::I8, types::I64),
+            DirectRet::F64 => (types::F64, types::F64),
+            DirectRet::F32 => (types::F64, types::F32),
+        };
+        outer.returns.push(AbiParam::new(o));
+        inner.returns.push(AbiParam::new(i));
+        let after_sig = st.module.make_signature();
+        let params = params.to_vec();
+        st.build(outer, move |b, ps| {
+            let vals: Vec<ir::Value> = params
+                .iter()
+                .zip(ps)
+                .map(|(p, v)| match p {
+                    DirectParam::Bool => b.ins().uextend(types::I64, *v),
+                    _ => *v,
+                })
+                .collect();
+            let f = b.ins().iconst(types::I64, addr as i64);
+            let sr = b.import_signature(inner);
+            let inst = b.ins().call_indirect(sr, f, &vals);
+            let r = b.inst_results(inst)[0];
+            // the upper bits of a narrow C result are not defined: keep its own bits
+            let narrow = |b: &mut FunctionBuilder, bytes: u8, signed: bool| {
+                let ty = match bytes {
+                    1 => types::I8,
+                    2 => types::I16,
+                    4 => types::I32,
+                    _ => return r,
+                };
+                let low = b.ins().ireduce(ty, r);
+                if signed {
+                    b.ins().sextend(types::I64, low)
+                } else {
+                    b.ins().uextend(types::I64, low)
+                }
+            };
+            let out = match ret {
+                DirectRet::Signed(n) => narrow(b, n, true),
+                DirectRet::Unsigned(n) => narrow(b, n, false),
+                DirectRet::Bool => {
+                    let low = b.ins().ireduce(types::I8, r);
+                    b.ins().icmp_imm_s(ir::condcodes::IntCC::NotEqual, low, 0)
+                }
+                DirectRet::F64 => r,
+                DirectRet::F32 => b.ins().fpromote(types::F64, r),
+            };
+            let af = b.ins().iconst(types::I64, after as usize as i64);
+            let asr = b.import_signature(after_sig);
+            b.ins().call_indirect(asr, af, &[]);
+            b.ins().return_(&[out]);
+        })
+    })
+}

@@ -836,6 +836,23 @@ impl Helper {
 // interpreter reports the timeout. Code that runs without a deadline pays
 // nothing for this.
 
+/// After a fallible typed native ([`super::value::TypedNative`]): its error,
+/// if it left one, becomes the error of the native code.
+extern "C" fn typed_check(ctx: *mut JitCtx) {
+    if let Some(msg) = crate::native::util::take_typed_error() {
+        // SAFETY: called by compiled code with its own context; the
+        // interpreter that runs this native code is below us on the stack.
+        unsafe {
+            (*ctx).err = ops::custom_code(&msg);
+            // the error was raised by Fogu code the native function ran (a
+            // callback): its line is the line of the error
+            if let Some(it) = super::interpreter::native_interpreter() {
+                (*ctx).line = (*it).current_line() as i64;
+            }
+        }
+    }
+}
+
 /// The stack limit of one JIT, and the deadline of the native code running
 /// on it (if it has one).
 pub struct Watch {
@@ -3270,7 +3287,17 @@ impl<'a, 'f> Gen<'a, 'f> {
                 let sr = self.b.import_signature(sig);
                 let f = self.b.ins().iconst(types::I64, t.entry as i64);
                 let inst = self.b.ins().call_indirect(sr, f, &vals);
-                Ok((self.b.inst_results(inst)[0], rt))
+                let r = self.b.inst_results(inst)[0];
+                if t.fallible {
+                    // the entry may have left an error: raise it here
+                    let mut csig = self.inner.module.make_signature();
+                    csig.params.push(AbiParam::new(types::I64));
+                    let csr = self.b.import_signature(csig);
+                    let cf = self.b.ins().iconst(types::I64, typed_check as *const () as usize as i64);
+                    self.b.ins().call_indirect(csr, cf, &[self.ctx_ptr]);
+                    self.check_err();
+                }
+                Ok((r, rt))
             }
             Callee::Math(name) => self.gen_math(name, args),
             Callee::User(f) => {

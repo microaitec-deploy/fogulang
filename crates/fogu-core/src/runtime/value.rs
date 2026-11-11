@@ -115,13 +115,16 @@ pub enum Num {
 
 /// The typed entry of a native function: `entry` is an `extern "C" fn` whose
 /// parameters are `params` (`i64` / `f64` / `u8`) and whose result is `ret`.
-/// It must compute exactly what `func` computes for those argument types and
-/// can never fail (a function with an error path has no typed entry).
+/// It must compute exactly what `func` computes for those argument types.
+/// An entry that may fail is `fallible`: it reports the error with
+/// `native::util::set_typed_error` (and returns anything) and compiled code
+/// checks for it after the call; the others can never fail.
 #[derive(Clone, Copy, Debug)]
 pub struct TypedNative {
     pub params: &'static [Num],
     pub ret: Num,
     pub entry: usize,
+    pub fallible: bool,
 }
 
 /// Cooperative channel (single-thread). `buffer == 0` is a rendezvous: the

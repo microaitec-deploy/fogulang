@@ -327,6 +327,14 @@ impl Default for IoGuard {
 
 impl Drop for IoGuard {
     fn drop(&mut self) {
+        // The order matters to the deadlock check of `wait_until`, which reads
+        // the wake generation, runs the tasks and then reads `IN_FLIGHT`:
+        // the generation moves *before* the operation stops counting as in
+        // flight (so a scheduler that polled the tasks too early sees a new
+        // generation and looks again instead of reporting a deadlock), and
+        // the real wake-up comes *after* (so a scheduler that went to sleep
+        // because the operation was still in flight is woken).
+        WAKE_GEN.fetch_add(1, Ordering::SeqCst);
         IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
         wake();
     }
@@ -550,6 +558,14 @@ pub fn wait_until(mut ready: impl FnMut() -> bool) -> Result<(), String> {
             }
             if busy {
                 sleep_until_woken(woken, None);
+                continue;
+            }
+            // Work off this thread that finished *during* the pass above is no
+            // longer in flight, and the task waiting for it was polled before
+            // its result arrived: nothing progressed, yet it is not a
+            // deadlock. Every completion bumps the wake generation, so a new
+            // generation means "look again".
+            if WAKE_GEN.load(Ordering::SeqCst) != woken {
                 continue;
             }
             return Err(

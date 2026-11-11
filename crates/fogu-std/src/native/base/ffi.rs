@@ -39,7 +39,7 @@ use crate::runtime::interpreter::Interpreter;
 use crate::runtime::value::{ModuleValue, NativeFnValue, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef};
-use crate::native::util::{list, max_args, nfn_var, str_arg};
+use crate::native::util::{list, max_args, nfn_var, str_arg, Num, TypedNative};
 
 #[path = "ffi_calls.rs"]
 mod calls;
@@ -344,8 +344,9 @@ impl FoguObject for LibValue {
                     return Err("func: up to 32 arguments".into());
                 }
                 let addr = self.symbol(&symbol, "func")?;
+                let typed = if stub.is_some() { direct_entry(addr, &params, ret) } else { None };
                 let f = FnInfo { lib: Rc::clone(&self.lib), addr, params, ret, name: symbol, stub };
-                Ok(native_fn(f))
+                Ok(native_fn(f, typed))
             }
             "has" => {
                 let symbol = str_arg(args, 0, "has")?;
@@ -393,7 +394,56 @@ thread_local! {
     static LAST_ERRNO: Cell<i32> = const { Cell::new(0) };
 }
 
-fn native_fn(f: FnInfo) -> Value {
+/// The entry compiled code calls directly, for a signature of numbers only
+/// (integers, pointers given as ints, `f64`, `bool`): no `Value` is built and
+/// the interpreter is not involved. It does what [`call_ffi`] does around
+/// the call — the result takes its declared width, `errno` is kept, an error
+/// of a callback is raised — so both paths behave the same.
+fn direct_entry(addr: usize, params: &[Ty], ret: Ty) -> Option<TypedNative> {
+    use ffi_stub::{DirectParam, DirectRet};
+    let mut dp = Vec::with_capacity(params.len());
+    let mut nums = Vec::with_capacity(params.len());
+    for p in params {
+        let (d, n) = match p {
+            Ty::I8 | Ty::I16 | Ty::I32 | Ty::I64 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64 | Ty::Ptr => (DirectParam::Int, Num::Int),
+            Ty::F64 => (DirectParam::F64, Num::Float),
+            Ty::Bool => (DirectParam::Bool, Num::Bool),
+            // text and buffers need the interpreter; an int given as `f32`
+            // would round differently here
+            Ty::F32 | Ty::Str | Ty::Buffer | Ty::Void => return None,
+        };
+        dp.push(d);
+        nums.push(n);
+    }
+    let (dr, rn) = match ret {
+        Ty::I8 => (DirectRet::Signed(1), Num::Int),
+        Ty::I16 => (DirectRet::Signed(2), Num::Int),
+        Ty::I32 => (DirectRet::Signed(4), Num::Int),
+        Ty::U8 => (DirectRet::Unsigned(1), Num::Int),
+        Ty::U16 => (DirectRet::Unsigned(2), Num::Int),
+        Ty::U32 => (DirectRet::Unsigned(4), Num::Int),
+        Ty::I64 | Ty::U64 | Ty::Ptr => (DirectRet::Signed(8), Num::Int),
+        Ty::Bool => (DirectRet::Bool, Num::Bool),
+        Ty::F64 => (DirectRet::F64, Num::Float),
+        Ty::F32 => (DirectRet::F32, Num::Float),
+        // nil and text are not numbers
+        Ty::Void | Ty::Str | Ty::Buffer => return None,
+    };
+    let entry = ffi_stub::direct(addr, &dp, dr, after_direct).ok()?;
+    // lives as long as the function may be called: the program's life
+    let params: &'static [Num] = Box::leak(nums.into_boxed_slice());
+    Some(TypedNative { params, ret: rn, entry, fallible: true })
+}
+
+/// After a direct call (see [`direct_entry`]): what [`call_ffi`] does after its own.
+extern "C" fn after_direct() {
+    LAST_ERRNO.with(|e| e.set(std::io::Error::last_os_error().raw_os_error().unwrap_or(0)));
+    if let Some(err) = PENDING.with(|p| p.borrow_mut().take()) {
+        crate::native::util::set_typed_error(err);
+    }
+}
+
+fn native_fn(f: FnInfo, typed: Option<TypedNative>) -> Value {
     let (name, arity) = (f.name.clone(), f.params.len());
     let id = FUNCS.with(|fs| {
         let mut fs = fs.borrow_mut();
@@ -407,7 +457,7 @@ fn native_fn(f: FnInfo) -> Value {
         variadic: false,
         func: call_ffi_placeholder,
         intercept: Default::default(),
-        typed: None,
+        typed,
     }))
 }
 
@@ -650,7 +700,12 @@ fn run_callback(id: usize, args: *const u64) -> Result<u64, String> {
         eprintln!("ffi: a closed callback was called (returning 0)");
         return Ok(0);
     };
-    let ctx = ACTIVE.with(|a| a.borrow().last().map(|c| (c.it, Rc::clone(&c.env))));
+    let ctx = ACTIVE.with(|a| a.borrow().last().map(|c| (c.it, Rc::clone(&c.env)))).or_else(|| {
+        // called by a C function that compiled code called directly
+        let it = crate::runtime::interpreter::native_interpreter()?;
+        // SAFETY: that interpreter's native code is on the stack below us.
+        Some((it, Rc::clone(unsafe { &*it }.globals_ref())))
+    });
     let Some((it, env)) = ctx else {
         eprintln!("ffi: a callback was called outside an ffi call or from another thread (returning 0)");
         return Ok(0);
