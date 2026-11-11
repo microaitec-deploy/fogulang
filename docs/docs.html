@@ -227,6 +227,153 @@ print(typeof(bytes("hi")))  // buffer  — mutable bytes: b[0], b.hex(), b.readU
       </ul>
     </section>
 
+    <section id="whats-new" data-group="Getting started" data-title="What's new in 0.7.4" class="scroll-mt-20 mt-16">
+      <h2 class="text-2xl font-bold">What's new in 0.7.4</h2>
+      <p>Version 0.7.4 is about the runtime: numbers with a size, bit operators, code that runs on every core, and
+      less time lost between Fogu and native code. Every example below was run with the released binary; the box
+      under it is what it printed. The full list is in the <code>CHANGELOG</code>.</p>
+      <div class="overflow-x-auto mt-4">
+        <table class="w-full text-sm border-collapse">
+          <thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Measured</th><th class="py-2 pr-4">0.7.3</th><th class="py-2">0.7.4</th></tr></thead>
+          <tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60">
+            <tr><td class="py-2 pr-4">Recursive calls, <code>fib(40)</code></td><td class="py-2 pr-4">1.25 s</td><td>0.68 s</td></tr>
+            <tr><td class="py-2 pr-4">A C function (<code>abs</code>) in a hot loop</td><td class="py-2 pr-4">266 ns per call</td><td>9 ns per call</td></tr>
+            <tr><td class="py-2 pr-4">A numeric loop in <code>fogu:vm</code> with a timeout</td><td class="py-2 pr-4">587 ms</td><td>5 ms</td></tr>
+            <tr><td class="py-2 pr-4">100 000 parked <code>fg</code> tasks</td><td class="py-2 pr-4">error (out of mappings)</td><td>2 s, about 5 KB each</td></tr>
+            <tr><td class="py-2 pr-4">Start-up of <code>print(1)</code> · resident memory</td><td class="py-2 pr-4">9.4 ms · 21.8 MB</td><td>about 6 ms · 15 MB</td></tr>
+            <tr><td class="py-2 pr-4">Eight CPU-bound jobs on eight cores</td><td class="py-2 pr-4">one after another</td><td>5.6× faster with <code>sync.Worker</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3 class="text-lg font-semibold mt-10" id="new-sized">Sized numbers</h3>
+      <p>The sized types of Go — <code>int8 int16 int32 int64</code>, <code>uint8 … uint64</code>, <code>byte</code>, <code>rune</code>, <code>float32</code>, <code>float64</code> — are type names and conversion functions. An annotation checks the range; a conversion keeps the low bits. Arithmetic itself stays 64-bit and checked. See <a class="underline" href="#types">Type annotations</a>.</p>
+      <script type="text/x-fogu">// Sized numbers, as in Go: a range when it annotates, a conversion when called
+let level: uint8 = 255
+fn mix(a: uint8, b: uint8): uint8 {
+    return uint8(a + b)              // keeps the low 8 bits
+}
+print(mix(200, 100))                 // 44
+
+print(uint8(300), int8(200), uint16(-1))
+print(int16(3.99), float32(0.1))
+
+let bad: uint8 = level + 1           // 256 does not fit</script>
+      <script type="text/x-fogu" data-lang="text">44
+44 -56 65535
+3 0.10000000149011612
+error[E0207]: type mismatch: variable 'bad' is declared as uint8, got int out of range (uint8 is 0..255)
+  --&gt; sized.fg:11
+    |
+ 11 | let bad: uint8 = level + 1           // 256 does not fit
+    |     ^^^
+   = help: the value does not match the type annotation</script>
+      <h3 class="text-lg font-semibold mt-10" id="new-bits">Bit operators</h3>
+      <p><code>&amp;</code> <code>|</code> <code>^</code> <code>~</code> <code>&lt;&lt;</code> <code>&gt;&gt;</code> and their assignments work on ints with Go's precedence. See <a class="underline" href="#operators">Operators</a>; <code>fogu:math</code> also has <code>ushr popcount clz ctz</code>.</p>
+      <script type="text/x-fogu">// Bit operators on ints: &amp; | ^ ~ &lt;&lt; &gt;&gt;  (precedence as in Go)
+const READ = 1
+const WRITE = 1 &lt;&lt; 1
+const EXEC = 1 &lt;&lt; 2
+
+let mode = READ | EXEC
+print(mode, mode &amp; WRITE != 0, mode &amp; EXEC != 0)
+
+mode |= WRITE                        // grant
+mode &amp;= ~READ                        // revoke
+print(mode)
+
+// a 32-bit hash (FNV-1a), compiled to native code
+fn hash(text: str): uint32 {
+    let h = 2166136261
+    for c in bytes(text) {
+        h = uint32((h ^ c) * 16777619)
+    }
+    return h
+}
+print(hash("fogu"), hash("fôgu"))</script>
+      <script type="text/x-fogu" data-lang="text">5 false true
+6
+1010625150 3416006778</script>
+      <h3 class="text-lg font-semibold mt-10" id="new-workers">Workers: every core</h3>
+      <p><code>fg</code> tasks share one thread. A <code>sync.Worker</code> is a program of its own — its own interpreter, on another OS thread, pinned to the CPU you choose. <code>w.call(name, ...args)</code> waits without stopping the other tasks; values cross as JSON. See <a class="underline" href="#mod-sync">fogu:sync</a>.</p>
+      <script type="text/x-fogu">// Every core: each worker is a program of its own on another OS thread
+import sync from "fogu:sync"
+
+const code = "fn primes(n) { let c = 0\n for i in 2..n { let p = true\n let d = 2\n while d * d &lt;= i { if i % d == 0 { p = false; break }\n d = d + 1 }\n if p { c = c + 1 } }\n return c }"
+
+const workers = []
+for core in 0..4 { workers.push(sync.Worker(code, { core: core })?) }
+
+const found = [0, 0, 0, 0]
+const wg = sync.WaitGroup()
+for i in 0..4 {
+    wg.add(1)
+    fg fn(i) {                        // the four calls run at the same time
+        found[i] = workers[i].call("primes", 50000 * (i + 1))?
+        wg.done()
+    }(i)
+}
+wg.wait()
+print(found)</script>
+      <script type="text/x-fogu" data-lang="text">[5133, 9592, 13848, 17984]</script>
+      <h3 class="text-lg font-semibold mt-10" id="new-vm">fogu:vm timeouts at full speed</h3>
+      <p>Code with a <code>timeout</code> is now compiled like any other code; a watchdog stops it when its time is over. See <a class="underline" href="#mod-vm">fogu:vm</a>.</p>
+      <script type="text/x-fogu">// fogu:vm: code with a timeout is compiled too — and still stopped on time
+import vm from "fogu:vm"
+
+const sum = "let s = 0\nfor i in 0..5000000 { s = s + i % 7 }\ns"
+print(vm.runInNewContext(sum, nil, { timeout: 2s }))
+
+const endless = "let n = 0\nwhile true { n = n + 1 }"
+print(vm.runInNewContext(endless, nil, { timeout: 50ms }))</script>
+      <script type="text/x-fogu" data-lang="text">14999995
+error: &lt;vm&gt;:2: runtime error: script execution timed out after 50ms</script>
+      <h3 class="text-lg font-semibold mt-10" id="new-ffi">Direct calls into C</h3>
+      <p>When a C function takes and returns numbers, compiled code calls it directly; <code>ffi.lastError()</code> and callbacks keep working. Signatures accept the sized type names (<code>"int32"</code>, <code>"uint8"</code>…). See <a class="underline" href="#mod-ffi">fogu:ffi</a>.</p>
+      <script type="text/x-fogu">// fogu:ffi: compiled code calls C functions directly (no interpreter in between)
+import ffi from "fogu:ffi"
+
+const libc = ffi.open("c")?
+const abs = libc.func("abs", ["int32"], "int32")?
+const toupper = libc.func("toupper", ["int32"], "uint8")?
+
+let total = 0
+for i in 0..1000000 {
+    total = total + abs(500000 - i)
+}
+print(total)
+
+const shout = bytes(0)
+for c in bytes("fogu") { shout.push(toupper(c)) }
+print(shout.text())</script>
+      <script type="text/x-fogu" data-lang="text">250000000000
+FOGU</script>
+      <h3 class="text-lg font-semibold mt-10" id="new-crypto">Key pairs</h3>
+      <p><code>crypto.generateKeyPair(algorithm, { bits })</code> returns <code>{ algorithm, bits, privateKey, publicKey }</code> as PEM text. Certificates: <code>tls.selfSigned</code>. See <a class="underline" href="#mod-crypto">fogu:crypto</a>.</p>
+      <script type="text/x-fogu">// Key pairs in PEM: ed25519, p256, p384, rsa (2048 / 3072 / 4096)
+import crypto from "fogu:crypto"
+
+for alg in ["ed25519", "p256", "p384", "rsa"] {
+    const k = crypto.generateKeyPair(alg)?
+    print(k.algorithm, k.bits, k.publicKey.lines()[0])
+}
+const big = crypto.generateKeyPair("rsa", { bits: 4096 })?
+print(big.bits, big.privateKey.lines()[0])</script>
+      <script type="text/x-fogu" data-lang="text">ed25519 256 -----BEGIN PUBLIC KEY-----
+p256 256 -----BEGIN PUBLIC KEY-----
+p384 384 -----BEGIN PUBLIC KEY-----
+rsa 2048 -----BEGIN PUBLIC KEY-----
+4096 -----BEGIN PRIVATE KEY-----</script>
+      <h3 class="text-lg font-semibold mt-10" id="new-cli">Also new</h3>
+      <ul>
+        <li><code>fogu .</code> (or <code>fogu &lt;folder&gt;</code>) runs a project: its <code>start</code> script, or its <code>entry</code>.</li>
+        <li>Buffers read and write by type name: <code>buf.readUint16(0)</code>, <code>buf.writeFloat32(4, x)</code>.</li>
+        <li><code>fogu:types</code> knows the sized types: <code>types.uint8()</code>, <code>"int32"</code> in a spec, coercion from text.</li>
+        <li><code>time.monotonic()</code>, <code>time.now()</code> and the bit functions of <code>fogu:math</code> are called natively by compiled code.</li>
+        <li>Fixed: a program could report a deadlock when a database commit or a request finished at the exact moment the scheduler checked its tasks.</li>
+        <li>The Linux executable no longer loads OpenSSL at start and is linked at a fixed address (as Go's are).</li>
+      </ul>
+    </section>
+
     <section id="types" data-group="Language" data-title="Type annotations" class="scroll-mt-20 mt-16">
       <h2 class="text-2xl font-bold">Type annotations</h2>
       <p>Annotations are optional. They are <strong>checked at runtime</strong> (parameters on entry, return values on
@@ -350,6 +497,76 @@ mode |= WRITE
 mode &= ~READ
 print(mode, 12 ^ 10, -16 >> 2, ~0)                 // 6 6 -4 -1
 print(uint32(2166136261 * 16777619) ^ 255)         // with a sized conversion: 84696544</script>
+    </section>
+
+    <section id="keywords" data-group="Language" data-title="Reserved words" class="scroll-mt-20 mt-16">
+      <h2 class="text-2xl font-bold">Reserved words</h2>
+      <p>Fogu has <strong>27 reserved words</strong>. They cannot name a variable, a function, a parameter or a struct
+      — <code>let match = 1</code> is a syntax error — but they are fine as map keys and after a dot
+      (<code>{ default: 1 }</code>, <code>cfg.from</code>).</p>
+      <div class="overflow-x-auto mt-4">
+        <table class="w-full text-sm border-collapse">
+          <thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Word</th><th class="py-2 pr-4">What it does</th><th class="py-2">Read more</th></tr></thead>
+          <tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60">
+            <tr><td class="py-2 pr-4" colspan="3"><strong>Declarations</strong></td></tr>
+            <tr><td class="py-2 pr-4"><code>let</code></td><td class="py-2 pr-4">a variable that can be assigned again</td><td><a class="underline" href="#variables">Variables</a></td></tr>
+            <tr><td class="py-2 pr-4"><code>const</code></td><td class="py-2 pr-4">a name bound once (<code>const [v, err] = f()</code> unpacks a list)</td><td><a class="underline" href="#variables">Variables</a></td></tr>
+            <tr><td class="py-2 pr-4"><code>fn</code></td><td class="py-2 pr-4">a function: named, anonymous, or a method of a struct</td><td><a class="underline" href="#functions">Functions</a></td></tr>
+            <tr><td class="py-2 pr-4"><code>struct</code></td><td class="py-2 pr-4">a type with fields and methods</td><td><a class="underline" href="#structs">Structs</a></td></tr>
+            <tr><td class="py-2 pr-4"><code>interface</code></td><td class="py-2 pr-4">a set of methods a value must have (structural)</td><td><a class="underline" href="#structs">Structs</a></td></tr>
+            <tr><td class="py-2 pr-4"><code>embed</code></td><td class="py-2 pr-4">inside a struct: takes the fields and methods of another struct</td><td><a class="underline" href="#structs">Structs</a></td></tr>
+            <tr><td class="py-2 pr-4" colspan="3"><strong>Control flow</strong></td></tr>
+            <tr><td class="py-2 pr-4"><code>if</code> <code>else</code></td><td class="py-2 pr-4">conditions (no parentheses, braces required)</td><td><a class="underline" href="#control">Control flow</a></td></tr>
+            <tr><td class="py-2 pr-4"><code>while</code></td><td class="py-2 pr-4">repeats while a condition holds</td><td><a class="underline" href="#control">Control flow</a></td></tr>
+            <tr><td class="py-2 pr-4"><code>for</code> <code>in</code></td><td class="py-2 pr-4">walks a range, a list, a map, a text, a buffer or a channel</td><td><a class="underline" href="#control">Control flow</a></td></tr>
+            <tr><td class="py-2 pr-4"><code>break</code> <code>continue</code></td><td class="py-2 pr-4">leave a loop · go to its next iteration</td><td><a class="underline" href="#control">Control flow</a></td></tr>
+            <tr><td class="py-2 pr-4"><code>return</code></td><td class="py-2 pr-4">ends a function with a value (or several: <code>return v, err</code>)</td><td><a class="underline" href="#functions">Functions</a></td></tr>
+            <tr><td class="py-2 pr-4"><code>match</code></td><td class="py-2 pr-4">chooses by pattern; an expression, and it must be exhaustive</td><td><a class="underline" href="#control">Control flow</a></td></tr>
+            <tr><td class="py-2 pr-4"><code>case</code> <code>default</code></td><td class="py-2 pr-4">the branches of <code>select</code> (<code>default</code> also names a module's default export)</td><td><a class="underline" href="#concurrency">Concurrency</a></td></tr>
+            <tr><td class="py-2 pr-4" colspan="3"><strong>Values</strong></td></tr>
+            <tr><td class="py-2 pr-4"><code>true</code> <code>false</code></td><td class="py-2 pr-4">the two <code>bool</code> values</td><td><a class="underline" href="#variables">Variables</a></td></tr>
+            <tr><td class="py-2 pr-4"><code>nil</code></td><td class="py-2 pr-4">"no value"; with <code>false</code>, the only falsy value</td><td><a class="underline" href="#variables">Variables</a></td></tr>
+            <tr><td class="py-2 pr-4" colspan="3"><strong>Modules</strong></td></tr>
+            <tr><td class="py-2 pr-4"><code>import</code> <code>from</code> <code>as</code></td><td class="py-2 pr-4"><code>import x from "m"</code>, <code>import { a as b } from "./f.fg"</code>, <code>import * as ns from "m"</code></td><td><a class="underline" href="#modules">Modules</a></td></tr>
+            <tr><td class="py-2 pr-4"><code>export</code></td><td class="py-2 pr-4">makes a declaration visible to the files that import this one</td><td><a class="underline" href="#modules">Modules</a></td></tr>
+            <tr><td class="py-2 pr-4" colspan="3"><strong>Concurrency</strong></td></tr>
+            <tr><td class="py-2 pr-4"><code>fg</code></td><td class="py-2 pr-4">starts a call as a task: <code>fg work(x)</code></td><td><a class="underline" href="#concurrency">Concurrency</a></td></tr>
+            <tr><td class="py-2 pr-4"><code>chan</code></td><td class="py-2 pr-4">creates a channel: <code>chan()</code>, <code>chan(8)</code>, <code>chan&lt;int&gt;()</code></td><td><a class="underline" href="#concurrency">Concurrency</a></td></tr>
+            <tr><td class="py-2 pr-4"><code>select</code></td><td class="py-2 pr-4">waits for the first of several channel operations</td><td><a class="underline" href="#concurrency">Concurrency</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3 class="text-lg font-semibold mt-8">Words with a meaning in one place</h3>
+      <p>These are ordinary names everywhere else (<code>let loop = 3</code> is valid), so old code never breaks on them:</p>
+      <ul>
+        <li><code>loop { … }</code> — a loop without a condition, the same as <code>while true { … }</code>.</li>
+        <li><code>new Point(1, 2)</code> — creates a struct and runs its <code>new</code> constructor.</li>
+        <li><code>this</code> — inside a method, the struct the method was called on.</li>
+        <li><code>_</code> — the wildcard of <code>match</code>, and a value to ignore in <code>const [v, _] = f()</code>.</li>
+      </ul>
+      <h3 class="text-lg font-semibold mt-8">Built-in names</h3>
+      <p>Not reserved: they are functions and types every program starts with, and a program may declare its own
+      with the same name (<code>fn len(x) { … }</code> replaces the built-in in that file).</p>
+      <ul>
+        <li><strong>Functions:</strong> <code>print len str int float typeof bytes error panic close timeout clock</code>, and the
+        sized conversions <code>int8 int16 int32 int64 uint8 uint16 uint32 uint64 uint uintptr byte rune float32 float64</code>.</li>
+        <li><strong>Type names</strong> (in annotations): <code>int float str bool nil duration list map buffer tuple range chan fn
+        struct object error any</code>, the sized types above, and the structs and interfaces of the program.</li>
+        <li><strong>The global object:</strong> <code>Fogu</code> (<code>Fogu.args</code>, <code>Fogu.env</code>, <code>Fogu.signal</code>, <code>Fogu.cores</code>…).</li>
+      </ul>
+      <script type="text/x-fogu">const cfg = { default: "dev", from: "env", in: 3 }   // reserved words as keys
+print(cfg.default, cfg.from, cfg["in"])              // dev env 3
+
+let loop = 3                                         // contextual words are plain names
+let new = 4
+print(loop + new)                                    // 7
+
+fn len(x) { return 42 }                              // a built-in, redeclared
+print(len([1, 2, 3]))                                // 42</script>
+      <script type="text/x-fogu" data-lang="text">let match = 1
+
+error[E0002]: expected a variable name, found Match
+  --> main.fg:1:5</script>
     </section>
 
     <section id="control" data-group="Language" data-title="Control flow" class="scroll-mt-20 mt-16">
