@@ -422,8 +422,33 @@ impl Interpreter {
         self.deadlines.borrow().get(&task).copied()
     }
 
-    fn no_deadline(&self) -> bool {
-        self.deadline_count.get() == 0 || self.deadline().is_none()
+    /// May native code run now? `Some(deadline)`: yes, to be stopped at that
+    /// deadline (`jit::deadline_ns`) if the running `fogu:vm` code has one.
+    #[inline]
+    fn jit_gate(&self) -> Option<Option<u64>> {
+        if !self.jit_enabled {
+            return None;
+        }
+        if self.deadline_count.get() == 0 {
+            return Some(None);
+        }
+        match self.deadline() {
+            None => Some(None),
+            // cancelled: the interpreter reports it at its next check
+            Some(d) if d.cancelled => None,
+            Some(d) => Some(Some(super::jit::deadline_ns(d.at))),
+        }
+    }
+
+    /// An error of native code: one stopped by its deadline is the timeout
+    /// (or cancellation) of the `fogu:vm` run.
+    fn jit_error(&self, e: String) -> String {
+        if e == ops::ERR_CANCEL {
+            if let Err(t) = self.check_deadline() {
+                return t;
+            }
+        }
+        e
     }
 
     fn check_deadline(&self) -> Result<(), String> {
@@ -903,18 +928,18 @@ impl Interpreter {
             // iterations, try to compile the whole loop. The state lives in
             // `env`, so the switch is exact.
             self.check_deadline()?;
-            if self.jit_enabled && self.no_deadline() {
+            if let Some(deadline) = self.jit_gate() {
                 iters = iters.saturating_add(1);
                 if iters == self.jit_loop_threshold {
                     let out = self
                         .jit
                         .borrow_mut()
-                        .run_loop(id, LoopKind::While { cond, body }, &env);
+                        .run_loop(id, LoopKind::While { cond, body }, &env, deadline);
                     match out {
                         LoopOutcome::Done => return Ok(Flow::Normal),
                         LoopOutcome::Err(e) => {
                             self.sync_jit_line();
-                            return Err(e);
+                            return Err(self.jit_error(e));
                         }
                         // a speculation failed before any effect of the
                         // iteration: it is simply re-run here
@@ -972,9 +997,8 @@ impl Interpreter {
         match iterable {
             Value::Range(start, end) => {
                 let mut resume = start;
-                if self.jit_enabled
-                    && self.no_deadline()
-                    && end.saturating_sub(start) >= self.jit_loop_threshold as i64
+                if let Some(deadline) =
+                    self.jit_gate().filter(|_| end.saturating_sub(start) >= self.jit_loop_threshold as i64)
                 {
                     let out = self.jit.borrow_mut().run_loop(
                         id,
@@ -985,12 +1009,13 @@ impl Interpreter {
                             hi: end,
                         },
                         &env,
+                        deadline,
                     );
                     match out {
                         LoopOutcome::Done => return Ok(Flow::Normal),
                         LoopOutcome::Err(e) => {
                             self.sync_jit_line();
-                            return Err(e);
+                            return Err(self.jit_error(e));
                         }
                         LoopOutcome::Skip => {}
                         // the native code stopped before any effect of
@@ -1012,17 +1037,18 @@ impl Interpreter {
                 // a snapshot: the body may modify the list (values are Rc clones, cheap)
                 let snapshot: Vec<Value> = list.borrow().clone();
                 let mut from = 0usize;
-                if self.jit_enabled && self.no_deadline() && snapshot.len() >= self.jit_loop_threshold as usize {
+                if let Some(deadline) = self.jit_gate().filter(|_| snapshot.len() >= self.jit_loop_threshold as usize) {
                     let out = self.jit.borrow_mut().run_loop(
                         id,
                         LoopKind::ForList { var, body, items: &snapshot },
                         &env,
+                        deadline,
                     );
                     match out {
                         LoopOutcome::Done => return Ok(Flow::Normal),
                         LoopOutcome::Err(e) => {
                             self.sync_jit_line();
-                            return Err(e);
+                            return Err(self.jit_error(e));
                         }
                         LoopOutcome::Skip => {}
                         LoopOutcome::Deopt(at) => from = at.max(0) as usize,
@@ -1983,15 +2009,15 @@ impl Interpreter {
         let saved = self.enter(f.module.as_ref());
 
         // Try native execution (hot numeric functions).
-        if self.jit_enabled && self.no_deadline() {
-            let r = self.jit.borrow_mut().call_fn(&f, &arg_vals);
+        if let Some(deadline) = self.jit_gate() {
+            let r = self.jit.borrow_mut().call_fn(&f, &arg_vals, deadline);
             if let Some(r) = r {
                 if r.is_err() {
                     self.sync_jit_line();
                 } else {
                     self.leave(saved);
                 }
-                return r;
+                return r.map_err(|e| self.jit_error(e));
             }
         }
 

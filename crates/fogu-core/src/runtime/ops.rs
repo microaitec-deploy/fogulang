@@ -8,6 +8,9 @@ pub const ERR_NEG_POW: &str = "negative integer exponent in '**' (use float)";
 pub const ERR_STACK: &str = "stack overflow (recursion too deep)";
 pub const ERR_MATCH: &str = "non-exhaustive match: no arm matched";
 pub const ERR_SHIFT: &str = "negative shift count";
+/// Native code was stopped by the deadline of its `fogu:vm` run (the
+/// interpreter turns it into the timeout error of that run).
+pub const ERR_CANCEL: &str = "script execution timed out";
 
 /// Error codes written by native code into `JitCtx::err`.
 pub const CODE_OVERFLOW: i64 = 1;

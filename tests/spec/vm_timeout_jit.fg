@@ -1,0 +1,23 @@
+// A fogu:vm timeout stops compiled code too (loops, nested loops, recursion),
+// and code with a timeout is still compiled.
+import vm from "fogu:vm"
+
+print(vm.runInNewContext("let n = 0\nwhile true { n = n + 1 }\nn", nil, { timeout: 60ms }))
+print(vm.runInNewContext("let a = 0\nfor i in 0..9000000000000 { a = a + i % 7 }\na", nil, { timeout: 60ms }))
+print(vm.runInNewContext("let a = 0\nfor i in 0..1000000 { let j = 0\n while true { j = j + 1 } }\na", nil, { timeout: 60ms }))
+print(vm.runInNewContext("fn fib(n) { if n < 2 { return n }\n return fib(n - 1) + fib(n - 2) }\nfib(70)", nil, { timeout: 60ms }))
+print(vm.runInNewContext("fn spin(k) { let s = 0\n while true { s = s + k }\n return s }\nspin(2)", nil, { timeout: 60ms }))
+
+// within its time: the result
+print(vm.runInNewContext("let a = 0\nfor i in 0..300000 { a = a + i % 7 }\na", nil, { timeout: 30s }))
+print(vm.runInNewContext("fn fib(n) { if n < 2 { return n }\n return fib(n - 1) + fib(n - 2) }\nfib(20)", nil, { timeout: 30s }))
+
+// the deadline of a run does not stop the program's own code
+fn work(n) {
+    let s = 0
+    for i in 0..n { s = s + i % 3 }
+    return s
+}
+const t = vm.spawn("let z = 0\nwhile true { z = z + 1 }", nil, { timeout: 40ms })
+print(work(300000), t.wait())
+print(work(300000))

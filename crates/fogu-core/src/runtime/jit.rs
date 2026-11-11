@@ -195,7 +195,6 @@ const OFF_LINE: i32 = 24;
 const OFF_DEOPT: i32 = 32;
 const OFF_RESUME: i32 = 40;
 const OFF_ERR: i32 = 0;
-const OFF_LIMIT: i32 = 16;
 
 // ---------- helpers called by native code ----------
 
@@ -823,11 +822,127 @@ impl Helper {
 // Keys and cache entries
 // ======================================================================
 
+// ======================================================================
+// Deadlines (`fogu:vm` timeouts) in native code
+// ======================================================================
+//
+// Native code does not return to the interpreter between statements, so it
+// cannot look at the clock the way the interpreter does. Instead every
+// compiled function compares the stack pointer with a limit on entry (its
+// stack-overflow check), and code compiled for a run with a deadline does
+// the same at every loop iteration. When the deadline of the running native
+// code passes, a watchdog thread raises that limit above any address: the
+// next check fails, the native code unwinds through its error path and the
+// interpreter reports the timeout. Code that runs without a deadline pays
+// nothing for this.
+
+/// The stack limit of one JIT, and the deadline of the native code running
+/// on it (if it has one).
+pub struct Watch {
+    /// The deadline (see [`deadline_ns`]) while native code with a deadline
+    /// runs. The watchdog raises the limit holding this lock, and the
+    /// interpreter arms / disarms holding it: a deadline can never stop the
+    /// native code of another run.
+    armed: std::sync::Mutex<Option<u64>>,
+    /// Lowest address the stack pointer may reach (-1: stop now).
+    limit: std::sync::atomic::AtomicI64,
+}
+
+/// "Stop now": above every address when compared unsigned.
+const LIMIT_STOP: i64 = -1;
+
+struct Watchdog {
+    watches: std::sync::Mutex<Vec<std::sync::Weak<Watch>>>,
+    /// The thread sleeps here while no deadline is armed.
+    parked: std::sync::Mutex<bool>,
+    wake: std::sync::Condvar,
+}
+
+fn watchdog() -> &'static Watchdog {
+    static W: OnceLock<Watchdog> = OnceLock::new();
+    W.get_or_init(|| Watchdog {
+        watches: std::sync::Mutex::new(Vec::new()),
+        parked: std::sync::Mutex::new(false),
+        wake: std::sync::Condvar::new(),
+    })
+}
+
+fn clock_base() -> Instant {
+    static BASE: OnceLock<Instant> = OnceLock::new();
+    *BASE.get_or_init(Instant::now)
+}
+
+/// A deadline as native code is armed with it: nanoseconds on the JIT's clock.
+pub fn deadline_ns(at: Instant) -> u64 {
+    (at.saturating_duration_since(clock_base()).as_nanos() as u64).max(1)
+}
+
+/// Registers a JIT with the watchdog (starting its thread the first time).
+fn watch_register(w: &std::sync::Arc<Watch>) {
+    let wd = watchdog();
+    wd.watches.lock().unwrap_or_else(|p| p.into_inner()).push(std::sync::Arc::downgrade(w));
+    static START: std::sync::Once = std::sync::Once::new();
+    START.call_once(|| {
+        let _ = std::thread::Builder::new().name("fogu-jit-watchdog".into()).spawn(watchdog_loop);
+    });
+}
+
+/// Wakes the watchdog if it is parked (a deadline was armed).
+fn watch_wake() {
+    let wd = watchdog();
+    let mut parked = wd.parked.lock().unwrap_or_else(|p| p.into_inner());
+    if *parked {
+        *parked = false;
+        wd.wake.notify_all();
+    }
+}
+
+fn watchdog_loop() {
+    let wd = watchdog();
+    let mut idle = 0u32;
+    loop {
+        let mut any = false;
+        {
+            let mut ws = wd.watches.lock().unwrap_or_else(|p| p.into_inner());
+            ws.retain(|w| w.strong_count() > 0);
+            let now = clock_base().elapsed().as_nanos() as u64;
+            for w in ws.iter().filter_map(std::sync::Weak::upgrade) {
+                let armed = w.armed.lock().unwrap_or_else(|p| p.into_inner());
+                if let Some(d) = *armed {
+                    any = true;
+                    if now >= d {
+                        w.limit.store(LIMIT_STOP, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+            }
+        }
+        if any {
+            idle = 0;
+            std::thread::sleep(std::time::Duration::from_micros(500));
+            continue;
+        }
+        idle += 1;
+        if idle < 200 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            continue;
+        }
+        // nothing armed for a while: sleep until the next deadline is armed
+        idle = 0;
+        let mut parked = wd.parked.lock().unwrap_or_else(|p| p.into_inner());
+        *parked = true;
+        while *parked {
+            parked = wd.wake.wait(parked).unwrap_or_else(|p| p.into_inner());
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct FnKey {
     ptr: usize,
     mask: u64,
     n: u8,
+    /// Compiled for a run with a deadline: its loops check the limit too.
+    checked: bool,
 }
 
 impl FnKey {
@@ -856,6 +971,8 @@ struct LoopKey {
     spec: Vec<(String, Ty)>,
     /// Speculated element type of the list a `for x in list` loop walks.
     elem: Option<Ty>,
+    /// Compiled for a run with a deadline (see [`Watch`]).
+    checked: bool,
 }
 
 enum LoopEntry {
@@ -880,6 +997,8 @@ struct Stats {
 // ======================================================================
 
 struct Inner {
+    /// Address of the stack limit native code checks ([`Watch::limit`]).
+    limit_addr: usize,
     module: JITModule,
     helper_ids: HashMap<Helper, FuncId>,
     specs: HashMap<FnKey, Spec>,
@@ -900,7 +1019,7 @@ struct Inner {
 }
 
 impl Inner {
-    fn new(debug: u8) -> Result<Inner, String> {
+    fn new(debug: u8, limit_addr: usize) -> Result<Inner, String> {
         let mut flags = settings::builder();
         flags.set("use_colocated_libcalls", "false").map_err(|e| e.to_string())?;
         flags.set("is_pic", "false").map_err(|e| e.to_string())?;
@@ -954,6 +1073,7 @@ impl Inner {
             guess_fails: HashMap::new(),
             loops: HashMap::new(),
             ctx: Box::new(JitCtx { err: 0, _reserved: 0, stack_limit: 0, line: 0, deopt: 0, resume: 0 }),
+            limit_addr,
             epoch: redefine_epoch(),
             counter: 0,
             debug,
@@ -1174,6 +1294,7 @@ impl Inner {
             let b = FunctionBuilder::new(&mut ctx.func, &mut fbc);
             let mut g = Gen::new(self, b, env, Some(ret), Some(me));
             g.fn_name = f.name.clone();
+            g.checked = me.checked;
             g.prologue_fn(&f.params, tys)?;
             for s in f.body.iter() {
                 g.stmt(s)?;
@@ -1283,6 +1404,7 @@ impl Inner {
         {
             let b = FunctionBuilder::new(&mut ctx.func, &mut fbc);
             let mut g = Gen::new(self, b, Rc::clone(env), None, None);
+            g.checked = key.checked;
             g.spec = key.spec.iter().cloned().collect();
             g.elem = key.elem;
             let slots_ptr = g.prologue_loop(slots)?;
@@ -1501,6 +1623,8 @@ struct Gen<'a, 'f> {
     ret_range: Option<(i64, i64, i64)>,
     /// The function being compiled (for its error messages).
     fn_name: String,
+    /// The code may run with a deadline: every loop iteration checks the limit.
+    checked: bool,
     me: Option<FnKey>,
     err_blocks: HashMap<i64, ir::Block>,
     prop_block: Option<ir::Block>,
@@ -1560,6 +1684,7 @@ impl<'a, 'f> Gen<'a, 'f> {
             ret,
             ret_range: None,
             fn_name: String::new(),
+            checked: false,
             me,
             err_blocks: HashMap::new(),
             prop_block: None,
@@ -1593,10 +1718,7 @@ impl<'a, 'f> Gen<'a, 'f> {
         }
         // the stack pointer against the limit of this thread / task: one
         // load and one compare per call, nothing to undo on return
-        let sp = self.b.ins().get_stack_pointer(types::I64);
-        let lim = self.b.ins().load(types::I64, MemFlagsData::trusted(), self.ctx_ptr, OFF_LIMIT);
-        let over = self.b.ins().icmp(IntCC::UnsignedLessThan, sp, lim);
-        self.trap_if(over, ops::CODE_STACK);
+        self.limit_check();
         Ok(())
     }
 
@@ -1794,6 +1916,26 @@ impl<'a, 'f> Gen<'a, 'f> {
     /// The current line, as the argument of an error block.
     fn line_arg(&mut self) -> ir::BlockArg {
         ir::BlockArg::Value(self.b.use_var(self.line_var))
+    }
+
+    /// The stack pointer against the limit of this thread / task: a stack
+    /// overflow, or a deadline that passed (the watchdog raised the limit).
+    fn limit_check(&mut self) {
+        let sp = self.b.ins().get_stack_pointer(types::I64);
+        let at = self.b.ins().iconst(types::I64, self.inner.limit_addr as i64);
+        // an atomic load: another thread (the watchdog) writes the limit, so
+        // the optimizer must not reuse a value read earlier in the function
+        // (a loop nested in a loop would otherwise never see the change)
+        let lim = self.b.ins().atomic_load(types::I64, MemFlagsData::trusted(), at);
+        let over = self.b.ins().icmp(IntCC::UnsignedLessThan, sp, lim);
+        self.trap_if(over, ops::CODE_STACK);
+    }
+
+    /// Start of a loop iteration: where code with a deadline can be stopped.
+    fn cancel_point(&mut self) {
+        if self.checked {
+            self.limit_check();
+        }
     }
 
     /// Raises the error `code` unless `lo <= v <= hi` (one unsigned compare).
@@ -2052,6 +2194,7 @@ impl<'a, 'f> Gen<'a, 'f> {
         self.b.ins().brif(c, body_b, &[], exit, &[]);
 
         self.b.switch_to_block(body_b);
+        self.cancel_point();
         let nested = !self.top_loop;
         let (eb, gb) = (self.effects, self.guards);
         self.iteration_start(None);
@@ -2086,6 +2229,7 @@ impl<'a, 'f> Gen<'a, 'f> {
 
         self.b.switch_to_block(body_b);
         self.dead = false;
+        self.cancel_point();
         self.scopes.push(HashMap::new());
         let cur = self.b.use_var(idx);
         let nested = !self.top_loop;
@@ -2137,6 +2281,7 @@ impl<'a, 'f> Gen<'a, 'f> {
 
         self.b.switch_to_block(body_b);
         self.dead = false;
+        self.cancel_point();
         self.scopes.push(HashMap::new());
         let cur = self.b.use_var(idx);
         let nested = !self.top_loop;
@@ -3153,7 +3298,7 @@ impl<'a, 'f> Gen<'a, 'f> {
                     mask |= t.code() << (2 * i);
                     vals.push(v);
                 }
-                let key = FnKey { ptr: Rc::as_ptr(&f.body) as usize, mask, n: args.len() as u8 };
+                let key = FnKey { ptr: Rc::as_ptr(&f.body) as usize, mask, n: args.len() as u8, checked: self.checked };
                 let (id, ret) = self.inner.specialize(&f, key, self.me)?;
                 let fr = self.inner.module.declare_func_in_func(id, self.b.func);
                 // the callee may print: no speculation may fail after it
@@ -3400,6 +3545,10 @@ pub struct Jit {
     init_failed: bool,
     counts: HashMap<usize, u32>,
     loop_names: HashMap<u32, Rc<Vec<String>>>,
+    /// The stack limit of the native code, shared with the watchdog.
+    watch: std::sync::Arc<Watch>,
+    /// The watchdog knows `watch` (from the first run with a deadline on).
+    watched: bool,
 }
 
 impl Jit {
@@ -3410,7 +3559,37 @@ impl Jit {
             init_failed: false,
             counts: HashMap::new(),
             loop_names: HashMap::new(),
+            watch: std::sync::Arc::new(Watch {
+                armed: std::sync::Mutex::new(None),
+                limit: std::sync::atomic::AtomicI64::new(0),
+            }),
+            watched: false,
         }
+    }
+
+    /// Before native code runs: its stack limit and, with a deadline, the
+    /// watchdog that will stop it.
+    fn enter(&mut self, deadline: Option<u64>) {
+        // native frames may go down to the limit of this thread / task (it
+        // already leaves a margin for the helpers and the error path)
+        self.watch.limit.store(sched::stack_limit() as i64, std::sync::atomic::Ordering::Relaxed);
+        if let Some(d) = deadline {
+            if !self.watched {
+                self.watched = true;
+                watch_register(&self.watch);
+            }
+            *self.watch.armed.lock().unwrap_or_else(|p| p.into_inner()) = Some(d);
+            watch_wake();
+        }
+    }
+
+    /// After native code ran: was it stopped by its deadline?
+    fn leave(&mut self, deadline: Option<u64>) -> bool {
+        if deadline.is_none() {
+            return false;
+        }
+        *self.watch.armed.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        self.watch.limit.load(std::sync::atomic::Ordering::SeqCst) == LIMIT_STOP
     }
 
     pub fn enabled(&self) -> bool {
@@ -3437,7 +3616,7 @@ impl Jit {
             }
         }
         if self.inner.is_none() {
-            match Inner::new(self.cfg.debug) {
+            match Inner::new(self.cfg.debug, &self.watch.limit as *const _ as usize) {
                 Ok(i) => self.inner = Some(i),
                 Err(e) => {
                     if self.cfg.debug >= 1 {
@@ -3456,9 +3635,6 @@ impl Jit {
         inner.ctx.deopt = 0;
         inner.ctx.resume = 0;
         inner.ctx.line = 0;
-        // native frames may go down to the limit of this thread / task (it
-        // already leaves a margin for the helpers and the error path)
-        inner.ctx.stack_limit = sched::stack_limit() as i64;
     }
 
     /// Last line recorded by native code (for error messages).
@@ -3467,7 +3643,11 @@ impl Jit {
     }
 
     /// Tries to run the function natively. `None` = use the interpreter.
-    pub fn call_fn(&mut self, f: &Rc<FnValue>, args: &[Value]) -> Option<Result<Value, String>> {
+    ///
+    /// `deadline` ([`deadline_ns`]) is the deadline of the running `fogu:vm`
+    /// code, if it has one: the native code is stopped when it passes (the
+    /// error is then [`ops::ERR_CANCEL`]).
+    pub fn call_fn(&mut self, f: &Rc<FnValue>, args: &[Value], deadline: Option<u64>) -> Option<Result<Value, String>> {
         if !self.cfg.enabled
             || args.len() != f.params.len()
             || args.len() > MAX_ARGS
@@ -3479,7 +3659,7 @@ impl Jit {
         for (i, a) in args.iter().enumerate() {
             mask |= Ty::of_value(a)?.code() << (2 * i);
         }
-        let key = FnKey { ptr: Rc::as_ptr(&f.body) as usize, mask, n: args.len() as u8 };
+        let key = FnKey { ptr: Rc::as_ptr(&f.body) as usize, mask, n: args.len() as u8, checked: deadline.is_some() };
 
         // Only compile after a few interpreted calls.
         let c = self.counts.entry(key.ptr).or_insert(0);
@@ -3525,12 +3705,20 @@ impl Jit {
         let mut out: u64 = 0;
         Self::set_limits(inner);
         inner.stats.native_calls += 1;
+        let ctx: *mut JitCtx = &mut *inner.ctx;
+        self.enter(deadline);
         let thunk: extern "C" fn(*mut JitCtx, *const u64, *mut u64) =
             unsafe { std::mem::transmute(addr) };
-        thunk(&mut *inner.ctx, argbuf.as_ptr(), &mut out);
+        thunk(ctx, argbuf.as_ptr(), &mut out);
+        let stopped = self.leave(deadline);
 
-        if inner.ctx.err != 0 {
-            return Some(Err(ops::code_message(inner.ctx.err).to_string()));
+        // SAFETY: `ctx` is the context of `self.inner`, which `enter` / `leave` do not touch.
+        let err = unsafe { (*ctx).err };
+        if err != 0 {
+            if stopped && err == ops::CODE_STACK {
+                return Some(Err(ops::ERR_CANCEL.to_string()));
+            }
+            return Some(Err(ops::code_message(err).to_string()));
         }
         Some(Ok(match ret {
             Ty::Int => Value::Int(out as i64),
@@ -3547,6 +3735,7 @@ impl Jit {
         id: u32,
         kind: LoopKind,
         env: &Rc<RefCell<Environment>>,
+        deadline: Option<u64>,
     ) -> LoopOutcome {
         if !self.cfg.enabled {
             return LoopOutcome::Skip;
@@ -3639,6 +3828,7 @@ impl Jit {
             slots: slots.clone(),
             spec,
             elem,
+            checked: deadline.is_some(),
         };
 
         let Some(inner) = self.inner() else {
@@ -3672,12 +3862,24 @@ impl Jit {
 
         Self::set_limits(inner);
         inner.stats.native_loops += 1;
+        let ctx: *mut JitCtx = &mut *inner.ctx;
+        self.enter(deadline);
         let f: extern "C" fn(*mut JitCtx, *mut u64) -> i64 = unsafe { std::mem::transmute(addr) };
-        let rc = f(&mut *inner.ctx, init.as_mut_ptr());
+        let rc = f(ctx, init.as_mut_ptr());
+        let stopped = self.leave(deadline);
+        let Some(inner) = self.inner.as_mut() else {
+            return LoopOutcome::Skip;
+        };
 
         // On error (and on deopt) the modified variables are also written back
         // (the native code already wrote them to the slots before leaving).
-        let failed = (inner.ctx.err != 0).then(|| ops::code_message(inner.ctx.err).to_string());
+        let failed = (inner.ctx.err != 0).then(|| {
+            if stopped && inner.ctx.err == ops::CODE_STACK {
+                ops::ERR_CANCEL.to_string()
+            } else {
+                ops::code_message(inner.ctx.err).to_string()
+            }
+        });
         for (i, (name, ty, _)) in slots.iter().enumerate() {
             if assigned[i] {
                 let v = match ty {

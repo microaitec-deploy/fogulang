@@ -45,6 +45,11 @@ pub enum LoopOutcome {
     Err(String),
 }
 
+/// A deadline as native code would be armed with it (there is none here).
+pub fn deadline_ns(_at: std::time::Instant) -> u64 {
+    0
+}
+
 pub struct Jit;
 
 impl Default for Jit {
@@ -70,11 +75,11 @@ impl Jit {
         0
     }
 
-    pub fn call_fn(&mut self, _f: &Rc<FnValue>, _args: &[Value]) -> Option<Result<Value, String>> {
+    pub fn call_fn(&mut self, _f: &Rc<FnValue>, _args: &[Value], _deadline: Option<u64>) -> Option<Result<Value, String>> {
         None
     }
 
-    pub fn run_loop(&mut self, _id: u32, _kind: LoopKind, _env: &Rc<RefCell<Environment>>) -> LoopOutcome {
+    pub fn run_loop(&mut self, _id: u32, _kind: LoopKind, _env: &Rc<RefCell<Environment>>, _deadline: Option<u64>) -> LoopOutcome {
         LoopOutcome::Skip
     }
 
