@@ -1,0 +1,41 @@
+// sync.Worker: a program on another OS thread (and CPU), called with values as JSON
+import sync from "fogu:sync"
+
+const w = sync.Worker("./_worker_primes.fg", { core: 0 })?
+print(w.core, w.source, w.closed)
+print(w.call("countPrimes", 1000)?)
+print(w.call("describe", { name: "Ana", tags: ["a", "b"] })?)
+
+// errors come back as error values
+print(w.call("fail", "no")) 
+print(w.call("boom"))
+print(w.call("missing"))
+
+// several workers at once: each call waits without stopping the other tasks
+const workers = [sync.Worker("./_worker_primes.fg")?, sync.Worker("./_worker_primes.fg")?, sync.Worker("./_worker_primes.fg")?]
+const results = [0, 0, 0]
+const wg = sync.WaitGroup()
+let ticks = 0
+for i in 0..3 {
+    wg.add(1)
+    fg fn(i) {
+        results[i] = workers[i].call("countPrimes", 20000 * (i + 1))?
+        wg.done()
+    }(i)
+}
+fg fn() { ticks = ticks + 1 }()
+wg.wait()
+print(results, ticks)
+
+// its globals live between calls, apart from this program's
+print(w.call("describe", { name: "Bia", tags: [] })?.calls)
+
+// code instead of a file
+const sq = sync.Worker("fn square(n) { return n * n }")?
+print(sq.call("square", 12)?, sq.core)
+
+w.close()
+print(w.closed, w.call("countPrimes", 10))
+print(sync.Worker("./_no_such_worker.fg"))
+print(sync.Worker("fn broken( {"))
+print(typeof(sync.Worker("fn f() {}", { core: 100000 })))

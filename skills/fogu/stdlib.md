@@ -719,6 +719,7 @@ Coordination of `fg` tasks. Waiting operations yield to the other tasks; waiting
 - `sync.Once()` → Once — `do(fn)` runs `fn` only the first time.
 - `sync.Atomic(value)` → Atomic — `get()` `set(v)` `add(n = 1)` → new value, `compareAndSwap(old, new)` → bool.
 - `sync.Semaphore(n)` → Semaphore — `acquire()` (waits for a permit) `tryAcquire()` → bool `release()`, fields `available size`. Also limits [fogu:vm](#foguvm) tasks (`{ semaphore }`).
+- `sync.Worker(file | code, { core }?)` → Worker · error — A program of its own on another OS thread, with its own interpreter — on CPU `core` if given: the way to use several cores (`fg` tasks share one thread). `w.call(name, ...args)` calls a global function of the worker and waits without stopping the other tasks; arguments and results cross as JSON (numbers, texts, bools, nil, lists, maps) and nothing else is shared. A failure of the call comes back as an error value. `w.close()`, fields `core source closed`.
 
 ```fogu
 import sync from "fogu:sync"

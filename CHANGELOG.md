@@ -23,6 +23,18 @@ be incompatible changes (spec §75).
   precedence (`<< >> &` like `*`; `| ^` like `+`). `>>` keeps the sign; a negative shift count is an
   error; compiled natively. `|` still separates alternatives in patterns and types, and `>>` still
   closes nested type arguments (`list<list<int>>`).
+- **`sync.Worker(file | code, { core })`**: a program on another OS thread with its own
+  interpreter, optionally pinned to a CPU — several cores for Fogu code. `w.call(name, ...args)`
+  waits cooperatively (other `fg` tasks keep running); values cross as JSON. Eight workers on eight
+  cores ran a CPU-bound function 5.6× faster than one after another (4 cores: 3.2×).
+- **Compiled code under a `fogu:vm` timeout**: code with a deadline is no longer interpreted. A
+  watchdog thread raises the stack limit native code checks (function entries, and every loop
+  iteration of code compiled for a run with a deadline), so the timeout still stops it within a
+  millisecond. A 3-million-iteration loop with `{ timeout }`: 587 ms → 5 ms.
+- **Compiled code calls `fogu:ffi` functions directly** when their signature is numeric (integers,
+  pointers given as ints, `f64`, `bool`; results of any numeric type): a generated entry widens the
+  result to its declared type, keeps `errno` for `ffi.lastError()` and raises an error of a Fogu
+  callback, exactly as the interpreted call does. `abs` of libc in a hot loop: 266 ns → 9 ns per call.
 - `fogu:math` bit operations: `band bor bxor bnot shl shr ushr popcount clz ctz` (total: no shift
   count is an error), called natively by compiled code.
 - `crypto.generateKeyPair(algorithm, { bits })`: PEM key pairs — `ed25519`, `p256`, `p384`, `rsa`
@@ -49,6 +61,13 @@ be incompatible changes (spec §75).
 - `fogu:ffi`: no heap allocation and no name search per call.
 - The HTTP / web examples and reference keep the process alive with `Fogu.signal.wait()` instead of
   a `while true { time.delay(…) }` loop.
+
+### Fixed
+
+- A program could stop with "deadlock: all tasks are blocked" when work off the interpreter thread
+  (a database commit, a request) finished exactly between the scheduler's pass over the tasks and
+  its deadlock check. The completion is now seen (`IoGuard` moves the wake generation before it
+  stops counting as in flight, and the scheduler looks again when the generation moved).
 
 ### Removed
 

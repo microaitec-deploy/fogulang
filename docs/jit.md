@@ -50,6 +50,14 @@ Environment: `FOGU_JIT=0`, `FOGU_JIT_DEBUG`, `FOGU_JIT_CALLS` (default 2), `FOGU
   counter to update, and the current line lives in a register — it is written
   to `JitCtx::line` only by the cold block of an error (0 = the function had
   not reached its first statement: the caller's line stands).
+- **Deadlines** (`fogu:vm` timeouts): the limit of the stack check is `jit::Watch::limit`, which a
+  watchdog thread raises when the deadline of the running native code passes. Code compiled for a
+  run with a deadline (`checked` specializations) also checks it at every loop iteration; the
+  failure is reported as the run's timeout. The limit is read with an atomic load so the
+  optimizer never reuses an older value.
+- **`fogu:ffi`**: a C function with a numeric signature has a typed entry built by
+  `ffi_stub::direct` and is called like any typed native; it is *fallible* (a callback may have
+  failed), so the call is followed by `typed_check` and the usual error branch.
 - **Typed natives**: a native function with a `TypedNative` entry (numbers in,
   a number out, cannot fail — e.g. `time.monotonic`, `time.now`) is called
   directly with `call_indirect`; no `Value` is built.

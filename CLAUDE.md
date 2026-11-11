@@ -156,6 +156,10 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
   `util::with_typed(nfn(...), TypedNative { params, ret, entry })`, where `entry` is an
   `extern "C" fn` over `i64` / `f64` / `u8` computing exactly the same. Compiled code then calls it
   directly (`time.monotonic`, the `math` bit functions); anything with an error path stays untyped.
+- Native code and the interpreter: while compiled code runs, `Interpreter::in_native` is set
+  (`NativeGuard`) and `jit_gate` refuses to enter the JIT again — Fogu code reached from there (an
+  ffi callback) is interpreted. Memory another thread writes for compiled code to read (the stack
+  limit of `jit::Watch`) must be read with `atomic_load`, never a plain `load`.
 - Sized numbers (`int8` … `float64`) live in `runtime/ops.rs` (`Sized`): ranges for annotations,
   Go's wrapping for conversions. Use it wherever a type name is read (`fogu:types`, `fogu:ffi`,
   buffers) instead of a new table.
@@ -180,7 +184,7 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
   admin UI is Fogu code (`native/messaging/broker_admin.fg`, run by `broker_admin::intercept`).
 - `fogu:vm` runs code on the same interpreter: its calls are intercepted at the top of
   `Interpreter::call_value` (through `Host::intercept`, `native::vm::intercept`), and `Interpreter::vm_run` sets a
-  `deadline` (checked in loops and calls; the JIT is skipped while it is set).
+  `deadline` (checked in loops and calls; native code is stopped by a watchdog when it passes).
 - Packages: never run install scripts; always verify the lock checksum.
 - Source files use CRLF line endings; keep them — except `scripts/*.sh` (LF: shells refuse CRLF).
 - `scripts/install.sh` / `install.ps1` install Fogu and set the PATH (test install.sh with a

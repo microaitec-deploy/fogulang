@@ -104,6 +104,47 @@ pub fn pin_cores(cpus: &[usize]) -> Result<(), String> {
     }
 }
 
+/// Pins the calling thread to one CPU (a `sync.Worker` with a `core`).
+pub fn pin_current_thread(cpu: usize) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        if cpu >= libc::CPU_SETSIZE as usize {
+            return Err(format!("CPU {} is out of range", cpu));
+        }
+        // SAFETY: a zeroed set with one CPU, applied to this thread (0).
+        let r = unsafe {
+            let mut set: libc::cpu_set_t = std::mem::zeroed();
+            libc::CPU_SET(cpu, &mut set);
+            libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set)
+        };
+        if r != 0 {
+            return Err(format!("cannot use CPU {}: {}", cpu, std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentThread() -> isize;
+            fn SetThreadAffinityMask(thread: isize, mask: usize) -> usize;
+        }
+        if cpu >= usize::BITS as usize {
+            return Err(format!("CPU {} is out of range", cpu));
+        }
+        // SAFETY: the pseudo-handle of this thread and a one-bit mask.
+        if unsafe { SetThreadAffinityMask(GetCurrentThread(), 1usize << cpu) } == 0 {
+            return Err(format!("cannot use CPU {}: {}", cpu, std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        let _ = cpu;
+        Err("choosing a CPU is not supported on this system".into())
+    }
+}
+
 /// `--cores` / FOGU_CORES: "4" (a number) or "0,2,3" (CPUs to use).
 pub fn configure_cores(spec: &str) -> Result<(), String> {
     let spec = spec.trim();

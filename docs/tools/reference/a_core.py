@@ -602,6 +602,7 @@ print(err != nil)
                     ("sync.Once()", "Once", "<code>do(fn)</code> runs <code>fn</code> only the first time."),
                     ("sync.Atomic(value)", "Atomic", "<code>get()</code> <code>set(v)</code> <code>add(n = 1)</code> → new value, <code>compareAndSwap(old, new)</code> → bool."),
                     ("sync.Semaphore(n)", "Semaphore", "<code>acquire()</code> (waits for a permit) <code>tryAcquire()</code> → bool <code>release()</code>, fields <code>available size</code>. Also limits <a class=\"underline\" href=\"#mod-vm\">fogu:vm</a> tasks (<code>{ semaphore }</code>)."),
+                    ("sync.Worker(file | code, { core }?)", "Worker · error", "A program of its own on another OS thread, with its own interpreter — on CPU <code>core</code> if given: the way to use several cores (<code>fg</code> tasks share one thread). <code>w.call(name, ...args)</code> calls a global function of the worker and waits without stopping the other tasks; arguments and results cross as JSON (numbers, texts, bools, nil, lists, maps) and nothing else is shared. A failure of the call comes back as an error value. <code>w.close()</code>, fields <code>core source closed</code>."),
                 ],
                 "example": r'''
 import sync from "fogu:sync"

@@ -21,6 +21,19 @@
 //! fg fn() { sem.acquire(); work(); sem.release() }()
 //! ```
 //!
+//! `fg` tasks share one thread (values are not thread-safe). To use other
+//! cores, a **worker** runs a program of its own, with its own interpreter,
+//! on another OS thread — on the CPU you choose:
+//!
+//! ```fogu
+//! const w = sync.Worker("./prime.fg", { core: 2 })?   // or code: sync.Worker("fn sq(n) { return n * n }")
+//! print(w.call("countPrimes", 2000000)?)            // runs on CPU 2; other tasks keep running meanwhile
+//! w.close()
+//! ```
+//!
+//! Arguments and results cross as JSON (numbers, texts, bools, nil, lists and
+//! maps): the two programs share nothing else.
+//!
 //! Tasks are cooperative, so blocking operations (`lock`, `wait`) wait by
 //! yielding to the other tasks: the interpreter asks the object for its wait
 //! condition (`FoguObject::wait_for`) and only then calls the method. Waiting
@@ -59,6 +72,9 @@ pub fn build() -> ModuleValue {
         max_args(a, 1, "sync.Atomic")?;
         Ok(NativeObjectRef::new(AtomicValue { value: a.first().cloned().unwrap_or(Value::Int(0)) }).to_value())
     }));
+    // Worker(file | code, { core }): its own interpreter on its own OS thread
+    #[cfg(not(target_family = "wasm"))]
+    e.insert("Worker".into(), nfn_var("Worker", 1, worker::new));
     ModuleValue {
         name: "fogu:sync".into(),
         exports: std::cell::RefCell::new(e),
@@ -331,5 +347,205 @@ impl FoguObject for AtomicValue {
     }
     fn methods(&self) -> Vec<&'static str> {
         vec!["get", "set", "add", "compareAndSwap"]
+    }
+}
+
+// ---------- Worker ----------
+
+/// `sync.Worker`: a Fogu program on another OS thread, with its own
+/// interpreter (so its own globals, modules and `fg` tasks). The caller's
+/// values never cross the thread: a call sends its arguments as JSON text and
+/// gets the result back the same way.
+#[cfg(not(target_family = "wasm"))]
+mod worker {
+    use std::path::{Path, PathBuf};
+    use std::rc::Rc;
+    use std::sync::mpsc::{channel, Sender};
+    use std::sync::{Arc, Mutex};
+
+    use crate::native::object::{FoguObject, NativeObjectRef, Poller};
+    use crate::native::util::max_args;
+    use crate::runtime::sched::{self, IoGuard};
+    use crate::runtime::value::{Value, ERR_VALUE_PREFIX};
+    use crate::runtime::{Interpreter, Lexer, Parser, MAIN_STACK};
+
+    type Slot = Arc<Mutex<Option<Result<String, String>>>>;
+
+    /// A call: the function, its arguments (a JSON array), where the result
+    /// goes and the guard that wakes the caller's scheduler when it is there.
+    struct Call {
+        name: String,
+        args: String,
+        slot: Slot,
+        guard: IoGuard,
+    }
+
+    pub struct WorkerValue {
+        tx: Option<Sender<Call>>,
+        core: Option<usize>,
+        source: String,
+    }
+
+    fn plain(e: String) -> String {
+        e.strip_prefix(ERR_VALUE_PREFIX).map(str::to_string).unwrap_or(e)
+    }
+
+    /// `sync.Worker(file | code, { core })`.
+    pub fn new(a: &[Value]) -> Result<Value, String> {
+        max_args(a, 2, "sync.Worker")?;
+        let Value::Str(src) = &a[0] else {
+            return Err(format!("sync.Worker(file | code, opts) expects a str, got '{}'", a[0].type_name()));
+        };
+        let core = match a.get(1) {
+            None | Some(Value::Nil) => None,
+            Some(Value::Map(m)) => match m.borrow().get("core") {
+                None | Some(Value::Nil) => None,
+                Some(Value::Int(n)) if *n >= 0 => Some(*n as usize),
+                Some(other) => return Err(format!("sync.Worker: 'core' must be an int >= 0, got {}", other.to_display_string())),
+            },
+            Some(other) => return Err(format!("sync.Worker: options must be a map, got '{}'", other.type_name())),
+        };
+        if let Some(c) = core {
+            let n = crate::native::rt::machine_cores();
+            if c >= n {
+                return Err(io_err!("sync.Worker: core {} does not exist (this machine has {}: 0..{})", c, n, n - 1));
+            }
+        }
+        // a path to a .fg file, or the code itself
+        let (code, file, dir) = if src.ends_with(".fg") && !src.contains('\n') {
+            let path = PathBuf::from(src.as_str());
+            let text = match crate::runtime::vfs::read(&path) {
+                Some(t) => t,
+                None => std::fs::read_to_string(&path).map_err(|e| io_err!("sync.Worker: {}: {}", src, e))?,
+            };
+            let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).map(Path::to_path_buf);
+            (text, src.to_string(), dir)
+        } else {
+            (src.to_string(), "<worker>".to_string(), None)
+        };
+        let dir = dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+        let (tx, rx) = channel::<Call>();
+        let (ready_tx, ready_rx) = channel::<Result<(), String>>();
+        let name = file.clone();
+        std::thread::Builder::new()
+            .name("fogu-worker".into())
+            .stack_size(MAIN_STACK)
+            .spawn(move || {
+                sched::init_main_stack(MAIN_STACK);
+                if let Some(c) = core {
+                    if let Err(e) = crate::native::rt::pin_current_thread(c) {
+                        let _ = ready_tx.send(Err(format!("sync.Worker: {}", e)));
+                        return;
+                    }
+                }
+                let interp = Interpreter::new();
+                interp.set_base_dir(&dir);
+                interp.set_main_file(&name);
+                // the program: its top level runs once, here
+                let loaded = Lexer::new(&code)
+                    .tokenize()
+                    .and_then(|t| Parser::new(t).parse_program())
+                    .map_err(|e| format!("{}: {}", name, e))
+                    .and_then(|p| {
+                        interp.embed_eval(&p).map(|_| ()).map_err(|e| {
+                            let (f, line) = interp.error_location();
+                            format!("{}:{}: {}", f, line, plain(e))
+                        })
+                    });
+                let ok = loaded.is_ok();
+                let _ = ready_tx.send(loaded);
+                if !ok {
+                    return;
+                }
+                let globals = interp.globals_env();
+                // one call at a time, until the Worker value is dropped or closed
+                for call in rx {
+                    let out = (|| {
+                        let f = interp.global(&call.name).ok_or_else(|| format!("the worker has no function '{}'", call.name))?;
+                        let args = match crate::native::json::parse_value(&call.args)? {
+                            Value::List(l) => l.borrow().clone(),
+                            _ => Vec::new(),
+                        };
+                        match interp.call_value(f, args, Rc::clone(&globals)) {
+                            Ok(Value::Error(e)) => Err(e.message.clone()),
+                            Ok(v) => Ok(crate::native::json::stringify_value(&v)),
+                            Err(e) => Err(plain(e)),
+                        }
+                    })();
+                    *call.slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(out);
+                    drop(call.guard); // wakes the caller, after the result is in place
+                }
+                sched::shutdown();
+            })
+            .map_err(|e| io_err!("sync.Worker: cannot start the thread: {}", e))?;
+        match ready_rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(io_err!("sync.Worker: {}", e)),
+            Err(_) => return Err(io_err!("sync.Worker: the worker thread stopped while starting")),
+        }
+        Ok(NativeObjectRef::new(WorkerValue { tx: Some(tx), core, source: file }).to_value())
+    }
+
+    impl FoguObject for WorkerValue {
+        fn name(&self) -> &str {
+            "Worker"
+        }
+
+        fn get(&self, field: &str) -> Option<Value> {
+            match field {
+                "core" => Some(self.core.map(|c| Value::Int(c as i64)).unwrap_or(Value::Nil)),
+                "source" => Some(Value::Str(self.source.clone().into())),
+                "closed" => Some(Value::Bool(self.tx.is_none())),
+                _ => None,
+            }
+        }
+
+        fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
+            match method {
+                // close(): the worker ends after the call it is running
+                "close" => {
+                    max_args(args, 0, "close")?;
+                    self.tx = None;
+                    Ok(Value::Nil)
+                }
+                other => Err(format!("method '{}' does not exist on Worker (call close)", other)),
+            }
+        }
+
+        /// `call(name, ...args)`: the caller waits without holding the
+        /// object, so its other tasks (and other calls) keep running.
+        fn start_async(&mut self, method: &str, args: &[Value]) -> Option<Result<Poller, String>> {
+            if method != "call" {
+                return None;
+            }
+            let r = (|| {
+                let name = match args.first() {
+                    Some(Value::Str(s)) => s.to_string(),
+                    _ => return Err("Worker.call(name, ...args) expects the name of a function of the worker".to_string()),
+                };
+                let tx = self.tx.as_ref().ok_or_else(|| io_err!("Worker.call: the worker is closed"))?;
+                let slot: Slot = Arc::new(Mutex::new(None));
+                let call = Call {
+                    name: name.clone(),
+                    args: crate::native::json::stringify_value(&crate::native::util::list(args[1..].to_vec())),
+                    slot: Arc::clone(&slot),
+                    guard: IoGuard::new(),
+                };
+                tx.send(call).map_err(|_| io_err!("Worker.call: the worker stopped"))?;
+                Ok(Box::new(move || {
+                    let out = slot.lock().unwrap_or_else(|p| p.into_inner()).take()?;
+                    Some(match out {
+                        Ok(json) => crate::native::json::parse_value(&json),
+                        Err(e) => Err(io_err!("Worker.call {}: {}", name, e)),
+                    })
+                }) as Poller)
+            })();
+            Some(r)
+        }
+
+        fn methods(&self) -> Vec<&'static str> {
+            vec!["call", "close"]
+        }
     }
 }

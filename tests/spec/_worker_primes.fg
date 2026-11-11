@@ -1,0 +1,31 @@
+// helper of sync_worker.fg: runs in a worker
+import system from "fogu:system"
+
+let calls = 0
+
+fn countPrimes(n) {
+    calls = calls + 1
+    let count = 0
+    for i in 2..n {
+        let prime = true
+        let d = 2
+        while d * d <= i {
+            if i % d == 0 { prime = false; break }
+            d = d + 1
+        }
+        if prime { count = count + 1 }
+    }
+    return count
+}
+
+fn describe(user) {
+    return { greeting: "hello " + user.name, tags: user.tags.len(), calls: calls }
+}
+
+fn fail(msg) {
+    return error("worker says: " + msg)
+}
+
+fn boom() {
+    return 1 / 0
+}

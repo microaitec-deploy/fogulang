@@ -1,0 +1,13 @@
+0 ./_worker_primes.fg false
+168
+{calls: 1, greeting: hello Ana, tags: 2}
+error: Worker.call fail: worker says: no
+error: Worker.call boom: division by zero
+error: Worker.call missing: the worker has no function 'missing'
+[2262, 4203, 6057] 1
+1
+144 nil
+true error: Worker.call: the worker is closed
+error: sync.Worker: ./_no_such_worker.fg: No such file or directory (os error 2)
+error: sync.Worker: <worker>: line 1:12: syntax error: expected a parameter, found LBrace
+error

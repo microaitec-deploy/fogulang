@@ -346,13 +346,31 @@ Unmaintained: `unsafe-libyaml` via serde_yaml → **replaced** by `serde_norway`
   lazy module table and `Fogu`); the rest is process creation, page faults of the 70 MB image and,
   where transparent huge pages are set to `always`, zeroing the allocator's first 2 MB pages.
 
+## Eighteenth round (deadlines in native code, direct ffi, workers, 0.7.4)
+
+- **Deadlines in native code**: one mechanism for stack overflow and timeouts — the stack limit
+  lives in `jit::Watch` (an `Arc` shared with a watchdog thread), read with an **atomic load**
+  (a plain load was hoisted out of a nested loop by Cranelift's redundant-load elimination: the
+  loop then never saw the limit change). Arming and firing hold `Watch::armed`, so a deadline
+  cannot stop the native code of another run. Functions and loops compiled for a run with a
+  deadline are separate specializations (`FnKey::checked`, `LoopKey::checked`): code without a
+  deadline has no check in its loops.
+- **Direct ffi**: while native code runs, the interpreter is marked (`NativeGuard`): a Fogu
+  callback run by a C function called from compiled code finds the interpreter through
+  `interpreter::native_interpreter()`, and the JIT is not re-entered until the native code returns.
+- **False deadlock**: see the changelog; found because `surrealkv.fg` failed about once in 20 runs.
+- **Workers**: the worker's top level runs once on its thread; calls are served one at a time
+  (its own `fg` tasks only run during a call).
+
 ## Known gaps
 
-- **Not in 0.7.4** (asked for, not done): a bytecode VM for non-numeric code (interpreted calls are
-  still ~150–300 ns); running Fogu code on several cores (values are `Rc`: tasks share one thread, so a
-  task cannot be given a core — `Fogu.cores` sizes and pins the I/O threads); the JIT under a
-  `fogu:vm` timeout (code with a deadline is interpreted: ~100× slower in numeric loops); a direct JIT call into `fogu:ffi`
-  functions (errno capture and callbacks need the interpreter's context).
+- **Not in 0.7.4**: a bytecode VM for non-numeric code (interpreted calls are still ~150–300 ns:
+  the tree-walker is at its limit; `docs/bytecode.md` has the design). A single `fg` task still
+  cannot be moved to another core (values are `Rc`): several cores are used through `sync.Worker`
+  (separate interpreters, JSON between them). `fogu:ffi` functions that take text or buffers, or
+  return nothing, are still called through the interpreter. The bundle of a standalone executable
+  is parsed and hashed at every start (not measurable for small programs; it grows with embedded
+  assets) — changing it needs a trailer the prebuilt desktop hosts can still read.
 
 - Exports are values taken when the `export` runs, not live bindings: `export let n = 0` (or
   `export { n }`) followed by `n += 1` does not change what importers see. A WebAssembly bundle
