@@ -189,13 +189,19 @@ in `fogu:ffi` signatures. Compiled code checks and converts them natively.
 | Precedence (high → low) | |
 | --- | --- |
 | `()` `[]` `.` `?.` | call, index, field, optional access |
-| `!` `-` `<-` | unary, channel receive |
+| `!` `-` `~` `<-` | unary (`~x` flips the bits of an int), channel receive |
 | `**` | power (right-associative) |
-| `*` `/` `%` · `+` `-` | **checked** arithmetic (overflow and division by zero are errors) |
+| `*` `/` `%` `<<` `>>` `&` | **checked** arithmetic (overflow and division by zero are errors); shifts and bit-and of ints |
+| `+` `-` `\|` `^` | addition, subtraction; bit-or and bit-xor of ints |
 | `<` `<=` `>` `>=` · `==` `!=` | comparison (always false with NaN) |
 | `&&` · `\|\|` `??` | logical and nil-coalescing |
 | `..` | half-open range `[a, b)` |
-| `=` `+=` `-=` `*=` `/=` `%=` | assignment (also to fields and indices) |
+| `=` `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` | assignment (also to fields and indices) |
+
+Bit operators work on ints (64-bit two's complement) with Go's precedence, so
+`flags & MASK == 0` needs no parentheses. `>>` keeps the sign (`math.ushr` fills
+with zeros); a shift by 64 or more shifts everything out and a negative count is
+an error. With a sized conversion: `uint32(h << 5 ^ c)`.
 
 ### Control flow
 

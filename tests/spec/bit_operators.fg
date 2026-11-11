@@ -1,0 +1,65 @@
+// Bit operators on ints: & | ^ ~ << >> (precedence as in Go)
+
+print(12 & 10, 12 | 10, 12 ^ 10, ~0, ~5)
+print(1 << 10, 1 << 63, 1 << 64, -1 << 4)
+print(-16 >> 2, 16 >> 2, -1 >> 100, 1 >> 100)
+
+// `<<` `>>` `&` bind like `*`; `|` `^` like `+`; all tighter than comparisons
+print(1 + 2 << 3, 1 | 2 * 4, 6 & 3 == 2, 1 << 2 + 1, 5 ^ 1 | 8)
+
+// flags, with compound assignment
+const READ = 1
+const WRITE = 1 << 1
+const EXEC = 1 << 2
+let mode = READ | EXEC
+print(mode, mode & WRITE != 0, mode & EXEC != 0)
+mode |= WRITE
+mode &= ~READ
+mode ^= EXEC
+print(mode)
+let s = 1
+s <<= 8
+s >>= 3
+print(s)
+
+// `|` still separates alternatives in patterns and types
+fn kind(n: int | str): str {
+    return match n {
+        1 | 2 | 3 => "small"
+        "a" | "b" => "letter"
+        _ => "other"
+    }
+}
+print(kind(2), kind("b"), kind(9))
+
+// `>>` still closes nested type arguments
+fn first(xs: list<list<int>>): int { return xs[0][0] }
+const grid: map<str, list<int>> = { a: [7] }
+print(first([[5]]), grid.a[0])
+
+// with sized conversions: a 32-bit hash, compiled
+fn fnv(n: int): uint32 {
+    let h = 2166136261
+    for i in 0..n {
+        h = uint32((h ^ i & 255) * 16777619)
+    }
+    return h
+}
+print(fnv(10), fnv(100000))
+
+// xorshift in a hot loop
+let x = 88172645463325252
+let acc = 0
+for i in 0..1000 {
+    x ^= x << 13
+    x ^= (x >> 7) & 144115188075855871
+    x ^= x << 17
+    acc ^= x
+}
+print(x, acc)
+
+fn rot(v, k) { return (v << k | v >> 64 - k & (1 << k) - 1) }
+print(rot(1, 4), rot(-9223372036854775807 - 1, 1))
+
+// errors
+print(1 << -1)

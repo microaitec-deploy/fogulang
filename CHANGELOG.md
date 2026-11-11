@@ -19,6 +19,10 @@ be incompatible changes (spec §75).
   conversion) with the interpreter's messages. The same names work in `fogu:types`
   (`types.uint8()`, `"int32"` in a spec, with coercion from text), in `fogu:ffi` signatures and as
   buffer accessors (`buf.readUint16(0)`, `buf.writeFloat32(4, x)`).
+- **Bit operators** on ints: `&`, `|`, `^`, `~`, `<<`, `>>` and `&= |= ^= <<= >>=`, with Go's
+  precedence (`<< >> &` like `*`; `| ^` like `+`). `>>` keeps the sign; a negative shift count is an
+  error; compiled natively. `|` still separates alternatives in patterns and types, and `>>` still
+  closes nested type arguments (`list<list<int>>`).
 - `fogu:math` bit operations: `band bor bxor bnot shl shr ushr popcount clz ctz` (total: no shift
   count is an error), called natively by compiled code.
 - `crypto.generateKeyPair(algorithm, { bits })`: PEM key pairs — `ed25519`, `p256`, `p384`, `rsa`

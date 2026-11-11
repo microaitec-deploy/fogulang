@@ -2343,6 +2343,7 @@ impl<'a, 'f> Gen<'a, 'f> {
                     }
                     (UnaryOp::Neg, Ty::Float) => Ok((self.b.ins().fneg(v), Ty::Float)),
                     (UnaryOp::Not, Ty::Bool) => Ok((self.b.ins().bxor_imm_s(v, 1), Ty::Bool)),
+                    (UnaryOp::BitNot, Ty::Int) => Ok((self.b.ins().bnot(v), Ty::Int)),
                     // int/float are always truthy (only false/nil are falsy)
                     (UnaryOp::Not, Ty::Int) | (UnaryOp::Not, Ty::Float) => {
                         Ok((self.b.ins().iconst(types::I8, 0), Ty::Bool))
@@ -2806,6 +2807,35 @@ impl<'a, 'f> Gen<'a, 'f> {
                 let e = self.equality(a, at, b, bt)?;
                 return Ok((self.b.ins().bxor_imm_s(e, 1), Ty::Bool));
             }
+            BitAnd | BitOr | BitXor | Shl | Shr => {
+                if (at, bt) != (Ty::Int, Ty::Int) {
+                    // the interpreter reports it
+                    return bail(format!("bit operator between {:?} and {:?}", at, bt));
+                }
+                let v = match op {
+                    BitAnd => self.b.ins().band(a, b),
+                    BitOr => self.b.ins().bor(a, b),
+                    BitXor => self.b.ins().bxor(a, b),
+                    Shl => {
+                        let neg = self.b.ins().icmp_imm_s(IntCC::SignedLessThan, b, 0);
+                        self.trap_if(neg, ops::CODE_SHIFT);
+                        // the machine shift takes the count modulo 64: 64 or more is 0
+                        let r = self.b.ins().ishl(a, b);
+                        let lim = self.b.ins().iconst(types::I64, 63);
+                        let big = self.b.ins().icmp(IntCC::UnsignedGreaterThan, b, lim);
+                        let z = self.b.ins().iconst(types::I64, 0);
+                        self.b.ins().select(big, z, r)
+                    }
+                    _ => {
+                        let neg = self.b.ins().icmp_imm_s(IntCC::SignedLessThan, b, 0);
+                        self.trap_if(neg, ops::CODE_SHIFT);
+                        let lim = self.b.ins().iconst(types::I64, 63);
+                        let n = self.b.ins().umin(b, lim);
+                        self.b.ins().sshr(a, n)
+                    }
+                };
+                return Ok((v, Ty::Int));
+            }
             _ => {}
         }
 
@@ -2846,7 +2876,7 @@ impl<'a, 'f> Gen<'a, 'f> {
                     Ok((self.float_arith(op, a, b), Ty::Float))
                 }
             }
-            Eq | Ne => unreachable!(),
+            Eq | Ne | BitAnd | BitOr | BitXor | Shl | Shr => unreachable!(),
         }
     }
 

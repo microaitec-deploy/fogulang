@@ -62,7 +62,12 @@ pub enum Token {
     GtEq,
     AndAnd,
     OrOr,
-    Pipe,             // |
+    Pipe,             // |  (bit or; alternatives in types and patterns)
+    Amp,              // &
+    Caret,            // ^
+    Tilde,            // ~
+    Shl,              // <<
+    Shr,              // >>
     PipeArrow,        // ->
     FatArrow,         // =>
     Question,         // ?
@@ -75,6 +80,11 @@ pub enum Token {
     StarEq,
     SlashEq,
     PercentEq,
+    AmpEq,
+    PipeEq,
+    CaretEq,
+    ShlEq,
+    ShrEq,
 
     // Delimiters
     LParen,

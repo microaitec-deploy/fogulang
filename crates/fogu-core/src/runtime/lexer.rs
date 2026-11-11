@@ -215,35 +215,79 @@ impl Lexer {
                             self.advance();
                             Token::LeftArrow
                         }
+                        Some('<') => {
+                            self.advance();
+                            if self.peek() == Some('=') {
+                                self.advance();
+                                Token::ShlEq
+                            } else {
+                                Token::Shl
+                            }
+                        }
                         _ => Token::Lt,
                     }
                 }
                 '>' => {
                     self.advance();
-                    if self.peek() == Some('=') {
-                        self.advance();
-                        Token::GtEq
-                    } else {
-                        Token::Gt
+                    match self.peek() {
+                        Some('=') => {
+                            self.advance();
+                            Token::GtEq
+                        }
+                        // `>>` also closes two type argument lists (`list<list<int>>`):
+                        // the parser splits it there
+                        Some('>') => {
+                            self.advance();
+                            if self.peek() == Some('=') {
+                                self.advance();
+                                Token::ShrEq
+                            } else {
+                                Token::Shr
+                            }
+                        }
+                        _ => Token::Gt,
                     }
                 }
                 '&' => {
                     self.advance();
-                    if self.peek() == Some('&') {
-                        self.advance();
-                        Token::AndAnd
-                    } else {
-                        return self.err("expected '&' after '&'");
+                    match self.peek() {
+                        Some('&') => {
+                            self.advance();
+                            Token::AndAnd
+                        }
+                        Some('=') => {
+                            self.advance();
+                            Token::AmpEq
+                        }
+                        _ => Token::Amp,
                     }
                 }
                 '|' => {
                     self.advance();
-                    if self.peek() == Some('|') {
-                        self.advance();
-                        Token::OrOr
-                    } else {
-                        Token::Pipe
+                    match self.peek() {
+                        Some('|') => {
+                            self.advance();
+                            Token::OrOr
+                        }
+                        Some('=') => {
+                            self.advance();
+                            Token::PipeEq
+                        }
+                        _ => Token::Pipe,
                     }
+                }
+                '^' => {
+                    self.advance();
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        Token::CaretEq
+                    } else {
+                        Token::Caret
+                    }
+                }
+                '~' => {
+                    self.advance();
+                    Token::Tilde
                 }
                 '(' => {
                     self.advance();

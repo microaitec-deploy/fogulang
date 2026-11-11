@@ -32,14 +32,14 @@ const KEYWORDS: &[&str] = &[
 /// Operators, longest first.
 const OPS: &[&str] = &[
     "...", "**=", "<<=", ">>=", "==", "!=", "<=", ">=", "&&", "||", "=>", "??", "?.", "..", "**", "+=", "-=", "*=",
-    "/=", "%=", "<-", "->", "<<", ">>", "::", "+", "-", "*", "/", "%", "=", "<", ">", "!", "?", ".", ",", ":", ";",
+    "/=", "%=", "&=", "|=", "^=", "<-", "->", "<<", ">>", "::", "+", "-", "*", "/", "%", "=", "<", ">", "!", "?", ".", ",", ":", ";",
     "(", ")", "[", "]", "{", "}", "&", "|", "^", "~", "@", "#", "$",
 ];
 
 /// Binary operators that get a space on both sides.
 const BINARY: &[&str] = &[
     "=", "==", "!=", "<=", ">=", "&&", "||", "=>", "??", "**", "+=", "-=", "*=", "/=", "%=", "**=", "*", "/", "%",
-    "<<", ">>", "<<=", ">>=", "|", "&", "^", "->",
+    "<<", ">>", "<<=", ">>=", "&=", "|=", "^=", "|", "&", "^", "->",
 ];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -226,7 +226,7 @@ fn spaced(prev: &Piece, cur: &Piece, prev2: Option<&Piece>) -> bool {
     if prev.kind == Kind::Op && matches!(p, "(" | "[" | "." | "?." | ".." | "...") {
         return false;
     }
-    if prev.kind == Kind::Op && p == "!" {
+    if prev.kind == Kind::Op && matches!(p, "!" | "~") {
         return false;
     }
     // unary minus/plus: after an operator, a keyword or the line start
@@ -246,6 +246,14 @@ fn spaced(prev: &Piece, cur: &Piece, prev2: Option<&Piece>) -> bool {
     }
     if cur.kind == Kind::Op && t == "{" {
         return !(prev.kind == Kind::Op && matches!(p, "(" | "[" | "$"));
+    }
+    // `>>` shifts, but it also closes two type argument lists (`list<list<int>>`):
+    // written without a space before it, it stays that way (like `<` and `>`)
+    if cur.kind == Kind::Op && t == ">>" && !cur.space_before {
+        return false;
+    }
+    if prev.kind == Kind::Op && p == ">>" && !prev.space_before && !(cur.kind == Kind::Op && BINARY.contains(&t)) {
+        return cur.space_before;
     }
     // binary operators
     if cur.kind == Kind::Op && (BINARY.contains(&t) || (matches!(t, "-" | "+") && ends_value(prev))) {

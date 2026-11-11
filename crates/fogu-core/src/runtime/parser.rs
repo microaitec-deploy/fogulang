@@ -21,6 +21,9 @@ pub struct Parser {
     type_params: Vec<Vec<String>>,
     /// Names exported so far, with their line (duplicate exports are errors).
     exported: Vec<(String, u32)>,
+    /// Inside a `match` pattern `|` separates alternatives: it is not the
+    /// bit-or operator there.
+    no_pipe: bool,
 }
 
 impl Parser {
@@ -30,6 +33,7 @@ impl Parser {
             pos: 0,
             type_params: Vec::new(),
             exported: Vec::new(),
+            no_pipe: false,
         }
     }
 
@@ -72,6 +76,21 @@ impl Parser {
         } else {
             false
         }
+    }
+
+    /// The `>` that closes a type argument list. The lexer reads `>>` as one
+    /// token (the shift operator): here it is two closers, one of them taken.
+    fn close_angle(&mut self, msg: &str) -> Result<(), String> {
+        let half = match self.peek() {
+            Token::Shr => Some(Token::Gt),
+            Token::ShrEq => Some(Token::GtEq),
+            _ => None,
+        };
+        if let (Some(rest), Some(t)) = (half, self.tokens.get_mut(self.pos)) {
+            t.tok = rest;
+            return Ok(());
+        }
+        self.expect(Token::Gt, msg).map(|_| ())
     }
 
     /// Is the current token on a later line than the previous token?
@@ -285,7 +304,7 @@ impl Parser {
                     break;
                 }
             }
-            self.expect(Token::Gt, "expected '>' after the type arguments")?;
+            self.close_angle("expected '>' after the type arguments")?;
         }
         Ok(args)
     }
@@ -304,7 +323,7 @@ impl Parser {
                     break;
                 }
             }
-            self.expect(Token::Gt, "expected '>' after the type parameters")?;
+            self.close_angle("expected '>' after the type parameters")?;
         }
         Ok(params)
     }
@@ -473,7 +492,7 @@ impl Parser {
                                     match self.peek_n(j) {
                                         Token::FatArrow => return true,
                                         Token::Ident(_) | Token::Nil | Token::Fn | Token::Chan
-                                        | Token::Lt | Token::Gt | Token::Pipe | Token::Question
+                                        | Token::Lt | Token::Gt | Token::Shr | Token::Pipe | Token::Question
                                         | Token::LParen | Token::RParen | Token::Comma => j += 1,
                                         _ => return false,
                                     }
@@ -875,7 +894,10 @@ impl Parser {
 
         // Literal patterns: use the `parse_or` level so as not to consume `|`
         // or `=>`, and without assignment.
-        Ok(Pattern::Literal(self.parse_equality()?))
+        let saved = std::mem::replace(&mut self.no_pipe, true);
+        let lit = self.parse_equality();
+        self.no_pipe = saved;
+        Ok(Pattern::Literal(lit?))
     }
 
     // ---------- import / export ----------
@@ -1085,6 +1107,11 @@ impl Parser {
             Token::StarEq => Some(Some(BinaryOp::Mul)),
             Token::SlashEq => Some(Some(BinaryOp::Div)),
             Token::PercentEq => Some(Some(BinaryOp::Rem)),
+            Token::AmpEq => Some(Some(BinaryOp::BitAnd)),
+            Token::PipeEq => Some(Some(BinaryOp::BitOr)),
+            Token::CaretEq => Some(Some(BinaryOp::BitXor)),
+            Token::ShlEq => Some(Some(BinaryOp::Shl)),
+            Token::ShrEq => Some(Some(BinaryOp::Shr)),
             _ => None,
         };
         if let Some(op) = op {
@@ -1204,6 +1231,10 @@ impl Parser {
             } else if self.check(&Token::Minus) && !self.nl_before() {
                 self.advance();
                 BinaryOp::Sub
+            } else if !self.no_pipe && self.matches(&Token::Pipe) {
+                BinaryOp::BitOr
+            } else if self.matches(&Token::Caret) {
+                BinaryOp::BitXor
             } else {
                 break;
             };
@@ -1226,6 +1257,12 @@ impl Parser {
                 BinaryOp::Div
             } else if self.matches(&Token::Percent) {
                 BinaryOp::Rem
+            } else if self.matches(&Token::Shl) {
+                BinaryOp::Shl
+            } else if self.matches(&Token::Shr) {
+                BinaryOp::Shr
+            } else if self.matches(&Token::Amp) {
+                BinaryOp::BitAnd
             } else {
                 break;
             };
@@ -1276,6 +1313,13 @@ impl Parser {
             let right = self.parse_unary()?;
             return Ok(Expr::Unary {
                 op: UnaryOp::Not,
+                right: Box::new(right),
+            });
+        }
+        if self.matches(&Token::Tilde) {
+            let right = self.parse_unary()?;
+            return Ok(Expr::Unary {
+                op: UnaryOp::BitNot,
                 right: Box::new(right),
             });
         }
@@ -1433,6 +1477,7 @@ impl Parser {
                     match self.advance() {
                         Token::Lt => depth += 1,
                         Token::Gt => depth -= 1,
+                        Token::Shr => depth -= 2,
                         Token::Eof => return self.fail("expected '>'"),
                         _ => {}
                     }

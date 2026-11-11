@@ -319,13 +319,14 @@ print(`waiting ${d}`)      // waiting 250ms</script>
           <thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Precedence (high → low)</th><th class="py-2">Meaning</th></tr></thead>
           <tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60">
             <tr><td class="py-2 pr-4"><code>()</code> <code>[]</code> <code>.</code> <code>?.</code></td><td>call, index, field, optional access</td></tr>
-            <tr><td class="py-2 pr-4"><code>!</code> <code>-</code> <code>&lt;-</code></td><td>negation, unary minus, channel receive</td></tr>
+            <tr><td class="py-2 pr-4"><code>!</code> <code>-</code> <code>~</code> <code>&lt;-</code></td><td>negation, unary minus, bit complement of an int, channel receive</td></tr>
             <tr><td class="py-2 pr-4"><code>**</code></td><td>power (right-associative)</td></tr>
-            <tr><td class="py-2 pr-4"><code>*</code> <code>/</code> <code>%</code> · <code>+</code> <code>-</code></td><td>checked arithmetic (overflow and division by zero are errors)</td></tr>
+            <tr><td class="py-2 pr-4"><code>*</code> <code>/</code> <code>%</code> <code>&lt;&lt;</code> <code>&gt;&gt;</code> <code>&amp;</code></td><td>checked arithmetic (overflow and division by zero are errors); shifts and bit-and of ints</td></tr>
+            <tr><td class="py-2 pr-4"><code>+</code> <code>-</code> <code>|</code> <code>^</code></td><td>addition, subtraction; bit-or and bit-xor of ints</td></tr>
             <tr><td class="py-2 pr-4"><code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> · <code>==</code> <code>!=</code></td><td>comparison</td></tr>
             <tr><td class="py-2 pr-4"><code>&amp;&amp;</code> · <code>||</code> <code>??</code></td><td>logical; <code>a ?? b</code> returns <code>b</code> if <code>a</code> is <code>nil</code></td></tr>
             <tr><td class="py-2 pr-4"><code>..</code></td><td>half-open range <code>[a, b)</code></td></tr>
-            <tr><td class="py-2 pr-4"><code>=</code> <code>+=</code> <code>-=</code> <code>*=</code> <code>/=</code> <code>%=</code></td><td>assignment (also to fields and indices)</td></tr>
+            <tr><td class="py-2 pr-4"><code>=</code> <code>+=</code> <code>-=</code> <code>*=</code> <code>/=</code> <code>%=</code> <code>&amp;=</code> <code>|=</code> <code>^=</code> <code>&lt;&lt;=</code> <code>&gt;&gt;=</code></td><td>assignment (also to fields and indices)</td></tr>
           </tbody>
         </table>
       </div>
@@ -335,6 +336,20 @@ print(u?.address?.city)                     // Porto
 print(nobody?.address?.city)                // nil — the whole chain is nil
 print(nobody?.name.upper() ?? "anonymous")  // anonymous
 print(7 / 2, 7 % 2, 2 ** 3 ** 2)            // 3 1 512</script>
+      <p>Bit operators work on ints (64-bit two's complement) and have Go's precedence: <code>&lt;&lt;</code>,
+      <code>&gt;&gt;</code> and <code>&amp;</code> bind like <code>*</code>, <code>|</code> and <code>^</code> like
+      <code>+</code>, all tighter than comparisons — <code>flags &amp; MASK == 0</code> needs no parentheses.
+      <code>&gt;&gt;</code> keeps the sign (<code>math.ushr</code> fills with zeros); a shift by 64 or more shifts
+      everything out and a negative count is an error.</p>
+      <script type="text/x-fogu">const READ = 1
+const WRITE = 1 << 1
+const EXEC = 1 << 2
+let mode = READ | EXEC
+print(mode, mode & WRITE != 0, mode & EXEC != 0)   // 5 false true
+mode |= WRITE
+mode &= ~READ
+print(mode, 12 ^ 10, -16 >> 2, ~0)                 // 6 6 -4 -1
+print(uint32(2166136261 * 16777619) ^ 255)         // with a sized conversion: 84696544</script>
     </section>
 
     <section id="control" data-group="Language" data-title="Control flow" class="scroll-mt-20 mt-16">

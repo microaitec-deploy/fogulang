@@ -1477,6 +1477,10 @@ impl Interpreter {
                 )),
             },
             UnaryOp::Not => Ok(Value::Bool(!r.is_truthy())),
+            UnaryOp::BitNot => match r {
+                Value::Int(n) => Ok(Value::Int(!n)),
+                other => Err(format!("operator '~' not applicable to '{}'", other.type_name())),
+            },
         }
     }
 
@@ -2668,6 +2672,25 @@ fn eval_binary(l: Value, op: BinaryOp, r: Value) -> Result<Value, String> {
         Eq => return Ok(Value::Bool(values_equal(&l, &r))),
         Ne => return Ok(Value::Bool(!values_equal(&l, &r))),
         Lt | Le | Gt | Ge => return compare_values(l, op, r),
+        // bits: ints only
+        BitAnd | BitOr | BitXor | Shl | Shr => {
+            return match (&l, &r) {
+                (Value::Int(a), Value::Int(b)) => match op {
+                    BitAnd => Ok(a & b),
+                    BitOr => Ok(a | b),
+                    BitXor => Ok(a ^ b),
+                    Shl => ops::int_shl(*a, *b),
+                    _ => ops::int_shr(*a, *b),
+                }
+                .map(Value::Int)
+                .map_err(|c| ops::code_message(c).to_string()),
+                _ => Err(format!(
+                    "operator not applicable between '{}' and '{}'",
+                    l.type_name(),
+                    r.type_name()
+                )),
+            };
+        }
         _ => {}
     }
 

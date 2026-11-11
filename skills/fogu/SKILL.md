@@ -63,6 +63,8 @@ const add = fn(a, b) { return a + b }                       // anonymous functio
 fn total(...xs) { return xs.reduce((a, b) => a + b, 0) }    // variadic
 ```
 
+- **Bit operators** on ints: `& | ^ ~ << >>` (and `&= |= ^= <<= >>=`), with Go's
+  precedence — `flags & MASK == 0` needs no parentheses. `>>` keeps the sign.
 - **Only `false` and `nil` are falsy.** `0`, `""`, `[]` and `{}` are truthy.
 - **No implicit conversions**: `"n=" + 1` is an error; write `"n=" + str(1)` or a
   template string. Convert with `int(x)`, `float(x)`, `str(x)`.

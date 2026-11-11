@@ -173,6 +173,8 @@ pub enum Expr {
 pub enum UnaryOp {
     Neg,
     Not,
+    /// `~x`: every bit of an int flipped.
+    BitNot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,6 +191,19 @@ pub enum BinaryOp {
     Le,
     Gt,
     Ge,
+    /// `&` `|` `^` `<<` `>>`: bits of two ints (`>>` keeps the sign).
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+}
+
+impl BinaryOp {
+    /// Is it one of the bit operators (ints only)?
+    pub fn is_bitwise(self) -> bool {
+        matches!(self, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

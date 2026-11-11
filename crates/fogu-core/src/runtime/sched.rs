@@ -36,6 +36,7 @@ pub const TASK_STACK: usize = 2 * 1024 * 1024;
 const POOL_MAX: usize = 256;
 /// What stays resident in a pooled stack (its top: where the next task
 /// starts); deeper pages are returned to the system.
+#[cfg_attr(not(unix), allow(dead_code))]
 const POOL_KEEP: usize = 64 * 1024;
 /// Safety margin before the end of the stack.
 const STACK_MARGIN: usize = 512 * 1024;

@@ -219,6 +219,14 @@ fn binop(l: Ty, op: BinaryOp, r: Ty) -> Result<Ty, String> {
     if l == Any || r == Any {
         return Ok(Any);
     }
+    if op.is_bitwise() {
+        return match (l, r) {
+            (Int, Int) => Ok(Int),
+            // `Num` may be an int: only known at run time
+            (Int | Num, Int | Num) => Ok(Any),
+            _ => Err(format!("operator not applicable between '{}' and '{}'", l.name(), r.name())),
+        };
+    }
     let between = || Err(format!("operator not applicable between '{}' and '{}'", l.name(), r.name()));
     match (l, r) {
         (Int, Int) => Ok(Int),
@@ -1186,6 +1194,13 @@ impl Resolver<'_> {
                 let t = self.expr_ty(right)?;
                 match op {
                     UnaryOp::Not => Ty::Bool,
+                    UnaryOp::BitNot => match t {
+                        Ty::Any | Ty::Int | Ty::Num => t,
+                        other => {
+                            self.report(format!("operator '~' not applicable to '{}'", other.name()));
+                            Ty::Any
+                        }
+                    },
                     UnaryOp::Neg => match t {
                         Ty::Any | Ty::Int | Ty::Float | Ty::Num | Ty::Duration => t,
                         other => {

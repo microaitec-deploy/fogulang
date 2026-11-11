@@ -7,6 +7,7 @@ pub const ERR_DIV_ZERO: &str = "division by zero";
 pub const ERR_NEG_POW: &str = "negative integer exponent in '**' (use float)";
 pub const ERR_STACK: &str = "stack overflow (recursion too deep)";
 pub const ERR_MATCH: &str = "non-exhaustive match: no arm matched";
+pub const ERR_SHIFT: &str = "negative shift count";
 
 /// Error codes written by native code into `JitCtx::err`.
 pub const CODE_OVERFLOW: i64 = 1;
@@ -14,6 +15,7 @@ pub const CODE_DIV_ZERO: i64 = 2;
 pub const CODE_NEG_POW: i64 = 3;
 pub const CODE_STACK: i64 = 4;
 pub const CODE_MATCH: i64 = 5;
+pub const CODE_SHIFT: i64 = 6;
 
 pub fn code_message(code: i64) -> &'static str {
     match code {
@@ -22,6 +24,7 @@ pub fn code_message(code: i64) -> &'static str {
         CODE_NEG_POW => ERR_NEG_POW,
         CODE_STACK => ERR_STACK,
         CODE_MATCH => ERR_MATCH,
+        CODE_SHIFT => ERR_SHIFT,
         c if c >= CODE_CUSTOM => CUSTOM.with(|m| m.borrow().get((c - CODE_CUSTOM) as usize).copied()).unwrap_or("unknown error in native code"),
         _ => "unknown error in native code",
     }
@@ -42,6 +45,23 @@ pub fn int_pow(a: i64, b: i64) -> Result<i64, i64> {
             }
             a.checked_pow(b as u32).ok_or(CODE_OVERFLOW)
         }
+    }
+}
+
+/// `a << n` (as in Go: bits shifted out are lost, 64 or more gives 0).
+pub fn int_shl(a: i64, n: i64) -> Result<i64, i64> {
+    match n {
+        0..=63 => Ok(((a as u64) << n) as i64),
+        64.. => Ok(0),
+        _ => Err(CODE_SHIFT),
+    }
+}
+
+/// `a >> n`, keeping the sign (64 or more gives 0 or -1).
+pub fn int_shr(a: i64, n: i64) -> Result<i64, i64> {
+    match n {
+        0.. => Ok(a >> n.min(63)),
+        _ => Err(CODE_SHIFT),
     }
 }
 

@@ -351,8 +351,7 @@ Unmaintained: `unsafe-libyaml` via serde_yaml → **replaced** by `serde_norway`
 - **Not in 0.7.4** (asked for, not done): a bytecode VM for non-numeric code (interpreted calls are
   still ~150–300 ns); running Fogu code on several cores (values are `Rc`: tasks share one thread, so a
   task cannot be given a core — `Fogu.cores` sizes and pins the I/O threads); the JIT under a
-  `fogu:vm` timeout (code with a deadline is interpreted: ~100× slower in numeric loops); bit
-  operators as syntax (`&`, `|`, `<<` — today `math.band`…); a direct JIT call into `fogu:ffi`
+  `fogu:vm` timeout (code with a deadline is interpreted: ~100× slower in numeric loops); a direct JIT call into `fogu:ffi`
   functions (errno capture and callbacks need the interpreter's context).
 
 - Exports are values taken when the `export` runs, not live bindings: `export let n = 0` (or
