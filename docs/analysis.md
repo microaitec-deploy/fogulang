@@ -384,9 +384,60 @@ review; none is new in 0.7.4):
   `sync.Worker`) can hide a deadlock on another until it finishes (the worker's own call is
   discounted with `sched::set_served`).
 
+## Nineteenth round (under 1.5× of Go on every benchmark, 0.7.5)
+
+Goal: no program of `bench/` slower than 1.5× its Go version; nothing slower than 0.7.4. How each
+cost was found matters as much as the fix, because none of them showed in a profile of the
+interpreter:
+
+- **`getrusage` hides it.** User + system time of the short benchmarks was *below* Go's while the
+  wall time was 1.5–2× above. `CLOCK_PROCESS_CPUTIME_ID` read inside the process agreed with the
+  wall clock: only wall time was used from then on (`startup-trace` feature: `runtime::mark`).
+- **Transparent huge pages (`always`) at start-up**: a program with nothing but `mimalloc` as its
+  allocator reached `main` 1 ms later than the same program without it; `prctl(PR_SET_THP_DISABLE)`
+  removed the difference. Each first write to a fresh region cleared a 2 MiB page. Turning them
+  off for the whole process made `maps`, `records` and `sort` 10–15% slower, hence the scheme of
+  `toolkit::startup`: off in a constructor that runs before the allocator, on again when the
+  interpreter starts, except for 8 MiB around the first heap allocations (`MADV_NOHUGEPAGE`).
+- **The second thread**: 0.2 ms to create, and at exit the kernel had to wake the main thread
+  (asleep in `join`) to end it — 0.35 ms after a 1 ms run, 0.8–1.7 ms after a 6 ms one (its CPU
+  had gone idle). The interpreter now runs on the main thread, on a 1 GiB `corosensei` stack.
+- **Dynamic OpenSSL costs 0.5 ms of start** (measure with the release's static link: the
+  `X86_64_UNKNOWN_LINUX_GNU_OPENSSL_*` variables of `server/publish-all.sh`).
+- **Cranelift's loop-invariant code motion depends on branch order.** Its elaboration pass keeps a
+  stack of the loops it is in and pops a loop at the first block outside of it; it visits the
+  second target of a `brif` first. With `brif c, body, exit` the exit came first and the body was
+  placed with no loop on the stack: no hoisting, and pure values defined before the loop were
+  re-evaluated at their use inside it. Found by running the dumped IR through
+  `cranelift-codegen` with `trace-log`. `jit::order_branches` rewrites every branch whose second
+  target is in fewer loops than its first.
+- **Division by a constant** was an `idiv`; **calls** paid a frame, a stack check and an error
+  check each: magic-number division (`jit::div_magic`, tested against the instruction) and
+  Cranelift's inliner fed with the IR of small functions (`Inner::bodies`).
+- **Strings**: each piece of a `split` was two allocations and two pointers away. Inline storage
+  for ≤ 15 bytes (`fstr.rs`: an enum whose length byte is the niche, so `Str` is 16 bytes and
+  `Value` stays 24) removed the allocations of the benchmark and of most keys and words.
+
+Minimum of 80 interleaved runs (20 for the last three), wall time in ms, same machine (WSL2,
+Ryzen 7 5700U), `lite` build (`--no-default-features`, static OpenSSL):
+
+| benchmark | 0.7.4 | 0.7.5 | Go | 0.7.5 / Go |
+|---|---:|---:|---:|---:|
+| startup | 3.8 | 1.8 | 2.0 | 0.90 |
+| fib | 21.6 | 13.7 | 13.6 | 1.01 |
+| loop | 34.6 | 27.3 | 22.6 | 1.21 |
+| mandel | 13.4 | 8.7 | 6.6 | 1.32 |
+| strings | 59.5 | 35.3 | 35.8 | 0.99 |
+| maps | 174.0 | 165.0 | 174.5 | 0.95 |
+| records | 118.4 | 81.9 | 150.6 | 0.54 |
+| sort | 31.0 | 27.2 | 39.8 | 0.68 |
+
+What is left of the difference in `mandel` and `loop` is the compilation itself (0.5–0.8 ms per
+loop, 0.1 ms to start the JIT) and the overflow checks Go does not make.
+
 ## Known gaps
 
-- **Not in 0.7.4**: a bytecode VM for non-numeric code (interpreted calls are still ~150–300 ns:
+- **Not in 0.7.5**: a bytecode VM for non-numeric code (interpreted calls are still ~150–300 ns:
   the tree-walker is at its limit; `docs/bytecode.md` has the design). A single `fg` task still
   cannot be moved to another core (values are `Rc`): several cores are used through `sync.Worker`
   (separate interpreters, JSON between them). `fogu:ffi` functions that take text or buffers, or

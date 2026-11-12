@@ -6,6 +6,52 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-11-12
+
+A performance release: every benchmark of `bench/` now runs in less than 1.5× the time of the Go
+program (see `bench/RESULTS.md`), and none is slower than in 0.7.4.
+
+### Changed
+
+- **Start-up: 3.9 ms → 1.8 ms** for `print("hello")` (Go: 2.0 ms), on Linux:
+  - the interpreter runs on the main thread, on a large stack of its own, instead of on a second
+    thread: no thread to create, and no sleeping thread for the kernel to wake up when the program
+    ends (that wait grew with the run time: about 1 ms after a 6 ms program);
+  - transparent huge pages are off while the process starts and for the first megabytes of the heap
+    (with `always`, the kernel cleared a whole 2 MiB page for each of the few fresh regions a start
+    touches: the allocator's tables, the first heap pages, the top of the stack). A heap that grows
+    beyond that still gets huge pages, and programs started by a Fogu program are not affected;
+  - the process exits as soon as the program ends, without first freeing the program's values one
+    by one (`runtime::last_run()` for embedders: `runtime::run_file` frees everything unless told
+    the process is about to exit).
+  The same applies to the executables of `fogu build --compile`.
+- **Strings of up to 15 bytes live inside the value** (no allocation, nothing to free, nothing to
+  follow to read them); longer ones are reference-counted as before. `Value` is still 24 bytes.
+  The `strings` benchmark (200 000 `"item" + str(i)`, join, split, sum of lengths): 59 ms → 35 ms;
+  `records`: 118 ms → 82 ms.
+- **JIT: calls to small functions are inlined**, including a function into itself (one level per
+  call site, which removes most of the calls of a recursion): `fib(32)` 21 ms → 14 ms. The
+  interpreter's errors and lines are kept (`tests/spec/jit_inline.fg`).
+- **JIT: `/` and `%` by a constant use no division instruction** (a multiplication and shifts, or a
+  shift and a mask for powers of two) and have nothing to check; the result of `x % c` and
+  `x & mask` is known to be small, so arithmetic on it that cannot overflow is not checked.
+- **JIT: loop-invariant code leaves the loops.** The generated branches made Cranelift's optimizer
+  lose track of being inside a loop, so nothing was hoisted and values computed before a loop but
+  used only inside were recomputed on every iteration (in `mandel`, two divisions per iteration of
+  the inner loop). Branches that leave a loop now do so through their first target, which is what
+  the optimizer expects: `mandel` 13 ms → 8.5 ms.
+- **JIT: `&&` / `||` in a condition are branches**, not a boolean that is built and then tested;
+  `2.0 * x` is `x + x`; the IR verifier (a development aid) and unwind tables are no longer
+  produced in release builds, which takes a third off every compilation.
+- `fogu --jit-debug` also prints how long the JIT took to start and each function's machine code;
+  `FOGU_JIT_DEBUG=3` adds the optimized IR and the machine code.
+- Built with Rust 1.99 (`rust-toolchain.toml`).
+
+### Added
+
+- The `startup-trace` cargo feature (off by default): `FOGU_T0=<CLOCK_MONOTONIC in ns> fogu …`
+  prints when each phase of the start is reached.
+
 ## [0.7.4] - 2026-11-11
 
 ### Added

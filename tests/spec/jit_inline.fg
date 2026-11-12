@@ -1,0 +1,57 @@
+// Calls to small compiled functions are inlined (a function that calls
+// itself gets a copy of its own body at each call site): the results, the
+// errors and their lines must be the ones of the interpreter.
+
+fn fib(n) {
+    if n < 2 { return n }
+    return fib(n - 1) + fib(n - 2)
+}
+print(fib(0), fib(1), fib(2), fib(10), fib(24))
+
+fn square(x) { return x * x }
+fn cube(x) { return square(x) * x }
+fn poly(x) { return cube(x) - 3 * square(x) + 2 * x - 7 }
+let acc = 0
+for i in 0..2000 { acc = acc + poly(i % 13) - cube(i % 5) }
+print(acc, poly(4), cube(-3))
+
+// floats and bools through inlined calls
+fn mix(a, b) { return a * 0.5 + b }
+fn near(a, b) { return mix(a, b) - mix(b, a) < 0.25 }
+let hits = 0
+for i in 0..500 { if near(i * 1.0, i * 1.0 + 0.3) { hits = hits + 1 } }
+print(hits, mix(3.0, 1.5), near(1.0, 9.0))
+
+// mutual recursion and a deeper self recursion
+fn even(n) {
+    if n == 0 { return true }
+    return odd(n - 1)
+}
+fn odd(n) {
+    if n == 0 { return false }
+    return even(n - 1)
+}
+print(even(10), odd(7), even(7), even(2000))
+
+fn depth(n) {
+    if n == 0 { return 0 }
+    return 1 + depth(n - 1)
+}
+print(depth(100000))
+
+fn ack(m, n) {
+    if m == 0 { return n + 1 }
+    if n == 0 { return ack(m - 1, 1) }
+    return ack(m - 1, ack(m, n - 1))
+}
+print(ack(2, 3), ack(3, 5))
+
+// an inlined callee that fails: same message and line as interpreted
+fn grow(x) {
+    return x * 4611686018427387904
+}
+fn outer(x) {
+    return grow(x) + 1
+}
+print(outer(1))
+print(outer(2))

@@ -439,6 +439,23 @@ fn sp() -> usize {
 
 /// Sets the stack limit of the current thread (called when the interpreter's
 /// main thread starts, with the size of its stack).
+/// Runs `f` on this thread, on a fresh stack of `size` bytes (virtual memory,
+/// used only as far as the recursion goes), and returns what it returns;
+/// `Err(f)` if the stack could not be reserved. This is how the interpreter
+/// gets its large stack without a thread of its own: `f` calls
+/// [`init_main_stack`] first, like the thread would.
+#[cfg(not(target_family = "wasm"))]
+pub fn run_on_stack<R: 'static, F: FnOnce() -> R + 'static>(size: usize, f: F) -> Result<R, F> {
+    let Ok(stack) = DefaultStack::new(size) else {
+        return Err(f);
+    };
+    let mut run = Coroutine::with_stack(stack, move |_: &Yielder<(), ()>, ()| f());
+    match run.resume(()) {
+        CoroutineResult::Return(r) => Ok(r),
+        CoroutineResult::Yield(()) => unreachable!("the main stack never yields"),
+    }
+}
+
 pub fn init_main_stack(size: usize) {
     let limit = sp().saturating_sub(size.saturating_sub(STACK_MARGIN));
     CTX.with(|c| {

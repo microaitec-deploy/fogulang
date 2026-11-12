@@ -388,7 +388,7 @@ pub fn main(spec: &ServiceSpec, entry: std::path::PathBuf, args: Vec<String>) ->
 }
 
 fn run_program(entry: std::path::PathBuf, args: Vec<String>) -> i32 {
-    let code = super::run_embedded(entry, args);
+    let code = super::run_embedded(entry, args, false);
     crate::native::cleanup();
     code
 }
@@ -567,7 +567,7 @@ mod win {
         crate::native::on_exit(report_stopped);
         let _ = handle.set_service_status(svc_status(ServiceState::Running, 0, Duration::ZERO));
         log_line(&format!("started '{}' (pid {}, log {})", job.spec.name, std::process::id(), log.display()));
-        let code = super::super::run_embedded(job.entry, job.args);
+        let code = super::super::run_embedded(job.entry, job.args, false);
         crate::native::cleanup();
         EXIT.store(code, Ordering::SeqCst);
         report_stopped(code);

@@ -46,6 +46,7 @@ fn load(path: &Path) -> Result<(Interpreter, Vec<ast::Stmt>, String), String> {
     };
 
     let filename = vfs::display(path);
+    mark("source read");
 
     let mut lexer = Lexer::new(&source);
     let tokens = lexer
@@ -57,9 +58,12 @@ fn load(path: &Path) -> Result<(Interpreter, Vec<ast::Stmt>, String), String> {
         .parse_program()
         .map_err(|e| format!("{}: {}", filename, e))?;
 
+    mark("parsed");
     let interp = Interpreter::new();
+    mark("interpreter created");
     resolver::check(&program, &interp.builtin_names())
         .map_err(|e| format!("{}: {}", filename, e))?;
+    mark("resolved");
 
     let base = path
         .parent()
@@ -89,7 +93,48 @@ pub fn run_file(path: &Path) -> Result<(), String> {
     if jit::stats_requested() {
         eprintln!("{}", interp.jit_report());
     }
+    mark("program ended");
+    if LAST_RUN.load(std::sync::atomic::Ordering::Relaxed) {
+        // the process ends after this run: giving every value of the program
+        // back to the allocator one by one first would only delay the exit
+        std::mem::forget(program);
+        std::mem::forget(interp);
+    }
     result
+}
+
+/// With the `startup-trace` feature and `FOGU_T0` set to the launcher's
+/// `CLOCK_MONOTONIC` in nanoseconds: prints the milliseconds since then and
+/// the CPU time of the process, to see where a start spends its time.
+/// Without the feature (the default) it is nothing at all.
+#[cfg(all(feature = "startup-trace", unix))]
+pub fn mark(what: &str) {
+    if let Some(t0) = std::env::var("FOGU_T0").ok().and_then(|s| s.parse::<i128>().ok()) {
+        let clock = |id| {
+            let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+            // SAFETY: `ts` is a valid timespec to fill
+            unsafe { libc::clock_gettime(id, &mut ts) };
+            ts.tv_sec as i128 * 1_000_000_000 + ts.tv_nsec as i128
+        };
+        let now = clock(libc::CLOCK_MONOTONIC);
+        let cpu = clock(libc::CLOCK_PROCESS_CPUTIME_ID);
+        eprintln!("[start] {:8.3} ms  cpu {:7.3}  {}", (now - t0) as f64 / 1e6, cpu as f64 / 1e6, what);
+    }
+}
+
+#[cfg(not(all(feature = "startup-trace", unix)))]
+#[inline(always)]
+pub fn mark(_what: &str) {}
+
+/// The process exits right after the program it is running (see [`last_run`]).
+static LAST_RUN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Tells the runtime that the process exits when the program ends, so
+/// [`run_file`] may leave the program's memory to the operating system
+/// instead of freeing it (the `fogu` command does this; an embedder that
+/// runs several programs in one process must not).
+pub fn last_run() {
+    LAST_RUN.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Result of one test registered with `fogu:test`.

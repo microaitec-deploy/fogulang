@@ -676,7 +676,7 @@ fn excel_read(path: &str, o: &HashMap<String, Value>) -> Result<Value, String> {
             Ok(map(all.iter().map(|(k, v)| (k.as_str(), v.clone())).collect()))
         }
         Some(Value::Str(s)) => {
-            if !names.contains(s) {
+            if !names.iter().any(|n| n == s.as_str()) {
                 return Err(io_err!("excel: {}: no sheet '{}' ({})", path, s, names.join(", ")));
             }
             read_sheet(&mut wb, s)

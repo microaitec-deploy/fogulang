@@ -1,0 +1,49 @@
+// Division and remainder by a constant: the JIT compiles them without a
+// division instruction, and must give what the interpreter gives (truncated
+// toward zero, like Go) for every sign and for the extremes.
+
+fn q3(n) { return n / 3 }
+fn r3(n) { return n % 3 }
+fn q7(n) { return n / 7 }
+fn r7(n) { return n % 7 }
+fn qm7(n) { return n / -7 }
+fn rm7(n) { return n % -7 }
+fn q8(n) { return n / 8 }
+fn r8(n) { return n % 8 }
+fn qm8(n) { return n / -8 }
+fn rm8(n) { return n % -8 }
+fn q1(n) { return n / 1 }
+fn r1(n) { return n % 1 }
+fn q10(n) { return n / 10 }
+fn r10(n) { return n % 10 }
+fn qbig(n) { return n / 1000000007 }
+fn rbig(n) { return n % 1000000007 }
+fn q641(n) { return n / 641 }
+fn r2(n) { return n % 2 }
+fn qp62(n) { return n / 4611686018427387904 }
+fn rp62(n) { return n % 4611686018427387904 }
+
+const MAX = 9223372036854775807
+const MIN = -MAX - 1
+const samples = [0, 1, 2, 3, 6, 7, 8, 9, 10, 15, 16, 17, 99, 100, 640, 641, 642,
+    1000000006, 1000000007, 1000000008, 4611686018427387903, 4611686018427387904,
+    MAX - 1, MAX, -1, -2, -3, -6, -7, -8, -9, -10, -15, -16, -17, -641,
+    -1000000007, -4611686018427387904, MIN + 1, MIN]
+
+for n in samples {
+    print(n, q3(n), r3(n), q7(n), r7(n), qm7(n), rm7(n), q8(n), r8(n), qm8(n), rm8(n))
+    print(" ", q1(n), r1(n), q10(n), r10(n), qbig(n), rbig(n), q641(n), r2(n), qp62(n), rp62(n))
+}
+
+// in a compiled loop, mixed with other arithmetic
+let sum = 0
+let odd = 0
+for i in -5000..5000 {
+    sum = sum + (i % 7) * 3 + i / 5 - (i % -3) + i / -4
+    if i % 2 != 0 { odd = odd + 1 }
+}
+print(sum, odd)
+
+// float division keeps its own rules
+fn half(x) { return x / 2.0 }
+print(half(7.0), half(-7.0), 7 % 2.5)

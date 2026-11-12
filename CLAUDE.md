@@ -107,6 +107,19 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
 
 ## Conventions and pitfalls
 
+- **Performance is a requirement** (0.7.5): every program of `bench/` stays under 1.5× its Go
+  version and no change may be slower than the previous release. Compare wall time (not
+  `getrusage`, which under-reports here), minimum of many interleaved runs, against the previous
+  binary and the Go binary, with the release's static OpenSSL (dynamic OpenSSL adds 0.5 ms of
+  start). `--features startup-trace` + `FOGU_T0` prints the phases of a start; `--jit-debug`
+  the compile times; `FOGU_JIT_DEBUG=3` the optimized IR and machine code.
+- On Linux the interpreter runs on the **main thread**, on its own 1 GiB stack
+  (`sched::run_on_stack`), and the process exits without freeing the program's values
+  (`runtime::last_run`); `toolkit::startup` handles transparent huge pages. In the JIT, a branch
+  that can leave a loop must leave through its *first* target (`order_branches` does it for all
+  generated code): otherwise Cranelift stops hoisting loop-invariant code.
+- `Str` is 16 bytes: inline up to 15 bytes, else `Rc`. It dereferences to `str`; mutate with
+  `push_str` / `make_mut()`.
 - **The interpreter is the source of truth.** Any new JIT behaviour must produce
   exactly the same output and error messages (`file:line: runtime error: ...`).
   When in doubt, bail in the JIT.

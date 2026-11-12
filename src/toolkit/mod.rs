@@ -164,6 +164,12 @@ fn load_dotenv() {
 }
 
 pub fn run() {
+    #[cfg(all(target_os = "linux", feature = "startup-trace"))]
+    if let Some(t0) = env::var("FOGU_T0").ok().and_then(|s| s.parse::<u64>().ok()) {
+        let early = startup::EARLY_NS.load(std::sync::atomic::Ordering::Relaxed);
+        eprintln!("[start] {:8.3} ms               first constructor", early.saturating_sub(t0) as f64 / 1e6);
+    }
+    crate::runtime::mark("main");
     crate::register();
     // OpenSSH may run `fogu` as its SSH_ASKPASS program (fogu:ssh passwords)
     #[cfg(feature = "ops")]
@@ -186,7 +192,7 @@ pub fn run() {
         let code = match embedded {
             // `fogu build --service`: install / start / stop… or run as a service
             Ok(build::Embedded { entry, service: Some(spec), .. }) => service::main(&spec, entry, env::args().skip(1).collect()),
-            Ok(e) => run_embedded(e.entry, env::args().skip(1).collect()),
+            Ok(e) => run_embedded(e.entry, env::args().skip(1).collect(), true),
             Err(e) => {
                 ui::error(&e);
                 1
@@ -251,24 +257,129 @@ pub fn run() {
         process::exit(code);
     }
 
-    // The interpreter is recursive: it runs on a thread with a large stack.
+    crate::runtime::mark("options read");
+    // The interpreter is recursive: it needs a large stack.
     #[allow(unreachable_code)]
+    let interpreter = move || -> i32 {
+        crate::runtime::mark("interpreter stack");
+        startup::ready();
+        sched::init_main_stack(MAIN_STACK);
+        crate::runtime::last_run();
+        let code = real_main(args, flags);
+        crate::runtime::mark("cleanup");
+        // the process ends right here, without unwinding to `main`
+        crate::native::cleanup();
+        crate::runtime::mark("exit");
+        process::exit(code)
+    };
+
+    // Linux: on this very thread, switched to a stack of its own. A second
+    // thread would cost its creation at the start and, at the end, the wait
+    // for the kernel to wake the sleeping main thread up just to end it.
+    #[cfg(target_os = "linux")]
+    let interpreter = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        sched::run_on_stack(MAIN_STACK, interpreter)
+    })) {
+        Ok(Ok(code)) => process::exit(code),
+        // no room for the stack: the thread below reports it
+        Ok(Err(f)) => f,
+        // the interpreter panicked (its message is already printed)
+        Err(_) => {
+            crate::native::cleanup();
+            process::exit(101);
+        }
+    };
+
+    // elsewhere, on a thread with a large stack
     let handle = std::thread::Builder::new()
         .name("fogu-main".into())
         .stack_size(MAIN_STACK)
-        .spawn(move || {
-            sched::init_main_stack(MAIN_STACK);
-            real_main(args, flags)
-        })
+        .spawn(interpreter)
         .expect("could not create the main thread");
 
-    let code = handle.join().unwrap_or(101);
+    // reached only if the interpreter thread panicked
+    let code: i32 = handle.join().unwrap_or(101);
     crate::native::cleanup();
     process::exit(code);
 }
 
+/// Start-up on Linux with transparent huge pages set to `always`: the first
+/// write to each fresh region of memory (the allocator's own tables, the
+/// first pages of the heap, the top of the interpreter's stack) makes the
+/// kernel clear a whole 2 MiB page, of which a program that starts uses a few
+/// KiB: about a millisecond of every run. Huge pages are therefore off while
+/// the process starts ([`early`], a constructor that runs before the
+/// allocator) and back on once the interpreter thread exists ([`ready`]),
+/// except for the first megabytes of the heap: a small program never pays
+/// for them, and a heap that grows large still gets them.
+pub mod startup {
+    #[cfg(target_os = "linux")]
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// [`early`] turned huge pages off (they were on) and [`ready`] must
+    /// turn them back on.
+    #[cfg(target_os = "linux")]
+    static HELD: AtomicBool = AtomicBool::new(false);
+
+    /// When [`early`] ran (`CLOCK_MONOTONIC`, ns), for the start-up trace.
+    #[cfg(all(target_os = "linux", feature = "startup-trace"))]
+    pub static EARLY_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    /// Runs before `main` and before the first allocation: it may not
+    /// allocate nor use anything of the Rust runtime.
+    #[cfg(target_os = "linux")]
+    pub extern "C" fn early() {
+        #[cfg(feature = "startup-trace")]
+        // SAFETY: `ts` is a valid timespec to fill
+        unsafe {
+            let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
+            EARLY_NS.store(ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64, Ordering::Relaxed);
+        }
+        // SAFETY: plain system calls without pointers
+        unsafe {
+            // an explicit choice (prctl by the parent process) is respected
+            if libc::prctl(libc::PR_GET_THP_DISABLE, 0, 0, 0, 0) == 0
+                && libc::prctl(libc::PR_SET_THP_DISABLE, 1, 0, 0, 0) == 0
+            {
+                HELD.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// The part of the heap around its first allocations that never gets
+    /// huge pages (on each side of the 2 MiB page of a first allocation).
+    #[cfg(target_os = "linux")]
+    const SMALL_HEAP: usize = 8 << 20;
+
+    /// The start is over (called on the interpreter thread, whose stack is
+    /// in use by now): huge pages are allowed again from here on, outside
+    /// the beginning of the heap. Processes started later do not inherit the
+    /// setting of the start-up.
+    pub fn ready() {
+        #[cfg(target_os = "linux")]
+        if HELD.swap(false, Ordering::Relaxed) {
+            // where the allocator is handing out memory right now
+            let probe = Box::new(0u8);
+            let at = (&*probe as *const u8 as usize) & !((2 << 20) - 1);
+            // SAFETY: madvise only sets a flag on the mappings of the range
+            // (the parts of it that are not mapped are skipped, with an
+            // error that does not matter here); prctl takes no pointers
+            unsafe {
+                libc::madvise(
+                    at.saturating_sub(SMALL_HEAP) as *mut libc::c_void,
+                    2 * SMALL_HEAP,
+                    libc::MADV_NOHUGEPAGE,
+                );
+                libc::prctl(libc::PR_SET_THP_DISABLE, 0, 0, 0, 0);
+            }
+        }
+    }
+}
+
 /// Runs the program embedded in a standalone executable.
-fn run_embedded(entry: std::path::PathBuf, args: Vec<String>) -> i32 {
+/// `last`: the process exits when the program ends (see `runtime::last_run`).
+fn run_embedded(entry: std::path::PathBuf, args: Vec<String>, last: bool) -> i32 {
     jit::configure(JitConfig::from_env());
     #[cfg(target_family = "wasm")]
     {
@@ -277,14 +388,28 @@ fn run_embedded(entry: std::path::PathBuf, args: Vec<String>) -> i32 {
         return finish(cli::run_file(&entry.to_string_lossy()));
     }
     #[allow(unreachable_code)]
+    let program = move || -> i32 {
+        startup::ready();
+        sched::init_main_stack(MAIN_STACK);
+        if last {
+            crate::runtime::last_run();
+        }
+        crate::native::system::set_script_args(args);
+        finish(cli::run_file(&entry.to_string_lossy()))
+    };
+    // Linux: on this thread, on a stack of its own (see `run`)
+    #[cfg(target_os = "linux")]
+    let program = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        sched::run_on_stack(MAIN_STACK, program)
+    })) {
+        Ok(Ok(code)) => return code,
+        Ok(Err(f)) => f,
+        Err(_) => return 101,
+    };
     let handle = std::thread::Builder::new()
         .name("fogu-main".into())
         .stack_size(MAIN_STACK)
-        .spawn(move || {
-            sched::init_main_stack(MAIN_STACK);
-            crate::native::system::set_script_args(args);
-            finish(cli::run_file(&entry.to_string_lossy()))
-        })
+        .spawn(program)
         .expect("could not create the main thread");
     handle.join().unwrap_or(101)
 }

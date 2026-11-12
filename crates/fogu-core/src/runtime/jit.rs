@@ -1024,6 +1024,143 @@ struct Stats {
 // Compiler state
 // ======================================================================
 
+/// A function of at most this many IR instructions may be inlined.
+const INLINE_MAX_INSTS: usize = 120;
+/// Instructions one function may receive from inlined callees.
+const INLINE_BUDGET: usize = 480;
+
+/// Tells Cranelift which calls to inline: the direct calls to functions whose
+/// body is in `bodies`, while the budget lasts.
+struct Inliner<'a> {
+    bodies: &'a HashMap<u32, ir::Function>,
+    budget: usize,
+}
+
+impl cranelift_codegen::inline::Inline for Inliner<'_> {
+    fn inline(
+        &mut self,
+        caller: &ir::Function,
+        _inst: ir::Inst,
+        opcode: ir::Opcode,
+        callee: FuncRef,
+        _args: &[ir::Value],
+    ) -> cranelift_codegen::inline::InlineCommand<'_> {
+        use cranelift_codegen::inline::InlineCommand;
+        if opcode != ir::Opcode::Call {
+            return InlineCommand::KeepCall;
+        }
+        let ir::ExternalName::User(name) = caller.dfg.ext_funcs[callee].name else {
+            return InlineCommand::KeepCall;
+        };
+        let name = &caller.params.user_named_funcs()[name];
+        if name.namespace != 0 {
+            return InlineCommand::KeepCall;
+        }
+        match self.bodies.get(&name.index) {
+            Some(f) if f.dfg.num_insts() <= self.budget => {
+                self.budget -= f.dfg.num_insts();
+                InlineCommand::Inline { callee: std::borrow::Cow::Borrowed(f), visit_callee: false }
+            }
+            _ => InlineCommand::KeepCall,
+        }
+    }
+}
+
+/// Makes every conditional branch that can leave a loop do so through its
+/// first target (`brif c, body, exit` becomes `brif c == 0, exit, body`).
+///
+/// Cranelift's optimizer walks the blocks in an order that follows the
+/// second target of a branch first, and it only knows it is inside a loop
+/// until it meets a block outside of it: with the exit as second target, the
+/// rest of the loop body was optimized as if it were outside any loop. Then
+/// nothing loop-invariant was moved out, and values computed before the loop
+/// but used only inside it were computed again on every iteration instead.
+fn order_branches(func: &mut ir::Function) {
+    use cranelift_codegen::cursor::{Cursor, FuncCursor};
+    use cranelift_codegen::dominator_tree::DominatorTree;
+    use cranelift_codegen::ir::condcodes::CondCode;
+    use cranelift_codegen::flowgraph::ControlFlowGraph;
+    use cranelift_codegen::loop_analysis::LoopAnalysis;
+
+    let cfg = ControlFlowGraph::with_function(func);
+    let domtree = DominatorTree::with_function(func, &cfg);
+    let mut loops = LoopAnalysis::new();
+    loops.compute(func, &cfg, &domtree);
+    if loops.loops().next().is_none() {
+        return;
+    }
+    let mut leaving = Vec::new();
+    for block in func.layout.blocks() {
+        let Some(inst) = func.layout.last_inst(block) else { continue };
+        if let ir::InstructionData::Brif { arg, blocks, .. } = &func.dfg.insts[inst] {
+            let then_b = blocks[0].block(&func.dfg.value_lists);
+            let else_b = blocks[1].block(&func.dfg.value_lists);
+            if loops.loop_level(else_b).level() < loops.loop_level(then_b).level() {
+                leaving.push((inst, *arg));
+            }
+        }
+    }
+    for (inst, cond) in leaving {
+        // the opposite comparison when the condition is one (so the branch
+        // still tests the flags directly), `cond == 0` otherwise
+        let compare = match func.dfg.value_def(cond) {
+            ir::ValueDef::Result(def, _) => match func.dfg.insts[def] {
+                ir::InstructionData::IntCompare { cond: cc, args, .. } => Some((Ok(cc.complement()), args)),
+                ir::InstructionData::FloatCompare { cond: cc, args, .. } => Some((Err(cc.complement()), args)),
+                _ => None,
+            },
+            _ => None,
+        };
+        let mut cur = FuncCursor::new(func).at_inst(inst);
+        let not = match compare {
+            Some((Ok(cc), [a, b])) => cur.ins().icmp(cc, a, b),
+            Some((Err(cc), [a, b])) => cur.ins().fcmp(cc, a, b),
+            None => cur.ins().icmp_imm_s(IntCC::Equal, cond, 0),
+        };
+        if let ir::InstructionData::Brif { arg, blocks, .. } = &mut cur.func.dfg.insts[inst] {
+            *arg = not;
+            blocks.swap(0, 1);
+        }
+    }
+}
+
+/// The multiplier and shift that turn a signed division by the constant `d`
+/// (not 0, 1, -1 or a power of two) into a multiplication (Hacker's Delight,
+/// 10-1): `q = mulhi(n, m)`, corrected by `n` when the signs of `d` and `m`
+/// differ, shifted right by the shift, plus its own sign bit.
+fn div_magic(d: i64) -> (i64, u32) {
+    const TWO63: u64 = 1 << 63;
+    let ad = d.unsigned_abs();
+    let t = TWO63 + ((d as u64) >> 63);
+    let anc = t - 1 - t % ad;
+    let mut p = 63u32;
+    let mut q1 = TWO63 / anc;
+    let mut r1 = TWO63 - q1 * anc;
+    let mut q2 = TWO63 / ad;
+    let mut r2 = TWO63 - q2 * ad;
+    loop {
+        p += 1;
+        q1 = q1.wrapping_mul(2);
+        r1 = r1.wrapping_mul(2);
+        if r1 >= anc {
+            q1 = q1.wrapping_add(1);
+            r1 = r1.wrapping_sub(anc);
+        }
+        q2 = q2.wrapping_mul(2);
+        r2 = r2.wrapping_mul(2);
+        if r2 >= ad {
+            q2 = q2.wrapping_add(1);
+            r2 = r2.wrapping_sub(ad);
+        }
+        let delta = ad - r2;
+        if !(q1 < delta || (q1 == delta && r1 == 0)) {
+            break;
+        }
+    }
+    let m = q2.wrapping_add(1) as i64;
+    (if d < 0 { m.wrapping_neg() } else { m }, p - 64)
+}
+
 struct Inner {
     /// Address of the stack limit native code checks ([`Watch::limit`]).
     limit_addr: usize,
@@ -1044,6 +1181,9 @@ struct Inner {
     math_fns: HashMap<usize, &'static str>,
     strs: HashMap<String, &'static str>,
     stats: Stats,
+    /// IR of the small compiled functions (by `FuncId`), before any inlining:
+    /// what [`Inner::inline_calls`] copies into their callers.
+    bodies: HashMap<u32, ir::Function>,
 }
 
 impl Inner {
@@ -1052,6 +1192,14 @@ impl Inner {
         flags.set("use_colocated_libcalls", "false").map_err(|e| e.to_string())?;
         flags.set("is_pic", "false").map_err(|e| e.to_string())?;
         flags.set("opt_level", "speed").map_err(|e| e.to_string())?;
+        // the IR verifier is a development aid (kept in debug builds, where
+        // the tests run): in a release it is time added to every compilation
+        if !cfg!(debug_assertions) {
+            flags.set("enable_verifier", "false").map_err(|e| e.to_string())?;
+        }
+        // nothing unwinds through compiled code (it reports errors through
+        // the context), so no unwind tables are needed
+        flags.set("unwind_info", "false").map_err(|e| e.to_string())?;
         let isa = cranelift_native::builder()
             .map_err(|e| e.to_string())?
             .finish(settings::Flags::new(flags))
@@ -1108,6 +1256,7 @@ impl Inner {
             math_fns,
             strs: HashMap::new(),
             stats: Stats::default(),
+            bodies: HashMap::new(),
         })
     }
 
@@ -1329,16 +1478,52 @@ impl Inner {
             }
             g.finish(cfg);
         }
+        order_branches(&mut ctx.func);
+        self.inline_calls(&mut ctx, Some(id))?;
         self.define(id, &mut ctx)
+    }
+
+    /// Copies the body of small compiled functions into their call sites in
+    /// `ctx` (one level deep), so a call costs nothing: no frame, no stack
+    /// check per call, and the optimizer sees caller and callee together. A
+    /// function that calls itself gets one copy of its own body per call site,
+    /// which removes most of the calls of a recursion.
+    fn inline_calls(&mut self, ctx: &mut Context, me: Option<FuncId>) -> R<()> {
+        if let Some(id) = me {
+            if ctx.func.dfg.num_insts() <= INLINE_MAX_INSTS {
+                self.bodies.insert(id.as_u32(), ctx.func.clone());
+            }
+        }
+        if self.bodies.is_empty() {
+            return Ok(());
+        }
+        let mut inl = Inliner { bodies: &self.bodies, budget: INLINE_BUDGET };
+        ctx.inline(&mut inl)
+            .map(|_| ())
+            .map_err(|e| Bail::Msg(format!("internal JIT error (inlining): {:?}", e)))
     }
 
     fn define(&mut self, id: FuncId, ctx: &mut Context) -> R<()> {
         if self.debug >= 2 {
             eprintln!("{}", ctx.func.display());
         }
+        if self.debug >= 3 {
+            ctx.set_disasm(true);
+        }
+        let t0 = Instant::now();
         self.module
             .define_function(id, ctx)
             .map_err(|e| Bail::Msg(format!("internal JIT error: {:?}", e)))?;
+        let code_us = t0.elapsed().as_micros();
+        if self.debug >= 3 {
+            eprintln!("; optimized\n{}", ctx.func.display());
+            if let Some(code) = ctx.compiled_code() {
+                eprintln!("{}", code.vcode.as_deref().unwrap_or(""));
+            }
+        }
+        if self.debug >= 1 {
+            eprintln!("[jit] machine code in {}µs", code_us);
+        }
         self.module.clear_context(ctx);
         Ok(())
     }
@@ -1455,6 +1640,8 @@ impl Inner {
             assigned = g.slots_assigned.clone();
             g.finish(cfg);
         }
+        order_branches(&mut ctx.func);
+        self.inline_calls(&mut ctx, None)?;
         self.define(id, &mut ctx)?;
         self.module
             .finalize_definitions()
@@ -1641,6 +1828,9 @@ enum Callee {
 struct Gen<'a, 'f> {
     inner: &'a mut Inner,
     b: FunctionBuilder<'f>,
+    /// Integer values known to lie in a range (`x % 7`, `x & 255`, and what
+    /// is computed from them): arithmetic that cannot overflow needs no check.
+    ranges: HashMap<ir::Value, (i64, i64)>,
     ctx_ptr: ir::Value,
     scopes: Vec<HashMap<String, Local>>,
     env: Rc<RefCell<Environment>>,
@@ -1730,6 +1920,7 @@ impl<'a, 'f> Gen<'a, 'f> {
             top_loop: false,
             effects: false,
             guards: 0,
+            ranges: HashMap::new(),
         }
     }
 
@@ -1974,6 +2165,70 @@ impl<'a, 'f> Gen<'a, 'f> {
         self.trap_if(out, code);
     }
 
+    /// The value of an integer constant (`iconst`), if `v` is one.
+    fn const_of(&self, v: ir::Value) -> Option<i64> {
+        match self.b.func.dfg.value_def(v) {
+            ir::ValueDef::Result(inst, _) => match self.b.func.dfg.insts[inst] {
+                ir::InstructionData::UnaryImm { opcode: ir::Opcode::Iconst, imm } => Some(imm.bits()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The value of a float constant (`f64const`), if `v` is one.
+    fn float_const(&self, v: ir::Value) -> Option<f64> {
+        match self.b.func.dfg.value_def(v) {
+            ir::ValueDef::Result(inst, _) => match self.b.func.dfg.insts[inst] {
+                ir::InstructionData::UnaryIeee64 { opcode: ir::Opcode::F64const, imm } => Some(imm.as_f64()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// `a / d` or `a % d` (truncated, like the interpreter) for a constant
+    /// `d` other than 0, -1 and `i64::MIN`: no division instruction and
+    /// nothing to check (neither a zero divisor nor an overflow can happen).
+    fn div_const(&mut self, div: bool, a: ir::Value, d: i64) -> ir::Value {
+        if d == 1 {
+            return if div { a } else { self.b.ins().iconst(types::I64, 0) };
+        }
+        let ad = d.unsigned_abs();
+        let q = if ad.is_power_of_two() {
+            let k = ad.trailing_zeros() as i64;
+            // rounds toward zero: negative values get 2^k - 1 added first
+            let sign = self.b.ins().sshr_imm_s(a, 63);
+            let bias = self.b.ins().ushr_imm_s(sign, 64 - k);
+            let t = self.b.ins().iadd(a, bias);
+            if !div {
+                let low = self.b.ins().band_imm_s(t, (ad - 1) as i64);
+                return self.b.ins().isub(low, bias);
+            }
+            let q = self.b.ins().sshr_imm_s(t, k);
+            if d < 0 { self.b.ins().ineg(q) } else { q }
+        } else {
+            let (m, s) = div_magic(d);
+            let mc = self.b.ins().iconst(types::I64, m);
+            let mut q = self.b.ins().smulhi(a, mc);
+            if d > 0 && m < 0 {
+                q = self.b.ins().iadd(q, a);
+            } else if d < 0 && m > 0 {
+                q = self.b.ins().isub(q, a);
+            }
+            if s > 0 {
+                q = self.b.ins().sshr_imm_s(q, s as i64);
+            }
+            let sign = self.b.ins().ushr_imm_s(q, 63);
+            self.b.ins().iadd(q, sign)
+        };
+        if div {
+            return q;
+        }
+        let qd = self.b.ins().imul_imm_s(q, d);
+        self.b.ins().isub(a, qd)
+    }
+
     fn trap_if(&mut self, cond: ir::Value, code: i64) {
         let eb = self.err_block(code);
         let cont = self.b.create_block();
@@ -2121,11 +2376,10 @@ impl<'a, 'f> Gen<'a, 'f> {
             }
             Stmt::Block(b) => self.block_stmts(b),
             Stmt::If { cond, then_branch, else_branch } => {
-                let c = self.cond(cond)?;
                 let then_b = self.b.create_block();
                 let merge = self.b.create_block();
                 let else_b = if else_branch.is_some() { self.b.create_block() } else { merge };
-                self.b.ins().brif(c, then_b, &[], else_b, &[]);
+                self.branch_on(cond, then_b, else_b)?;
 
                 self.b.switch_to_block(then_b);
                 self.dead = false;
@@ -2202,6 +2456,37 @@ impl<'a, 'f> Gen<'a, 'f> {
         }
     }
 
+    /// Jumps to `t` when the condition holds and to `f` when it does not.
+    /// `&&` and `||` become the branches themselves (as the interpreter
+    /// evaluates them: the right side only when needed) instead of a boolean
+    /// that is built and then tested.
+    fn branch_on(&mut self, e: &Expr, t: ir::Block, f: ir::Block) -> R<()> {
+        match e {
+            Expr::Logical { left, op: LogicalOp::And, right } => {
+                let rhs = self.b.create_block();
+                self.branch_on(left, rhs, f)?;
+                self.b.switch_to_block(rhs);
+                self.branch_on(right, t, f)
+            }
+            Expr::Logical { left, op: LogicalOp::Or, right } => {
+                let rhs = self.b.create_block();
+                self.branch_on(left, t, rhs)?;
+                self.b.switch_to_block(rhs);
+                self.branch_on(right, t, f)
+            }
+            _ => {
+                let c = self.cond(e)?;
+                self.b.ins().brif(c, t, &[], f, &[]);
+                Ok(())
+            }
+        }
+    }
+
+    /// The range an integer value is known to lie in, if any.
+    fn range_of(&self, v: ir::Value) -> Option<(i64, i64)> {
+        self.const_of(v).map(|c| (c, c)).or_else(|| self.ranges.get(&v).copied())
+    }
+
     fn cond(&mut self, e: &Expr) -> R<ir::Value> {
         let (v, t) = self.expr(e)?;
         if t != Ty::Bool {
@@ -2218,8 +2503,7 @@ impl<'a, 'f> Gen<'a, 'f> {
 
         self.b.switch_to_block(header);
         self.dead = false;
-        let c = self.cond(cond)?;
-        self.b.ins().brif(c, body_b, &[], exit, &[]);
+        self.branch_on(cond, body_b, exit)?;
 
         self.b.switch_to_block(body_b);
         self.cancel_point();
@@ -2260,6 +2544,12 @@ impl<'a, 'f> Gen<'a, 'f> {
         self.cancel_point();
         self.scopes.push(HashMap::new());
         let cur = self.b.use_var(idx);
+        if let (Some(first), Some(end)) = (self.const_of(lo), self.const_of(hi)) {
+            // inside the body, `first <= var < end`
+            if first < end {
+                self.ranges.insert(cur, (first, end - 1));
+            }
+        }
         let nested = !self.top_loop;
         let (eb, gb) = (self.effects, self.guards);
         self.iteration_start(Some(cur));
@@ -2986,7 +3276,15 @@ impl<'a, 'f> Gen<'a, 'f> {
                     return bail(format!("bit operator between {:?} and {:?}", at, bt));
                 }
                 let v = match op {
-                    BitAnd => self.b.ins().band(a, b),
+                    BitAnd => {
+                        let r = self.b.ins().band(a, b);
+                        // `x & mask` with a non-negative mask is in 0..=mask
+                        let mask = [a, b].iter().filter_map(|v| self.const_of(*v)).filter(|c| *c >= 0).min();
+                        if let Some(mask) = mask {
+                            self.ranges.insert(r, (0, mask));
+                        }
+                        r
+                    }
                     BitOr => self.b.ins().bor(a, b),
                     BitXor => self.b.ins().bxor(a, b),
                     Shl => {
@@ -3055,6 +3353,28 @@ impl<'a, 'f> Gen<'a, 'f> {
 
     fn int_arith(&mut self, op: BinaryOp, a: ir::Value, b: ir::Value) -> ir::Value {
         use BinaryOp::*;
+        // both operands in known ranges and no result outside of an int: the
+        // plain instruction, with nothing to check
+        if let (Add | Sub | Mul, Some((al, ah)), Some((bl, bh))) = (op, self.range_of(a), self.range_of(b)) {
+            let (al, ah, bl, bh) = (al as i128, ah as i128, bl as i128, bh as i128);
+            let (lo, hi) = match op {
+                Add => (al + bl, ah + bh),
+                Sub => (al - bh, ah - bl),
+                _ => {
+                    let p = [al * bl, al * bh, ah * bl, ah * bh];
+                    (p.iter().copied().min().unwrap_or(0), p.iter().copied().max().unwrap_or(0))
+                }
+            };
+            if lo >= i64::MIN as i128 && hi <= i64::MAX as i128 {
+                let r = match op {
+                    Add => self.b.ins().iadd(a, b),
+                    Sub => self.b.ins().isub(a, b),
+                    _ => self.b.ins().imul(a, b),
+                };
+                self.ranges.insert(r, (lo as i64, hi as i64));
+                return r;
+            }
+        }
         match op {
             Add => {
                 let (r, of) = self.b.ins().sadd_overflow(a, b);
@@ -3069,6 +3389,23 @@ impl<'a, 'f> Gen<'a, 'f> {
             Mul => {
                 let (r, of) = self.b.ins().smul_overflow(a, b);
                 self.trap_if(of, ops::CODE_OVERFLOW);
+                r
+            }
+            Div | Rem if self.const_of(b).is_some_and(|d| d != 0 && d != -1 && d != i64::MIN) => {
+                let d = self.const_of(b).unwrap_or(1);
+                let known = self.range_of(a);
+                let r = self.div_const(op == Div, a, d);
+                if op == Rem {
+                    // a remainder is smaller than the divisor and has the
+                    // sign of the dividend
+                    let m = d.abs() - 1;
+                    let range = match known {
+                        Some((lo, _)) if lo >= 0 => (0, m),
+                        Some((_, hi)) if hi <= 0 => (-m, 0),
+                        _ => (-m, m),
+                    };
+                    self.ranges.insert(r, range);
+                }
                 r
             }
             Div | Rem => {
@@ -3100,6 +3437,9 @@ impl<'a, 'f> Gen<'a, 'f> {
         match op {
             Add => self.b.ins().fadd(a, b),
             Sub => self.b.ins().fsub(a, b),
+            // `2.0 * x` is exactly `x + x`, without a constant to load
+            Mul if self.float_const(a) == Some(2.0) => self.b.ins().fadd(b, b),
+            Mul if self.float_const(b) == Some(2.0) => self.b.ins().fadd(a, a),
             Mul => self.b.ins().fmul(a, b),
             Div => self.b.ins().fdiv(a, b),
             Rem => {
@@ -3654,8 +3994,14 @@ impl Jit {
             }
         }
         if self.inner.is_none() {
+            let t0 = Instant::now();
             match Inner::new(self.cfg.debug, &self.watch.limit as *const _ as usize) {
-                Ok(i) => self.inner = Some(i),
+                Ok(i) => {
+                    if self.cfg.debug >= 1 {
+                        eprintln!("[jit] ready in {}µs", t0.elapsed().as_micros());
+                    }
+                    self.inner = Some(i)
+                }
                 Err(e) => {
                     if self.cfg.debug >= 1 {
                         eprintln!("[jit] unavailable on this system: {}", e);
@@ -3971,5 +4317,54 @@ impl Jit {
 impl Default for Jit {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod div_magic_tests {
+    use super::div_magic;
+
+    /// What the code `div_const` emits computes, for a divisor that is not a
+    /// power of two.
+    fn div(n: i64, d: i64) -> i64 {
+        let (m, s) = div_magic(d);
+        let mut q = ((n as i128 * m as i128) >> 64) as i64;
+        if d > 0 && m < 0 {
+            q = q.wrapping_add(n);
+        } else if d < 0 && m > 0 {
+            q = q.wrapping_sub(n);
+        }
+        q >>= s;
+        q.wrapping_add(((q as u64) >> 63) as i64)
+    }
+
+    #[test]
+    fn matches_the_division_instruction() {
+        let mut divisors: Vec<i64> = vec![3, 5, 6, 7, 9, 10, 11, 12, 25, 100, 125, 641, 1000, 65537, 1_000_000_007];
+        divisors.extend([i64::MAX, i64::MAX - 1, (1 << 62) + 1, (1 << 62) - 1, (1 << 33) + 3]);
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x as i64
+        };
+        for _ in 0..200 {
+            let d = next() >> (next() & 63);
+            if d != 0 && d != -1 && d != i64::MIN && !d.unsigned_abs().is_power_of_two() {
+                divisors.push(d);
+            }
+        }
+        let mut values: Vec<i64> = vec![0, 1, -1, 2, -2, i64::MAX, i64::MIN, i64::MAX - 1, i64::MIN + 1];
+        for _ in 0..2000 {
+            values.push(next() >> (next() & 63));
+        }
+        for &d in divisors.iter().chain(divisors.iter().map(|d| -*d).collect::<Vec<_>>().iter()) {
+            for &n in &values {
+                for n in [n, n.wrapping_mul(d), n.wrapping_mul(d).wrapping_add(1), n.wrapping_mul(d).wrapping_sub(1)] {
+                    assert_eq!(div(n, d), n.wrapping_div(d), "{} / {}", n, d);
+                }
+            }
+        }
     }
 }

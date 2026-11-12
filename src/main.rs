@@ -4,6 +4,14 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+// Linux, before anything else runs (the allocator included): see
+// `fogu::toolkit::startup`. Priority 00099 puts it ahead of every ordinary
+// constructor of the program.
+#[cfg(target_os = "linux")]
+#[used]
+#[unsafe(link_section = ".init_array.00099")]
+static EARLY: extern "C" fn() = fogu::toolkit::startup::early;
+
 fn main() {
     #[cfg(feature = "pprof")]
     prof::start();

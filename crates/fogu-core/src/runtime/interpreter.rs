@@ -123,6 +123,7 @@ impl Default for Interpreter {
 impl Interpreter {
     pub fn new() -> Self {
         let module_cache = ModuleCache::new();
+        super::mark("module cache");
         let globals = Environment::new();
         {
             let mut g = globals.borrow_mut();
@@ -130,6 +131,7 @@ impl Interpreter {
                 g.define_builtin(name, value);
             }
         }
+        super::mark("globals");
         let jit = Jit::new();
         let jit_enabled = jit.enabled();
         let jit_loop_threshold = jit.loop_threshold();

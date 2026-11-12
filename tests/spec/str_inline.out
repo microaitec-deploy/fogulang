@@ -1,0 +1,40 @@
+1 x true X
+2 xx true XX
+3 xxx true XXX
+4 xxxx true XXXX
+5 xxxxx true XXXXX
+6 xxxxxx true XXXXXX
+7 xxxxxxx true XXXXXXX
+8 xxxxxxxx true XXXXXXXX
+9 xxxxxxxxx true XXXXXXXXX
+10 xxxxxxxxxx true XXXXXXXXXX
+11 xxxxxxxxxxx true XXXXXXXXXXX
+12 xxxxxxxxxxxx true XXXXXXXXXXXX
+13 xxxxxxxxxxxxx true XXXXXXXXXXXXX
+14 xxxxxxxxxxxxxx true XXXXXXXXXXXXXX
+15 xxxxxxxxxxxxxxx true XXXXXXXXXXXXXXX
+16 xxxxxxxxxxxxxxxx true XXXXXXXXXXXXXXXX
+17 xxxxxxxxxxxxxxxxx true XXXXXXXXXXXXXXXXX
+18 xxxxxxxxxxxxxxxxxx true XXXXXXXXXXXXXXXXXX
+19 xxxxxxxxxxxxxxxxxxx true XXXXXXXXXXXXXXXXXXX
+20 xxxxxxxxxxxxxxxxxxxx true XXXXXXXXXXXXXXXXXXXX
+1 é é 2
+2 éé é 4
+3 ééé é 6
+4 éééé é 8
+5 ééééé é 10
+6 éééééé é 12
+7 ééééééé é 14
+8 éééééééé é 16
+9 ééééééééé é 18
+6 ñ € 😀 AÑB€C😀 añb€c😀añb€c😀añb€c😀
+short! short a text of more than fifteen bytes! a text of more than fifteen bytes
+1 15 16 17
+true true true
+[a text of more than fifteen bytes, apple, fifteen bytes!!, fig, pear, sixteen bytes!!!]
+5 [one, two, three, a piece that is clearly long, five] one|two|three|a piece that is clearly long|five
+345678 23456789abcdefghi xxxxxxxxxxxxxxx xxxxxxxxxxxxxxxx
+n=12345 value 12345 of a piece that is clearly long hell0 w0rld again
+trimmed fifteen bytes!! SIXTEEN BYTES!!! true true
+1234567890123456 123456789012345 123456789012345 233 é
+22890 item0 item2999

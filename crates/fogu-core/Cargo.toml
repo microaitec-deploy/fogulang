@@ -1,6 +1,6 @@
 [package]
 name = "fogu-core"
-version = "0.7.4"
+version = "0.7.5"
 edition = "2024"
 description = "Core of the Fogu language: lexer, parser, resolver, interpreter, Cranelift JIT and the fg task scheduler"
 authors = ["Edmilson Soares"]
@@ -25,3 +25,7 @@ corosensei = "0.3.4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[features]
+# prints when each phase of the start is reached (see `runtime::mark`)
+startup-trace = []

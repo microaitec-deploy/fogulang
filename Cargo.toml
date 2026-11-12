@@ -1,6 +1,6 @@
 [package]
 name = "fogu"
-version = "0.7.4"
+version = "0.7.5"
 edition = "2024"
 description = "Reference implementation of the Fogu language: interpreter, Cranelift JIT, REPL and package manager"
 authors = ["Edmilson Soares"]
@@ -20,7 +20,7 @@ path = "src/main.rs"
 
 [dependencies]
 pprof = { version = "0.14", optional = true }
-libc = { version = "0.2", optional = true }
+libc = "0.2"
 fogu-core = { path = "crates/fogu-core" }
 fogu-std = { path = "crates/fogu-std", default-features = false }
 fogu-pkg = { path = "crates/fogu-pkg" }
@@ -58,7 +58,9 @@ rpc = ["fogu-std/rpc"]
 vendored-openssl = ["fogu-std/vendored-openssl"]
 # `cargo build --profile profiling --features pprof`, then `FOGU_PPROF=1 fogu …`:
 # an in-process sampling profiler (no root needed) prints the hottest functions at exit
-pprof = ["dep:pprof", "dep:libc"]
+pprof = ["dep:pprof"]
+# `FOGU_T0=<CLOCK_MONOTONIC in ns> fogu …` prints when each phase of the start is reached
+startup-trace = ["fogu-core/startup-trace"]
 
 # debug builds: line tables only (backtraces keep file:line, linking is much faster)
 [profile.dev]

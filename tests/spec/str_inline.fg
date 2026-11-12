@@ -1,0 +1,51 @@
+// Short strings (up to 15 bytes) are stored inside the value, longer ones on
+// the heap: nothing of that may show, at the boundary or anywhere else.
+
+let s = ""
+for i in 0..20 {
+    s = s + "x"
+    print(s.len(), s, s == "x".repeat(i + 1), s.upper())
+}
+
+// chars of several bytes around the boundary
+let u = ""
+for i in 0..9 {
+    u += "é"
+    print(u.len(), u, u[i], bytes(u).len())
+}
+const mixed = "añb€c😀"
+print(mixed.len(), mixed[1], mixed[3], mixed[5], mixed.upper(), mixed + mixed + mixed)
+
+// a copy does not follow later changes of the original
+let a = "short"
+let b = a
+a += "!"
+let c = "a text of more than fifteen bytes"
+let d = c
+c += "!"
+print(a, b, c, d)
+
+// keys, comparisons, order
+const m = {}
+for w in ["k", "key", "fifteen bytes!!", "sixteen bytes!!!", "seventeen bytes!!"] {
+    m[w] = w.len()
+}
+print(m["k"], m["fifteen bytes!!"], m["sixteen bytes!!!"], m["seventeen bytes!!"])
+print("abc" < "abd", "fifteen bytes!!" < "fifteen bytes!!!", "b" > "a text of more than fifteen bytes")
+const words = ["pear", "a text of more than fifteen bytes", "fig", "sixteen bytes!!!", "apple", "fifteen bytes!!"]
+print(words.sort())
+
+// split, join, replace, slices, templates
+const parts = "one,two,three,a piece that is clearly long,five".split(",")
+print(parts.len(), parts, parts.join("|"))
+print("0123456789abcdef".slice(3, 9), "0123456789abcdefghij".slice(2, 19), "x".repeat(15), "x".repeat(16))
+const n = 12345
+print(`n=${n}`, `value ${n} of ${parts[3]}`, "hello world again".replace("o", "0"))
+print("  trimmed  ".trim(), "Fifteen Bytes!!".lower(), "sixteen bytes!!!".upper(), "abc".contains("b"), "abcdefghijklmnopqrstuvwxyz".contains("xyz"))
+print(str(1234567890123456), str(123456789012345), int("123456789012345"), "é".code(), char(233))
+
+let total = 0
+const back = []
+for i in 0..3000 { back.push("item" + str(i)) }
+for p in back.join(",").split(",") { total = total + p.len() }
+print(total, back[0], back[2999])

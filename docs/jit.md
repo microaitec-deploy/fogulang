@@ -88,6 +88,29 @@ destructuring, `fg`, default parameters that are actually used, and variadic
 functions. A loop that deopts finishes in the interpreter (it is not
 recompiled with another speculation).
 
+## Optimizations of 0.7.5
+
+- **Inlining**: the IR of every compiled function of at most 120 instructions is kept
+  (`Inner::bodies`) and copied into its call sites by Cranelift's inliner (`Context::inline`), up
+  to 480 instructions per caller, one level deep. A function that calls itself receives its own
+  body at each call site. Error handling is unchanged: the inlined body stores the error in the
+  context and the caller's check after the (former) call propagates it.
+- **Division and remainder by a constant** (`div_const`): shift and mask for powers of two,
+  multiply-high by a magic number otherwise (`div_magic`); no zero / overflow checks, since the
+  divisor is known. `-1`, `0` and `i64::MIN` take the general path.
+- **Ranges** (`Gen::ranges`): the result of `x % c`, `x & mask`, constants and the variable of a
+  `for` over constant bounds are known to lie in a range; `+ - *` between ranged values whose
+  result fits an int are emitted without the overflow check.
+- **Branch order** (`order_branches`): a conditional branch that can leave a loop leaves through
+  its first target. Cranelift's elaboration visits the second target first and forgets a loop at
+  the first block outside of it, so this is what makes its loop-invariant code motion work (and
+  keeps it from sinking outer values into inner loops).
+- **Conditions** (`branch_on`): `&&` / `||` in `if` / `while` are control flow.
+- Release builds turn the IR verifier and unwind tables off.
+
+`fogu --jit-debug` prints the start and compile times; `FOGU_JIT_DEBUG=2` the IR, `=3` also the
+optimized IR and the machine code.
+
 ## Benchmarks (release)
 
 | test | interpreter | JIT |
