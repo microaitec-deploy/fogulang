@@ -1200,8 +1200,18 @@ impl Inner {
         // nothing unwinds through compiled code (it reports errors through
         // the context), so no unwind tables are needed
         flags.set("unwind_info", "false").map_err(|e| e.to_string())?;
-        let isa = cranelift_native::builder()
-            .map_err(|e| e.to_string())?
+        let mut isa_builder = cranelift_native::builder().map_err(|e| e.to_string())?;
+        // x86-64: plain SSE2 code, as Go generates. With AVX on, Cranelift
+        // mixes VEX instructions (`vmulsd`) with legacy SSE register moves
+        // (`movdqa`); when the upper halves of the vector registers are in
+        // use (any AVX code that ran before, in a library), every such mix
+        // stalls: the same float loop then ran 2–6× slower, and erratically.
+        // The compiled code is scalar, so AVX had nothing else to give.
+        #[cfg(target_arch = "x86_64")]
+        for f in ["has_avx", "has_avx2", "has_fma", "has_avx512f", "has_avx512vl", "has_avx512dq", "has_avx512bitalg", "has_avx512vbmi"] {
+            let _ = isa_builder.set(f, "false");
+        }
+        let isa = isa_builder
             .finish(settings::Flags::new(flags))
             .map_err(|e| e.to_string())?;
         let mut jb = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());

@@ -109,6 +109,8 @@ recompiled with another speculation).
   keeps it from sinking outer values into inner loops).
 - **Conditions** (`branch_on`): `&&` / `||` in `if` / `while` are control flow.
 - Release builds turn the IR verifier and unwind tables off.
+- No AVX on x86-64 (`Inner::new`): Cranelift's VEX code still moves registers with legacy SSE
+  `movdqa`, and that mix stalls when the upper halves of the vector registers are dirty.
 
 `fogu --jit-debug` prints the start and compile times; `FOGU_JIT_DEBUG=2` the IR, `=3` also the
 optimized IR and the machine code.

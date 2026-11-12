@@ -411,6 +411,10 @@ interpreter:
   re-evaluated at their use inside it. Found by running the dumped IR through
   `cranelift-codegen` with `trace-log`. `jit::order_branches` rewrites every branch whose second
   target is in fewer loops than its first.
+- **AVX/SSE mixing**: the compiled Mandelbrot loop took 3.8 ms per pass in Go and anything from 4
+  to 50 ms in Fogu, with identical-looking machine code — except that Cranelift, with AVX on,
+  emits VEX arithmetic and legacy `movdqa` moves. Found by timing each pass inside the program;
+  fixed by generating SSE2 only.
 - **Division by a constant** was an `idiv`; **calls** paid a frame, a stack check and an error
   check each: magic-number division (`jit::div_magic`, tested against the instruction) and
   Cranelift's inliner fed with the IR of small functions (`Inner::bodies`).

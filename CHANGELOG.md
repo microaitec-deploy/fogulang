@@ -43,6 +43,10 @@ program (see `bench/RESULTS.md`), and none is slower than in 0.7.4.
   used only inside were recomputed on every iteration (in `mandel`, two divisions per iteration of
   the inner loop). Branches that leave a loop now do so through their first target, which is what
   the optimizer expects: `mandel` 13 ms → 8.5 ms.
+- **JIT: float code is plain SSE2** (as Go's). With AVX enabled, Cranelift mixed VEX instructions
+  with legacy SSE register moves, which stalls whenever some AVX code ran earlier in the process:
+  the same compiled float loop ran 2–6× slower, erratically (a 1200×1200 Mandelbrot: 375 ms →
+  61 ms; Go: 61 ms).
 - **JIT: `&&` / `||` in a condition are branches**, not a boolean that is built and then tested;
   `2.0 * x` is `x + x`; the IR verifier (a development aid) and unwind tables are no longer
   produced in release builds, which takes a third off every compilation.
