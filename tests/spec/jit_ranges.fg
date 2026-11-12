@@ -1,0 +1,74 @@
+// The JIT drops overflow checks it can prove unnecessary from what the
+// conditions say (`while n < 50`, `if x <= 9`, `x % 7`, `x & 255`); where
+// the proof does not hold, the overflow must still be reported.
+
+const MAX = 9223372036854775807
+
+fn count(limit) {
+    let n = 0
+    let steps = 0
+    while n < 50 && steps < limit {
+        n = n + 1
+        steps = steps + 2
+    }
+    return n * 1000 + steps
+}
+print(count(10), count(1000))
+
+// the fact about `n` ends when `n` is assigned
+fn grow(start) {
+    let n = start
+    let total = 0
+    while n < 100 {
+        n = n * 3 + 1
+        total = total + n + 1
+        n = n - 2
+    }
+    return total
+}
+print(grow(1), grow(40))
+
+// an inner loop changes the variable the outer condition spoke about
+fn nested(rounds) {
+    let n = 1
+    let seen = 0
+    while n < 1000 {
+        let k = 0
+        while k < rounds {
+            seen = seen + n + 1
+            n = n * 2
+            k = k + 1
+        }
+        n = n + 1
+    }
+    return seen + n
+}
+print(nested(1), nested(3), nested(5))
+
+fn clamp(x) {
+    if x <= 9 && x >= -9 {
+        return x * 1000000000000000000 / 1000
+    }
+    if 100 < x {
+        return x - 100
+    }
+    return x
+}
+print(clamp(9), clamp(-9), clamp(10), clamp(150), clamp(50))
+
+let acc = 0
+for i in 0..3000 {
+    acc = acc + (i % 7) * (i & 15) - (i % -5) * 3
+    if i % 3 == 0 { acc = acc - i / 3 }
+}
+print(acc)
+
+// the bound is the largest int: `n + 1` after the loop overflows
+fn edge() {
+    let n = MAX - 3
+    while n < 9223372036854775807 {
+        n = n + 1
+    }
+    return n + 1
+}
+print(edge())

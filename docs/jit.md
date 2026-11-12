@@ -100,7 +100,9 @@ recompiled with another speculation).
   divisor is known. `-1`, `0` and `i64::MIN` take the general path.
 - **Ranges** (`Gen::ranges`): the result of `x % c`, `x & mask`, constants and the variable of a
   `for` over constant bounds are known to lie in a range; `+ - *` between ranged values whose
-  result fits an int are emitted without the overflow check.
+  result fits an int are emitted without the overflow check. Conditions add scoped facts about
+  variables (`Gen::facts`: `while n < 50`, `if x <= 9`, joined by `&&`), valid in the body until
+  the variable is assigned or a loop starts.
 - **Branch order** (`order_branches`): a conditional branch that can leave a loop leaves through
   its first target. Cranelift's elaboration visits the second target first and forgets a loop at
   the first block outside of it, so this is what makes its loop-invariant code motion work (and

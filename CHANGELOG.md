@@ -34,7 +34,10 @@ program (see `bench/RESULTS.md`), and none is slower than in 0.7.4.
   interpreter's errors and lines are kept (`tests/spec/jit_inline.fg`).
 - **JIT: `/` and `%` by a constant use no division instruction** (a multiplication and shifts, or a
   shift and a mask for powers of two) and have nothing to check; the result of `x % c` and
-  `x & mask` is known to be small, so arithmetic on it that cannot overflow is not checked.
+  `x & mask` is known to be small, so arithmetic on it that cannot overflow is not checked. The
+  same goes for what the conditions say: in the body of `while n < 50 { … }` (or of
+  `if x <= 9 { … }`, `for i in 0..300 { … }`), `n + 1` cannot overflow until `n` is assigned
+  (`tests/spec/jit_ranges.fg`).
 - **JIT: loop-invariant code leaves the loops.** The generated branches made Cranelift's optimizer
   lose track of being inside a loop, so nothing was hoisted and values computed before a loop but
   used only inside were recomputed on every iteration (in `mandel`, two divisions per iteration of

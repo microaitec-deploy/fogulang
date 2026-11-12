@@ -1831,6 +1831,16 @@ struct Gen<'a, 'f> {
     /// Integer values known to lie in a range (`x % 7`, `x & 255`, and what
     /// is computed from them): arithmetic that cannot overflow needs no check.
     ranges: HashMap<ir::Value, (i64, i64)>,
+    /// What the conditions around the code being generated say about int
+    /// variables (`while n < 50 { … }`: `n <= 49` in the body), with the
+    /// depth of the scope that established each. A fact ends when its
+    /// variable is assigned, when a loop starts (its body runs again after
+    /// whatever it assigns) and with its scope.
+    facts: Vec<(Variable, (i64, i64), usize)>,
+    fact_depth: usize,
+    /// Values given a range from a fact: forgotten when the scope ends,
+    /// because the same value may be used where the fact does not hold.
+    fact_values: Vec<ir::Value>,
     ctx_ptr: ir::Value,
     scopes: Vec<HashMap<String, Local>>,
     env: Rc<RefCell<Environment>>,
@@ -1921,6 +1931,9 @@ impl<'a, 'f> Gen<'a, 'f> {
             effects: false,
             guards: 0,
             ranges: HashMap::new(),
+            facts: Vec::new(),
+            fact_depth: 0,
+            fact_values: Vec::new(),
         }
     }
 
@@ -2379,11 +2392,15 @@ impl<'a, 'f> Gen<'a, 'f> {
                 let then_b = self.b.create_block();
                 let merge = self.b.create_block();
                 let else_b = if else_branch.is_some() { self.b.create_block() } else { merge };
+                let mut facts = Vec::new();
+                self.cond_facts(cond, &mut facts);
                 self.branch_on(cond, then_b, else_b)?;
 
                 self.b.switch_to_block(then_b);
                 self.dead = false;
+                let mark = self.facts_begin(facts);
                 self.stmt(then_branch)?;
+                self.facts_end(mark);
                 if !self.dead {
                     self.b.ins().jump(merge, &[]);
                 }
@@ -2482,6 +2499,77 @@ impl<'a, 'f> Gen<'a, 'f> {
         }
     }
 
+    /// The facts a true `e` establishes: comparisons of an int variable with
+    /// an int literal, joined by `&&`.
+    fn cond_facts(&self, e: &Expr, out: &mut Vec<(Variable, (i64, i64))>) {
+        match e {
+            Expr::Logical { left, op: LogicalOp::And, right } => {
+                self.cond_facts(left, out);
+                self.cond_facts(right, out);
+            }
+            Expr::Binary { left, op, right } => {
+                use BinaryOp::*;
+                // `c < x` is `x > c`
+                let (name, c, op) = match (&**left, &**right) {
+                    (Expr::Ident(n), Expr::Int(c)) => (n, *c, *op),
+                    (Expr::Int(c), Expr::Ident(n)) => {
+                        let flipped = match op {
+                            Lt => Gt,
+                            Le => Ge,
+                            Gt => Lt,
+                            Ge => Le,
+                            other => *other,
+                        };
+                        (n, *c, flipped)
+                    }
+                    _ => return,
+                };
+                let Some(local) = self.lookup_local(name) else { return };
+                if local.ty != Ty::Int {
+                    return;
+                }
+                let range = match op {
+                    Lt if c > i64::MIN => (i64::MIN, c - 1),
+                    Le => (i64::MIN, c),
+                    Gt if c < i64::MAX => (c + 1, i64::MAX),
+                    Ge => (c, i64::MAX),
+                    Eq => (c, c),
+                    _ => return,
+                };
+                out.push((local.var, range));
+            }
+            _ => {}
+        }
+    }
+
+    /// Opens a scope where `facts` hold (the body of a `while`, the first
+    /// branch of an `if`); returns what [`Gen::facts_end`] needs.
+    fn facts_begin(&mut self, facts: Vec<(Variable, (i64, i64))>) -> usize {
+        self.fact_depth += 1;
+        let depth = self.fact_depth;
+        self.facts.extend(facts.into_iter().map(|(v, r)| (v, r, depth)));
+        self.fact_values.len()
+    }
+
+    fn facts_end(&mut self, mark: usize) {
+        let depth = self.fact_depth;
+        self.facts.retain(|f| f.2 < depth);
+        self.fact_depth -= 1;
+        for v in self.fact_values.split_off(mark.min(self.fact_values.len())) {
+            self.ranges.remove(&v);
+        }
+    }
+
+    /// `v` is the current value of `var`: gives it the range of a fact about
+    /// the variable, if there is one.
+    fn note_fact(&mut self, var: Variable, v: ir::Value) {
+        let Some(&(_, range, _)) = self.facts.iter().rev().find(|f| f.0 == var) else { return };
+        if self.const_of(v).is_none() && !self.ranges.contains_key(&v) {
+            self.ranges.insert(v, range);
+            self.fact_values.push(v);
+        }
+    }
+
     /// The range an integer value is known to lie in, if any.
     fn range_of(&self, v: ir::Value) -> Option<(i64, i64)> {
         self.const_of(v).map(|c| (c, c)).or_else(|| self.ranges.get(&v).copied())
@@ -2500,12 +2588,17 @@ impl<'a, 'f> Gen<'a, 'f> {
         let body_b = self.b.create_block();
         let exit = self.b.create_block();
         self.b.ins().jump(header, &[]);
+        // the loop runs again after whatever its body assigns
+        self.facts.clear();
 
         self.b.switch_to_block(header);
         self.dead = false;
+        let mut facts = Vec::new();
+        self.cond_facts(cond, &mut facts);
         self.branch_on(cond, body_b, exit)?;
 
         self.b.switch_to_block(body_b);
+        let mark = self.facts_begin(facts);
         self.cancel_point();
         let nested = !self.top_loop;
         let (eb, gb) = (self.effects, self.guards);
@@ -2514,6 +2607,7 @@ impl<'a, 'f> Gen<'a, 'f> {
         let r = self.stmt(body);
         self.loops.pop();
         r?;
+        self.facts_end(mark);
         if nested {
             self.nested_loop_check(eb, gb)?;
         }
@@ -2533,6 +2627,8 @@ impl<'a, 'f> Gen<'a, 'f> {
         let incr = self.b.create_block();
         let exit = self.b.create_block();
         self.b.ins().jump(header, &[]);
+        // the loop runs again after whatever its body assigns
+        self.facts.clear();
 
         self.b.switch_to_block(header);
         let i = self.b.use_var(idx);
@@ -2591,6 +2687,8 @@ impl<'a, 'f> Gen<'a, 'f> {
         let incr = self.b.create_block();
         let exit = self.b.create_block();
         self.b.ins().jump(header, &[]);
+        // the loop runs again after whatever its body assigns
+        self.facts.clear();
 
         self.b.switch_to_block(header);
         let i = self.b.use_var(idx);
@@ -2867,6 +2965,9 @@ impl<'a, 'f> Gen<'a, 'f> {
                     return bail(format!("assignment to const '{}'", name));
                 }
                 let cur = self.b.use_var(local.var);
+                if local.ty == Ty::Int {
+                    self.note_fact(local.var, cur);
+                }
                 let (rv, rt) = self.expr(value)?;
                 let (nv, nt) = match op {
                     None => (rv, rt),
@@ -2876,6 +2977,8 @@ impl<'a, 'f> Gen<'a, 'f> {
                     return bail(format!("variable '{}' would change type", name));
                 }
                 self.b.def_var(local.var, nv);
+                // what was known about the variable was about its old value
+                self.facts.retain(|f| f.0 != local.var);
                 if let Some(i) = local.slot {
                     self.slots_assigned[i] = true;
                 }
@@ -3243,7 +3346,11 @@ impl<'a, 'f> Gen<'a, 'f> {
             if matches!(l.ty, Ty::List | Ty::Map) {
                 return bail(format!("'{}' (a list or map) used as a value", name));
             }
-            return Ok((self.b.use_var(l.var), l.ty));
+            let v = self.b.use_var(l.var);
+            if l.ty == Ty::Int {
+                self.note_fact(l.var, v);
+            }
+            return Ok((v, l.ty));
         }
         let binding = self.env.borrow().lookup(name);
         match binding {
