@@ -1,10 +1,16 @@
-# Fogu
+# Fogu — One language. From automation to devices.
 
-**Fogu** (`.fg` files) is a small, dynamically typed scripting language with
-optional type annotations, built for **automation, infrastructure, systems
-integration and small services**. This repository is the reference
-implementation in Rust: interpreter + **JIT compiler (Cranelift)**, REPL, CLI,
-git-based package manager and standalone executables.
+**Fogu** (`.fg` files) is an independent programming language and runtime for
+connecting software, systems, services and devices: **configuration,
+automation, integration, infrastructure, applications and devices**, with one
+syntax, errors as values and cooperative tasks (`fg`, channels, `select`).
+Dynamically typed, with optional type annotations. See
+[FOGU_VISION.md](FOGU_VISION.md) for what Fogu is for and how it decides, and
+[docs/roadmap-0.8.0.md](docs/roadmap-0.8.0.md) for what comes next.
+
+This repository is the reference implementation in Rust: interpreter + **JIT
+compiler (Cranelift)**, REPL, CLI, git-based package manager and standalone
+executables.
 
 The name comes from **Fôgu** — *fire* in Forro, the creole of São Tomé and
 Príncipe — a mark of the identity of STP.
