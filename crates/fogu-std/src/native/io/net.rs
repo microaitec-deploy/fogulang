@@ -62,13 +62,53 @@ pub fn build() -> ModuleValue {
     }
 }
 
-/// `tcpListen(addr)` → TcpListener
+/// `tcpListen(addr, { reusePort, backlog })` → TcpListener
+///
+/// `reusePort: true` (Linux, macOS, BSD) lets several listeners — one per
+/// `sync.Worker`, each on its own core — take the same port; the kernel
+/// spreads the incoming connections over them.
 fn tcp_listen(args: &[Value]) -> Result<Value, String> {
-    max_args(args, 1, "tcpListen")?;
+    max_args(args, 2, "tcpListen")?;
     let addr = str_arg(args, 0, "tcpListen(addr)")?;
+    let (mut reuse_port, mut backlog) = (false, 1024u32);
+    match args.get(1) {
+        None | Some(Value::Nil) => {}
+        Some(Value::Map(m)) => {
+            for (k, v) in m.borrow().iter() {
+                match (k.as_str(), v) {
+                    ("reusePort", Value::Bool(b)) => reuse_port = *b,
+                    ("backlog", Value::Int(n)) if *n > 0 && *n <= u32::MAX as i64 => backlog = *n as u32,
+                    ("reusePort" | "backlog", other) => {
+                        return Err(format!("tcpListen: invalid '{}': {}", k, other.to_display_string()));
+                    }
+                    (other, _) => return Err(format!("tcpListen: unknown option '{}' (reusePort backlog)", other)),
+                }
+            }
+        }
+        Some(other) => return Err(format!("tcpListen(addr, opts): options must be a map, got '{}'", other.type_name())),
+    }
+    #[cfg(not(unix))]
+    if reuse_port {
+        return Err(io_err!("tcpListen: reusePort is not available on this system"));
+    }
     let a = addr.clone();
-    let listener = rt::block_on(async move { tokio::net::TcpListener::bind(a).await })?
-        .map_err(|e| io_err!("tcpListen: {} at {}", e, addr))?;
+    let listener = rt::block_on(async move {
+        let sa = tokio::net::lookup_host(a.as_str())
+            .await?
+            .next()
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "no address"))?;
+        let sock = if sa.is_ipv4() { tokio::net::TcpSocket::new_v4()? } else { tokio::net::TcpSocket::new_v6()? };
+        // as the standard listener does: a restarted server can bind at once
+        #[cfg(unix)]
+        sock.set_reuseaddr(true)?;
+        #[cfg(unix)]
+        if reuse_port {
+            sock.set_reuseport(true)?;
+        }
+        sock.bind(sa)?;
+        sock.listen(backlog)
+    })?
+    .map_err(|e| io_err!("tcpListen: {} at {}", e, addr))?;
     let local = listener.local_addr().map(|a| a.to_string()).unwrap_or_else(|_| "?".into());
     Ok(NativeObjectRef::new(TcpListenerValue { listener: Some(Arc::new(listener)), local, timeout: None }).to_value())
 }

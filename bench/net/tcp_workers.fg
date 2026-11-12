@@ -1,0 +1,39 @@
+// TCP echo server on several cores: one sync.Worker per core, each with its
+// own listener on the same port (reusePort) — the kernel spreads the
+// connections over them. Each worker serves its connections with fg tasks.
+//
+//   fogu tcp_workers.fg PORT [WORKERS]   (WORKERS: default half the cores)
+import sync from "fogu:sync"
+import system from "fogu:system"
+
+const port = Fogu.args.first() ?? "9102"
+import math from "fogu:math"
+const n = int(Fogu.args[1] ?? str(math.max(1, system.info.cores / 2)))
+
+const code = `
+import net from "fogu:net"
+const server = net.tcpListen("127.0.0.1:${port}", { reusePort: true })?
+fn serve() {
+    for conn in server {
+        fg fn(c) {
+            while true {
+                const [data, err] = c.read()
+                if err != nil || data == nil { break }
+                const [_, werr] = c.write(data)
+                if werr != nil { break }
+            }
+            c.close()
+        }(conn)
+    }
+}
+`
+const workers = []
+for i in 0..n {
+    workers.push(sync.Worker(code)?)
+}
+print("ready")
+// each worker serves until the process ends
+for w in workers {
+    fg fn(w) { w.call("serve") }(w)
+}
+Fogu.signal.wait()

@@ -1,0 +1,37 @@
+// tcpListen options: reusePort lets several listeners share a port (one per
+// sync.Worker in a multi-core server); an unknown option stops the program.
+import net from "fogu:net"
+
+const a = net.tcpListen("127.0.0.1:0", { reusePort: true, backlog: 64 })?
+const port = a.addr.split(":")[1]
+const b = net.tcpListen("127.0.0.1:" + port, { reusePort: true })?
+print("two listeners on one port:", a.addr == b.addr)
+
+// without reusePort the port is taken
+const [c, err] = net.tcpListen("127.0.0.1:" + port)
+print("plain listener:", c == nil, err != nil)
+
+// connections are served by the listeners together
+for l in [a, b] {
+    fg fn(l) {
+        while true {
+            const [conn, aerr] = l.accept(500ms)
+            if aerr != nil || conn == nil { break }
+            conn.writeLine("hi")
+            conn.close()
+        }
+    }(l)
+}
+let answers = 0
+for i in 0..8 {
+    const s = net.tcpConnect("127.0.0.1:" + port)?
+    if s.readLine()? == "hi" { answers = answers + 1 }
+    s.close()
+}
+print("answers:", answers)
+a.close()
+b.close()
+
+// a misspelt option stops the program
+net.tcpListen("127.0.0.1:0", { reuse: true })
+print("not reached")

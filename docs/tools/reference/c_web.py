@@ -610,7 +610,7 @@ for msg in ch { ch.send(str(msg).upper()) }
         "blocks": [
             {
                 "api": [
-                    ("net.tcpListen(\"host:port\")", "TcpListener · error", "Port 0 picks a free one. <code>accept(timeout?)</code> → TcpStream, <code>for conn in listener</code>, <code>setTimeout(d)</code>, <code>close()</code>; fields <code>addr localAddr port</code>."),
+                    ("net.tcpListen(\"host:port\", opts?)", "TcpListener · error", "Port 0 picks a free one. Options: <code>reusePort: true</code> (Linux, macOS, BSD) lets several listeners share the port — one per <code>sync.Worker</code> for a server on several cores, the kernel spreads the connections; <code>backlog</code> (default 1024). <code>accept(timeout?)</code> → TcpStream, <code>for conn in listener</code>, <code>setTimeout(d)</code>, <code>close()</code>; fields <code>addr localAddr port</code>."),
                     ("net.tcpConnect(\"host:port\", timeout?)", "TcpStream · error", ""),
                     ("stream.read(n = 64 KiB)", "buffer · nil · error", "What arrived (up to <code>n</code> bytes); <code>nil</code> at the end of the stream."),
                     ("stream.readExact(n) · stream.readAll()", "buffer · error", "Exactly <code>n</code> bytes · everything up to the end of the stream."),

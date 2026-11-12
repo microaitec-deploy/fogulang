@@ -3003,9 +3003,9 @@ export const REFERENCE: Record<string, RefData> = {
    {
     "api": [
      [
-      "net.tcpListen(\"host:port\")",
+      "net.tcpListen(\"host:port\", opts?)",
       "TcpListener · error",
-      "Port 0 picks a free one. <code>accept(timeout?)</code> → TcpStream, <code>for conn in listener</code>, <code>setTimeout(d)</code>, <code>close()</code>; fields <code>addr localAddr port</code>."
+      "Port 0 picks a free one. Options: <code>reusePort: true</code> (Linux, macOS, BSD) lets several listeners share the port — one per <code>sync.Worker</code> for a server on several cores, the kernel spreads the connections; <code>backlog</code> (default 1024). <code>accept(timeout?)</code> → TcpStream, <code>for conn in listener</code>, <code>setTimeout(d)</code>, <code>close()</code>; fields <code>addr localAddr port</code>."
      ],
      [
       "net.tcpConnect(\"host:port\", timeout?)",

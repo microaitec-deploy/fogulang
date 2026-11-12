@@ -59,6 +59,9 @@ program (see `bench/RESULTS.md`), and none is slower than in 0.7.4.
   lookups still use the I/O threads. Echo servers, 64 connections: TCP 21 000 → 89 000
   messages/s (Go: 107 000), UDP 1 800 → 151 000 (Go: 168 000); with one connection Fogu
   answers in a third of Go's time.
+- **`net.tcpListen(addr, { reusePort, backlog })`**: with `reusePort`, several listeners share a
+  port — one per `sync.Worker` makes a TCP server use every core (`bench/net/tcp_workers.fg`).
+  Echo with 256 connections: one thread 61 000 messages/s, 8 workers 471 000 (Go: 389 000).
 - **Scheduler**: a task waiting for I/O is resumed only when its operation has finished (it used
   to be resumed on every completion of any task, to ask); tasks waiting for sockets leave the run
   queue; before sleeping the scheduler looks a little longer for work when something arrived in

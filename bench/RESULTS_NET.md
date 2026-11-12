@@ -37,6 +37,18 @@ AMD Ryzen 7 5700U with Radeon Graphics · 16 cores · median of 1 rounds · fogu
 | Bun | 128129 | 0.38 | 2.06 | 0 |
 | Python (asyncio) | 27939 | 2.22 | 4.01 | 0 |
 
+## TCP echo, 256 connections
+
+256 connections, 64-byte messages, 5 s. Fogu also with one sync.Worker per core (reusePort): `bench/net/tcp_workers.fg`.
+
+| | messages/s | p50 ms | p99 ms | errors |
+|---|---:|---:|---:|---:|
+| Fogu (workers) | 471244 | 0.29 | 4.87 | 0 |
+| Fogu | 61128 | 3.9 | 26.93 | 0 |
+| Go | 389435 | 0.34 | 3.65 | 0 |
+| Bun | 75113 | 3.09 | 7.71 | 0 |
+| Python (asyncio) | 28911 | 8.37 | 37.42 | 0 |
+
 ## UDP echo
 
 64 sockets, 64-byte datagrams, each waits for its echo, 5 s.

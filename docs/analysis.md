@@ -446,8 +446,9 @@ out of tokio's own epoll (it woke an I/O thread per packet: this alone was 3× o
 edge-triggered permanent registration (no `epoll_ctl` per wait), a short adaptive spin before
 sleeping, and no receive on a socket known to be drained. TCP 21k → 89k msg/s (Go 107k), UDP
 1.8k → 151k (Go 168k), HTTP 46k → 49–54k req/s (Go 70k), WebSocket 114k → 124k msg/s (Go 80k).
-What is left: one interpreter thread serves every connection, so beyond some hundred
-connections Go (all cores) pulls ahead; a single HTTP connection pays the two hops between the
+One interpreter thread serves every connection, so beyond some hundred connections Go (all
+cores) pulls ahead of a single-threaded Fogu server (256 connections: 61k vs 389k msg/s); with
+`tcpListen(addr, { reusePort: true })` in one `sync.Worker` per core Fogu does 471k. What is left: a single HTTP connection pays the two hops between the
 I/O threads and the handler (1.5× Go's latency). `fogu:vm` runs the benchmarks within 0–10% of
 running them directly.
 

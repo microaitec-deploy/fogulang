@@ -72,7 +72,9 @@ const start = fn(cmd, args, probe) {
     nextPort = nextPort + 1
     const port = nextPort
     const log = "/tmp/fogu-bench-" + str(port) + ".log"
-    const line = ([cmd].concat(args).concat([str(port)])).map((a) => "'" + a + "'").join(" ")
+    // a script that takes more than the port gets it where "PORT_FIRST" stands
+    const withPort = pick(args.contains("PORT_FIRST"), args.map((a) => pick(a == "PORT_FIRST", str(port), a)), args.concat([str(port)]))
+    const line = ([cmd].concat(withPort)).map((a) => "'" + a + "'").join(" ")
     const r = process.run("sh", ["-c", line + " > " + log + " 2>&1 & echo $!"])?
     const pid = r.stdout.trim()
     const deadline = time.monotonic() + 10.0
@@ -152,12 +154,18 @@ if want("ws") {
     results.ws = impls.filter((i) => data[i.name].mps.len() > 0).map((i) => ({ name: i.name, mps: median(data[i.name].mps), errors: data[i.name].errors }))
 }
 
-// ---------- TCP and UDP echo: 64 connections, 64-byte messages ----------
-const echo = fn(kind) {
-    const impls = impls_of(kind, [
+// ---------- TCP and UDP echo: 64-byte messages ----------
+// `conns` connections; TCP also with 256, where the cores matter: there Fogu
+// runs one sync.Worker per core (bench/net/tcp_workers.fg, reusePort)
+const echo = fn(kind, conns, multicore) {
+    let impls = impls_of(kind, [
         { name: "Bun", cmd: bun, args: [dir + "/" + kind + ".js"] },
         { name: "Python (asyncio)", cmd: python, args: ["-I", dir + "/" + kind + ".py"] },
     ])
+    if multicore {
+        const half = str(int(system.info.cores / 2))
+        impls = [{ name: "Fogu (workers)", cmd: fogu, args: [dir + "/tcp_workers.fg", "PORT_FIRST", half] }].concat(impls)
+    }
     const data = {}
     for impl in impls { data[impl.name] = { mps: [], p50: [], p99: [], errors: 0 } }
     for round in 0..rounds {
@@ -167,7 +175,7 @@ const echo = fn(kind) {
                 continue
             }
             time.delay(200ms)
-            const r = process.run(netbench, ["load-" + kind, "127.0.0.1:" + str(s.port), "64", "5"])?
+            const r = process.run(netbench, ["load-" + kind, "127.0.0.1:" + str(s.port), str(conns), "5"])?
             stop(s)
             const j = json.parse(r.stdout.trim())
             if typeof(j) == "error" { print(kind, "load failed for", impl.name, r.stderr); continue }
@@ -181,8 +189,9 @@ const echo = fn(kind) {
     }
     return impls.filter((i) => data[i.name].mps.len() > 0).map((i) => ({ name: i.name, mps: median(data[i.name].mps), p50: median(data[i.name].p50), p99: median(data[i.name].p99), errors: data[i.name].errors }))
 }
-if want("tcp") { results.tcp = echo("tcp") }
-if want("udp") { results.udp = echo("udp") }
+if want("tcp") { results.tcp = echo("tcp", 64, false) }
+if want("tcp256") { results.tcp256 = echo("tcp", 256, true) }
+if want("udp") { results.udp = echo("udp", 64, false) }
 
 // ---------- tasks: memory, concurrent waits, message passing ----------
 const langs = [
@@ -248,7 +257,7 @@ const outFile = pick(dir == "net", "results_net.json", "bench/results_net.json")
 if only.len() > 0 && fs.exists(outFile) {
     const old = json.parse(fs.readText(outFile)?)
     if typeof(old) == "map" {
-        for k in ["http", "ws", "tcp", "udp", "tasks", "sleeps", "pingpong"] {
+        for k in ["http", "ws", "tcp", "tcp256", "udp", "tasks", "sleeps", "pingpong"] {
             if results[k] == nil && old[k] != nil { results[k] = old[k] }
         }
     }
@@ -286,6 +295,8 @@ table("HTTP", "`GET /hello` (a small JSON body), 64 keep-alive connections, 5 s.
 table("WebSocket echo", "50 connections, each sends a message and waits for its echo, 5 s.", results.ws,
     [["messages/s", (r) => whole(r.mps)], ["errors", (r) => str(r.errors)]])
 table("TCP echo", "64 connections, 64-byte messages, each waits for its echo, 5 s.", results.tcp,
+    [["messages/s", (r) => whole(r.mps)], ["p50 ms", (r) => ms2(r.p50)], ["p99 ms", (r) => ms2(r.p99)], ["errors", (r) => str(r.errors)]])
+table("TCP echo, 256 connections", "256 connections, 64-byte messages, 5 s. Fogu also with one sync.Worker per core (reusePort): `bench/net/tcp_workers.fg`.", results.tcp256,
     [["messages/s", (r) => whole(r.mps)], ["p50 ms", (r) => ms2(r.p50)], ["p99 ms", (r) => ms2(r.p99)], ["errors", (r) => str(r.errors)]])
 table("UDP echo", "64 sockets, 64-byte datagrams, each waits for its echo, 5 s.", results.udp,
     [["messages/s", (r) => whole(r.mps)], ["p50 ms", (r) => ms2(r.p50)], ["p99 ms", (r) => ms2(r.p99)], ["errors", (r) => str(r.errors)]])

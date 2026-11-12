@@ -2211,7 +2211,7 @@ import net from "fogu:net"
 
 TCP and UDP sockets on the shared runtime: an operation that waits (`accept`, reads, writes, `recv`, `tcpConnect`) lets the other `fg` tasks run. Data is read as a [buffer](#values) (`read readExact readAll recv`) or as text (`readLine readText`); writes take a str, a buffer or a list of byte ints. Network failures are error values. Timeouts are durations or int milliseconds.
 
-- `net.tcpListen("host:port")` → TcpListener · error — Port 0 picks a free one. `accept(timeout?)` → TcpStream, `for conn in listener`, `setTimeout(d)`, `close()`; fields `addr localAddr port`.
+- `net.tcpListen("host:port", opts?)` → TcpListener · error — Port 0 picks a free one. Options: `reusePort: true` (Linux, macOS, BSD) lets several listeners share the port — one per `sync.Worker` for a server on several cores, the kernel spreads the connections; `backlog` (default 1024). `accept(timeout?)` → TcpStream, `for conn in listener`, `setTimeout(d)`, `close()`; fields `addr localAddr port`.
 - `net.tcpConnect("host:port", timeout?)` → TcpStream · error
 - `stream.read(n = 64 KiB)` → buffer · nil · error — What arrived (up to `n` bytes); `nil` at the end of the stream.
 - `stream.readExact(n) · stream.readAll()` → buffer · error — Exactly `n` bytes · everything up to the end of the stream.
