@@ -62,6 +62,16 @@ program (see `bench/RESULTS.md`), and none is slower than in 0.7.4.
 - **`net.tcpListen(addr, { reusePort, backlog })`**: with `reusePort`, several listeners share a
   port — one per `sync.Worker` makes a TCP server use every core (`bench/net/tcp_workers.fg`).
   Echo with 256 connections: one thread 61 000 messages/s, 8 workers 471 000 (Go: 389 000).
+- **Scaling on cores, measured against Go**: `bench/run_net.fg scaling` runs the TCP echo
+  server on 1, 2, 4 and 8 pinned cores (Fogu: one `sync.Worker` per core; Go: `GOMAXPROCS`),
+  10 interleaved rounds each, with the spread, p50/p95/p99 and the machine's load. Medians, Go
+  over Fogu: 1.35× (1 core), 1.44× (2), 1.31× (4), 1.04× (8). The earlier p99 rise from 4 to 8
+  workers came from the load generator sharing the server's cores; pinned apart it is gone.
+- The reactor indexes its sockets by descriptor (no hashing per operation) and removes a
+  socket's registration explicitly when it closes (descriptor numbers are reused);
+  `close()` of a TCP connection ends both directions, so a read pending in another task
+  returns `nil`. `bench/net/tcp_workers.fg` takes a duration, reports the connections each
+  worker accepted and stops cleanly.
 - **Scheduler**: a task waiting for I/O is resumed only when its operation has finished (it used
   to be resumed on every completion of any task, to ask); tasks waiting for sockets leave the run
   queue; before sleeping the scheduler looks a little longer for work when something arrived in

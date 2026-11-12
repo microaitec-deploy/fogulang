@@ -193,6 +193,79 @@ if want("tcp") { results.tcp = echo("tcp", 64, false) }
 if want("tcp256") { results.tcp256 = echo("tcp", 256, true) }
 if want("udp") { results.udp = echo("udp", 64, false) }
 
+// ---------- scaling: the same TCP echo on 1, 2, 4 and 8 cores ----------
+// Fogu: one sync.Worker per core (tcp_workers.fg); Go: GOMAXPROCS = cores.
+// Each server is pinned to that many physical cores (one logical CPU per
+// core) and the load generator to the other logical CPUs, so the two do not
+// take each other's cores — at 8 the server has every physical core and the
+// generator only their second hardware threads.
+if want("scaling") {
+    // the logical CPUs of distinct physical cores, in order
+    const physical = []
+    const seen = {}
+    for cpu in 0..system.info.cores {
+        const [sib, serr] = fs.readText("/sys/devices/system/cpu/cpu" + str(cpu) + "/topology/thread_siblings_list")
+        const key = pick(serr == nil, (sib ?? "").trim(), str(cpu))
+        if seen[key] == nil {
+            seen[key] = true
+            physical.push(cpu)
+        }
+    }
+    const rows = []
+    for n in [1, 2, 4, 8] {
+        if n > physical.len() { break }
+        const serverCpus = physical.slice(0, n).map((c) => str(c)).join(",")
+        const used = physical.slice(0, n)
+        const rest = []
+        for cpu in 0..system.info.cores { if !used.contains(cpu) { rest.push(str(cpu)) } }
+        const clientCpus = rest.join(",")
+        let impls = [
+            { name: "Fogu", cmd: "taskset", args: ["-c", serverCpus, fogu, dir + "/tcp_workers.fg", "PORT_FIRST", str(n)] },
+            { name: "Go", cmd: "env", args: ["GOMAXPROCS=" + str(n), "taskset", "-c", serverCpus, netbench, "tcp"] },
+        ]
+        if prev != nil {
+            impls.push({ name: "Fogu (previous)", cmd: "taskset", args: ["-c", serverCpus, prev, dir + "/tcp_workers.fg", "PORT_FIRST", str(n)] })
+        }
+        const row = { workers: n }
+        // at least 10 runs of each: the spread matters as much as the median.
+        // Interleaved (each round runs every server once) so that a change of
+        // the machine's state during the measurement affects them all alike.
+        const reps = pick(rounds < 10, 10, rounds)
+        const allRuns = {}
+        for impl in impls { allRuns[impl.name] = [] }
+        for round in 0..reps {
+            for impl in impls {
+                const [s, serr] = start(impl.cmd, impl.args, nil)
+                if serr != nil { print("scaling ·", impl.name, "· did not start"); continue }
+                time.delay(300ms)
+                const r = process.run("taskset", ["-c", clientCpus, netbench, "load-tcp", "127.0.0.1:" + str(s.port), "256", "5"])?
+                stop(s)
+                const j = json.parse(r.stdout.trim())
+                if typeof(j) == "error" { print("scaling load failed for", impl.name, r.stderr); continue }
+                allRuns[impl.name].push(j)
+            }
+        }
+        for impl in impls {
+            const runs = allRuns[impl.name]
+            if runs.len() == 0 { continue }
+            // the run with the median throughput, whole, and the spread of all
+            const sorted = runs.sort((a, b) => a.count / a.seconds - b.count / b.seconds)
+            const m = sorted[sorted.len() / 2]
+            const rate = (r) => r.count / r.seconds
+            const errors = runs.reduce((acc, r) => acc + r.errors, 0)
+            row[impl.name] = {
+                count: m.count, seconds: m.seconds, mps: rate(m), min: rate(sorted[0]), max: rate(sorted[-1]),
+                p50: m.p50, p95: m.p95, p99: m.p99, errors: errors, runs: runs.len(),
+                all: sorted.map((r) => int(rate(r))),
+            }
+            print("scaling ·", impl.name, "·", str(n), "cores ·", str(int(rate(m))), "msg/s (", str(int(rate(sorted[0]))), "–", str(int(rate(sorted[-1]))), ") · p99", str(m.p99), "ms")
+        }
+        rows.push(row)
+    }
+    results.scaling = rows
+    results.scalingLoad = [loadStart, loadavg()]
+}
+
 // ---------- tasks: memory, concurrent waits, message passing ----------
 const langs = [
     { name: "Fogu", cmd: fogu, args: [], ext: "fg" },
@@ -257,7 +330,7 @@ const outFile = pick(dir == "net", "results_net.json", "bench/results_net.json")
 if only.len() > 0 && fs.exists(outFile) {
     const old = json.parse(fs.readText(outFile)?)
     if typeof(old) == "map" {
-        for k in ["http", "ws", "tcp", "tcp256", "udp", "tasks", "sleeps", "pingpong"] {
+        for k in ["http", "ws", "tcp", "tcp256", "udp", "scaling", "scalingLoad", "tasks", "sleeps", "pingpong"] {
             if results[k] == nil && old[k] != nil { results[k] = old[k] }
         }
     }
@@ -300,6 +373,30 @@ table("TCP echo, 256 connections", "256 connections, 64-byte messages, 5 s. Fogu
     [["messages/s", (r) => whole(r.mps)], ["p50 ms", (r) => ms2(r.p50)], ["p99 ms", (r) => ms2(r.p99)], ["errors", (r) => str(r.errors)]])
 table("UDP echo", "64 sockets, 64-byte datagrams, each waits for its echo, 5 s.", results.udp,
     [["messages/s", (r) => whole(r.mps)], ["p50 ms", (r) => ms2(r.p50)], ["p99 ms", (r) => ms2(r.p99)], ["errors", (r) => str(r.errors)]])
+if results.scaling != nil {
+    md.push("## Scaling: TCP echo on 1, 2, 4 and 8 cores")
+    md.push("")
+    md.push("256 connections, 64-byte messages, 5 s per run, at least 10 runs per case. Fogu: one `sync.Worker` per core with `tcpListen(addr, { reusePort: true })` (`bench/net/tcp_workers.fg`); Go: `GOMAXPROCS` = cores. The server is pinned to that many physical cores, the load generator to the other logical CPUs. Messages/s: median, with the lowest and highest run; latencies of the median run. Every run is in `results_net.json`.")
+    md.push("")
+    md.push("| cores | server | msg/s (median) | min – max | growth | p50 ms | p95 ms | p99 ms | errors | median / Go |")
+    md.push("|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    const base = results.scaling[0]
+    for r in results.scaling {
+        const g = r["Go"]
+        for name in ["Fogu", "Fogu (previous)", "Go"] {
+            const f = r[name]
+            if f == nil { continue }
+            const vsGo = pick(g != nil, ms2(f.mps / g.mps), "")
+            md.push("| " + str(r.workers) + " | " + name + " | " + whole(f.mps) + " | " + whole(f.min) + " – " + whole(f.max) + " | " +
+                ms2(f.mps / base[name].mps) + "× | " + ms2(f.p50) + " | " + ms2(f.p95) + " | " + ms2(f.p99) + " | " + str(f.errors) + " | " + vsGo + " |")
+        }
+    }
+    md.push("")
+    if results.scalingLoad != nil {
+        md.push("Load average of the machine (1 min) before and after: " + str(results.scalingLoad[0]) + " → " + str(results.scalingLoad[1]) + ".")
+        md.push("")
+    }
+}
 if results.tasks != nil {
     table("Memory per task", str(results.tasks.count) + " sleeping tasks.", results.tasks.perTask, [["bytes", (r) => whole(r.bytes)]])
 }

@@ -107,6 +107,14 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
 
 ## Conventions and pitfalls
 
+- **The fundamental rule** (`FOGU_VISION.md`): no change may compromise performance, memory,
+  concurrency efficiency, architecture, safety or simplicity. Accept when it improves or keeps
+  performance; investigate a measurable regression; reject it if the regression cannot be
+  removed. Prove it: compare against the previous version (`bench/run.fg`, `bench/run_net.fg`
+  with `FOGU_PREV=<previous fogu>`) and run `cargo test --release` before committing.
+- **Architecture is protected too** (`docs/architecture/engineering-principles.md`): changing a
+  fundamental (scheduler, memory model, worker isolation, value representation, reactors)
+  needs a design note in `docs/architecture/`, measurements before and after and the full suite.
 - **Performance is a requirement** (0.7.5): every program of `bench/` stays under 1.5× its Go
   version and no change may be slower than the previous release. Compare wall time (not
   `getrusage`, which under-reports here), minimum of many interleaved runs, against the previous

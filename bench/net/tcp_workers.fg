@@ -1,30 +1,74 @@
-// TCP echo server on several cores: one sync.Worker per core, each with its
-// own listener on the same port (reusePort) — the kernel spreads the
-// connections over them. Each worker serves its connections with fg tasks.
+// Multi-core TCP server with SO_REUSEPORT — a reference benchmark of the
+// runtime (bench/run_net.fg: "tcp256" and "scaling").
 //
-//   fogu tcp_workers.fg PORT [WORKERS]   (WORKERS: default half the cores)
+//   fogu tcp_workers.fg PORT [WORKERS] [SECONDS] [HOST]
+//
+// WORKERS: default half the logical CPUs. SECONDS: serve that long, then
+// stop cleanly and print how many connections each worker accepted (without
+// it the server runs until the process is stopped). HOST: default 127.0.0.1
+// (local only; 0.0.0.0 listens on every interface — expose it on purpose).
+//
+// Three mechanisms together:
+//   1. `tcpListen(addr, { reusePort: true })` — every worker has its own
+//      listener on the same port; the kernel spreads new connections over
+//      them (not perfectly evenly: the per-worker counts show how evenly).
+//   2. `sync.Worker` — an OS thread of this process with its own interpreter,
+//      scheduler and socket reactor; nothing is shared with the others except
+//      JSON values passed through `call`.
+//   3. `fg` tasks — inside each worker, one task per connection on one thread.
 import sync from "fogu:sync"
 import system from "fogu:system"
-
-const port = Fogu.args.first() ?? "9102"
 import math from "fogu:math"
-const n = int(Fogu.args[1] ?? str(math.max(1, system.info.cores / 2)))
+
+// the i-th argument, or `fallback` when there are fewer
+fn arg(i, fallback) {
+    if Fogu.args.len() > i { return Fogu.args[i] }
+    return fallback
+}
+const port = arg(0, "9102")
+const n = int(arg(1, str(math.max(1, system.info.cores / 2))))
+const seconds = int(arg(2, "0"))
+const host = arg(3, "127.0.0.1")
 
 const code = `
 import net from "fogu:net"
-const server = net.tcpListen("127.0.0.1:${port}", { reusePort: true })?
-fn serve() {
-    for conn in server {
-        fg fn(c) {
+import sync from "fogu:sync"
+import time from "fogu:time"
+const server = net.tcpListen("${host}:${port}", { reusePort: true })?
+
+// echoes on every connection; returns { accepted } once \`seconds\` have
+// passed (0: never), after closing the listener and every connection and
+// waiting for their tasks
+fn serve(seconds) {
+    const end = time.monotonic() + seconds
+    const open = {}
+    const wg = sync.WaitGroup()
+    let accepted = 0
+    while seconds == 0 || time.monotonic() < end {
+        let wait = 1s
+        if seconds > 0 { wait = (end - time.monotonic()) * 1s }
+        const [conn, err] = server.accept(wait)
+        if err != nil || conn == nil { continue }
+        accepted = accepted + 1
+        const id = str(accepted)
+        open[id] = conn
+        wg.add(1)
+        fg fn(c, id) {
             while true {
-                const [data, err] = c.read()
-                if err != nil || data == nil { break }
+                const [data, rerr] = c.read()
+                if rerr != nil || data == nil { break }
                 const [_, werr] = c.write(data)
                 if werr != nil { break }
             }
             c.close()
-        }(conn)
+            open.remove(id)
+            wg.done()
+        }(conn, id)
     }
+    server.close()
+    for id, c in open { c.close() }
+    wg.wait()
+    return { accepted: accepted }
 }
 `
 const workers = []
@@ -32,8 +76,26 @@ for i in 0..n {
     workers.push(sync.Worker(code)?)
 }
 print("ready")
-// each worker serves until the process ends
-for w in workers {
-    fg fn(w) { w.call("serve") }(w)
+
+// each worker serves in a task of this program; a failure is reported
+const results = chan(n)
+for i in 0..n {
+    fg fn(i, w) {
+        const [r, err] = w.call("serve", seconds)
+        if err != nil { print("worker " + str(i) + " failed: " + str(err)) }
+        results <- [i, r, err]
+    }(i, workers[i])
 }
-Fogu.signal.wait()
+
+if seconds == 0 {
+    Fogu.signal.wait()
+} else {
+    let total = 0
+    const counts = []
+    for k in 0..n {
+        const [i, r, err] = <-results
+        if err == nil { counts.push(r.accepted); total = total + r.accepted } else { counts.push(-1) }
+    }
+    for w in workers { w.close() }
+    print("connections per worker:", counts, "total:", total)
+}

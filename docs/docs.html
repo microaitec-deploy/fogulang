@@ -102,11 +102,14 @@
     <section id="intro" data-group="Getting started" data-title="Introduction" class="scroll-mt-20">
       <p class="text-sm font-semibold text-ember-600 dark:text-ember-400 uppercase tracking-wider">Official documentation</p>
       <h1 class="mt-2 text-4xl sm:text-5xl font-bold tracking-tight">The Fogu language</h1>
+      <p class="mt-3 text-xl font-semibold">One language. From automation to devices.</p>
       <p class="mt-4 text-lg text-slate-600 dark:text-slate-400 max-w-3xl">
-        Fogu (<code>.fg</code> files) is a small, predictable scripting language, dynamically typed with optional type
-        annotations, built for <strong>automation, infrastructure, systems integration and small services</strong>.
-        The reference implementation is written in Rust and ships an interpreter, a JIT compiler (Cranelift), a REPL,
-        a CLI, a package manager and standalone executables.
+        Fogu (<code>.fg</code> files) is an independent programming language and runtime for connecting software,
+        systems, services and devices — <strong>configuration, automation, integration, infrastructure, applications
+        and devices</strong>. It is dynamically typed with optional type annotations, its errors are values, and its
+        concurrency combines light tasks with real threads. The reference implementation ships an interpreter, a JIT
+        compiler (Cranelift), a REPL, a CLI, a package manager and standalone executables.
+        <strong>Built in Rust. Designed as Fogu.</strong> See <a class="underline" href="#about">About Fogu</a>.
       </p>
       <div class="mt-6 grid gap-4 sm:grid-cols-3">
         <div class="rounded-xl border border-slate-200 dark:border-slate-800 p-4">
@@ -133,6 +136,169 @@ http.serve(3000, fn(req) {
 })
 
 while true { time.delay(100ms) }</script>
+    </section>
+
+    <section id="about" data-group="Getting started" data-title="About Fogu" class="scroll-mt-20 mt-16">
+      <h2 class="text-3xl font-bold tracking-tight">About Fogu</h2>
+      <p class="mt-2 text-lg font-semibold">One language. Many possibilities.</p>
+      <p>Fogu is an independent programming language and runtime designed to connect software, systems, services and
+      devices. From configuration and automation to services, infrastructure, applications and embedded systems, it aims
+      to give one coherent way to build solutions in different settings. Fogu has its own syntax, semantics, execution
+      model, concurrency and tools. It is written in Rust — a solid technical foundation — without taking on the identity
+      or the design decisions of another language.</p>
+
+      <h3 class="mt-8 text-xl font-semibold">A language to build and to connect</h3>
+      <p>Technical work rarely lives alone: applications talk to services, services depend on infrastructure, devices
+      exchange data with systems. Fogu brings these areas into one language and one runtime:</p>
+      <ul>
+        <li><strong>Configuration</strong> — describe, validate and transform components, data and environments.</li>
+        <li><strong>Automation</strong> — run tasks and coordinate operations.</li>
+        <li><strong>Integration</strong> — connect services, protocols, APIs and external systems.</li>
+        <li><strong>Infrastructure</strong> — tools and services that administer and support systems.</li>
+        <li><strong>Applications</strong> — tools, services and desktop applications.</li>
+        <li><strong>Devices</strong> — hardware and embedded programming.</li>
+      </ul>
+      <p>These areas are the direction and the scope of the project. What is available in each depends on the module, the
+      platform and the version: the status of every feature is in <code>CHECKLIST.md</code>, and the boards the
+      <code>mcu</code> library has been tested on are listed in its documentation.</p>
+
+      <h3 class="mt-8 text-xl font-semibold">An identity of its own</h3>
+      <p>Fogu is not a copy of Rust, Go, Python or JavaScript, and it does not compete with them on a single number. It is
+      an independent language with its own syntax and semantics; a runtime designed around its own execution model;
+      light concurrency together with parallelism on real threads; integration with the operating system and with
+      native libraries; and tools and libraries organised around one ecosystem. Rust is how Fogu is implemented, not how
+      Fogu is programmed. The principles behind these choices are in <code>FOGU_VISION.md</code>.</p>
+
+      <h3 class="mt-8 text-xl font-semibold">The execution model</h3>
+      <p>Concurrency in Fogu combines two mechanisms:</p>
+      <ul>
+        <li><strong><code>sync.Worker</code> — real parallelism.</strong> A worker is an OS thread of the same process,
+        running in parallel with the others, with its own interpreter. Each worker has its own task scheduler and its own
+        network reactor, so the normal path of work shares no state between workers.</li>
+        <li><strong><code>fg</code> — light concurrency.</strong> An <code>fg</code> task is a coroutine managed by the
+        scheduler of its thread, not an OS thread. A task stays on the thread that created it: it never moves between
+        workers, which keeps execution local and the handling of values and resources simple.</li>
+      </ul>
+      <table class="mt-4 w-full text-sm">
+        <thead><tr><th class="text-left py-2 pr-4">Mechanism</th><th class="text-left py-2">Responsibility</th></tr></thead>
+        <tbody>
+          <tr><td class="py-2 pr-4"><code>sync.Worker</code></td><td class="py-2">Parallelism on real threads</td></tr>
+          <tr><td class="py-2 pr-4"><code>fg</code></td><td class="py-2">Concurrency with light tasks</td></tr>
+          <tr><td class="py-2 pr-4">Scheduler per thread</td><td class="py-2">Runs the tasks of its worker</td></tr>
+          <tr><td class="py-2 pr-4">Reactor per thread</td><td class="py-2">Follows the I/O of that worker</td></tr>
+        </tbody>
+      </table>
+      <p class="mt-4"><strong>Real threads for parallelism. Light tasks for concurrency. Local execution for less
+      coupling.</strong> The details — affinity, communication between workers, memory, scheduling, and how this was
+      verified — are in <code>docs/concurrency.md</code>.</p>
+
+      <h3 class="mt-8 text-xl font-semibold">Performance, with its context</h3>
+      <p>Fogu is developed with attention to performance, and its results are given with their method: they depend on the
+      hardware, the operating system, the load and the program they are compared with. A TCP echo server
+      (<code>bench/net/tcp_workers.fg</code>: one worker per core, each with <code>tcpListen(addr, { reusePort: true })</code>
+      and <code>fg</code> tasks), 256 connections, 3 s per run, on an 8-core AMD Ryzen 7 5700U:</p>
+      <table class="mt-4 w-full text-sm">
+        <thead><tr><th class="text-right py-2 pr-4">Workers</th><th class="text-right py-2 pr-4">Messages</th><th class="text-right py-2 pr-4">p50 ms</th><th class="text-right py-2 pr-4">p99 ms</th><th class="text-right py-2">Errors</th></tr></thead>
+        <tbody>
+          <tr><td class="text-right py-1 pr-4">1</td><td class="text-right pr-4">204 964</td><td class="text-right pr-4">3.429</td><td class="text-right pr-4">65.582</td><td class="text-right">0</td></tr>
+          <tr><td class="text-right py-1 pr-4">2</td><td class="text-right pr-4">352 555</td><td class="text-right pr-4">1.996</td><td class="text-right pr-4">7.195</td><td class="text-right">0</td></tr>
+          <tr><td class="text-right py-1 pr-4">4</td><td class="text-right pr-4">711 116</td><td class="text-right pr-4">0.950</td><td class="text-right pr-4">3.291</td><td class="text-right">0</td></tr>
+          <tr><td class="text-right py-1 pr-4">8</td><td class="text-right pr-4">1 412 363</td><td class="text-right pr-4">0.307</td><td class="text-right pr-4">4.802</td><td class="text-right">0</td></tr>
+        </tbody>
+      </table>
+      <p class="mt-4">With eight workers these runs processed 1 412 363 messages without errors: 6.89 times the throughput of
+      one worker. These numbers describe these runs, not a guarantee for every program or platform; a comparison with
+      another language must use the same machine, load, duration, parameters and method (<code>bench/run_net.fg</code>
+      measures Go on the same matrix). Measuring, validating and optimising the runtime is continuous work — the
+      wake-ups between the schedulers of different workers are being investigated now.</p>
+
+      <h3 class="mt-8 text-xl font-semibold">A solid foundation</h3>
+      <p>Rust gives Fogu mature tools and libraries, memory safety and integration with native code, without imposing its
+      programming model: the language and the runtime follow Fogu's own goals. The project includes an interpreter and a
+      Cranelift JIT, network and messaging libraries, FFI and an embeddable runtime, automation and integration with
+      external services, development and testing tools, and work on embedded platforms and microcontrollers. How mature
+      each of these is varies between platforms and versions.</p>
+
+      <h3 class="mt-8 text-xl font-semibold">Made for integration — and still growing</h3>
+      <p>Fogu aims to shorten the distance between writing logic, talking to systems and operating them: one language for
+      an automation task, a network service, an infrastructure tool or the logic of a device. Not every one of these is
+      finished — this is the direction that guides the language and its ecosystem. Fogu is under active development;
+      each release consolidates the language, the runtime, the libraries and the tools. Version 0.8.0 focuses on the
+      identity of the language, the execution model, performance, documentation and the quality of the ecosystem
+      (<code>docs/roadmap-0.8.0.md</code>), guided by verifiable implementation, reproducible tests and technical
+      documentation.</p>
+      <p class="mt-4">Website: <a class="underline" href="https://fogulang.microaitec.com/">fogulang.microaitec.com</a> ·
+      Source: <a class="underline" href="https://github.com/microaitec-deploy/fogulang">github.com/microaitec-deploy/fogulang</a></p>
+      <p class="mt-4">How Fogu evolves — the rule that no change may make it slower, and the fundamentals it keeps — is in
+      <a class="underline" href="#principles">Engineering principles</a>.</p>
+      <p class="mt-6 text-lg font-semibold">Local execution. Massive concurrency. Real parallelism.<br>Built in Rust. Designed as Fogu.</p>
+    </section>
+
+    <section id="principles" data-group="Getting started" data-title="Engineering principles" class="scroll-mt-20 mt-16">
+      <h2 class="text-3xl font-bold tracking-tight">Engineering principles</h2>
+      <p class="mt-2 text-lg font-semibold">Evolve without losing character. Add without compromising. Improve without losing the essence.</p>
+      <p>Fogu protects the decisions that make it what it is. These principles are permanent from 0.8.0 on and apply to
+      every change — features, fixes, refactors and dependencies. The full text is in
+      <code>docs/architecture/engineering-principles.md</code> and <code>FOGU_VISION.md</code>.</p>
+
+      <h3 class="mt-8 text-xl font-semibold">The fundamental rule</h3>
+      <p><strong>No feature, change or improvement may compromise Fogu's performance, efficiency or architectural
+      integrity.</strong> Every change is checked for performance, memory, concurrency (workers, <code>fg</code> tasks,
+      schedulers, reactors), architecture (no global synchronization without a reason), safety and simplicity.</p>
+      <table class="mt-4 w-full text-sm">
+        <thead><tr><th class="text-left py-2 pr-4">Result</th><th class="text-left py-2">Decision</th></tr></thead>
+        <tbody>
+          <tr><td class="py-2 pr-4">Performance improves or stays the same</td><td class="py-2"><strong>Accept</strong></td></tr>
+          <tr><td class="py-2 pr-4">A measurable regression</td><td class="py-2"><strong>Investigate</strong> — analyse, optimise, measure again</td></tr>
+          <tr><td class="py-2 pr-4">The regression cannot be removed</td><td class="py-2"><strong>Reject</strong> — however convenient the change is</td></tr>
+        </tbody>
+      </table>
+      <p class="mt-4">Proof, not claims: every relevant change is compared with the previous version through benchmarks
+      (<code>bench/run.fg</code>, <code>bench/run_net.fg</code> with <code>FOGU_PREV</code>, every run recorded with its spread
+      and the machine's load) and regression tests on both engines.</p>
+
+      <h3 class="mt-8 text-xl font-semibold">Four permanent commitments</h3>
+      <table class="mt-4 w-full text-sm">
+        <thead><tr><th class="text-left py-2 pr-4">Commitment</th><th class="text-left py-2">Purpose</th></tr></thead>
+        <tbody>
+          <tr><td class="py-2 pr-4"><strong>Architectural Preservation</strong></td><td class="py-2">Keep the identity and the fundamentals of the runtime.</td></tr>
+          <tr><td class="py-2 pr-4"><strong>Performance Integrity</strong></td><td class="py-2">No unjustified performance regression.</td></tr>
+          <tr><td class="py-2 pr-4"><strong>Compatibility Discipline</strong></td><td class="py-2">Control incompatible changes; keep releases predictable.</td></tr>
+          <tr><td class="py-2 pr-4"><strong>Reliability Evidence</strong></td><td class="py-2">Tests for reliability, safety, long-running stability and recovery from failures.</td></tr>
+        </tbody>
+      </table>
+
+      <h3 class="mt-8 text-xl font-semibold">The fundamentals</h3>
+      <ul>
+        <li><strong>Runtime</strong> — programs run on Fogu's own runtime; the libraries inside it are implementation details.</li>
+        <li><strong>Concurrency</strong> — light <code>fg</code> tasks, scheduled locally by their thread.</li>
+        <li><strong>Parallelism</strong> — workers on real OS threads.</li>
+        <li><strong>Isolation</strong> — a heap, a scheduler and a reactor per worker. Code may cross workers; state and execution context do not cross implicitly.</li>
+        <li><strong>Memory</strong> — reference-counted values with Rust's guarantees; no garbage collector without a measured need.</li>
+        <li><strong>I/O</strong> — local reactors and direct non-blocking system calls.</li>
+        <li><strong>Language</strong> — its own syntax and semantics, one meaning across interpreter, JIT, <code>fogu:vm</code> and executables.</li>
+        <li><strong>Simplicity</strong> — coherent features, no artificial complexity.</li>
+      </ul>
+
+      <h3 class="mt-8 text-xl font-semibold">Five questions for every change</h3>
+      <ol>
+        <li>Does it respect the current execution model?</li>
+        <li>Does it keep the runtime's isolation and efficiency?</li>
+        <li>Does it keep or improve performance — measured against the previous version?</li>
+        <li>Is the complexity it adds really justified?</li>
+        <li>Is it still coherent with the philosophy and identity of Fogu?</li>
+      </ol>
+      <p class="mt-4">Adding libraries, APIs, tools or syntax on the existing design is normal evolution. Changing a fundamental
+      — the scheduler, the memory model, worker isolation, how tasks run — needs a written design note, measurements
+      before and after and the full test suite. A change that would cost performance or a fundamental property without a
+      benefit that justifies it does not enter.</p>
+
+      <h3 class="mt-8 text-xl font-semibold">Trust is built, not announced</h3>
+      <p>Fogu does not call itself "production-ready" or "enterprise-grade": those words are not evidence. Trust comes from
+      keeping what is documented, what is implemented and what is measured consistent with each other, release after
+      release, and from writing down the limits. These principles do not by themselves make Fogu ready for every
+      production environment — that takes comprehensive tests, documented limitations, error handling, security,
+      compatibility and real use. They are how it gets there.</p>
     </section>
 
     <section id="install" data-group="Getting started" data-title="Installation" class="scroll-mt-20 mt-16">
@@ -873,6 +1039,12 @@ const j = import("fogu:json")                  // built-in modules too</script>
       <p><code>fg</code> starts a cooperative task (not an OS thread). Buffered or unbuffered channels connect tasks;
       <code>select</code> waits for the first ready case (choosing randomly among ready ones) and <code>timeout(d)</code>
       returns a channel that receives a value after <code>d</code>. The runtime detects deadlocks.</p>
+      <p class="mt-3">Two levels: <strong>threads for parallelism across cores, light tasks for concurrency at scale</strong>.
+      An <code>fg</code> task stays on the thread that started it and runs until it waits; a <code>sync.Worker</code> is an OS
+      thread of the same process with its own interpreter, scheduler and tasks, reached through <code>w.call</code> (JSON values,
+      nothing shared). A server on every core is one worker per core, each listening with
+      <code>net.tcpListen(addr, { reusePort: true })</code> and serving its connections with <code>fg</code> tasks — see
+      <code>docs/concurrency.md</code> and <code>bench/net/tcp_workers.fg</code>.</p>
       <script type="text/x-fogu">const results = chan(3)
 
 fg fn() {
@@ -1197,7 +1369,7 @@ true</script>
       <h2 class="text-2xl font-bold"><code>fogu:sync</code></h2>
       <p>Coordination of <code>fg</code> tasks. Waiting operations yield to the other tasks; waiting forever is reported as a deadlock.</p>
       <script type="text/x-fogu" data-title="import">import sync from "fogu:sync"</script>
-      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>sync.Mutex()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Mutex</td><td class="py-2"><code>lock()</code> <code>unlock()</code> <code>tryLock()</code> → bool, field <code>locked</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>sync.WaitGroup()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">WaitGroup</td><td class="py-2"><code>add(n = 1)</code> <code>done()</code> <code>wait()</code>, field <code>count</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>sync.Once()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Once</td><td class="py-2"><code>do(fn)</code> runs <code>fn</code> only the first time.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>sync.Atomic(value)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Atomic</td><td class="py-2"><code>get()</code> <code>set(v)</code> <code>add(n = 1)</code> → new value, <code>compareAndSwap(old, new)</code> → bool.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>sync.Semaphore(n)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Semaphore</td><td class="py-2"><code>acquire()</code> (waits for a permit) <code>tryAcquire()</code> → bool <code>release()</code>, fields <code>available size</code>. Also limits <a class="underline" href="#mod-vm">fogu:vm</a> tasks (<code>{ semaphore }</code>).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>sync.Worker(file | code, { core }?)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Worker · error</td><td class="py-2">A program of its own on another OS thread, with its own interpreter — on CPU <code>core</code> if given: the way to use several cores (<code>fg</code> tasks share one thread). <code>w.call(name, ...args)</code> calls a global function of the worker and waits without stopping the other tasks; arguments and results cross as JSON (numbers, texts, bools, nil, lists, maps) and nothing else is shared. A failure of the call comes back as an error value. <code>w.close()</code>, fields <code>core source closed</code>.</td></tr></tbody></table></div>
+      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>sync.Mutex()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Mutex</td><td class="py-2"><code>lock()</code> <code>unlock()</code> <code>tryLock()</code> → bool, field <code>locked</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>sync.WaitGroup()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">WaitGroup</td><td class="py-2"><code>add(n = 1)</code> <code>done()</code> <code>wait()</code>, field <code>count</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>sync.Once()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Once</td><td class="py-2"><code>do(fn)</code> runs <code>fn</code> only the first time.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>sync.Atomic(value)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Atomic</td><td class="py-2"><code>get()</code> <code>set(v)</code> <code>add(n = 1)</code> → new value, <code>compareAndSwap(old, new)</code> → bool.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>sync.Semaphore(n)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Semaphore</td><td class="py-2"><code>acquire()</code> (waits for a permit) <code>tryAcquire()</code> → bool <code>release()</code>, fields <code>available size</code>. Also limits <a class="underline" href="#mod-vm">fogu:vm</a> tasks (<code>{ semaphore }</code>).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>sync.Worker(file | code, { core }?)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Worker · error</td><td class="py-2">A program of its own on another OS thread, with its own interpreter — on CPU <code>core</code> if given: the way to use several cores (<code>fg</code> tasks share one thread). <code>w.call(name, ...args)</code> calls a global function of the worker and waits without stopping the other tasks; arguments and results cross as JSON (numbers, texts, bools, nil, lists, maps) and nothing else is shared. A failure of the call comes back as an error value. Each worker is a thread of the same process, not a separate process: its own interpreter, heap of Fogu values, task scheduler and socket reactor, so workers scale over cores without locks. With <code>net.tcpListen(addr, { reusePort: true })</code> in each, a TCP server uses every core (<code>bench/net/tcp_workers.fg</code>). <code>w.close()</code>, fields <code>core source closed</code>.</td></tr></tbody></table></div>
       <script type="text/x-fogu" data-title="example.fg">import sync from "fogu:sync"
 const wg = sync.WaitGroup()
 const total = sync.Atomic(0)

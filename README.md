@@ -5,10 +5,11 @@ connecting software, systems, services and devices: **configuration,
 automation, integration, infrastructure, applications and devices**, with one
 syntax, errors as values and cooperative tasks (`fg`, channels, `select`).
 Dynamically typed, with optional type annotations. See
-[FOGU_VISION.md](FOGU_VISION.md) for what Fogu is for and how it decides, and
+[FOGU_VISION.md](FOGU_VISION.md) for what Fogu is for and how it decides,
+[docs/concurrency.md](docs/concurrency.md) for its two levels of concurrency, and
 [docs/roadmap-0.8.0.md](docs/roadmap-0.8.0.md) for what comes next.
 
-This repository is the reference implementation in Rust: interpreter + **JIT
+**Built in Rust. Designed as Fogu.** This repository is the reference implementation in Rust: interpreter + **JIT
 compiler (Cranelift)**, REPL, CLI, git-based package manager and standalone
 executables.
 

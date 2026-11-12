@@ -46,8 +46,9 @@ Each domain is documented with the boards, systems and services that are
 2. **Errors are values.** `return value, error(msg)`, `const [x, err] = f()`,
    `expr?`. No exceptions. Programming mistakes stop the program; operational
    failures (I/O, network, data) are values the program decides about.
-3. **Concurrency you can read.** Cooperative `fg` tasks, channels, `select`,
-   timeouts and cancellation. Predictable before clever: no data races in
+3. **Concurrency you can read.** Threads for parallelism across cores
+   (`sync.Worker`), light tasks for concurrency at scale (`fg`), channels,
+   `select`, timeouts and cancellation (`docs/concurrency.md`). Predictable before clever: no data races in
    Fogu code, deadlocks reported, every wait can be bounded.
 4. **Batteries that agree with each other.** The standard library is one
    design, not a collection: the same argument conventions, the same error
@@ -65,6 +66,44 @@ Each domain is documented with the boards, systems and services that are
    every program of `bench/` within 1.5× of its Go version, and no release
    slower than the one before (`CLAUDE.md`). Publicly, numbers are technical
    information with their method, versions and code, not a headline.
+
+## The fundamental rule
+
+> **No feature, change or improvement may compromise Fogu's performance, efficiency or
+> architectural integrity.** First, keep what works well. Then improve without compromising.
+> A new feature is progress only when it adds value without sacrificing the fundamental
+> qualities of the language.
+
+This rule is permanent, from 0.8.0 on, and applies to every change — features, fixes,
+refactors, dependencies.
+
+**Every change is checked against:**
+
+1. **Performance** — no regression in execution time, throughput or latency.
+2. **Memory** — no needless consumption, copies, allocations or duplicated state.
+3. **Concurrency** — the efficiency of workers, `fg` tasks, schedulers and reactors is kept.
+4. **Architecture** — no added complexity or global synchronization without a reason.
+5. **Safety** — the guarantees and the isolation of the runtime are kept.
+6. **Simplicity** — no complex mechanism where a simpler, efficient solution exists.
+
+**Deciding:**
+
+| Result | Decision |
+|---|---|
+| Performance improves or stays the same | **Accept** — the change adds value without costing the existing properties |
+| A measurable regression | **Investigate** — analyse, optimise, measure again under controlled conditions |
+| The regression cannot be removed | **Reject** — the change does not enter the release, however convenient |
+
+**Proof, not claims.** Every relevant change is compared with the previous version through
+benchmarks (`bench/run.fg`, `bench/run_net.fg` with `FOGU_PREV`) and regression tests
+(`cargo test --release`, both engines). Saying an implementation is faster is not enough: the
+measurement shows it, with its runs, spread and machine load.
+
+The architecture that produces these properties is protected the same way:
+[docs/architecture/engineering-principles.md](docs/architecture/engineering-principles.md)
+— the fundamentals (runtime, concurrency, parallelism, isolation, memory, I/O,
+language, simplicity), five questions for every change, and what an
+architectural change requires.
 
 ## What Fogu is not
 

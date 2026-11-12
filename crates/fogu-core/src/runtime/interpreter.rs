@@ -1882,7 +1882,7 @@ impl Interpreter {
         let gate = sched::take_offered_gate();
         let mut out = None;
         let waited = self.keep_loc(|| {
-            sched::wait_until_on(gate.as_ref(), || {
+            sched::wait_until_on_restored(gate.as_ref(), || {
                 if out.is_none() {
                     out = poller();
                 }

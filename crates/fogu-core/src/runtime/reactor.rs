@@ -13,7 +13,6 @@
 //! Each interpreter thread (the main one, each `sync.Worker`) has its own.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::os::fd::RawFd;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -42,7 +41,8 @@ struct Reactor {
     ep: RawFd,
     event: RawFd,
     sleeping: Arc<AtomicBool>,
-    waits: HashMap<RawFd, Entry>,
+    /// By descriptor number (small, dense integers): no hashing on the hot path.
+    waits: Vec<Entry>,
     /// Entries with a gate still closed.
     waiting: usize,
 }
@@ -76,7 +76,7 @@ impl Reactor {
             let sleeping = Arc::new(AtomicBool::new(false));
             WAKERS.lock().unwrap_or_else(|p| p.into_inner()).push((event, Arc::clone(&sleeping)));
             REACTORS.fetch_add(1, Ordering::SeqCst);
-            Some(Reactor { ep, event, sleeping, waits: HashMap::new(), waiting: 0 })
+            Some(Reactor { ep, event, sleeping, waits: Vec::new(), waiting: 0 })
         }
     }
 
@@ -85,17 +85,30 @@ impl Reactor {
     /// *becomes* readable or writable, with no further call per wait. (A
     /// task only waits after a read or write found the socket not ready, so
     /// no edge is missed; an edge nobody waits for is dropped.)
+    /// The entry of `fd` (created empty when new).
+    fn entry(&mut self, fd: RawFd) -> &mut Entry {
+        let i = fd as usize;
+        if i >= self.waits.len() {
+            self.waits.resize_with(i + 1, Entry::default);
+        }
+        &mut self.waits[i]
+    }
+
     fn watch(&mut self, fd: RawFd) -> bool {
-        let e = self.waits.entry(fd).or_default();
+        if fd < 0 {
+            return false;
+        }
+        let ep = self.ep;
+        let e = self.entry(fd);
         if e.added {
             return true;
         }
         let events = (libc::EPOLLIN | libc::EPOLLOUT | libc::EPOLLRDHUP | libc::EPOLLET) as u32;
         let mut ev = libc::epoll_event { events, u64: fd as u64 };
         // SAFETY: `ev` is a valid event; a bad descriptor is an error, not undefined
-        let mut r = unsafe { libc::epoll_ctl(self.ep, libc::EPOLL_CTL_ADD, fd, &mut ev) };
+        let mut r = unsafe { libc::epoll_ctl(ep, libc::EPOLL_CTL_ADD, fd, &mut ev) };
         if r < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EEXIST) {
-            r = unsafe { libc::epoll_ctl(self.ep, libc::EPOLL_CTL_MOD, fd, &mut ev) };
+            r = unsafe { libc::epoll_ctl(ep, libc::EPOLL_CTL_MOD, fd, &mut ev) };
         }
         e.added = r == 0;
         e.added
@@ -106,7 +119,7 @@ impl Reactor {
             // cannot be watched (not a socket…): the caller reports it
             return None;
         }
-        let e = self.waits.get_mut(&fd)?;
+        let e = self.waits.get_mut(fd as usize)?;
         if !write && std::mem::take(&mut e.ready_read) {
             // something arrived meanwhile: try again right away
             return Some(Gate::new(std::sync::atomic::AtomicBool::new(true)));
@@ -124,8 +137,21 @@ impl Reactor {
 
     /// The descriptor is being closed (the kernel drops it from the epoll
     /// instance by itself): whoever still waited for it is let go.
+    ///
+    /// Descriptor numbers are reused by the kernel: the entry is emptied and
+    /// the registration removed explicitly (the kernel drops it by itself only
+    /// when no duplicate of the descriptor is left open), so events of the old
+    /// socket cannot be taken for a new one with the same number. An event
+    /// already read in the same batch can still arrive for the new socket; it
+    /// only makes a waiting operation try again (every operation retries a
+    /// non-blocking call and waits anew when it finds nothing), never lose or
+    /// invent data.
     fn forget(&mut self, fd: RawFd) {
-        if let Some(e) = self.waits.remove(&fd) {
+        if let Some(e) = self.waits.get_mut(fd as usize).map(std::mem::take) {
+            if e.added {
+                // SAFETY: removing a descriptor from our own epoll instance
+                unsafe { libc::epoll_ctl(self.ep, libc::EPOLL_CTL_DEL, fd, std::ptr::null_mut()) };
+            }
             for g in [e.read, e.write].into_iter().flatten() {
                 g.store(true, Ordering::Release);
                 super::sched::gate_opened(g);
@@ -155,7 +181,7 @@ impl Reactor {
                 continue;
             }
             let fd = token as RawFd;
-            let Some(e) = self.waits.get_mut(&fd) else { continue };
+            let Some(e) = self.waits.get_mut(fd as usize) else { continue };
             // an error or a hang-up is news for both directions: the retry reports it
             let broken = bits & (libc::EPOLLERR | libc::EPOLLHUP) as u32 != 0;
             if broken || bits & (libc::EPOLLIN | libc::EPOLLRDHUP) as u32 != 0 {
@@ -240,7 +266,7 @@ pub fn take_readable(fd: RawFd) -> bool {
     REACTOR.with(|r| {
         let mut r = r.borrow_mut();
         let Some(r) = r.as_mut() else { return true };
-        match r.waits.get_mut(&fd) {
+        match r.waits.get_mut(fd as usize) {
             Some(e) if e.added => std::mem::take(&mut e.ready_read),
             _ => true,
         }

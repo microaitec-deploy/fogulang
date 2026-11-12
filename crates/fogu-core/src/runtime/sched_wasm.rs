@@ -104,6 +104,24 @@ fn take_next_timer() -> Option<Instant> {
 
 /// Waits until `ready()`: only timers can still change anything, so it
 /// sleeps until the next deadline, or reports a deadlock.
+/// What a waiting task parks behind (see the native scheduler); WebAssembly
+/// has one thread and polls, so a gate is only a hint.
+pub type Gate = std::sync::Arc<std::sync::atomic::AtomicBool>;
+
+pub fn offer_gate(_gate: Gate) {}
+
+pub fn take_offered_gate() -> Option<Gate> {
+    None
+}
+
+pub fn wait_until_on(_gate: Option<&Gate>, ready: impl FnMut() -> bool) -> Result<(), String> {
+    wait_until(ready)
+}
+
+pub fn wait_until_on_restored(_gate: Option<&Gate>, ready: impl FnMut() -> bool) -> Result<(), String> {
+    wait_until(ready)
+}
+
 pub fn wait_until(mut ready: impl FnMut() -> bool) -> Result<(), String> {
     loop {
         if ready() {

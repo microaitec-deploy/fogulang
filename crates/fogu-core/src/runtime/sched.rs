@@ -15,7 +15,7 @@
 //!   it calls [`wake`] (or the next timer) instead of polling.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
@@ -243,11 +243,11 @@ thread_local! {
     /// Tasks waiting behind a gate that only this thread opens (a socket of
     /// its reactor), by the address of the gate: they are not in `QUEUE`, so
     /// a pass costs nothing for them, and [`gate_opened`] brings each back.
-    static PARKED: RefCell<HashMap<usize, Task>> = RefCell::new(HashMap::new());
+    static PARKED: RefCell<rustc_hash::FxHashMap<usize, Task>> = RefCell::new(rustc_hash::FxHashMap::default());
     /// Gates this thread opened since the last pass.
     static OPENED: RefCell<Vec<Gate>> = const { RefCell::new(Vec::new()) };
     /// Gates that are opened on this thread, and announced with [`gate_opened`].
-    static LOCAL_GATES: RefCell<std::collections::HashSet<usize>> = RefCell::new(std::collections::HashSet::new());
+    static LOCAL_GATES: RefCell<rustc_hash::FxHashSet<usize>> = RefCell::new(rustc_hash::FxHashSet::default());
     static CTX: Cell<Ctx> = const { Cell::new(Ctx { yielder: std::ptr::null(), stack_limit: 0 }) };
     static PROGRESS: Cell<u64> = const { Cell::new(0) };
     /// Pending deadlines of `timeout(d)` channels.
@@ -666,7 +666,19 @@ pub fn wait_until(ready: impl FnMut() -> bool) -> Result<(), String> {
 
 /// [`wait_until`] for a condition that can only become true after `gate` is
 /// set: a task waiting this way is not resumed (to ask `ready`) before that.
-pub fn wait_until_on(gate: Option<&Gate>, mut ready: impl FnMut() -> bool) -> Result<(), String> {
+pub fn wait_until_on(gate: Option<&Gate>, ready: impl FnMut() -> bool) -> Result<(), String> {
+    wait_inner(gate, true, ready)
+}
+
+/// [`wait_until_on`] for a caller that restores the interpreter's position
+/// itself after the wait (`Interpreter::poll_async`): the scheduler's
+/// capture of it at every switch would only repeat that work.
+pub fn wait_until_on_restored(gate: Option<&Gate>, ready: impl FnMut() -> bool) -> Result<(), String> {
+    wait_inner(gate, false, ready)
+}
+
+fn wait_inner(gate: Option<&Gate>, keep: bool, mut ready: impl FnMut() -> bool) -> Result<(), String> {
+    let capture = || if keep { capture() } else { None };
     loop {
         if ready() {
             return Ok(());

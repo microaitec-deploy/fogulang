@@ -1,6 +1,6 @@
 # Fogu networking: servers and tasks
 
-AMD Ryzen 7 5700U with Radeon Graphics · 16 cores · median of 1 rounds · fogu 0.7.5
+AMD Ryzen 7 5700U with Radeon Graphics · 16 cores · median of 10 rounds · fogu 0.7.5
 
 ## HTTP
 
@@ -60,6 +60,27 @@ AMD Ryzen 7 5700U with Radeon Graphics · 16 cores · median of 1 rounds · fogu
 | Go | 182316 | 0.23 | 1.78 | 0 |
 | Bun | 157099 | 0.29 | 1.96 | 0 |
 | Python (asyncio) | 25392 | 2.45 | 4.25 | 0 |
+
+## Scaling: TCP echo on 1, 2, 4 and 8 cores
+
+256 connections, 64-byte messages, 5 s per run, at least 10 runs per case. Fogu: one `sync.Worker` per core with `tcpListen(addr, { reusePort: true })` (`bench/net/tcp_workers.fg`); Go: `GOMAXPROCS` = cores. The server is pinned to that many physical cores, the load generator to the other logical CPUs. Messages/s: median, with the lowest and highest run; latencies of the median run. Every run is in `results_net.json`.
+
+| cores | server | msg/s (median) | min – max | growth | p50 ms | p95 ms | p99 ms | errors | median / Go |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | Fogu | 66086 | 63230 – 84980 | 1.0× | 3.6 | 5.83 | 12.88 | 0 | 0.74 |
+| 1 | Fogu (previous) | 62776 | 56317 – 77420 | 1.0× | 3.72 | 6.39 | 9.29 | 0 | 0.7 |
+| 1 | Go | 89196 | 77992 – 114800 | 1.0× | 2.73 | 4.69 | 5.92 | 0 | 1.0 |
+| 2 | Fogu | 147092 | 117833 – 156311 | 2.22× | 1.6 | 2.85 | 4.0 | 0 | 0.69 |
+| 2 | Fogu (previous) | 142401 | 133860 – 148465 | 2.26× | 1.66 | 2.87 | 3.83 | 0 | 0.67 |
+| 2 | Go | 211703 | 163356 – 222325 | 2.37× | 1.06 | 2.39 | 3.26 | 0 | 1.0 |
+| 4 | Fogu | 274827 | 201003 – 278648 | 4.15× | 0.85 | 1.85 | 2.58 | 0 | 0.76 |
+| 4 | Fogu (previous) | 262024 | 202321 – 278066 | 4.17× | 0.89 | 1.87 | 2.63 | 0 | 0.72 |
+| 4 | Go | 360089 | 328170 – 364444 | 4.03× | 0.68 | 1.56 | 2.21 | 0 | 1.0 |
+| 8 | Fogu | 548217 | 439469 – 555512 | 8.29× | 0.33 | 1.15 | 2.24 | 0 | 0.95 |
+| 8 | Fogu (previous) | 539888 | 516691 – 550509 | 8.6× | 0.33 | 1.15 | 2.19 | 0 | 0.94 |
+| 8 | Go | 572314 | 555818 – 584405 | 6.41× | 0.32 | 1.15 | 1.81 | 0 | 1.0 |
+
+Load average of the machine (1 min) before and after: 1.49 → 13.62.
 
 ## Memory per task
 

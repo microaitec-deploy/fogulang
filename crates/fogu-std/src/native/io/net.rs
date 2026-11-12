@@ -306,6 +306,8 @@ struct RawTcp {
     /// watches it since): unless the reactor saw more arrive, the next one
     /// would find nothing.
     drained: std::cell::Cell<bool>,
+    /// The reactor watches the socket already (registration is permanent).
+    watched: std::cell::Cell<bool>,
 }
 
 #[cfg(target_os = "linux")]
@@ -358,7 +360,10 @@ impl RawTcp {
             };
             // less than asked for: the socket is empty now. Watched from
             // here on (if it was not), so anything that arrives is noticed.
-            self.drained.set(got > 0 && got < s.len() && reactor::watch(self.fd()));
+            if got > 0 && got < s.len() && !self.watched.get() {
+                self.watched.set(reactor::watch(self.fd()));
+            }
+            self.drained.set(got > 0 && got < s.len() && self.watched.get());
             self.buf.borrow_mut().extend_from_slice(&s[..got]);
             Ok(got)
         })
@@ -618,7 +623,7 @@ impl TcpStreamValue {
         // Linux: out of the runtime of the I/O threads, into this thread's reactor
         #[cfg(target_os = "linux")]
         {
-            let raw = s.into_std().ok().map(|sock| std::rc::Rc::new(RawTcp { sock, buf: RefCell::new(Vec::new()), drained: std::cell::Cell::new(false) }));
+            let raw = s.into_std().ok().map(|sock| std::rc::Rc::new(RawTcp { sock, buf: RefCell::new(Vec::new()), drained: std::cell::Cell::new(false), watched: std::cell::Cell::new(false) }));
             return NativeObjectRef::new(TcpStreamValue {
                 raw,
                 reader: None,
@@ -735,8 +740,10 @@ impl FoguObject for TcpStreamValue {
                 self.reader = None;
                 #[cfg(target_os = "linux")]
                 if let Some(raw) = self.raw.take() {
-                    // sends FIN; the descriptor closes with the last reference
-                    let _ = raw.sock.shutdown(std::net::Shutdown::Write);
+                    // sends FIN and ends both directions: a read pending in
+                    // another task returns nil (end of stream) instead of
+                    // waiting on; the descriptor closes with the last reference
+                    let _ = raw.sock.shutdown(std::net::Shutdown::Both);
                 }
                 if let Some(w) = self.writer.take() {
                     // flushes and sends FIN without making the program wait

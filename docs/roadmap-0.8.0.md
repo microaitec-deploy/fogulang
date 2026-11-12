@@ -9,9 +9,14 @@ open items of `CHECKLIST.md` and "Known gaps" / "Concurrency audit" in
 Labels: `identity`, `language`, `runtime`, `concurrency`, `stdlib`, `pkg`,
 `security`, `ffi`, `desktop`, `mcu`, `tooling`, `docs`, `site`, `release`.
 
-Standing rules for every issue: a spec test (with and without the JIT) for
-behaviour; docs, `CHANGELOG.md` and the site in the same change; no benchmark of
-`bench/` slower than 0.7.5, none above 1.5× of Go.
+Standing rules for every issue: the five questions and the fundamentals of
+`docs/architecture/engineering-principles.md` (an issue that changes a fundamental
+needs a design note there); **the fundamental rule of `FOGU_VISION.md`** —
+no change may compromise performance, memory, concurrency, architecture, safety or
+simplicity; each is measured against the previous version (accept / investigate /
+reject) —, a spec test (with and without the JIT) for behaviour; docs,
+`CHANGELOG.md` and the site in the same change; no benchmark of `bench/` slower
+than 0.7.5, none above 1.5× of Go.
 
 ---
 
@@ -81,6 +86,38 @@ messages / 3 s; 2 workers 353k; 4 workers 711k; 8 workers 1 412k — linear in t
 Fogu values (they stay per thread). Done: `bench/run_net.fg` at 64 and 256 connections, Fogu
 within 1.5× of Go (or ahead) for HTTP, WebSocket, TCP and UDP, with the default settings.
 
+Design rule for #12c–#12g: **code may cross workers; state and execution context do not cross
+implicitly.** Each worker keeps its own heap, scheduler and reactor; workers talk through explicit
+interfaces (calls, channels of JSON values).
+
+**#12c `sync.Worker(fn)`** · `concurrency`
+A worker created from a function: the function's *source* is sent, and the worker compiles it in
+its own context — no `Rc` value, captured environment or coroutine crosses threads. Rules: a
+function that uses only its parameters, globals and imports is accepted (imports resolved in the
+worker; argument values sent with each call); one that captures a local variable is refused with
+an error naming the variable and suggesting to pass it as an argument; a global it uses must be
+reproducible in the worker (a constant or an import), otherwise the same kind of error. Three
+operations, documented as such: `sync.Worker(fn)` creates the worker and loads the function,
+`w.call(...)` invokes it (on the worker's scheduler, as a task of that worker), `w.close()` ends
+the worker and frees its resources. Done: spec tests for each rule, repeated calls, several
+workers, and close.
+
+**#12d Captures checked before the thread starts** · `concurrency` `tooling`
+The resolver computes what a function captures; `sync.Worker(fn)` and `fogu check` report a
+capture before any thread is created.
+
+**#12e Worker tasks between calls** · `concurrency`
+A worker's own `fg` tasks keep running between calls (today its thread waits for the next call and
+they pause): the worker's thread runs its scheduler and takes calls as tasks.
+
+**#12f Channels and `select` across workers** · `concurrency`
+A thread-safe channel of JSON values usable from several workers; `select` over a worker call; a
+worker's failure visible to its creator without a call.
+
+**#12g Wake-ups local to their worker** · `runtime`
+`sched::wake` is process-wide: a completion on one worker wakes the sleeping others. Each thread
+gets its own wake signal; measure the p99 of the scaling matrix before and after.
+
 **#13 Standard library conventions** · `stdlib`
 One document of argument order, options maps, error style, durations, buffers and sized
 numbers; a lint over `fogu-std` exports. Done: every module follows it or has an issue.
@@ -134,6 +171,11 @@ performance as a technical page (method, versions, code) instead of a home-page 
 **#24 Reproducible benchmarks** · `release`
 `bench/run.fg` and `bench/run_net.fg` with published method, machine, versions and source;
 startup, interpreter, JIT, memory, tasks, network, compile time and executable size.
+
+**#26 Reliability evidence** · `release` `runtime`
+Soak tests (a server and its workers under load for hours, memory flat), failure injection (a
+worker panics, a peer resets, a disk fills, a DNS lookup hangs) with the expected behaviour
+written down, and the results kept with each release. Done: the suite runs in CI nightly.
 
 **#25 Release candidate** · `release`
 Full suite, regressions against 0.7.5 resolved, `0.8.0-rc.1` published, then `0.8.0`.

@@ -6,7 +6,7 @@
 //	netbench load-tcp  ADDR CONNS SECONDS    64-byte messages, each waits for its echo
 //	netbench load-udp  ADDR CONNS SECONDS    the same with datagrams
 //
-// The loads print {"count": n, "seconds": s, "errors": e, "p50": ms, "p99": ms}.
+// The loads print {"count": n, "seconds": s, "errors": e, "p50": ms, "p95": ms, "p99": ms}.
 package main
 
 import (
@@ -152,7 +152,7 @@ func load(kind, target string, conns int, d time.Duration) {
 		}
 		return lat[int(float64(len(lat)-1)*p)]
 	}
-	out, _ := json.Marshal(map[string]any{"count": count, "seconds": secs, "errors": errors, "p50": pct(0.50), "p99": pct(0.99)})
+	out, _ := json.Marshal(map[string]any{"count": count, "seconds": secs, "errors": errors, "p50": pct(0.50), "p95": pct(0.95), "p99": pct(0.99)})
 	fmt.Println(string(out))
 }
 
