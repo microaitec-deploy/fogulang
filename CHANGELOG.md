@@ -50,6 +50,12 @@ program (see `bench/RESULTS.md`), and none is slower than in 0.7.4.
 - **JIT: `&&` / `||` in a condition are branches**, not a boolean that is built and then tested;
   `2.0 * x` is `x + x`; the IR verifier (a development aid) and unwind tables are no longer
   produced in release builds, which takes a third off every compilation.
+- **A smaller executable** (Linux x64: 73.9 MB → about 52 MB): the dependencies that are not on a
+  hot path are compiled for size (`[profile.release.package."*"]`; the interpreter, natives, JIT,
+  allocator, hashing, JSON and network stack keep `opt-level = 3`), and what is published is built
+  with whole-program LTO in one codegen unit. The benchmarks are unchanged.
+- **`list.sort()` of ints**: read without copying the list first, and long lists are sorted by
+  their bytes (radix sort): 300 000 ints in 7.6 ms instead of 12.5.
 - `fogu --jit-debug` also prints how long the JIT took to start and each function's machine code;
   `FOGU_JIT_DEBUG=3` adds the optimized IR and the machine code.
 - Built with Rust 1.99 (`rust-toolchain.toml`).

@@ -70,13 +70,133 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 opt-level = 2
 
-# `cargo build --release`: no symbols, thin LTO (small binary, still a quick build)
+# `cargo build --release`: no symbols, thin LTO (a quick build: tests and development).
+# What is published is built with whole-program LTO in one codegen unit, which drops
+# the code nothing reaches (about 20% off the executable, same speed):
+# `server/publish-all.sh` sets CARGO_PROFILE_RELEASE_LTO=fat and
+# CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 (as `--profile dist` does). It needs ~6 GB of
+# memory for one executable, so never two such builds at once.
 [profile.release]
 strip = true
 lto = "thin"
 
-# `cargo build --profile dist`: the smallest binary (for the runtimes of
-# `fogu build --compile`); slower to build
+# Size: the dependencies that are not on a hot path (cloud SDKs, database
+# drivers, codecs, parsers of formats…) are compiled for size, which takes
+# another 12% off the executable. What the benchmarks and servers spend
+# their time in keeps full speed: the workspace crates (interpreter, natives),
+# the JIT, the allocator, hashing, JSON and the network stack.
+[profile.release.package."*"]
+opt-level = "s"
+[profile.release.package.cranelift-codegen]
+opt-level = 3
+[profile.release.package.cranelift-frontend]
+opt-level = 3
+[profile.release.package.cranelift-jit]
+opt-level = 3
+[profile.release.package.cranelift-module]
+opt-level = 3
+[profile.release.package.cranelift-entity]
+opt-level = 3
+[profile.release.package.cranelift-bforest]
+opt-level = 3
+[profile.release.package.cranelift-bitset]
+opt-level = 3
+[profile.release.package.cranelift-control]
+opt-level = 3
+[profile.release.package.cranelift-assembler-x64]
+opt-level = 3
+[profile.release.package.cranelift-native]
+opt-level = 3
+[profile.release.package.regalloc2]
+opt-level = 3
+[profile.release.package.mimalloc]
+opt-level = 3
+[profile.release.package.libmimalloc-sys]
+opt-level = 3
+[profile.release.package.hashbrown]
+opt-level = 3
+[profile.release.package.ahash]
+opt-level = 3
+[profile.release.package.rustc-hash]
+opt-level = 3
+[profile.release.package.foldhash]
+opt-level = 3
+[profile.release.package.corosensei]
+opt-level = 3
+[profile.release.package.smallvec]
+opt-level = 3
+[profile.release.package.serde]
+opt-level = 3
+[profile.release.package.serde_json]
+opt-level = 3
+[profile.release.package.memchr]
+opt-level = 3
+[profile.release.package.itoa]
+opt-level = 3
+[profile.release.package.ryu]
+opt-level = 3
+[profile.release.package.indexmap]
+opt-level = 3
+[profile.release.package.bumpalo]
+opt-level = 3
+[profile.release.package.tokio]
+opt-level = 3
+[profile.release.package.mio]
+opt-level = 3
+[profile.release.package.bytes]
+opt-level = 3
+[profile.release.package.hyper]
+opt-level = 3
+[profile.release.package.hyper-util]
+opt-level = 3
+[profile.release.package.h2]
+opt-level = 3
+[profile.release.package.http]
+opt-level = 3
+[profile.release.package.httparse]
+opt-level = 3
+[profile.release.package.http-body]
+opt-level = 3
+[profile.release.package.tungstenite]
+opt-level = 3
+[profile.release.package.tokio-tungstenite]
+opt-level = 3
+[profile.release.package.tokio-util]
+opt-level = 3
+[profile.release.package.socket2]
+opt-level = 3
+[profile.release.package.futures-util]
+opt-level = 3
+[profile.release.package.futures-core]
+opt-level = 3
+[profile.release.package.parking_lot]
+opt-level = 3
+[profile.release.package.parking_lot_core]
+opt-level = 3
+[profile.release.package.crossbeam-utils]
+opt-level = 3
+[profile.release.package.crossbeam-deque]
+opt-level = 3
+[profile.release.package.crossbeam-epoch]
+opt-level = 3
+[profile.release.package.regex]
+opt-level = 3
+[profile.release.package.regex-automata]
+opt-level = 3
+[profile.release.package.aho-corasick]
+opt-level = 3
+[profile.release.package.sha2]
+opt-level = 3
+[profile.release.package.base64]
+opt-level = 3
+[profile.release.package.simdutf8]
+opt-level = 3
+[profile.release.package.rustls]
+opt-level = 3
+[profile.release.package.ring]
+opt-level = 3
+
+# `cargo build --profile dist`: the smallest binary (what is published); slow to build
 [profile.dist]
 inherits = "release"
 lto = "fat"

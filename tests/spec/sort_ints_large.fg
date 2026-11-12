@@ -1,0 +1,39 @@
+// Long lists of ints are sorted by their bytes (radix sort): the result must
+// be the one of a comparison sort, for negatives and the extremes too.
+
+const MAX = 9223372036854775807
+fn check(xs) {
+    const s = xs.sort()
+    let ok = s.len() == xs.len()
+    let sum = 0
+    for i in 1..s.len() {
+        if s[i - 1] > s[i] { ok = false }
+    }
+    for v in s { sum = sum + v % 1000003 }
+    let want = 0
+    for v in xs { want = want + v % 1000003 }
+    return [ok && sum == want, s[0], s[s.len() - 1]]
+}
+
+let x = 42
+const small = []
+const wide = []
+const mixed = []
+for i in 0..20000 {
+    x = (x * 1103515245 + 12345) % 2147483648
+    small.push(x)
+    wide.push((x - 1073741824) * 4294967291)
+    mixed.push(x % 2001 - 1000)
+}
+wide.push(MAX)
+wide.push(-MAX - 1)
+wide.push(0)
+print(check(small))
+print(check(wide))
+print(check(mixed))
+print(check([5, -3, 9, 0, -3, 7]))
+const same = []
+for i in 0..5000 { same.push(7) }
+print(check(same))
+// the original is left as it was
+print(small[0], small[19999], small.sort()[0] <= small[0])
