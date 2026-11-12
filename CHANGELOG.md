@@ -13,7 +13,7 @@ program (see `bench/RESULTS.md`), and none is slower than in 0.7.4.
 
 ### Changed
 
-- **Start-up: 3.9 ms → 1.8 ms** for `print("hello")` (Go: 2.0 ms), on Linux:
+- **Start-up: 4.4 ms → 2.0 ms** for `print("hello")` (Go: 1.7 ms), on Linux:
   - the interpreter runs on the main thread, on a large stack of its own, instead of on a second
     thread: no thread to create, and no sleeping thread for the kernel to wake up when the program
     ends (that wait grew with the run time: about 1 ms after a 6 ms program);
@@ -27,10 +27,10 @@ program (see `bench/RESULTS.md`), and none is slower than in 0.7.4.
   The same applies to the executables of `fogu build --compile`.
 - **Strings of up to 15 bytes live inside the value** (no allocation, nothing to free, nothing to
   follow to read them); longer ones are reference-counted as before. `Value` is still 24 bytes.
-  The `strings` benchmark (200 000 `"item" + str(i)`, join, split, sum of lengths): 59 ms → 35 ms;
-  `records`: 118 ms → 82 ms.
+  The `strings` benchmark (200 000 `"item" + str(i)`, join, split, sum of lengths): 57 ms → 32 ms (Go: 36);
+  `records`: 113 ms → 77 ms.
 - **JIT: calls to small functions are inlined**, including a function into itself (one level per
-  call site, which removes most of the calls of a recursion): `fib(32)` 21 ms → 14 ms. The
+  call site, which removes most of the calls of a recursion): `fib(32)` 19 ms → 12 ms (Go: 11.5). The
   interpreter's errors and lines are kept (`tests/spec/jit_inline.fg`).
 - **JIT: `/` and `%` by a constant use no division instruction** (a multiplication and shifts, or a
   shift and a mask for powers of two) and have nothing to check; the result of `x % c` and
@@ -42,7 +42,7 @@ program (see `bench/RESULTS.md`), and none is slower than in 0.7.4.
   lose track of being inside a loop, so nothing was hoisted and values computed before a loop but
   used only inside were recomputed on every iteration (in `mandel`, two divisions per iteration of
   the inner loop). Branches that leave a loop now do so through their first target, which is what
-  the optimizer expects: `mandel` 13 ms → 8.5 ms.
+  the optimizer expects: `mandel` 12 ms → 6.7 ms (Go: 5.7).
 - **JIT: float code is plain SSE2** (as Go's). With AVX enabled, Cranelift mixed VEX instructions
   with legacy SSE register moves, which stalls whenever some AVX code ran earlier in the process:
   the same compiled float loop ran 2–6× slower, erratically (a 1200×1200 Mandelbrot: 375 ms →

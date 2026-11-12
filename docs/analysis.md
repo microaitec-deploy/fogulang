@@ -422,19 +422,20 @@ interpreter:
   for ≤ 15 bytes (`fstr.rs`: an enum whose length byte is the niche, so `Str` is 16 bytes and
   `Value` stays 24) removed the allocations of the benchmark and of most keys and words.
 
-Minimum of 80 interleaved runs (20 for the last three), wall time in ms, same machine (WSL2,
-Ryzen 7 5700U), `lite` build (`--no-default-features`, static OpenSSL):
+Minimum of 120 interleaved runs (30 for the last three), wall time in ms, same machine (WSL2,
+Ryzen 7 5700U), the published binaries (`bench/cmp.py`):
 
 | benchmark | 0.7.4 | 0.7.5 | Go | 0.7.5 / Go |
 |---|---:|---:|---:|---:|
-| startup | 3.8 | 1.8 | 2.0 | 0.90 |
-| fib | 21.6 | 13.7 | 13.6 | 1.01 |
-| loop | 34.6 | 27.3 | 22.6 | 1.21 |
-| mandel | 13.4 | 8.7 | 6.6 | 1.32 |
-| strings | 59.5 | 35.3 | 35.8 | 0.99 |
-| maps | 174.0 | 165.0 | 174.5 | 0.95 |
-| records | 118.4 | 81.9 | 150.6 | 0.54 |
-| sort | 31.0 | 27.2 | 39.8 | 0.68 |
+| startup | 4.4 | 2.0 | 1.7 | 1.18 |
+| fib | 19.1 | 12.4 | 11.5 | 1.08 |
+| loop | 30.6 | 24.5 | 20.0 | 1.22 |
+| mandel | 11.9 | 6.7 | 5.7 | 1.18 |
+| strings | 56.6 | 32.4 | 35.6 | 0.91 |
+| maps | 156.9 | 149.5 | 182.1 | 0.82 |
+| records | 112.6 | 77.4 | 138.0 | 0.56 |
+| sort | 28.5 | 25.4 | 36.0 | 0.71 |
+| mandel 1200×1200 | 411.7 | 63.0 | 60.8 | 1.04 |
 
 What is left of the difference in `mandel` and `loop` is the compilation itself (0.5–0.8 ms per
 loop, 0.1 ms to start the JIT) and the overflow checks Go does not make.
