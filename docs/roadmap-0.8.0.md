@@ -71,6 +71,16 @@ WebSocket streams on it too. Done: `bench/run_net.fg` within 1.5× of Go at 64 c
 
 ## Stage 3 — Ecosystem
 
+**#12b Servers on every core, by default** · `runtime` `concurrency`
+The 0.7.5 measurement (TCP echo, 256 connections, `bench/net/tcp_workers.fg`): one thread 205k
+messages / 3 s; 2 workers 353k; 4 workers 711k; 8 workers 1 412k — linear in the cores, p99 from
+66 ms to under 5 ms. In 0.8.0 a server should get this without writing the workers by hand:
+`net.tcpListen`, `http.serve`, `web.app().listen` and `websocket.listen` take
+`{ workers: n | "auto" }` and run the handler program on one `sync.Worker` per core with
+`reusePort`; state shared between workers goes through channels or `fogu:kv`, never through
+Fogu values (they stay per thread). Done: `bench/run_net.fg` at 64 and 256 connections, Fogu
+within 1.5× of Go (or ahead) for HTTP, WebSocket, TCP and UDP, with the default settings.
+
 **#13 Standard library conventions** · `stdlib`
 One document of argument order, options maps, error style, durations, buffers and sized
 numbers; a lint over `fogu-std` exports. Done: every module follows it or has an issue.
