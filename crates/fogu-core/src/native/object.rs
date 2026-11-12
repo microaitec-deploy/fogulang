@@ -106,6 +106,11 @@ impl NativeObjectRef {
         self.inner.borrow().name().to_string()
     }
 
+    /// Looks at the type name without copying it.
+    pub fn with_name<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+        f(self.inner.borrow().name())
+    }
+
     /// See [`FoguObject::start_async`]; the borrow ends before returning.
     pub fn start_async(&self, method: &str, args: &[Value]) -> Option<Result<Poller, String>> {
         self.inner.borrow_mut().start_async(method, args)

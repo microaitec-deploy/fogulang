@@ -15,6 +15,8 @@ pub mod lexer;
 pub mod module;
 pub mod ops;
 pub mod parser;
+#[cfg(target_os = "linux")]
+pub mod reactor;
 pub mod resolver;
 #[cfg(not(target_family = "wasm"))]
 pub mod sched;

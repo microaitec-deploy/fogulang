@@ -1,0 +1,16 @@
+// TCP echo server (fogu:net), a task per connection
+import net from "fogu:net"
+const port = Fogu.args.first() ?? "9101"
+const server = net.tcpListen("127.0.0.1:" + port)?
+print("ready")
+for conn in server {
+    fg fn(c) {
+        while true {
+            const [data, err] = c.read()
+            if err != nil || data == nil { break }
+            const [_, werr] = c.write(data)
+            if werr != nil { break }
+        }
+        c.close()
+    }(conn)
+}

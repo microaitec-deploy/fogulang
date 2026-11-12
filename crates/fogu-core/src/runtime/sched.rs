@@ -15,7 +15,7 @@
 //!   it calls [`wake`] (or the next timer) instead of polling.
 
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
@@ -42,6 +42,49 @@ const POOL_KEEP: usize = 64 * 1024;
 const STACK_MARGIN: usize = 512 * 1024;
 
 type Task = Coroutine<(), (), Result<(), String>, TaskStack>;
+
+/// Set (from any thread) when the one thing a parked task waits for has
+/// happened. The scheduler does not resume a task whose gate is still closed:
+/// with many tasks waiting for I/O, each completion then costs one look at
+/// each gate instead of a switch into every task to ask it.
+pub type Gate = std::sync::Arc<std::sync::atomic::AtomicBool>;
+
+/// An operation that is starting (a native method called by the interpreter)
+/// says what its completion sets; [`take_offered_gate`] collects it.
+pub fn offer_gate(gate: Gate) {
+    OFFERED.with(|o| *o.borrow_mut() = Some(gate));
+}
+
+pub fn take_offered_gate() -> Option<Gate> {
+    OFFERED.with(|o| o.borrow_mut().take())
+}
+
+/// A gate that this thread will open, calling [`gate_opened`] when it does
+/// (the reactor's): a task parked behind it leaves the run queue meanwhile.
+pub fn local_gate(gate: &Gate) {
+    LOCAL_GATES.with(|l| l.borrow_mut().insert(std::sync::Arc::as_ptr(gate) as usize));
+}
+
+/// A [`local_gate`] was opened: its task runs in the next pass.
+pub fn gate_opened(gate: Gate) {
+    LOCAL_GATES.with(|l| l.borrow_mut().remove(&(std::sync::Arc::as_ptr(&gate) as usize)));
+    OPENED.with(|o| o.borrow_mut().push(gate));
+}
+
+/// Puts a task that suspended back where the scheduler finds it: parked
+/// behind its gate when this thread is the one that opens it, queued otherwise.
+fn requeue(task: Task) {
+    let gate = PARK_GATE.with(|g| g.borrow_mut().take());
+    if let Some(g) = &gate {
+        let key = std::sync::Arc::as_ptr(g) as usize;
+        let local = !g.load(Ordering::Acquire) && LOCAL_GATES.with(|l| l.borrow().contains(&key));
+        if local && PARKED.with(|p| !p.borrow().contains_key(&key)) {
+            PARKED.with(|p| p.borrow_mut().insert(key, task));
+            return;
+        }
+    }
+    QUEUE.with(|q| q.borrow_mut().push_back((task, gate)));
+}
 
 /// Tasks alive on stacks of their own mapping (with a guard page) before the
 /// next ones share big mappings. Each guarded stack costs the process two
@@ -190,7 +233,21 @@ struct Ctx {
 }
 
 thread_local! {
-    static QUEUE: RefCell<VecDeque<Task>> = const { RefCell::new(VecDeque::new()) };
+    static QUEUE: RefCell<VecDeque<(Task, Option<Gate>)>> = const { RefCell::new(VecDeque::new()) };
+    /// When this thread last saw something arrive while it had nothing to run.
+    static LAST_EVENT: Cell<Option<Instant>> = const { Cell::new(None) };
+    /// The gate of the task that just suspended (see [`wait_until_on`]).
+    static PARK_GATE: RefCell<Option<Gate>> = const { RefCell::new(None) };
+    /// A gate offered by the operation being started (see [`offer_gate`]).
+    static OFFERED: RefCell<Option<Gate>> = const { RefCell::new(None) };
+    /// Tasks waiting behind a gate that only this thread opens (a socket of
+    /// its reactor), by the address of the gate: they are not in `QUEUE`, so
+    /// a pass costs nothing for them, and [`gate_opened`] brings each back.
+    static PARKED: RefCell<HashMap<usize, Task>> = RefCell::new(HashMap::new());
+    /// Gates this thread opened since the last pass.
+    static OPENED: RefCell<Vec<Gate>> = const { RefCell::new(Vec::new()) };
+    /// Gates that are opened on this thread, and announced with [`gate_opened`].
+    static LOCAL_GATES: RefCell<std::collections::HashSet<usize>> = RefCell::new(std::collections::HashSet::new());
     static CTX: Cell<Ctx> = const { Cell::new(Ctx { yielder: std::ptr::null(), stack_limit: 0 }) };
     static PROGRESS: Cell<u64> = const { Cell::new(0) };
     /// Pending deadlines of `timeout(d)` channels.
@@ -317,6 +374,8 @@ pub fn set_served(n: usize) {
 /// does not wait.
 pub fn wake() {
     WAKE_GEN.fetch_add(1, Ordering::SeqCst);
+    #[cfg(target_os = "linux")]
+    super::reactor::notify();
     if SLEEPERS.load(Ordering::SeqCst) > 0 {
         let _g = WAKE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         WAKE_CV.notify_all();
@@ -357,6 +416,44 @@ impl Drop for IoGuard {
 
 /// Sleeps until [`wake`] is called after `since` was read, or `deadline`.
 fn sleep_until_woken(since: u64, deadline: Option<Instant>) {
+    // An answer that is about to arrive (a request–reply exchange with a
+    // peer on this machine, an I/O thread finishing) is cheaper to wait for
+    // awake than asleep: going to sleep and being woken costs tens of
+    // microseconds, more on a virtual machine. So look a little longer first:
+    // 20 µs, or 200 µs when something arrived in the last millisecond (a
+    // server under load would otherwise sleep between every batch of
+    // requests). An idle program pays this once and then sleeps for good.
+    let started = Instant::now();
+    let hot = LAST_EVENT.with(|l| l.get()).is_some_and(|t| started.saturating_duration_since(t) < std::time::Duration::from_millis(1));
+    let spin_until = started + std::time::Duration::from_micros(if hot { 200 } else { 20 });
+    loop {
+        for _ in 0..32 {
+            if WAKE_GEN.load(Ordering::Relaxed) != since {
+                LAST_EVENT.with(|l| l.set(Some(Instant::now())));
+                return;
+            }
+            std::hint::spin_loop();
+        }
+        // a socket this thread's tasks wait for may be what arrives
+        #[cfg(target_os = "linux")]
+        if super::reactor::poll_now() {
+            LAST_EVENT.with(|l| l.set(Some(Instant::now())));
+            return;
+        }
+        let now = Instant::now();
+        if now >= spin_until || deadline.is_some_and(|d| d <= now) {
+            break;
+        }
+    }
+    // tasks of this thread wait for sockets: sleep on them (a wake-up from
+    // another thread interrupts it through the reactor's eventfd)
+    #[cfg(target_os = "linux")]
+    if super::reactor::waiting() {
+        let timeout = deadline.map(|d| d.saturating_duration_since(Instant::now()));
+        if super::reactor::sleep(timeout, || WAKE_GEN.load(Ordering::SeqCst) != since) {
+            return;
+        }
+    }
     let mut g = WAKE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     SLEEPERS.fetch_add(1, Ordering::SeqCst);
     while WAKE_GEN.load(Ordering::SeqCst) == since {
@@ -508,7 +605,7 @@ pub fn spawn(f: Box<dyn FnOnce() -> Result<(), String>>) -> Result<(), String> {
     if finished {
         recycle(task);
     } else {
-        QUEUE.with(|q| q.borrow_mut().push_back(task));
+        requeue(task);
     }
     Ok(())
 }
@@ -536,21 +633,40 @@ fn step(task: &mut Task) -> bool {
 
 /// Runs one round over all queued tasks.
 fn run_pass() {
+    // tasks whose socket became ready
+    let opened = OPENED.with(|o| std::mem::take(&mut *o.borrow_mut()));
+    for g in opened {
+        let key = std::sync::Arc::as_ptr(&g) as usize;
+        if let Some(task) = PARKED.with(|p| p.borrow_mut().remove(&key)) {
+            QUEUE.with(|q| q.borrow_mut().push_back((task, None)));
+        }
+    }
     let n = QUEUE.with(|q| q.borrow().len());
     for _ in 0..n {
         let task = QUEUE.with(|q| q.borrow_mut().pop_front());
-        let Some(mut task) = task else { break };
+        let Some((mut task, gate)) = task else { break };
+        // still waiting for its operation: not worth a switch into it
+        if gate.as_ref().is_some_and(|g| !g.load(Ordering::Acquire)) {
+            QUEUE.with(|q| q.borrow_mut().push_back((task, gate)));
+            continue;
+        }
         if step(&mut task) {
             recycle(task);
         } else {
-            QUEUE.with(|q| q.borrow_mut().push_back(task));
+            requeue(task);
         }
     }
 }
 
 /// Blocks the current task until `ready()` is true, yielding control to
 /// the other tasks. Returns an error on deadlock.
-pub fn wait_until(mut ready: impl FnMut() -> bool) -> Result<(), String> {
+pub fn wait_until(ready: impl FnMut() -> bool) -> Result<(), String> {
+    wait_until_on(None, ready)
+}
+
+/// [`wait_until`] for a condition that can only become true after `gate` is
+/// set: a task waiting this way is not resumed (to ask `ready`) before that.
+pub fn wait_until_on(gate: Option<&Gate>, mut ready: impl FnMut() -> bool) -> Result<(), String> {
     loop {
         if ready() {
             return Ok(());
@@ -558,6 +674,9 @@ pub fn wait_until(mut ready: impl FnMut() -> bool) -> Result<(), String> {
         let ctx = CTX.with(|c| c.get());
         if !ctx.yielder.is_null() {
             // Inside a task: yield to the resumer.
+            if let Some(g) = gate {
+                PARK_GATE.with(|p| *p.borrow_mut() = Some(Gate::clone(g)));
+            }
             let state = capture();
             unsafe { (*ctx.yielder).suspend(()) };
             CTX.with(|c| c.set(ctx));
@@ -570,6 +689,11 @@ pub fn wait_until(mut ready: impl FnMut() -> bool) -> Result<(), String> {
         let woken = WAKE_GEN.load(Ordering::SeqCst);
         let before = progress();
         let state = capture();
+        // sockets that became ready while tasks were running
+        #[cfg(target_os = "linux")]
+        if super::reactor::poll_now() {
+            note_progress();
+        }
         run_pass();
         if let Some(restore) = state {
             restore();
@@ -580,6 +704,9 @@ pub fn wait_until(mut ready: impl FnMut() -> bool) -> Result<(), String> {
         if progress() == before {
             // operations of this thread's own caller do not count (see `set_served`)
             let busy = IN_FLIGHT.load(Ordering::SeqCst) > SERVED.with(|s| s.get());
+            // a task waiting for a socket is waiting for the outside world
+            #[cfg(target_os = "linux")]
+            let busy = busy || super::reactor::waiting();
             if let Some(deadline) = take_next_timer() {
                 // a completion (wake) ends the sleep early; the deadline
                 // stays pending until it passes
@@ -613,14 +740,19 @@ pub fn shutdown() {
     QUEUE.with(|q| {
         // We do not drop suspended coroutines (that would require unwinding
         // their stacks); the process is about to exit anyway.
-        for t in q.borrow_mut().drain(..) {
+        for (t, _) in q.borrow_mut().drain(..) {
             std::mem::forget(t);
         }
+        PARKED.with(|p| {
+            for (_, t) in p.borrow_mut().drain() {
+                std::mem::forget(t);
+            }
+        });
     });
 }
 
 /// Number of tasks still queued (diagnostics/tests).
 #[allow(dead_code)]
 pub fn pending_tasks() -> usize {
-    QUEUE.with(|q| q.borrow().len())
+    QUEUE.with(|q| q.borrow().len()) + PARKED.with(|p| p.borrow().len())
 }

@@ -1,0 +1,10 @@
+// UDP echo server (fogu:net)
+import net from "fogu:net"
+const port = Fogu.args.first() ?? "9201"
+const sock = net.udpBind("127.0.0.1:" + port)?
+print("ready")
+while true {
+    const [pkt, err] = sock.recvFrom()
+    if err != nil || pkt == nil { break }
+    sock.sendTo(pkt.from, pkt.data)
+}

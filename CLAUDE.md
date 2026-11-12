@@ -118,6 +118,12 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
   (`runtime::last_run`); `toolkit::startup` handles transparent huge pages. In the JIT, a branch
   that can leave a loop must leave through its *first* target (`order_branches` does it for all
   generated code): otherwise Cranelift stops hoisting loop-invariant code.
+- On Linux, `fogu:net` sockets do not go through tokio: `runtime/reactor.rs` is a per-thread
+  `epoll` reactor the scheduler sleeps in, `net.rs::direct` runs non-blocking system calls and
+  parks the task behind a `sched::Gate` (`offer_gate` / `wait_until_on`). A socket registered
+  with tokio wakes an I/O thread for every packet — keep plain sockets out of it. Registration is
+  edge-triggered and permanent: a reader may only wait after a receive found the socket empty.
+  The built-in profiler (`FOGU_PPROF`) can crash when it samples a task's stack under load.
 - `Str` is 16 bytes: inline up to 15 bytes, else `Rc`. It dereferences to `str`; mutate with
   `push_str` / `make_mut()`.
 - **The interpreter is the source of truth.** Any new JIT behaviour must produce

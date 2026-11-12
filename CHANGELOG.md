@@ -50,6 +50,22 @@ program (see `bench/RESULTS.md`), and none is slower than in 0.7.4.
 - **JIT: `&&` / `||` in a condition are branches**, not a boolean that is built and then tested;
   `2.0 * x` is `x + x`; the IR verifier (a development aid) and unwind tables are no longer
   produced in release builds, which takes a third off every compilation.
+- **Networking on the interpreter thread (Linux)**: `fogu:net` TCP connections and UDP sockets
+  are read and written directly, with non-blocking system calls, and a task whose socket is not
+  ready parks until the scheduler's own reactor (`epoll`) sees it ready — instead of handing every
+  operation to the I/O threads and waiting for the answer, which cost two wake-ups of sleeping
+  threads per read. `read`, `readText`, `readExact`, `readAll`, `readLine`, `write`, `writeLine`,
+  `recv`, `recvFrom`, `send`, `sendTo` and their timeouts all work this way; TLS streams and name
+  lookups still use the I/O threads. Echo servers, 64 connections: TCP 21 000 → 89 000
+  messages/s (Go: 107 000), UDP 1 800 → 151 000 (Go: 168 000); with one connection Fogu
+  answers in a third of Go's time.
+- **Scheduler**: a task waiting for I/O is resumed only when its operation has finished (it used
+  to be resumed on every completion of any task, to ask); tasks waiting for sockets leave the run
+  queue; before sleeping the scheduler looks a little longer for work when something arrived in
+  the last millisecond; method calls on native objects skip the chain of interceptors unless
+  the object's type has one (it copied the type name several times per call).
+- `bench/run_net.fg` measures HTTP, WebSocket, TCP and UDP against Go, Bun and Python, and the
+  previous Fogu (`FOGU_PREV`); results in `bench/RESULTS_NET.md`.
 - **A smaller executable** (Linux x64: 73.9 MB → about 52 MB): the dependencies that are not on a
   hot path are compiled for size (`[profile.release.package."*"]`; the interpreter, natives, JIT,
   allocator, hashing, JSON and network stack keep `opt-level = 3`), and what is published is built

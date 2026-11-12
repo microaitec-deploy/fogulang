@@ -273,11 +273,28 @@ fn worker(p: &Pool) {
 /// The result of work running elsewhere; taken once it is ready.
 pub struct Pending<T> {
     slot: Arc<Mutex<Option<T>>>,
+    /// Set when the work ended, with or without a result.
+    done: sched::Gate,
+}
+
+/// Sets the gate of a [`Pending`] when the work ends — also when it panics
+/// or is dropped before finishing, so nothing waits for it forever.
+struct Finished(sched::Gate);
+
+impl Drop for Finished {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+    }
 }
 
 impl<T> Pending<T> {
     pub fn try_take(&self) -> Option<T> {
         self.slot.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+
+    /// What is set when the work ends (see [`sched::Gate`]).
+    pub fn gate(&self) -> sched::Gate {
+        sched::Gate::clone(&self.done)
     }
 
     /// Did the work end without leaving a result (it panicked, or its task
@@ -291,13 +308,17 @@ impl<T> Pending<T> {
 pub fn spawn_blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Pending<T> {
     let slot = Arc::new(Mutex::new(None));
     let out = Arc::clone(&slot);
+    let done = sched::Gate::default();
     let guard = IoGuard::new();
+    // declared after the guard: set before the guard wakes the scheduler
+    let finished = Finished(sched::Gate::clone(&done));
     pool_spawn(Box::new(move || {
         let r = work();
         *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+        drop(finished);
         drop(guard); // wakes the scheduler, after the result is in place
     }));
-    Pending { slot }
+    Pending { slot, done }
 }
 
 /// Runs `fut` on the shared runtime.
@@ -308,13 +329,16 @@ where
 {
     let slot = Arc::new(Mutex::new(None));
     let out = Arc::clone(&slot);
+    let done = sched::Gate::default();
     let guard = IoGuard::new();
+    let finished = Finished(sched::Gate::clone(&done));
     tokio().spawn(async move {
         let r = fut.await;
         *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+        drop(finished);
         drop(guard);
     });
-    Pending { slot }
+    Pending { slot, done }
 }
 
 /// Is there another task that could run while this one waits?
@@ -326,7 +350,8 @@ pub fn concurrent() -> bool {
 pub fn wait<T>(p: Pending<T>) -> Result<T, String> {
     let mut out = None;
     let mut lost = false;
-    sched::wait_until(|| {
+    let gate = p.gate();
+    sched::wait_until_on(Some(&gate), || {
         if out.is_none() {
             out = p.try_take();
             // checked after the take: the producer fills the slot before it lets go of it

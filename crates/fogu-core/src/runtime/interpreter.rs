@@ -1872,13 +1872,17 @@ impl Interpreter {
     /// Runs an asynchronous native method (`start_async`) to completion,
     /// waiting cooperatively; `None` when `method` is an ordinary one.
     fn poll_async(&self, receiver: &NativeObjectRef, method: &str, args: &[Value]) -> Option<Result<Value, String>> {
+        sched::take_offered_gate();
         let mut poller = match receiver.start_async(method, args)? {
             Ok(p) => p,
             Err(e) => return Some(Err(e)),
         };
+        // the operation may say what its completion sets: until then this
+        // task need not be asked
+        let gate = sched::take_offered_gate();
         let mut out = None;
         let waited = self.keep_loc(|| {
-            sched::wait_until(|| {
+            sched::wait_until_on(gate.as_ref(), || {
                 if out.is_none() {
                     out = poller();
                 }
@@ -1977,7 +1981,7 @@ impl Interpreter {
                     }
                     n => n == 2,
                 },
-                Value::BoundMethod(_) => true,
+                Value::BoundMethod(bm) => bm.receiver.with_name(|n| host.may_intercept_object(n)),
                 _ => false,
             };
             if interceptable {

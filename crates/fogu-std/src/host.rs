@@ -107,6 +107,14 @@ impl Host for Std {
         false
     }
 
+    fn may_intercept_object(&self, type_name: &str) -> bool {
+        // the receivers the interceptors of `intercept` look for
+        matches!(
+            type_name,
+            "FoguSignal" | "VmScript" | "VmContext" | "VmTask" | "TopcoatShard" | "Broker" | "NatsFogu" | "NatsFoguStore" | "NatsKv"
+        )
+    }
+
     fn intercept_method(
         &self,
         receiver: &NativeObjectRef,

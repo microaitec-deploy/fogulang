@@ -437,6 +437,20 @@ Ryzen 7 5700U), the published binaries (`bench/cmp.py`):
 | sort | 28.5 | 25.4 | 36.0 | 0.71 |
 | mandel 1200×1200 | 411.7 | 63.0 | 60.8 | 1.04 |
 
+**Networking** (after the above; `bench/run_net.fg`, 64 connections): the echo servers were
+idle 95% of the time — every read was handed to a tokio task and its result handed back, two
+wake-ups of sleeping threads per operation, and each completion resumed every waiting task to
+ask whether it was the one. In order: completion gates (only the task whose operation ended is
+resumed), a reactor on the interpreter thread with direct non-blocking calls, the sockets taken
+out of tokio's own epoll (it woke an I/O thread per packet: this alone was 3× on UDP),
+edge-triggered permanent registration (no `epoll_ctl` per wait), a short adaptive spin before
+sleeping, and no receive on a socket known to be drained. TCP 21k → 89k msg/s (Go 107k), UDP
+1.8k → 151k (Go 168k), HTTP 46k → 49–54k req/s (Go 70k), WebSocket 114k → 124k msg/s (Go 80k).
+What is left: one interpreter thread serves every connection, so beyond some hundred
+connections Go (all cores) pulls ahead; a single HTTP connection pays the two hops between the
+I/O threads and the handler (1.5× Go's latency). `fogu:vm` runs the benchmarks within 0–10% of
+running them directly.
+
 **Size** (after the speed work, same benchmarks): 73.9 MB → 52.2 MB for Linux x64 (Windows
 71.1 → 47.2 MB). No single crate is large — the code is spread over some 750 of them — so the
 levers are global: `opt-level = "s"` for every dependency except the hot ones (−12%), and

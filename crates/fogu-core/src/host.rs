@@ -35,6 +35,14 @@ pub trait Host: Sync {
         true
     }
 
+    /// May [`intercept`](Self::intercept) handle method calls on native
+    /// objects of this type? The others (sockets, files, most objects) skip
+    /// the chain of interceptors on every call.
+    fn may_intercept_object(&self, type_name: &str) -> bool {
+        let _ = type_name;
+        true
+    }
+
     /// A method of a native object that needs the interpreter (`Agent.run`,
     /// `GrpcServer.serve`).
     fn intercept_method(
