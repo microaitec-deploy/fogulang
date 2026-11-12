@@ -437,6 +437,14 @@ Ryzen 7 5700U), the published binaries (`bench/cmp.py`):
 | sort | 28.5 | 25.4 | 36.0 | 0.71 |
 | mandel 1200×1200 | 411.7 | 63.0 | 60.8 | 1.04 |
 
+**Size** (after the speed work, same benchmarks): 73.9 MB → 52.2 MB for Linux x64 (Windows
+71.1 → 47.2 MB). No single crate is large — the code is spread over some 750 of them — so the
+levers are global: `opt-level = "s"` for every dependency except the hot ones (−12%), and
+whole-program LTO in one codegen unit for what is published (−20% more). That link needs about
+6 GB: the publish script builds one executable at a time, and ARM64 (vendored OpenSSL) keeps
+thin LTO (58.7 MB). Identical code folding gave 2% and was not kept; compressing the
+executable would be paid at every start.
+
 What is left of the difference in `mandel` and `loop` is the compilation itself (0.5–0.8 ms per
 loop, 0.1 ms to start the JIT) and the overflow checks Go does not make.
 
