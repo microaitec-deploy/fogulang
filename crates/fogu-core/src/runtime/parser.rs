@@ -24,6 +24,8 @@ pub struct Parser {
     /// Inside a `match` pattern `|` separates alternatives: it is not the
     /// bit-or operator there.
     no_pipe: bool,
+    /// Where each function of the text is (see [`super::fnsrc`]).
+    fn_spans: Vec<(Block, super::fnsrc::Span)>,
 }
 
 impl Parser {
@@ -34,7 +36,24 @@ impl Parser {
             type_params: Vec::new(),
             exported: Vec::new(),
             no_pipe: false,
+            fn_spans: Vec::new(),
         }
+    }
+
+    /// The functions this parser found and where they are, for
+    /// [`super::fnsrc::register`] (callers that parse a file).
+    pub fn take_fn_spans(&mut self) -> Vec<(Block, super::fnsrc::Span)> {
+        std::mem::take(&mut self.fn_spans)
+    }
+
+    /// Notes that the function whose body is `body` started at `start` and
+    /// ends before the current token.
+    fn note_fn(&mut self, start: (u32, u32), body: &Block) {
+        let end = match self.tokens.get(self.pos) {
+            Some(t) if t.tok != Token::Eof => Some((t.line, t.col)),
+            _ => None,
+        };
+        self.fn_spans.push((Rc::clone(body), super::fnsrc::Span { start, end }));
     }
 
     // ---------- Primitives ----------
@@ -450,6 +469,7 @@ impl Parser {
 
     /// `(params) => expr`, `(params) => { ... }` or `(params): T => ...` (spec §21).
     fn parse_arrow_fn(&mut self) -> Result<Expr, String> {
+        let start = self.here();
         let (params, mut prologue) = self.parse_param_list()?;
         if let Some(ret) = self.parse_optional_return_type()? {
             prologue.insert(0, Stmt::ReturnType(ret));
@@ -462,10 +482,9 @@ impl Parser {
             let e = self.parse_expr()?;
             Rc::new(vec![Stmt::Line(line), Stmt::Return(Some(e))])
         };
-        Ok(Expr::Fn {
-            params,
-            body: with_prologue(prologue, body),
-        })
+        let body = with_prologue(prologue, body);
+        self.note_fn(start, &body);
+        Ok(Expr::Fn { params, body })
     }
 
     /// Does the current `(` open the parameter list of an arrow function?
@@ -557,9 +576,11 @@ impl Parser {
     }
 
     fn parse_fn_decl(&mut self) -> Result<Stmt, String> {
+        let start = self.here();
         self.advance();
         let name = self.expect_ident("a function name")?;
         let (params, body) = self.parse_fn_tail()?;
+        self.note_fn(start, &body);
         Ok(Stmt::FnDecl { name, params, body })
     }
 
@@ -1457,11 +1478,13 @@ impl Parser {
 
         // anonymous fn
         if self.check(&Token::Fn) {
+            let start = self.here();
             self.advance();
             if let Token::Ident(_) = self.peek() {
                 self.advance();
             }
             let (params, body) = self.parse_fn_tail()?;
+            self.note_fn(start, &body);
             return Ok(Expr::Fn { params, body });
         }
 

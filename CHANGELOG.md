@@ -6,6 +6,16 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
+### Added
+
+- **`sync.Worker(fn)`**: a worker made from a function. The function's *source* crosses the
+  thread — never the value or the environment it captured — and `w.call(...args)` runs it. What
+  it uses besides its parameters is added to the worker's program: `fogu:` modules, top-level
+  functions (with what they use) and constants; a captured local variable, a mutable global or
+  any other value of this thread is refused with an error that names it, before any thread
+  starts. The parser notes where each function of a file is (`runtime::fnsrc`, a few words per
+  definition, nothing per call); the text is read back only when a worker needs it.
+
 ## [0.7.5] - 2026-11-12
 
 A performance release: every benchmark of `bench/` now runs in less than 1.5× the time of the Go

@@ -208,6 +208,21 @@ impl Environment {
         out
     }
 
+    /// The nearest binding of `name`: its value, whether it is mutable, and
+    /// whether it belongs to a module's top level (or the globals) rather than
+    /// to a function's or a block's scope.
+    pub fn lookup_scoped(&self, name: &str) -> Option<(Value, bool, bool)> {
+        let s = symbol::existing(name)?;
+        self.lookup_scoped_sym(s)
+    }
+
+    fn lookup_scoped_sym(&self, s: Sym) -> Option<(Value, bool, bool)> {
+        if let Some((v, m)) = self.find(s) {
+            return Some((v.clone(), m, self.module.is_some() || self.parent.is_none()));
+        }
+        self.parent.as_ref()?.borrow().lookup_scoped_sym(s)
+    }
+
     /// Own binding (value, mutable) of this environment.
     pub fn get_own(&self, name: &str) -> Option<(Value, bool)> {
         let (v, m) = self.find(symbol::existing(name)?)?;

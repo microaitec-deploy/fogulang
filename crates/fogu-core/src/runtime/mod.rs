@@ -2,6 +2,7 @@
 
 pub mod ast;
 pub mod environment;
+pub mod fnsrc;
 #[cfg(not(target_family = "wasm"))]
 pub mod ffi_stub;
 pub mod fstr;
@@ -59,6 +60,7 @@ fn load(path: &Path) -> Result<(Interpreter, Vec<ast::Stmt>, String), String> {
     let program = parser
         .parse_program()
         .map_err(|e| format!("{}: {}", filename, e))?;
+    fnsrc::register(path, parser.take_fn_spans());
 
     mark("parsed");
     let interp = Interpreter::new();

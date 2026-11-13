@@ -384,17 +384,182 @@ mod worker {
         tx: Option<Sender<Call>>,
         core: Option<usize>,
         source: String,
+        /// Made from a function (`sync.Worker(fn)`): the global of the worker
+        /// that `call(...args)` runs.
+        entry: Option<String>,
+    }
+
+    /// The global names a program can use without declaring them (this
+    /// thread's, computed once: a fresh interpreter has the same ones).
+    fn builtin_names() -> Rc<std::collections::HashSet<String>> {
+        thread_local! {
+            static NAMES: std::cell::OnceCell<Rc<std::collections::HashSet<String>>> = const { std::cell::OnceCell::new() };
+        }
+        NAMES.with(|n| Rc::clone(n.get_or_init(|| Rc::new(Interpreter::new().builtin_names()))))
+    }
+
+    /// `fn name(` with exactly this name: the text is a declaration.
+    fn declares(src: &str, name: &str) -> bool {
+        let Some(rest) = src.strip_prefix("fn") else { return false };
+        let rest = rest.trim_start();
+        !name.is_empty() && rest.len() > name.len() && rest.starts_with(name) && {
+            let next = rest[name.len()..].chars().next().unwrap_or(' ');
+            !(next.is_alphanumeric() || next == '_')
+        } && rest.len() < src.len()
+    }
+
+    /// The source of `name` as a top-level declaration of the worker.
+    fn as_global(name: &str, src: &str) -> String {
+        if declares(src, name) {
+            src.to_string()
+        } else {
+            format!("const {} = {}", name, src)
+        }
+    }
+
+    /// The text of a constant as Fogu source.
+    fn literal(v: &Value) -> Option<String> {
+        Some(match v {
+            Value::Nil => "nil".into(),
+            Value::Bool(b) => b.to_string(),
+            Value::Int(n) => n.to_string(),
+            Value::Float(f) if f.is_finite() => crate::runtime::value::display_float(*f),
+            Value::Str(s) => {
+                let mut out = String::with_capacity(s.len() + 2);
+                out.push('"');
+                for c in s.chars() {
+                    match c {
+                        '"' => out.push_str("\\\""),
+                        '\\' => out.push_str("\\\\"),
+                        '\n' => out.push_str("\\n"),
+                        '\r' => out.push_str("\\r"),
+                        '\t' => out.push_str("\\t"),
+                        '\0' => out.push_str("\\0"),
+                        c => out.push(c),
+                    }
+                }
+                out.push('"');
+                out
+            }
+            _ => return None,
+        })
+    }
+
+    /// The name a resolver error says is not defined.
+    fn undefined_name(e: &str) -> Option<String> {
+        let i = e.find("variable '")? + "variable '".len();
+        let j = e[i..].find("' is not defined")?;
+        Some(e[i..i + j].to_string())
+    }
+
+    /// `sync.Worker(fn)`: the worker's program, built from the function's
+    /// source — what crosses threads is code, never the function value or
+    /// the environment it captured. Whatever the function uses besides its
+    /// parameters and the builtins must be reproducible in the worker: a
+    /// `fogu:` module (imported again there), a top-level function of a file
+    /// (its source is added, with what it uses), a constant of a top-level
+    /// scope (written as a literal). A local variable it captures, or any
+    /// other value of this thread, is an error that names it — checked here,
+    /// before any thread starts. Returns (program, the global to call).
+    fn from_function(f: &crate::runtime::value::FnValue) -> Result<(String, String), String> {
+        let what = if f.name == "<anonymous>" { "the function".to_string() } else { format!("'{}'", f.name) };
+        let fail = |msg: String| io_err!("sync.Worker({}): {}", if f.name == "<anonymous>" { "fn" } else { &f.name }, msg);
+        let src = crate::runtime::fnsrc::source(&f.body).ok_or_else(|| {
+            fail(format!(
+                "the source of {} is not available: only functions defined in a file can start a worker (or pass a file or code)",
+                what
+            ))
+        })?;
+        let entry = if declares(&src, &f.name) { f.name.clone() } else { "__worker_main".to_string() };
+        let main = as_global(&entry, &src);
+        let builtins = builtin_names();
+        // what the function needs, dependencies first (a declaration must
+        // come before the code that runs it)
+        let mut deps: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        loop {
+            let mut code = deps.join("\n");
+            code.push('\n');
+            code.push_str(&main);
+            code.push('\n');
+            let program = Lexer::new(&code)
+                .tokenize()
+                .and_then(|t| Parser::new(t).parse_program())
+                .map_err(|e| fail(format!("its source does not parse on its own: {}", e)))?;
+            let err = match crate::runtime::resolver::check(&program, &builtins) {
+                Ok(_) => return Ok((code, entry)),
+                Err(e) => e,
+            };
+            let Some(name) = undefined_name(&err) else {
+                return Err(fail(err));
+            };
+            if !seen.insert(name.clone()) {
+                return Err(fail(format!("cannot make '{}' available in the worker", name)));
+            }
+            let found = f.closure.as_ref().and_then(|env| env.borrow().lookup_scoped(&name));
+            let line = match found {
+                None => return Err(fail(format!("it uses '{}', which is not defined", name))),
+                Some((_, _, false)) => {
+                    return Err(fail(format!(
+                        "it captures the local variable '{}' of this thread, which cannot cross threads: pass it as an argument (w.call(..., {}))",
+                        name, name
+                    )))
+                }
+                Some((Value::Module(m), _, true)) if m.name.starts_with("fogu:") => {
+                    format!("import {} from \"{}\"", name, m.name)
+                }
+                Some((Value::Fn(g), _, true)) => match crate::runtime::fnsrc::source(&g.body) {
+                    Some(gsrc) => as_global(&name, &gsrc),
+                    None => return Err(fail(format!("it calls '{}', whose source is not available", name))),
+                },
+                Some((_, true, true)) => {
+                    return Err(fail(format!(
+                        "it uses the variable '{}' of this thread, which can change: pass it as an argument",
+                        name
+                    )))
+                }
+                Some((v, false, true)) => match literal(&v) {
+                    Some(text) => format!("const {} = {}", name, text),
+                    None => {
+                        return Err(fail(format!(
+                            "it uses '{}' (a {}) from this thread: pass what it needs as arguments, or import it in the worker",
+                            name,
+                            v.type_name()
+                        )))
+                    }
+                },
+            };
+            deps.insert(0, line);
+        }
     }
 
     fn plain(e: String) -> String {
         e.strip_prefix(ERR_VALUE_PREFIX).map(str::to_string).unwrap_or(e)
     }
 
-    /// `sync.Worker(file | code, { core })`.
+    /// `sync.Worker(file | code | fn, { core })`.
     pub fn new(a: &[Value]) -> Result<Value, String> {
         max_args(a, 2, "sync.Worker")?;
-        let Value::Str(src) = &a[0] else {
-            return Err(format!("sync.Worker(file | code, opts) expects a str, got '{}'", a[0].type_name()));
+        // from a function: its program is built (and checked) before the thread starts
+        let built;
+        let mut entry = None;
+        let mut fn_dir = None;
+        let src: &str = match &a[0] {
+            Value::Str(s) => s,
+            Value::Fn(f) => {
+                let (code, name) = from_function(f)?;
+                entry = Some(name);
+                fn_dir = crate::runtime::fnsrc::file(&f.body).and_then(|p| p.parent().map(Path::to_path_buf));
+                built = code;
+                &built
+            }
+            Value::NativeFn(f) => {
+                return Err(format!(
+                    "sync.Worker: '{}' is a built-in function, which has no source to send: call it from a function of a file",
+                    f.name
+                ))
+            }
+            other => return Err(format!("sync.Worker(file | code | fn, opts) expects a str or a function, got '{}'", other.type_name())),
         };
         let core = match a.get(1) {
             None | Some(Value::Nil) => None,
@@ -412,8 +577,10 @@ mod worker {
             }
         }
         // a path to a .fg file, or the code itself
-        let (code, file, dir) = if src.ends_with(".fg") && !src.contains('\n') {
-            let path = PathBuf::from(src.as_str());
+        let (code, file, dir) = if let Some(name) = &entry {
+            (src.to_string(), format!("<worker fn {}>", name), fn_dir)
+        } else if src.ends_with(".fg") && !src.contains('\n') {
+            let path = PathBuf::from(src);
             let text = match crate::runtime::vfs::read(&path) {
                 Some(t) => t,
                 None => std::fs::read_to_string(&path).map_err(|e| io_err!("sync.Worker: {}: {}", src, e))?,
@@ -507,7 +674,7 @@ mod worker {
         if let Some(Err(e)) = started {
             return Err(io_err!("sync.Worker: {}", e));
         }
-        Ok(NativeObjectRef::new(WorkerValue { tx: Some(tx), core, source: file }).to_value())
+        Ok(NativeObjectRef::new(WorkerValue { tx: Some(tx), core, source: file, entry }).to_value())
     }
 
     impl FoguObject for WorkerValue {
@@ -543,15 +710,17 @@ mod worker {
                 return None;
             }
             let r = (|| {
-                let name = match args.first() {
-                    Some(Value::Str(s)) => s.to_string(),
-                    _ => return Err("Worker.call(name, ...args) expects the name of a function of the worker".to_string()),
+                // a worker made from a function runs it with every argument
+                let (name, rest) = match (&self.entry, args.first()) {
+                    (Some(entry), _) => (entry.clone(), args),
+                    (None, Some(Value::Str(s))) => (s.to_string(), &args[1..]),
+                    (None, _) => return Err("Worker.call(name, ...args) expects the name of a function of the worker".to_string()),
                 };
                 let tx = self.tx.as_ref().ok_or_else(|| io_err!("Worker.call: the worker is closed"))?;
                 let slot: Slot = Arc::new(Mutex::new(None));
                 let call = Call {
                     name: name.clone(),
-                    args: crate::native::json::stringify_value(&crate::native::util::list(args[1..].to_vec())),
+                    args: crate::native::json::stringify_value(&crate::native::util::list(rest.to_vec())),
                     slot: Arc::clone(&slot),
                     guard: IoGuard::new(),
                 };

@@ -1,0 +1,7 @@
+[185, 10, 11]
+[2250, 100, 11]
+<worker fn work>
+92
+9900
+nil error: sync.Worker(fn): it captures the local variable 'local' of this thread, which cannot cross threads: pass it as an argument (w.call(..., local))
+nil error: sync.Worker(bump): it uses the variable 'counter' of this thread, which can change: pass it as an argument

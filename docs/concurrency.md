@@ -114,10 +114,32 @@ w.close()
   that lasts as long as the service, as `bench/net/tcp_workers.fg` does with
   `serve()`. (Letting a worker's tasks run between calls is in the 0.8.0
   roadmap, #12e.)
-- **Not a function, yet.** `sync.Worker` takes a file or code text, not a
-  function value: a function is a value of its thread's heap, with the
-  environment it captures. 0.8.0 adds `sync.Worker(fn)`, which sends the
-  function's source and refuses functions that capture local variables (#12c).
+- **From a function** (0.8.0): `sync.Worker(fn)` sends the function's
+  *source* — a function value lives in its thread's heap with the environment
+  it captured and cannot cross. `w.call(...args)` runs it with every
+  argument. What the function uses besides its parameters and the builtins
+  must be reproducible in the worker, and is added to the worker's program:
+  `fogu:` modules (imported again), top-level functions of a file (their
+  source, with what they use) and constants (written as literals). A captured
+  local variable, a mutable global or any other value of this thread is an
+  error that names it — checked before any thread starts. Only functions
+  defined in a file qualify (code given to `-e` or `fogu:vm` has no file to
+  take the source from).
+
+  ```fogu
+  import sync from "fogu:sync"
+  import math from "fogu:math"
+
+  fn work(n) {
+      let total = 0
+      for i in 0..n {
+          total = total + math.sqrt(i)
+      }
+      return total
+  }
+  const w = sync.Worker(work)?
+  print(w.call(1000000)?)
+  ```
 
 ## A server on every core
 

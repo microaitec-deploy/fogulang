@@ -1,0 +1,72 @@
+// sync.Worker(fn): a worker made from a function. Its source crosses the
+// thread, never the value: what it uses must be reproducible in the worker
+// (fogu: modules, top-level functions, constants), and a captured local or a
+// mutable global is refused before any thread starts.
+import sync from "fogu:sync"
+import math from "fogu:math"
+
+const LIMIT = 50
+const GREETING = "hi \"there\"\n"
+
+fn square(x) {
+    return x * x
+}
+
+fn work(n) {
+    let total = 0
+    for i in 0..n {
+        total = total + square(i) % LIMIT
+    }
+    return [total, math.max(n, 3), GREETING.len()]
+}
+
+const w = sync.Worker(work)?
+print(w.call(10)?)
+print(w.call(100)?)
+print(w.source)
+w.close()
+
+// anonymous functions and arrows: call(...) runs them with every argument
+const mul = sync.Worker((a, b) => a * b + LIMIT)?
+print(mul.call(6, 7)?)
+mul.close()
+
+// fg tasks inside the worker, during the call
+fn tasks(n) {
+    const ch = chan(n)
+    for i in 0..n {
+        fg fn(i) {
+            ch <- i * 2
+        }(i)
+    }
+    let sum = 0
+    for i in 0..n {
+        sum = sum + <-ch
+    }
+    return sum
+}
+const t = sync.Worker(tasks)?
+print(t.call(100)?)
+t.close()
+
+// refused, with the name of what cannot cross
+fn make() {
+    const local = 5
+    return fn(x) {
+        return x + local
+    }
+}
+const [w1, e1] = sync.Worker(make())
+print(w1, e1)
+
+let counter = 0
+fn bump() {
+    counter = counter + 1
+    return counter
+}
+const [w2, e2] = sync.Worker(bump)
+print(w2, e2)
+
+// a built-in function has no source: a programming error
+sync.Worker(print)
+print("not reached")

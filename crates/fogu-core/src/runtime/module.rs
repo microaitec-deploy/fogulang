@@ -263,6 +263,7 @@ impl ModuleCache {
         let program = parser
             .parse_program()
             .map_err(|e| format!("{}: {}", display_path(canonical), e))?;
+        super::fnsrc::register(canonical, parser.take_fn_spans());
         super::resolver::check(&program, &interp.builtin_names())
             .map_err(|e| format!("{}: {}", display_path(canonical), e))?;
 
