@@ -6,6 +6,14 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-13
+
+Identity, execution model and the rules Fogu evolves by. Fogu is presented as an independent
+language and runtime for connecting software, systems, services and devices ("One language.
+From automation to devices."), with two levels of concurrency — real threads for parallelism,
+light tasks for concurrency — and a permanent rule that no change may make it slower.
+Performance work of 0.7.5 is included; no benchmark is slower than in 0.7.5.
+
 ### Added
 
 - **`sync.Worker(fn)`**: a worker made from a function. The function's *source* crosses the
@@ -15,6 +23,21 @@ be incompatible changes (spec §75).
   any other value of this thread is refused with an error that names it, before any thread
   starts. The parser notes where each function of a file is (`runtime::fnsrc`, a few words per
   definition, nothing per call); the text is read back only when a worker needs it.
+
+### Documentation and site
+
+- `FOGU_VISION.md` (what Fogu is for, the six domains, principles, the fundamental rule),
+  `docs/architecture/engineering-principles.md` (Architectural Preservation, Performance
+  Integrity, Compatibility Discipline, Reliability Evidence; the fundamentals; five questions),
+  `docs/concurrency.md` (`fg` tasks and workers: affinity, communication, memory, scheduling —
+  with the `strace` verification that each worker has its own scheduler and reactor) and
+  `docs/roadmap.md` (what shipped, what is next).
+- The site: home page with the new positioning, the six domains, the execution model and "How
+  Fogu evolves"; new pages `/docs/about` and `/docs/principles`; "What's new in 0.8.0" with run
+  examples. Benchmarks are technical information with their method, not a headline.
+- `bench/run_net.fg`: the 1/2/4/8-core scaling matrix against Go (pinned cores, 10 interleaved
+  rounds, spread, p50/p95/p99, machine load) and `FOGU_PREV` for the previous release.
+- The server keeps only the latest release and the latest version of each library.
 
 ## [0.7.5] - 2026-11-12
 

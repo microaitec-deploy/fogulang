@@ -1,10 +1,32 @@
-# Fogu 0.8.0 — roadmap and issues
+# Fogu roadmap
 
-The milestone that turns [FOGU_VISION.md](../FOGU_VISION.md) into the language,
-the runtime and the site. Five stages, in order; inside a stage the issues are
-independent. Each issue lists its scope and what "done" means. Sources: the
-open items of `CHECKLIST.md` and "Known gaps" / "Concurrency audit" in
-`docs/analysis.md`.
+What comes next, as issues: each lists its scope and what "done" means. The
+direction is [FOGU_VISION.md](../FOGU_VISION.md); the rules every change follows
+are in [docs/architecture/engineering-principles.md](architecture/engineering-principles.md).
+Sources: the open items of `CHECKLIST.md` and "Known gaps" / "Concurrency audit"
+in `docs/analysis.md`.
+
+## Shipped in 0.8.0 (2026-11-13)
+
+- **#1 The vision**: `FOGU_VISION.md`, the six domains, the README and the site
+  ("One language. From automation to devices.", About Fogu).
+- **#12c `sync.Worker(fn)`**: a worker from a function's source;
+  `w.call(...args)` runs it.
+- **#12d Captures checked before the thread starts**, with errors that name the
+  variable.
+- The engineering principles (the fundamental rule, four commitments,
+  the fundamentals, five questions) and `docs/concurrency.md` (two levels of
+  concurrency, verified with `strace`).
+- Part of #24: `bench/run_net.fg` with HTTP, WebSocket, TCP, UDP, the 256-connection
+  case and the 1/2/4/8-core scaling matrix against Go (interleaved, 10 rounds,
+  spread, p50/p95/p99, machine load), and `FOGU_PREV` to compare with the
+  previous release.
+- Part of #23: the home page with the six domains, the execution model and how
+  Fogu evolves; `/docs/about` and `/docs/principles`.
+
+## Next: 0.9.0
+
+The stages are in order; inside a stage the issues are independent.
 
 Labels: `identity`, `language`, `runtime`, `concurrency`, `stdlib`, `pkg`,
 `security`, `ffi`, `desktop`, `mcu`, `tooling`, `docs`, `site`, `release`.
@@ -16,15 +38,11 @@ no change may compromise performance, memory, concurrency, architecture, safety 
 simplicity; each is measured against the previous version (accept / investigate /
 reject) —, a spec test (with and without the JIT) for behaviour; docs,
 `CHANGELOG.md` and the site in the same change; no benchmark of `bench/` slower
-than 0.7.5, none above 1.5× of Go.
+than the previous release, none above 1.5× of Go.
 
 ---
 
 ## Stage 1 — Identity & Foundation
-
-**#1 Publish the vision** · `identity` `docs`
-Adopt `FOGU_VISION.md`; README opens with the new message and the six domains.
-Done: README, `docs/docs.html` intro, `skills/fogu/SKILL.md` and `llms.txt` say the same thing.
 
 **#2 Language reference, written from the code** · `language` `docs`
 A reference of what Fogu *is* today (execution model, types and inference, errors as values,
@@ -89,22 +107,6 @@ within 1.5× of Go (or ahead) for HTTP, WebSocket, TCP and UDP, with the default
 Design rule for #12c–#12g: **code may cross workers; state and execution context do not cross
 implicitly.** Each worker keeps its own heap, scheduler and reactor; workers talk through explicit
 interfaces (calls, channels of JSON values).
-
-**#12c `sync.Worker(fn)`** · `concurrency`
-A worker created from a function: the function's *source* is sent, and the worker compiles it in
-its own context — no `Rc` value, captured environment or coroutine crosses threads. Rules: a
-function that uses only its parameters, globals and imports is accepted (imports resolved in the
-worker; argument values sent with each call); one that captures a local variable is refused with
-an error naming the variable and suggesting to pass it as an argument; a global it uses must be
-reproducible in the worker (a constant or an import), otherwise the same kind of error. Three
-operations, documented as such: `sync.Worker(fn)` creates the worker and loads the function,
-`w.call(...)` invokes it (on the worker's scheduler, as a task of that worker), `w.close()` ends
-the worker and frees its resources. Done: spec tests for each rule, repeated calls, several
-workers, and close.
-
-**#12d Captures checked before the thread starts** · `concurrency` `tooling`
-The resolver computes what a function captures; `sync.Worker(fn)` and `fogu check` report a
-capture before any thread is created.
 
 **#12e Worker tasks between calls** · `concurrency`
 A worker's own `fg` tasks keep running between calls (today its thread waits for the next call and

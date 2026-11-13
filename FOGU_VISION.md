@@ -1,7 +1,7 @@
 # Fogu — One language. From automation to devices.
 
 This document says what Fogu is for, what it values and how it decides. It
-guides the roadmap (see [docs/roadmap-0.8.0.md](docs/roadmap-0.8.0.md)), the
+guides the roadmap (see [docs/roadmap.md](docs/roadmap.md)), the
 documentation and the official site. When a proposal conflicts with it, either
 the proposal changes or this document does — explicitly, in a commit of its own.
 

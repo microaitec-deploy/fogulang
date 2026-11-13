@@ -2156,7 +2156,7 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "fogu"
-version = "0.7.5"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "dotenvy",
@@ -2175,7 +2175,7 @@ dependencies = [
 
 [[package]]
 name = "fogu-core"
-version = "0.7.5"
+version = "0.8.0"
 dependencies = [
  "ahash",
  "base64 0.22.1",
@@ -2194,14 +2194,14 @@ dependencies = [
 
 [[package]]
 name = "fogu-ffi"
-version = "0.7.5"
+version = "0.8.0"
 dependencies = [
  "fogu",
 ]
 
 [[package]]
 name = "fogu-pkg"
-version = "0.7.5"
+version = "0.8.0"
 dependencies = [
  "flate2",
  "reqwest",
@@ -2212,7 +2212,7 @@ dependencies = [
 
 [[package]]
 name = "fogu-std"
-version = "0.7.5"
+version = "0.8.0"
 dependencies = [
  "ab_glyph",
  "aes-gcm",

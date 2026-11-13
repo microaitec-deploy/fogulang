@@ -223,9 +223,9 @@ while true { time.delay(100ms) }</script>
       <p>Fogu aims to shorten the distance between writing logic, talking to systems and operating them: one language for
       an automation task, a network service, an infrastructure tool or the logic of a device. Not every one of these is
       finished — this is the direction that guides the language and its ecosystem. Fogu is under active development;
-      each release consolidates the language, the runtime, the libraries and the tools. Version 0.8.0 focuses on the
-      identity of the language, the execution model, performance, documentation and the quality of the ecosystem
-      (<code>docs/roadmap-0.8.0.md</code>), guided by verifiable implementation, reproducible tests and technical
+      each release consolidates the language, the runtime, the libraries and the tools. Version 0.8.0 set out the
+      identity of the language, the execution model and the rules it evolves by; what comes next is in
+      <code>docs/roadmap.md</code> — guided by verifiable implementation, reproducible tests and technical
       documentation.</p>
       <p class="mt-4">Website: <a class="underline" href="https://fogulang.microaitec.com/">fogulang.microaitec.com</a> ·
       Source: <a class="underline" href="https://github.com/microaitec-deploy/fogulang">github.com/microaitec-deploy/fogulang</a></p>
@@ -393,151 +393,143 @@ print(typeof(bytes("hi")))  // buffer  — mutable bytes: b[0], b.hex(), b.readU
       </ul>
     </section>
 
-    <section id="whats-new" data-group="Getting started" data-title="What's new in 0.7.4" class="scroll-mt-20 mt-16">
-      <h2 class="text-2xl font-bold">What's new in 0.7.4</h2>
-      <p>Version 0.7.4 is about the runtime: numbers with a size, bit operators, code that runs on every core, and
-      less time lost between Fogu and native code. Every example below was run with the released binary; the box
-      under it is what it printed. The full list is in the <code>CHANGELOG</code>.</p>
+    <section id="whats-new" data-group="Getting started" data-title="What's new in 0.8.0" class="scroll-mt-20 mt-16">
+      <h2 class="text-2xl font-bold">What's new in 0.8.0</h2>
+      <p>Version 0.8.0 is about the execution model and its speed: <strong>real threads for parallelism, light tasks for
+      concurrency</strong>, sockets served by the interpreter's own thread, workers made from functions, and a runtime that
+      runs every program of <code>bench/</code> within 1.5× of its Go version. It also gives Fogu its identity
+      (<a class="underline" href="#about">About Fogu</a>) and the rules it evolves by
+      (<a class="underline" href="#principles">Engineering principles</a>). It includes the work of 0.7.5. Every example below
+      was run with the release; the box under it is what it printed. The full list is in the <code>CHANGELOG</code>.</p>
       <div class="overflow-x-auto mt-4">
         <table class="w-full text-sm border-collapse">
-          <thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Measured</th><th class="py-2 pr-4">0.7.3</th><th class="py-2">0.7.4</th></tr></thead>
+          <thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Measured</th><th class="py-2 pr-4">0.7.4</th><th class="py-2 pr-4">0.8.0</th><th class="py-2">Go</th></tr></thead>
           <tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60">
-            <tr><td class="py-2 pr-4">Recursive calls, <code>fib(40)</code></td><td class="py-2 pr-4">1.25 s</td><td>0.68 s</td></tr>
-            <tr><td class="py-2 pr-4">A C function (<code>abs</code>) in a hot loop</td><td class="py-2 pr-4">266 ns per call</td><td>9 ns per call</td></tr>
-            <tr><td class="py-2 pr-4">A numeric loop in <code>fogu:vm</code> with a timeout</td><td class="py-2 pr-4">587 ms</td><td>5 ms</td></tr>
-            <tr><td class="py-2 pr-4">100 000 parked <code>fg</code> tasks</td><td class="py-2 pr-4">error (out of mappings)</td><td>2 s, about 5 KB each</td></tr>
-            <tr><td class="py-2 pr-4">Start-up of <code>print(1)</code> · resident memory</td><td class="py-2 pr-4">9.4 ms · 21.8 MB</td><td>about 6 ms · 15 MB</td></tr>
-            <tr><td class="py-2 pr-4">Eight CPU-bound jobs on eight cores</td><td class="py-2 pr-4">one after another</td><td>5.6× faster with <code>sync.Worker</code></td></tr>
+            <tr><td class="py-2 pr-4">Start-up, <code>print("hello")</code></td><td class="py-2 pr-4">3.1 ms</td><td class="py-2 pr-4">1.7 ms</td><td>1.6 ms</td></tr>
+            <tr><td class="py-2 pr-4">Recursive calls, <code>fib(32)</code></td><td class="py-2 pr-4">18.3 ms</td><td class="py-2 pr-4">12.3 ms</td><td>11.5 ms</td></tr>
+            <tr><td class="py-2 pr-4">Mandelbrot 300×300</td><td class="py-2 pr-4">11.9 ms</td><td class="py-2 pr-4">6.5 ms</td><td>5.3 ms</td></tr>
+            <tr><td class="py-2 pr-4">Strings: build, join, split 200 000</td><td class="py-2 pr-4">54.0 ms</td><td class="py-2 pr-4">31.4 ms</td><td>36.0 ms</td></tr>
+            <tr><td class="py-2 pr-4">TCP echo, 64 connections</td><td class="py-2 pr-4">21 000 msg/s</td><td class="py-2 pr-4">89 000 msg/s</td><td>107 000 msg/s</td></tr>
+            <tr><td class="py-2 pr-4">UDP echo, 64 sockets</td><td class="py-2 pr-4">1 800 msg/s</td><td class="py-2 pr-4">151 000 msg/s</td><td>168 000 msg/s</td></tr>
+            <tr><td class="py-2 pr-4">TCP echo, 256 connections, 8 cores</td><td class="py-2 pr-4">one thread</td><td class="py-2 pr-4">548 000 msg/s (8 workers)</td><td>572 000 msg/s</td></tr>
+            <tr><td class="py-2 pr-4">Linux x64 executable</td><td class="py-2 pr-4">74 MB</td><td class="py-2 pr-4">52 MB</td><td>—</td></tr>
           </tbody>
         </table>
       </div>
-      <h3 class="text-lg font-semibold mt-10" id="new-sized">Sized numbers</h3>
-      <p>The sized types of Go — <code>int8 int16 int32 int64</code>, <code>uint8 … uint64</code>, <code>byte</code>, <code>rune</code>, <code>float32</code>, <code>float64</code> — are type names and conversion functions. An annotation checks the range; a conversion keeps the low bits. Arithmetic itself stays 64-bit and checked. See <a class="underline" href="#types">Type annotations</a>.</p>
-      <script type="text/x-fogu">// Sized numbers, as in Go: a range when it annotates, a conversion when called
-let level: uint8 = 255
-fn mix(a: uint8, b: uint8): uint8 {
-    return uint8(a + b)              // keeps the low 8 bits
-}
-print(mix(200, 100))                 // 44
+      <p class="mt-2 text-sm">Medians of interleaved runs on an AMD Ryzen 7 5700U (8 cores); method and every run in <code>bench/</code>.</p>
 
-print(uint8(300), int8(200), uint16(-1))
-print(int16(3.99), float32(0.1))
-
-let bad: uint8 = level + 1           // 256 does not fit</script>
-      <script type="text/x-fogu" data-lang="text">44
-44 -56 65535
-3 0.10000000149011612
-error[E0207]: type mismatch: variable 'bad' is declared as uint8, got int out of range (uint8 is 0..255)
-  --&gt; sized.fg:11
-    |
- 11 | let bad: uint8 = level + 1           // 256 does not fit
-    |     ^^^
-   = help: the value does not match the type annotation</script>
-      <h3 class="text-lg font-semibold mt-10" id="new-bits">Bit operators</h3>
-      <p><code>&amp;</code> <code>|</code> <code>^</code> <code>~</code> <code>&lt;&lt;</code> <code>&gt;&gt;</code> and their assignments work on ints with Go's precedence. See <a class="underline" href="#operators">Operators</a>; <code>fogu:math</code> also has <code>ushr popcount clz ctz</code>.</p>
-      <script type="text/x-fogu">// Bit operators on ints: &amp; | ^ ~ &lt;&lt; &gt;&gt;  (precedence as in Go)
-const READ = 1
-const WRITE = 1 &lt;&lt; 1
-const EXEC = 1 &lt;&lt; 2
-
-let mode = READ | EXEC
-print(mode, mode &amp; WRITE != 0, mode &amp; EXEC != 0)
-
-mode |= WRITE                        // grant
-mode &amp;= ~READ                        // revoke
-print(mode)
-
-// a 32-bit hash (FNV-1a), compiled to native code
-fn hash(text: str): uint32 {
-    let h = 2166136261
-    for c in bytes(text) {
-        h = uint32((h ^ c) * 16777619)
-    }
-    return h
-}
-print(hash("fogu"), hash("fôgu"))</script>
-      <script type="text/x-fogu" data-lang="text">5 false true
-6
-1010625150 3416006778</script>
-      <h3 class="text-lg font-semibold mt-10" id="new-workers">Workers: every core</h3>
-      <p><code>fg</code> tasks share one thread. A <code>sync.Worker</code> is a program of its own — its own interpreter, on another OS thread, pinned to the CPU you choose. <code>w.call(name, ...args)</code> waits without stopping the other tasks; values cross as JSON. See <a class="underline" href="#mod-sync">fogu:sync</a>.</p>
-      <script type="text/x-fogu">// Every core: each worker is a program of its own on another OS thread
+      <h3 class="text-lg font-semibold mt-10" id="new-workerfn">Workers from functions</h3>
+      <p><code>sync.Worker(fn)</code> sends a function's <em>source</em> to another thread — never its values — and
+      <code>w.call(...args)</code> runs it. What it uses (<code>fogu:</code> modules, top-level functions, constants) is rebuilt in the
+      worker; a captured local variable is refused, with its name, before any thread starts. See <code>docs/concurrency.md</code>.</p>
+      <script type="text/x-fogu">// A worker from a function: its source crosses the thread, never its values
 import sync from "fogu:sync"
+import math from "fogu:math"
 
-const code = "fn primes(n) { let c = 0\n for i in 2..n { let p = true\n let d = 2\n while d * d &lt;= i { if i % d == 0 { p = false; break }\n d = d + 1 }\n if p { c = c + 1 } }\n return c }"
+fn primes(limit) {
+    let count = 0
+    for i in 2..limit {
+        let prime = true
+        for d in 2..int(math.sqrt(i)) + 1 {
+            if i % d == 0 {
+                prime = false
+                break
+            }
+        }
+        if prime { count = count + 1 }
+    }
+    return count
+}
+
+const w = sync.Worker(primes)?          // checked before the thread starts
+print(w.call(100000)?)
+
+fn make() {
+    const offset = 5
+    return fn(x) { return x + offset }
+}
+const [_, err] = sync.Worker(make())    // a captured local cannot cross
+print(err.message)</script>
+      <script type="text/x-fogu" data-lang="text">9592
+sync.Worker(fn): it captures the local variable 'offset' of this thread, which cannot cross threads: pass it as an argument (w.call(..., offset))</script>
+
+      <h3 class="text-lg font-semibold mt-10" id="new-multicore">Servers on every core</h3>
+      <p><code>net.tcpListen(addr, { reusePort: true })</code> lets several listeners share a port: one per worker makes a server
+      that uses every core, each worker serving its connections with <code>fg</code> tasks. Each worker has its own scheduler and
+      network reactor; tasks never leave their thread.</p>
+      <script type="text/x-fogu">// A TCP server on every core: one worker per core, each with its own listener
+import sync from "fogu:sync"
+import net from "fogu:net"
+
+fn serve(port) {
+    const server = net.tcpListen("127.0.0.1:" + str(port), { reusePort: true })?
+    for conn in server {
+        fg fn(c) {                      // light tasks inside each worker
+            while true {
+                const [data, err] = c.read()
+                if err != nil || data == nil { break }
+                c.write(data)
+            }
+        }(conn)
+    }
+}
 
 const workers = []
-for core in 0..4 { workers.push(sync.Worker(code, { core: core })?) }
-
-const found = [0, 0, 0, 0]
-const wg = sync.WaitGroup()
 for i in 0..4 {
-    wg.add(1)
-    fg fn(i) {                        // the four calls run at the same time
-        found[i] = workers[i].call("primes", 50000 * (i + 1))?
-        wg.done()
-    }(i)
+    const w = sync.Worker(serve)?
+    fg w.call(9100)                     // each worker serves on the same port
+    workers.push(w)
 }
-wg.wait()
-print(found)</script>
-      <script type="text/x-fogu" data-lang="text">[5133, 9592, 13848, 17984]</script>
-      <h3 class="text-lg font-semibold mt-10" id="new-vm">fogu:vm timeouts at full speed</h3>
-      <p>Code with a <code>timeout</code> is now compiled like any other code; a watchdog stops it when its time is over. See <a class="underline" href="#mod-vm">fogu:vm</a>.</p>
-      <script type="text/x-fogu">// fogu:vm: code with a timeout is compiled too — and still stopped on time
-import vm from "fogu:vm"
+print("4 workers on port 9100 — the kernel spreads the connections")
+Fogu.signal.wait()                      // serve until the process is stopped</script>
+      <script type="text/x-fogu" data-lang="text">4 workers on port 9100 — the kernel spreads the connections</script>
 
-const sum = "let s = 0\nfor i in 0..5000000 { s = s + i % 7 }\ns"
-print(vm.runInNewContext(sum, nil, { timeout: 2s }))
+      <h3 class="text-lg font-semibold mt-10" id="new-network">Sockets on the interpreter thread</h3>
+      <p>On Linux, <code>fogu:net</code> TCP connections and UDP sockets are read and written directly by the interpreter's thread,
+      through an <code>epoll</code> reactor of its own; a task whose socket is not ready parks until it is. <code>close()</code> of a TCP
+      connection ends both directions, so a read pending in another task returns <code>nil</code>.</p>
+      <script type="text/x-fogu">// Sockets read and written on the interpreter thread itself
+import net from "fogu:net"
+import time from "fogu:time"
 
-const endless = "let n = 0\nwhile true { n = n + 1 }"
-print(vm.runInNewContext(endless, nil, { timeout: 50ms }))</script>
-      <script type="text/x-fogu" data-lang="text">14999995
-error: &lt;vm&gt;:2: runtime error: script execution timed out after 50ms</script>
-      <h3 class="text-lg font-semibold mt-10" id="new-ffi">Direct calls into C</h3>
-      <p>When a C function takes and returns numbers, compiled code calls it directly; <code>ffi.lastError()</code> and callbacks keep working. Signatures accept the sized type names (<code>"int32"</code>, <code>"uint8"</code>…). See <a class="underline" href="#mod-ffi">fogu:ffi</a>.</p>
-      <script type="text/x-fogu">// fogu:ffi: compiled code calls C functions directly (no interpreter in between)
-import ffi from "fogu:ffi"
-
-const libc = ffi.open("c")?
-const abs = libc.func("abs", ["int32"], "int32")?
-const toupper = libc.func("toupper", ["int32"], "uint8")?
-
-let total = 0
-for i in 0..1000000 {
-    total = total + abs(500000 - i)
+const a = net.udpBind("127.0.0.1:0")?
+const b = net.udpBind("127.0.0.1:0")?
+const msg = bytes("x".repeat(64))
+const t0 = time.monotonic()
+for i in 0..100000 {
+    a.sendTo(b.addr, msg)?
+    b.recvFrom()?
 }
-print(total)
+const us = (time.monotonic() - t0) * 1e6 / 100000
+print("send + receive:", us < 50, "(a few µs per pair)")</script>
+      <script type="text/x-fogu" data-lang="text">send + receive: true (a few µs per pair)</script>
 
-const shout = bytes(0)
-for c in bytes("fogu") { shout.push(toupper(c)) }
-print(shout.text())</script>
-      <script type="text/x-fogu" data-lang="text">250000000000
-FOGU</script>
-      <h3 class="text-lg font-semibold mt-10" id="new-crypto">Key pairs</h3>
-      <p><code>crypto.generateKeyPair(algorithm, { bits })</code> returns <code>{ algorithm, bits, privateKey, publicKey }</code> as PEM text. Certificates: <code>tls.selfSigned</code>. See <a class="underline" href="#mod-crypto">fogu:crypto</a>.</p>
-      <script type="text/x-fogu">// Key pairs in PEM: ed25519, p256, p384, rsa (2048 / 3072 / 4096)
-import crypto from "fogu:crypto"
-
-for alg in ["ed25519", "p256", "p384", "rsa"] {
-    const k = crypto.generateKeyPair(alg)?
-    print(k.algorithm, k.bits, k.publicKey.lines()[0])
+      <h3 class="text-lg font-semibold mt-10" id="new-fast">A faster JIT</h3>
+      <p>Small functions are inlined (recursion included), division and remainder by a constant need no division, overflow checks
+      that the conditions make impossible are dropped, loop-invariant code leaves the loops, float code avoids AVX/SSE stalls,
+      and strings of up to 15 bytes are stored inside the value.</p>
+      <script type="text/x-fogu">// Calls are inlined, constants divide without division, invariants leave loops
+fn fib(n) {
+    if n < 2 { return n }
+    return fib(n - 1) + fib(n - 2)
 }
-const big = crypto.generateKeyPair("rsa", { bits: 4096 })?
-print(big.bits, big.privateKey.lines()[0])</script>
-      <script type="text/x-fogu" data-lang="text">ed25519 256 -----BEGIN PUBLIC KEY-----
-p256 256 -----BEGIN PUBLIC KEY-----
-p384 384 -----BEGIN PUBLIC KEY-----
-rsa 2048 -----BEGIN PUBLIC KEY-----
-4096 -----BEGIN PRIVATE KEY-----</script>
-      <h3 class="text-lg font-semibold mt-10" id="new-cli">Also new</h3>
-      <ul>
-        <li><code>fogu .</code> (or <code>fogu &lt;folder&gt;</code>) runs a project: its <code>start</code> script, or its <code>entry</code>.</li>
-        <li>Buffers read and write by type name: <code>buf.readUint16(0)</code>, <code>buf.writeFloat32(4, x)</code>.</li>
-        <li><code>fogu:types</code> knows the sized types: <code>types.uint8()</code>, <code>"int32"</code> in a spec, coercion from text.</li>
-        <li><code>time.monotonic()</code>, <code>time.now()</code> and the bit functions of <code>fogu:math</code> are called natively by compiled code.</li>
-        <li>Fixed: a program could report a deadlock when a database commit or a request finished at the exact moment the scheduler checked its tasks.</li>
-        <li>The Linux executable no longer loads OpenSSL at start and is linked at a fixed address (as Go's are).</li>
-      </ul>
+print(fib(32))
+
+let sum = 0
+for i in 0..20000000 {
+    sum = sum + (i % 7) * 3            // % 7: a multiplication, no overflow check
+}
+print(sum)</script>
+      <script type="text/x-fogu" data-lang="text">2178309
+179999991</script>
+
+      <h3 class="text-lg font-semibold mt-10" id="new-startup">Start-up and size</h3>
+      <p>On Linux the interpreter runs on the main thread with its own stack, transparent huge pages stay off while the process
+      starts, and the process exits without freeing the program's values one by one. The published executables are built with
+      whole-program optimization, and the dependencies off the hot path are compiled for size.</p>
+      <script type="text/x-fogu">// print("hello") starts and ends in under 2 ms, from a 52 MB executable
+print("hello")</script>
+      <script type="text/x-fogu" data-lang="text">hello</script>
     </section>
 
     <section id="types" data-group="Language" data-title="Type annotations" class="scroll-mt-20 mt-16">

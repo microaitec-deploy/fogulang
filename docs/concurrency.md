@@ -31,8 +31,7 @@ process
 | Use it for | many concurrent waits: connections, requests, timers | CPU work on several cores; a server per core |
 
 The design rule: **code may cross workers; state and execution context do not
-cross implicitly.** A worker receives a program (and, from 0.8.0, a function's
-source) and builds its own values from it; what workers exchange goes through
+cross implicitly.** A worker receives a program (or a function's source) and builds its own values from it; what workers exchange goes through
 explicit interfaces.
 
 ## `fg` tasks
@@ -112,7 +111,7 @@ w.close()
   the worker's thread waits for the next call and its tasks do not advance —
   so a worker that serves (a listener, background tasks) does it inside a call
   that lasts as long as the service, as `bench/net/tcp_workers.fg` does with
-  `serve()`. (Letting a worker's tasks run between calls is in the 0.8.0
+  `serve()`. (Letting a worker's tasks run between calls is on the
   roadmap, #12e.)
 - **From a function** (0.8.0): `sync.Worker(fn)` sends the function's
   *source* — a function value lives in its thread's heap with the environment
@@ -194,10 +193,10 @@ One thing is still shared between threads: the wake-up signal for work that
 finishes off-thread (`sched::wake`) is process-wide, so a completion on one
 worker also wakes the others that are asleep, to look and find nothing. It
 costs no correctness, only some idle wake-ups — a candidate for the p99 rise
-from 4 to 8 workers, to measure in 0.8.0 (#12c).
+from 4 to 8 workers, to measure next (roadmap #12g).
 
-In 0.8.0 the servers of the standard library (`http.serve`, `web`, `websocket`,
-`net`) take `{ workers }` and do this themselves (`docs/roadmap-0.8.0.md`, #12b).
+Next, the servers of the standard library (`http.serve`, `web`, `websocket`,
+`net`) take `{ workers }` and do this themselves (`docs/roadmap.md`, #12b).
 
 ## Choosing
 

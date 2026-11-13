@@ -7,7 +7,7 @@ syntax, errors as values and cooperative tasks (`fg`, channels, `select`).
 Dynamically typed, with optional type annotations. See
 [FOGU_VISION.md](FOGU_VISION.md) for what Fogu is for and how it decides,
 [docs/concurrency.md](docs/concurrency.md) for its two levels of concurrency, and
-[docs/roadmap-0.8.0.md](docs/roadmap-0.8.0.md) for what comes next.
+[docs/roadmap.md](docs/roadmap.md) for what comes next.
 
 **Built in Rust. Designed as Fogu.** This repository is the reference implementation in Rust: interpreter + **JIT
 compiler (Cranelift)**, REPL, CLI, git-based package manager and standalone
@@ -32,7 +32,7 @@ while true { time.delay(100ms) }
 
 > 📖 **Official documentation:** open [docs/docs.html](docs/docs.html) in a browser.
 >
-> Version **0.7.5** — in development. The full language specification
+> Version **0.8.0**. The full language specification
 > (Draft 0.4) is in [docs/spec.md](docs/spec.md); the status of every feature
 > is tracked in [CHECKLIST.md](CHECKLIST.md).
 
