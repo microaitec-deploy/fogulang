@@ -6,6 +6,33 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
+### Added
+
+- **Bytecode VM, opt-in** (`--engine=vm`, `FOGU_ENGINE=vm`): a function body is compiled to
+  a register machine the first time it is called — locals are registers resolved at compile
+  time, calls between compiled functions push a frame in the same loop, struct fields,
+  struct methods and function calls have inline caches. The unit is the function: a body
+  that uses something the compiler does not cover yet (closures, `match`, `fg`, channel
+  operators, `?.`) runs on the tree-walker, which stays the default engine and the semantic
+  reference. `FOGU_VM_DEBUG=1` says what is compiled and why not; `fogu disasm file.fg`
+  prints the bytecode. `docs/bytecode.md` has the status and the differences from the design.
+- **Program benchmarks**: `bench/parser` (a tokenizer, a recursive-descent parser and an
+  evaluator), `bench/orders` (a limit order book over two heaps of structs) and
+  `bench/wordfreq` (write a text file, read it, count and sort the words), each in Fogu, Go,
+  Python and JavaScript with identical output. `fogu bench/run.fg programs` runs them with a
+  column for the VM and writes `bench/RESULTS_PROGRAMS.md`. They measure what the kernels
+  of `bench/` do not: the code the JIT does not compile. Fogu is far behind Go on them (see
+  the results); they are the target of the VM work and are not yet part of the "within 1.5×
+  of Go" requirement.
+
+### Changed
+
+- **Struct instances are a vector over a layout shared by the type**
+  (`docs/architecture/struct-layouts.md`) instead of two hash maps per instance: `new` no
+  longer builds a map of field names and a function value per method, and the VM reads a
+  field by its slot. Nothing a program can observe changes (`tests/spec/struct_layout.fg`).
+- The conformance suite runs every test a third time on the VM (`tests/spec.rs`).
+
 ## [0.8.0] - 2026-11-13
 
 Identity, execution model and the rules Fogu evolves by. Fogu is presented as an independent

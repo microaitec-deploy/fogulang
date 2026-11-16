@@ -1,0 +1,8 @@
+// A runtime error inside compiled functions reports the line where it happened.
+fn third(xs) {
+    const i = 3
+    return xs[i]
+}
+fn second(xs) { return third(xs) + 1 }
+print("before")
+print(second([1, 2, 3]))

@@ -50,6 +50,7 @@ fn help() -> String {
   build --compile [file]  build a standalone executable in dist/ (--target linux-arm64,windows-x64,…|all; --targets)
   test [paths] [-t text]  run the tests of *.test.fg files
   fmt [paths] [--check]   format .fg files (- for stdin)
+  disasm <file.fg>        print the bytecode of the file's functions and methods
   play <playbook.yml>     run a playbook (-i inventory, --check, -l, -t, -e)
   desktop <create|dev|build|update>  desktop apps (Tauri + Vite); see fogu desktop help
   mcu <boards|build|flash|run|monitor|…>  microcontroller firmware; see fogu mcu help
@@ -63,6 +64,8 @@ fn help() -> String {
       --jit-stats         show JIT statistics at the end
       --jit-debug         log to stderr what the JIT compiles/rejects
       --jit-dump          like --jit-debug, and print the IR (CLIF)
+      --engine <tree|vm>  how function bodies run: the tree-walking interpreter (default)
+                          or the bytecode VM (docs/bytecode.md)
       --strict            an error in an 'fg' task terminates the process
       --cores <n|cpus>    threads the runtime uses (4), or the CPUs to run on (0,2-3)
   -v, --version           show the version
@@ -78,7 +81,7 @@ fn help() -> String {
   Stored in {home}/fogu_modules (global, shared between projects);
   fogu.lock pins commit + checksum. Usage: import x from \"name\"
 
-Environment: FOGU_HOME (default ~/.fogu), NO_COLOR, FOGU_JIT=0, FOGU_JIT_CALLS, FOGU_JIT_LOOPS, FOGU_CORES",
+Environment: FOGU_HOME (default ~/.fogu), NO_COLOR, FOGU_JIT=0, FOGU_JIT_CALLS, FOGU_JIT_LOOPS, FOGU_ENGINE=vm, FOGU_CORES",
         title = ui::bold("Fogu"),
         ver = VERSION,
         usage = ui::bold("Usage:"),
@@ -112,6 +115,14 @@ fn take_flags(args: &mut Vec<String>, cfg: &mut JitConfig, f: &mut RunFlags) -> 
             "--jit-debug" => cfg.debug = cfg.debug.max(1),
             "--jit-dump" => cfg.debug = 2,
             "--strict" => sched::set_strict(true),
+            // --engine vm · --engine=vm: function bodies on the bytecode VM
+            "--engine" => {
+                if args.is_empty() {
+                    return Err("--engine expects tree or vm".into());
+                }
+                crate::runtime::vm::set_engine(&args.remove(0))?;
+            }
+            s if s.starts_with("--engine=") => crate::runtime::vm::set_engine(&s["--engine=".len()..])?,
             // --cores 4 (threads) · --cores 0,2-3 (pinned to those CPUs)
             "--cores" => {
                 if args.is_empty() {
@@ -457,6 +468,7 @@ fn real_main(mut args: Vec<String>, flags: RunFlags) -> i32 {
             "build" => return build::build(rest),
             "test" => return testing::test(rest),
             "fmt" => return fmt::fmt(rest),
+            "disasm" => return disasm(rest),
             "play" => return play(rest),
             "desktop" => return frameworks::desktop(rest),
             "mcu" => return frameworks::mcu(rest),
@@ -529,6 +541,35 @@ fn start_repl() -> i32 {
     {
         ui::error("the REPL is not available on WebAssembly");
         1
+    }
+}
+
+/// `fogu disasm <file.fg>`: the bytecode the VM runs for each function and
+/// method declared at the top level of the file (or why one is not compiled).
+fn disasm(args: &[String]) -> i32 {
+    let Some(path) = args.first() else {
+        ui::error("usage: fogu disasm <file.fg>");
+        return 1;
+    };
+    let source = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            ui::error(&format!("error reading '{}': {}", path, e));
+            return 1;
+        }
+    };
+    let program = crate::runtime::Lexer::new(&source)
+        .tokenize()
+        .and_then(|tokens| crate::runtime::Parser::new(tokens).parse_program());
+    match program {
+        Ok(program) => {
+            print!("{}", crate::runtime::vm::disasm_program(&program));
+            0
+        }
+        Err(e) => {
+            ui::error(&format!("{}: {}", path, e));
+            1
+        }
     }
 }
 

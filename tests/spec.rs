@@ -1,7 +1,7 @@
 //! Conformance suite (spec §70).
 //!
-//! Each `tests/spec/<name>.fg` runs twice — with the JIT and with
-//! `--no-jit` — and both runs must produce:
+//! Each `tests/spec/<name>.fg` runs three times — with `--no-jit`, with the JIT
+//! and on the bytecode VM (`--engine=vm`) — and every run must produce:
 //!
 //! * `<name>.out` — the expected stdout (required);
 //! * `<name>.err` — if present, the program must fail and stderr must
@@ -27,16 +27,20 @@ struct Run {
     stderr: String,
 }
 
-fn run(file: &Path, jit: bool) -> Run {
+fn run(file: &Path, jit: bool, vm: bool) -> Run {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_fogu"));
     if !jit {
         cmd.arg("--no-jit");
+    }
+    if vm {
+        cmd.arg("--engine=vm");
     }
     let out = cmd
         .arg(file.file_name().unwrap())
         .current_dir(file.parent().unwrap())
         .env("NO_COLOR", "1")
         .env_remove("FOGU_JIT")
+        .env_remove("FOGU_ENGINE")
         // low thresholds: force the JIT to compile even in small tests
         .env("FOGU_JIT_CALLS", "1")
         .env("FOGU_JIT_LOOPS", "2")
@@ -70,7 +74,7 @@ fn check_one(file: &Path, bless: bool) -> Vec<String> {
     let err_path = file.with_extension("err");
     let expected_err = fs::read_to_string(&err_path).ok().map(|s| normalize(&s));
 
-    let interp = run(file, false);
+    let interp = run(file, false, false);
     remove_tmp_files(file.parent().unwrap());
     if bless {
         fs::write(&out_path, &interp.stdout).unwrap();
@@ -83,9 +87,11 @@ fn check_one(file: &Path, bless: bool) -> Vec<String> {
         }
     };
 
-    let jit = run(file, true);
+    let jit = run(file, true, false);
     remove_tmp_files(file.parent().unwrap());
-    for (label, r) in [("interpreter", &interp), ("jit", &jit)] {
+    let vm = run(file, true, true);
+    remove_tmp_files(file.parent().unwrap());
+    for (label, r) in [("interpreter", &interp), ("jit", &jit), ("vm", &vm)] {
         if r.stdout != expected_out {
             errors.push(format!(
                 "{} [{}]: different stdout\n--- expected\n{}--- got\n{}--- stderr\n{}",

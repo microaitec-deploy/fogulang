@@ -1,0 +1,122 @@
+// The bytecode VM (--engine=vm) runs function bodies: everything here prints the
+// same on the tree-walker, the JIT and the VM.
+
+// calls, recursion, globals
+fn fib(n) {
+    if n < 2 { return n }
+    return fib(n - 1) + fib(n - 2)
+}
+let total = 0
+fn add(n) {
+    total += n
+    return total
+}
+add(2)
+add(40)
+print(fib(15), total)
+
+// block scopes, loop variables, break and continue
+fn scopes(x) {
+    const out = []
+    for i in 0..3 {
+        let y = x * 10 + i
+        out.push(y)
+    }
+    {
+        let y = -1
+        out.push(y)
+    }
+    let i = 0
+    while true {
+        i += 1
+        if i == 2 { continue }
+        if i > 3 { break }
+        out.push(i)
+    }
+    out.push(x)
+    return out
+}
+print(scopes(7))
+
+// text grows in place; templates; compound assignment
+fn text(n) {
+    let s = ""
+    for i in 0..n { s = s + str(i) + "," }
+    s += "end"
+    return `${s} (${len(s)})`
+}
+print(text(4))
+
+// structs: fields, methods calling methods, `this`
+struct Counter {
+    n = 0
+    step = 1
+    new(step) { this.step = step }
+    fn inc() {
+        this.n += this.step
+        return this
+    }
+    fn twice() { return this.inc().inc().n }
+}
+const c = new Counter(5)
+print(c.twice(), c.n)
+
+// maps, lists, indexes; `for` over keys, pairs and text
+fn collect() {
+    const m = { b: 2, a: 1 }
+    m.c = m.a + m.b
+    m["d"] = 4
+    let keys = ""
+    for k in m { keys += k }
+    let sum = 0
+    for _k, v in m { sum += v }
+    const xs = [10, 20, 30]
+    xs[1] += 5
+    let idx = 0
+    for i, x in xs { idx += i * x }
+    let chars = 0
+    for _ch in "héllo" { chars += 1 }
+    return [keys, sum, xs[-1], idx, chars]
+}
+const r = collect()
+print(r[0], r[1], r[2], r[3], r[4])
+
+// errors as values: `?` and destructuring
+fn parse(s) {
+    if s == "" { return nil, error("empty") }
+    return len(s), nil
+}
+fn both(a, b) {
+    const x = parse(a)?
+    const y = parse(b)?
+    return x + y, nil
+}
+const [v1, e1] = both("ab", "cde")
+const [v2, e2] = both("ab", "")
+print(v1, e1, v2, e2.message)
+
+// default and variadic parameters, annotations
+fn greet(name: str, times: int = 2): str {
+    let out = ""
+    for _i in 0..times { out += name }
+    return out
+}
+fn sum(...xs) {
+    let t = 0
+    for x in xs { t += x }
+    return t
+}
+print(greet("ab"), greet("c", 3), sum(), sum(1, 2, 3))
+
+// logical operators keep the operand's value
+fn pick(a, b) { return [a && b, a || b, a ?? b] }
+print(pick(nil, 1), pick(0, 2), pick(false, 3))
+
+// an operand read before the right side assigns it
+fn order() {
+    let x = 1
+    const y = x + (x = 5)
+    x += (x = 10)
+    return [y, x]
+}
+print(order())

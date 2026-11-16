@@ -4,6 +4,9 @@
 //
 //   fogu bench/run.fg                 // 5 runs per case (the median is kept)
 //   fogu bench/run.fg 3 fib loop      // 3 runs, only fib and loop
+//   fogu bench/run.fg programs        // the programs (parser, orders, wordfreq) instead of
+//                                     // the kernels, with a column for --engine=vm;
+//                                     // writes results_programs.json and RESULTS_PROGRAMS.md
 //
 // Needs python3, bun and go (the Go programs are compiled once into bench/.bin
 // before measuring, so compile time is not counted). The Fogu measured is $FOGU_BIN, else target/release/fogu
@@ -30,10 +33,16 @@ const loadavg = fn() {
 const loadStart = loadavg()
 
 const dir = pick(fs.exists("bench/fib.fg"), "bench", ".")
-const all = ["startup", "fib", "loop", "mandel", "strings", "maps", "records", "sort"]
+// kernels: one hot loop each, what the JIT compiles. programs: whole small programs
+// (text, structs, maps, calls), what the interpreter and the VM run
+const kernels = ["startup", "fib", "loop", "mandel", "strings", "maps", "records", "sort"]
+const programs = ["parser", "orders", "wordfreq"]
+const programMode = Fogu.args.contains("programs")
+const all = pick(programMode, programs, kernels)
 let runs = 5
 let only = []
 for a in Fogu.args {
+    if a == "programs" { continue }
     const [n, err] = json.parse(a)
     if err == nil && typeof(n) == "int" { runs = n } else { only.push(a) }
 }
@@ -60,10 +69,11 @@ for b in benches {
 const langs = [
     { name: "Fogu", cmd: fogu, args: [], ext: "fg" },
     { name: "Fogu (no JIT)", cmd: fogu, args: ["--no-jit"], ext: "fg" },
+    { name: "Fogu (VM)", cmd: fogu, args: ["--engine=vm"], ext: "fg" },
     { name: "Bun", cmd: bun, args: [], ext: "js" },
     { name: "Go", cmd: nil, args: [], ext: "go" },
     { name: "Python", cmd: python, args: ["-I"], ext: "py" },
-].filter(fn(l) { return l.ext != "go" || haveGo })
+].filter(fn(l) { return l.ext != "go" || haveGo }).filter(fn(l) { return programMode || l.name != "Fogu (VM)" })
 
 const version = fn(cmd, args) {
     const [r, err] = process.run(cmd, args)
@@ -144,7 +154,7 @@ const info = {
     },
     results: results,
 }
-fs.writeText(path.join(dir, "results.json"), json.stringify(info) + "\n")?
+fs.writeText(path.join(dir, pick(programMode, "results_programs.json", "results.json")), json.stringify(info) + "\n")?
 
 // a Markdown table (ms, median; lower is better)
 const names = langs.map(fn(l) { return l.name })
@@ -157,6 +167,7 @@ for r in results {
     })
     md = md + "| " + r.bench + " | " + cells.join(" | ") + " |\n"
 }
-fs.writeText(path.join(dir, "RESULTS.md"), "# Fogu vs Bun vs Go vs Python\n\n" + info.cpu + " · " + info.os + " · median of " + str(runs) + " runs, in ms (lower is better)\n\n" + md)?
+const title = pick(programMode, "# Programs: Fogu (tree-walker, VM) vs Bun vs Go vs Python", "# Fogu vs Bun vs Go vs Python")
+fs.writeText(path.join(dir, pick(programMode, "RESULTS_PROGRAMS.md", "RESULTS.md")), title + "\n\n" + info.cpu + " · " + info.os + " · median of " + str(runs) + " runs, in ms (lower is better)\n\n" + md)?
 print("")
 print(md)

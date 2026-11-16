@@ -1,0 +1,64 @@
+// A program, not a kernel: write a 100k-line text file, read it back, count
+// the words and print the ten most frequent. Files, strings, maps, sorting.
+import fs from "fogu:fs"
+
+let seed = 11
+fn rnd(n) {
+    seed = (seed * 75 + 74) % 65537
+    return seed % n
+}
+
+const syl = ["ka", "to", "mi", "re", "su", "no", "la", "pe", "di", "vu"]
+const vocab = []
+for i in 0..2000 {
+    vocab.push(syl[i % 10] + syl[(i / 10) % 10] + syl[(i / 100) % 10] + str(i / 1000))
+}
+
+// ten words per line, the frequent ones far more often; each line starts with
+// a word in capitals and ends with a full stop, to be undone when counting
+fn makeText(lines) {
+    const out = []
+    for l in 0..lines {
+        const words = []
+        for w in 0..10 {
+            const a = rnd(2000)
+            const b = rnd(2000)
+            const word = vocab[a * b / 2000]
+            if w == 0 { words.push(word.upper()) } else { words.push(word) }
+        }
+        out.push(words.join(" ") + ".")
+    }
+    return out.join("\n") + "\n"
+}
+
+fn count(text) {
+    const counts = {}
+    for line in text.split("\n") {
+        if len(line) == 0 { continue }
+        for w in line.lower().replace(".", "").split(" ") {
+            counts[w] = (counts[w] ?? 0) + 1
+        }
+    }
+    return counts
+}
+
+fn report(counts) {
+    const order = fn(a, b) {
+        if counts[a] != counts[b] { return counts[b] - counts[a] }
+        if a < b { return -1 }
+        return 1
+    }
+    const top = counts.keys().sort(order)
+    let total = 0
+    for k in top { total += counts[k] }
+    let line = ""
+    for i in 0..10 { line += top[i] + "=" + str(counts[top[i]]) + " " }
+    print(line.trim())
+    print(top.len(), total)
+}
+
+const path = "/tmp/fogu_bench_wordfreq_fg.txt"
+fs.writeText(path, makeText(100000))?
+const text = fs.readText(path)?
+report(count(text))
+fs.remove(path)?

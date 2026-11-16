@@ -67,6 +67,14 @@ impl Jit {
         false
     }
 
+    pub fn compiled(&self, _body: usize) -> bool {
+        false
+    }
+
+    pub fn call_threshold(&self) -> u32 {
+        u32::MAX
+    }
+
     pub fn loop_threshold(&self) -> u32 {
         u32::MAX
     }

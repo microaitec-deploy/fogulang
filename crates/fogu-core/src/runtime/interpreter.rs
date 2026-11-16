@@ -13,7 +13,7 @@ use crate::native::NativeObjectRef;
 use super::symbol::Sym;
 use super::value::{param_syms, 
     BoundMethodValue, ChanValue, ErrorValue, FnValue, ModuleValue, NativeFnValue, Str, StructBoundMethodValue,
-    StructInstance, StructTypeValue, Value,
+    StructInstance, StructLayout, StructTypeValue, Value,
     ERR_VALUE_PREFIX,
 };
 
@@ -91,6 +91,10 @@ pub struct Interpreter {
     /// The global natives alone, shared by every isolated `fogu:vm` context
     /// (built on the first one: copying them per context was most of its cost).
     vm_globals: RefCell<Option<Rc<RefCell<Environment>>>>,
+    /// Function bodies run on the bytecode VM (`--engine=vm`); see `runtime/vm`.
+    vm_enabled: bool,
+    /// The compiled bodies (and the ones the compiler refused).
+    vm_protos: vm::Protos,
 }
 
 impl Drop for Interpreter {
@@ -108,6 +112,9 @@ pub struct Deadline {
     pub timeout: std::time::Duration,
     pub cancelled: bool,
 }
+
+#[path = "vm/mod.rs"]
+pub mod vm;
 
 /// Sentinel used by `?` to unwind to the end of the function.
 const PROPAGATE: &str = "\u{0}propagate";
@@ -151,6 +158,8 @@ impl Interpreter {
             switch_hook: Cell::new(false),
             in_native: Cell::new(false),
             vm_globals: RefCell::new(None),
+            vm_enabled: vm::enabled(),
+            vm_protos: vm::Protos::default(),
             rng: Cell::new(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -692,6 +701,7 @@ impl Interpreter {
                 let t = Value::StructType(Rc::new(StructTypeValue {
                     decl: decl.clone(),
                     env: Rc::clone(&env),
+                    layout: RefCell::new(None),
                 }));
                 self.declare(&env, &decl.name, t.clone(), false)?;
                 add_export(exports, &decl.name, t)
@@ -938,6 +948,7 @@ impl Interpreter {
         let t = Value::StructType(Rc::new(StructTypeValue {
             decl: decl.clone(),
             env: Rc::clone(&env),
+            layout: RefCell::new(None),
         }));
         self.declare(&env, &decl.name, t, false)?;
         Ok(Flow::Normal)
@@ -1698,28 +1709,35 @@ impl Interpreter {
 
     #[inline(never)]
     fn eval_new(&self, name: &str, args: &[Expr], env: Rc<RefCell<Environment>>) -> Result<Value, String> {
-        let t = env
-            .borrow()
-            .get(name)
-            .ok_or_else(|| format!("struct '{}' is not defined", name))?;
-        let tv = match t {
-            Value::StructType(d) => d,
-            other => {
-                return Err(format!(
-                    "'{}' is not a struct type (it is '{}')",
-                    name,
-                    other.type_name()
-                ))
-            }
-        };
-
+        let tv = self.struct_type(name, &env)?;
         let mut arg_vals = Vec::with_capacity(args.len());
         for a in args {
             arg_vals.push(self.eval(a, env.clone())?);
         }
-
         let inst = self.instantiate_struct(&tv, arg_vals, false)?;
         Ok(Value::Struct(inst))
+    }
+
+    /// The struct type called `name` in `env` (for `new name(...)`).
+    fn struct_type(&self, name: &str, env: &Rc<RefCell<Environment>>) -> Result<Rc<StructTypeValue>, String> {
+        let t = env
+            .borrow()
+            .get(name)
+            .ok_or_else(|| format!("struct '{}' is not defined", name))?;
+        match t {
+            Value::StructType(d) => Ok(d),
+            other => Err(format!(
+                "'{}' is not a struct type (it is '{}')",
+                name,
+                other.type_name()
+            )),
+        }
+    }
+
+    /// `new name(args)` with the arguments already evaluated (the VM).
+    fn new_struct(&self, name: &str, args: Vec<Value>, env: &Rc<RefCell<Environment>>) -> Result<Value, String> {
+        let tv = self.struct_type(name, env)?;
+        Ok(Value::Struct(self.instantiate_struct(&tv, args, false)?))
     }
 
     #[inline(never)]
@@ -1925,14 +1943,16 @@ impl Interpreter {
             }
             Value::Struct(s) => {
                 let mut b = s.borrow_mut();
-                if !b.fields.contains_key(field) {
-                    return Err(format!(
+                match b.field_mut(field) {
+                    Some(slot) => {
+                        *slot = v;
+                        Ok(())
+                    }
+                    None => Err(format!(
                         "field '{}' does not exist on '{}'",
                         field, b.type_name
-                    ));
+                    )),
                 }
-                b.fields.insert(field.to_string(), v);
-                Ok(())
             }
             Value::Object(o) => o.set(field, v),
             Value::Module(_) => Err(format!(
@@ -2096,6 +2116,16 @@ impl Interpreter {
             return Err(e);
         }
 
+        if self.vm_enabled {
+            if let Some(proto) = self.vm_protos.get(&f, false) {
+                let r = vm::run(self, &proto, &f, None, arg_vals);
+                if r.is_ok() {
+                    self.leave(saved);
+                }
+                return r;
+            }
+        }
+
         let parent = f.closure.clone().unwrap_or_else(|| self.globals.clone());
         let fn_env = Environment::call_scope(parent);
         bind_params(&mut fn_env.borrow_mut(), &f.params, &f.param_syms, arg_vals);
@@ -2165,11 +2195,25 @@ impl Interpreter {
                 .cloned()
                 .ok_or_else(|| format!("method '{}' does not exist", method))?
         };
-        check_arity("method", &method, &f.params, arg_vals.len())?;
+        self.call_struct_fn(receiver, f, &method, arg_vals)
+    }
+
+    /// Calls the method `f` (named `method`) of `receiver`.
+    fn call_struct_fn(&self, receiver: Rc<RefCell<StructInstance>>, f: Rc<FnValue>, method: &str, arg_vals: Vec<Value>) -> Result<Value, String> {
+        check_arity("method", method, &f.params, arg_vals.len())?;
         if !sched::stack_ok() {
             return Err(ops::ERR_STACK.into());
         }
         let saved = self.enter(f.module.as_ref());
+        if self.vm_enabled {
+            if let Some(proto) = self.vm_protos.get(&f, true) {
+                let r = vm::run(self, &proto, &f, Some(Value::Struct(receiver)), arg_vals);
+                if r.is_ok() {
+                    self.leave(saved);
+                }
+                return r;
+            }
+        }
         let fn_env = Environment::call_scope(
             f.closure.clone().unwrap_or_else(|| self.globals.clone()),
         );
@@ -2380,6 +2424,104 @@ impl Interpreter {
 
     // ---------- structs ----------
 
+    /// The struct types a struct embeds, looked up where it was declared.
+    fn embed_types(&self, tv: &StructTypeValue) -> Result<Vec<Rc<StructTypeValue>>, String> {
+        let mut out = Vec::new();
+        for embed_name in &tv.decl.embeds {
+            let t = tv
+                .env
+                .borrow()
+                .get(embed_name)
+                .ok_or_else(|| format!("embed '{}' is not defined", embed_name))?;
+            match t {
+                Value::StructType(d) => out.push(d),
+                other => {
+                    return Err(format!(
+                        "'{}' is not a struct type (it is '{}')",
+                        embed_name,
+                        other.type_name()
+                    ))
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The layout of a struct type (field slots, methods), built on its first
+    /// `new` and again if one of its embedded types was redeclared (REPL).
+    fn struct_layout(&self, tv: &StructTypeValue, embedded_types: &[Rc<StructTypeValue>]) -> Result<Rc<StructLayout>, String> {
+        let mut inner: Vec<Rc<StructLayout>> = Vec::with_capacity(embedded_types.len());
+        for t in embedded_types {
+            let its = self.embed_types(t)?;
+            inner.push(self.struct_layout(t, &its)?);
+        }
+        if let Some(l) = tv.layout.borrow().as_ref() {
+            if l.embed_ids.len() == inner.len() && l.embed_ids.iter().zip(&inner).all(|(id, i)| *id == i.id) {
+                return Ok(Rc::clone(l));
+            }
+        }
+        let decl = &tv.decl;
+        let denv = &tv.env;
+        let module = denv.borrow().module_name();
+        let mut names: Vec<String> = Vec::new();
+        let mut index: HashMap<String, u32> = HashMap::new();
+        let mut methods: HashMap<String, Rc<FnValue>> = HashMap::new();
+        let mut slot = |name: &str| {
+            if !index.contains_key(name) {
+                index.insert(name.to_string(), names.len() as u32);
+                names.push(name.to_string());
+            }
+        };
+        for (embed_name, il) in decl.embeds.iter().zip(&inner) {
+            for n in &il.names {
+                slot(n);
+            }
+            for (m, f) in il.methods.iter() {
+                methods.entry(m.clone()).or_insert_with(|| Rc::clone(f));
+            }
+            slot(embed_name);
+        }
+        for f in &decl.fields {
+            slot(&f.name);
+        }
+        for (mname, params, body) in &decl.methods {
+            methods.insert(
+                mname.clone(),
+                Rc::new(FnValue {
+                    name: format!("{}.{}", decl.name, mname),
+                    params: params.clone(),
+                    param_syms: param_syms(params),
+                    body: Rc::clone(body),
+                    closure: Some(Rc::clone(denv)),
+                    module: module.clone(),
+                }),
+            );
+        }
+        let ctor = decl.constructor.as_ref().map(|(params, body)| {
+            Rc::new(FnValue {
+                name: decl.name.clone(),
+                params: params.clone(),
+                param_syms: param_syms(params),
+                body: Rc::clone(body),
+                closure: Some(Rc::clone(denv)),
+                module: module.clone(),
+            })
+        });
+        let layout = Rc::new(StructLayout {
+            id: super::value::next_layout_id(),
+            type_name: decl.name.clone(),
+            module,
+            embeds: decl.embeds.clone(),
+            names,
+            index,
+            methods,
+            ctor,
+            embed_ids: inner.iter().map(|l| l.id).collect(),
+        });
+        *tv.layout.borrow_mut() = Some(Rc::clone(&layout));
+        Ok(layout)
+    }
+
     /// Instantiates a struct. Methods and default values resolve names in
     /// the environment where the struct was *declared*.
     fn instantiate_struct(
@@ -2390,36 +2532,30 @@ impl Interpreter {
     ) -> Result<Rc<RefCell<StructInstance>>, String> {
         let decl = &tv.decl;
         let denv = &tv.env;
-        let mut fields: HashMap<String, Value> = HashMap::new();
-        let mut methods: HashMap<String, Rc<FnValue>> = HashMap::new();
+        let embedded_types = self.embed_types(tv)?;
+        let layout = self.struct_layout(tv, &embedded_types)?;
+        let mut values = vec![Value::Nil; layout.names.len()];
 
-        // 1) embeds (fields and methods of the embed become visible outside)
-        for embed_name in &decl.embeds {
-            let t = denv
-                .borrow()
-                .get(embed_name)
-                .ok_or_else(|| format!("embed '{}' is not defined", embed_name))?;
-            let inner_tv = match t {
-                Value::StructType(d) => d,
-                other => {
-                    return Err(format!(
-                        "'{}' is not a struct type (it is '{}')",
-                        embed_name,
-                        other.type_name()
-                    ))
+        // 1) embeds (fields and methods of the embed become visible outside);
+        //    a field two embeds have keeps the value of the first
+        if !embedded_types.is_empty() {
+            let mut set = vec![false; values.len()];
+            for (embed_name, inner_tv) in decl.embeds.iter().zip(&embedded_types) {
+                let inner = self.instantiate_struct(inner_tv, Vec::new(), true)?;
+                {
+                    let ib = inner.borrow();
+                    for (k, v) in ib.fields() {
+                        let i = layout.index[k] as usize;
+                        if !set[i] {
+                            values[i] = v.clone();
+                            set[i] = true;
+                        }
+                    }
                 }
-            };
-            let inner = self.instantiate_struct(&inner_tv, Vec::new(), true)?;
-            {
-                let ib = inner.borrow();
-                for (k, v) in ib.fields.iter() {
-                    fields.entry(k.clone()).or_insert_with(|| v.clone());
-                }
-                for (m, f) in ib.methods.iter() {
-                    methods.entry(m.clone()).or_insert_with(|| Rc::clone(f));
-                }
+                let i = layout.index[embed_name] as usize;
+                values[i] = Value::Struct(inner);
+                set[i] = true;
             }
-            fields.insert(embed_name.clone(), Value::Struct(inner));
         }
 
         // 2) own fields
@@ -2428,31 +2564,11 @@ impl Interpreter {
                 Some(e) => self.eval(e, denv.clone())?,
                 None => Value::Nil,
             };
-            fields.insert(f.name.clone(), v);
+            values[layout.index[&f.name] as usize] = v;
         }
 
-        // 3) own methods
-        for (mname, params, body) in &decl.methods {
-            methods.insert(
-                mname.clone(),
-                Rc::new(FnValue {
-                    name: format!("{}.{}", decl.name, mname),
-                    params: params.clone(),
-                    param_syms: param_syms(params),
-                    body: Rc::clone(body),
-                    closure: Some(Rc::clone(denv)),
-                    module: denv.borrow().module_name(),
-                }),
-            );
-        }
-
-        let inst = Rc::new(RefCell::new(StructInstance {
-            type_name: decl.name.clone(),
-            module: denv.borrow().module_name(),
-            fields,
-            embeds: decl.embeds.clone(),
-            methods,
-        }));
+        // 3) the methods are those of the layout
+        let inst = Rc::new(RefCell::new(StructInstance { layout: Rc::clone(&layout), values }));
 
         // 4) constructor
         match &decl.constructor {
@@ -2464,6 +2580,17 @@ impl Interpreter {
                 check_arity("constructor of", &decl.name, params, args.len())?;
                 let module = denv.borrow().module_name();
                 let saved = self.enter(module.as_ref());
+                // on the VM, unless a `?` in it must end the function that
+                // called `new` (the sentinel of the tree-walker does that)
+                if self.vm_enabled {
+                    if let Some(f) = &layout.ctor {
+                        if let Some(proto) = self.vm_protos.get(f, true).filter(|p| !p.propagates) {
+                            vm::run(self, &proto, f, Some(Value::Struct(Rc::clone(&inst))), args)?;
+                            self.leave(saved);
+                            return Ok(inst);
+                        }
+                    }
+                }
                 let ctor_env = Environment::with_parent(denv.clone());
                 {
                     let mut e = ctor_env.borrow_mut();
@@ -2515,7 +2642,7 @@ impl Interpreter {
                 if s.borrow().methods.contains_key(field) {
                     return Ok(Value::struct_bound(Rc::clone(&s), field));
                 }
-                if let Some(v) = s.borrow().fields.get(field) {
+                if let Some(v) = s.borrow().field(field) {
                     return Ok(v.clone());
                 }
                 Err(format!(

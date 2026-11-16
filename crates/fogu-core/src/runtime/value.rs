@@ -187,15 +187,72 @@ impl ChanValue {
 pub struct StructTypeValue {
     pub decl: StructDecl,
     pub env: Rc<RefCell<Environment>>,
+    /// What its instances share, built by the first `new` (see [`StructLayout`]).
+    pub layout: RefCell<Option<Rc<StructLayout>>>,
 }
 
-pub struct StructInstance {
+/// What every instance of a struct type shares: the names of its fields (each
+/// one a slot of the instance, in this order) and its methods. An instance is
+/// then one vector of values; reading `p.x` is an index once the slot of `x`
+/// is known, and `new` neither hashes field names nor builds methods.
+/// See `docs/architecture/struct-layouts.md`.
+pub struct StructLayout {
+    /// Unique in the process: what inline caches compare.
+    pub id: u64,
     pub type_name: String,
     /// Module where the struct was declared (`_x` fields are only visible there).
     pub module: Option<Rc<str>>,
-    pub fields: HashMap<String, Value>,
     pub embeds: Vec<String>,
+    /// Field names, in slot order.
+    pub names: Vec<String>,
+    /// Field name → slot.
+    pub index: HashMap<String, u32>,
     pub methods: HashMap<String, Rc<FnValue>>,
+    /// The constructor as a method (`this` + its parameters), when there is one.
+    pub ctor: Option<Rc<FnValue>>,
+    /// The layouts of the embedded types this one was built from.
+    pub embed_ids: Vec<u64>,
+}
+
+/// A new [`StructLayout::id`].
+pub fn next_layout_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A struct value: its type's layout and one value per field.
+/// It reads as its layout (`type_name`, `module`, `embeds`, `methods`).
+pub struct StructInstance {
+    pub layout: Rc<StructLayout>,
+    pub values: Vec<Value>,
+}
+
+impl std::ops::Deref for StructInstance {
+    type Target = StructLayout;
+    fn deref(&self) -> &StructLayout {
+        &self.layout
+    }
+}
+
+impl StructInstance {
+    /// The value of the field `name`, if the struct has it.
+    #[inline]
+    pub fn field(&self, name: &str) -> Option<&Value> {
+        self.layout.index.get(name).map(|i| &self.values[*i as usize])
+    }
+
+    #[inline]
+    pub fn field_mut(&mut self, name: &str) -> Option<&mut Value> {
+        match self.layout.index.get(name) {
+            Some(i) => Some(&mut self.values[*i as usize]),
+            None => None,
+        }
+    }
+
+    /// Every field with its value, in slot order.
+    pub fn fields(&self) -> impl Iterator<Item = (&String, &Value)> {
+        self.layout.names.iter().zip(self.values.iter())
+    }
 }
 
 impl fmt::Debug for Value {
@@ -288,8 +345,7 @@ impl Value {
             Value::Struct(s) => {
                 let b = s.borrow();
                 let mut fields: Vec<String> = b
-                    .fields
-                    .iter()
+                    .fields()
                     .map(|(k, v)| format!("{}: {}", k, v.to_display_string()))
                     .collect();
                 fields.sort();

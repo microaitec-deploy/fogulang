@@ -1,0 +1,8 @@
+// Assigning a field the struct does not have is an error (the layout is fixed).
+struct P { x = 0 }
+fn widen(p) {
+    p.y = 1
+    return p
+}
+print("before")
+widen(new P())

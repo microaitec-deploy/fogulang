@@ -1,10 +1,12 @@
 # The bytecode VM (design, Phase 4)
 
-Status: **design**. The tree-walking interpreter (`runtime/interpreter.rs`) is the
-semantic reference and stays so until the VM passes the whole spec suite with
-identical output. This document fixes the instruction set and the execution
-model before the code is written, so the compiler, the VM and the JIT (which
-will compile *from bytecode*, Phase 5) agree.
+Status: **steps 1 and 2 implemented, opt-in** (0.8.1, `--engine=vm`); see
+[Implementation status](#implementation-status-081) for what the code does today
+and where it differs from this design. The tree-walking interpreter
+(`runtime/interpreter.rs`) is the semantic reference and stays so until the VM
+runs every construct. This document fixes the instruction set and the execution
+model, so the compiler, the VM and the JIT (which will compile *from bytecode*,
+Phase 5) agree.
 
 ## Why
 
@@ -209,6 +211,64 @@ opt-in: with `--engine=vm` the JIT is off, and the benchmarks compare
 tree-walker+JIT, VM, VM+JIT when it exists. This is why the VM is not switched
 on by default in a half state: hot numeric loops would leave the JIT and get
 slower.
+
+## Implementation status (0.8.1)
+
+The code is in `crates/fogu-core/src/runtime/vm/`: `mod.rs` (`Op`, `Proto`,
+`Cache`, the engine switch, the cache of compiled bodies, `fogu disasm`),
+`compiler.rs` (AST → `Proto`) and `exec.rs` (the run loop).
+
+**How it is used.** `--engine=vm` (or `FOGU_ENGINE=vm`) makes the interpreter
+compile a function body the first time it is called. The unit is the function:
+a body that uses a construct the compiler does not cover is run by the
+tree-walker, as before (`FOGU_VM_DEBUG=1` prints which and why; `fogu disasm
+file.fg` prints the bytecode of each function, or why there is none). The top
+level of a module is always run by the tree-walker.
+
+**Compiled today.** Literals, locals in registers, globals through the
+defining environment, every arithmetic / comparison / logical / bit operator,
+`if`, `while`, `loop`, `for` over ranges, lists, maps, text, buffers, channels
+and listeners (one and two variables), `break` / `continue`, calls of
+functions, natives, methods and `new`, lists and map literals, templates,
+indexing and fields (read, write, compound), `return a, b`, `?`,
+`const [a, b] = …`, default and variadic parameters, parameter / variable /
+return annotations, struct methods and constructors.
+
+**Not compiled yet** (the function runs on the tree-walker): closures and
+function literals inside the function, `match`, `fg`, channel operators and
+`select`, `?.`, `import()`, declarations of functions, structs and interfaces
+inside a function. A function that assigns a constant or declares a name twice
+is also left to the tree-walker, which reports the error.
+
+**Differences from the design above.**
+
+- An instruction is a Rust enum of 8 bytes (16-bit registers, 32-bit absolute
+  jump targets), not a packed 32-bit word.
+- The line is an instruction (`Line`), not a side table.
+- A name that is not a local of the function is a *global* read in the
+  function's defining environment: there are no upvalues yet, because a function
+  that creates a closure is not compiled. A closure itself may be compiled (its
+  captured variables are read from its environment).
+- A call from compiled code to a compiled function pushes a frame in the same
+  loop (no Rust recursion; `MAX_FRAMES` = 200 000 frames per run). A function
+  the JIT compiled keeps running as native code: the VM lets the JIT see the
+  first calls of every function and only then calls it directly.
+- Operations with a non-trivial meaning (fields, indexing, arithmetic outside
+  the int / float fast paths, `?`, type checks, natives, the host's intercepts)
+  call the interpreter's own functions, so results and messages are the same.
+- Inline caches exist for struct fields, struct methods and function calls
+  (`vm::Cache`, one per instruction), over the struct layouts of
+  [architecture/struct-layouts.md](architecture/struct-layouts.md).
+- The JIT still compiles from the AST. Loops inside a function the VM runs do
+  not reach the loop JIT, which is why the VM is not the default: a function
+  with a hot numeric loop that the function JIT refuses is slower on the VM
+  than on the tree-walker + loop JIT.
+
+**Measured** (`fogu bench/run.fg programs`, see `bench/RESULTS_PROGRAMS.md`):
+the VM is about 2× to 3× faster than the tree-walker on the three programs —
+below the ≥ 5× of the exit criterion, and far from Go. What the profiles show
+is next: map keys are `String`s (a map literal allocates one per key), and
+every call still builds an argument vector for natives.
 
 ## Testing
 

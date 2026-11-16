@@ -11,14 +11,22 @@ fogu --watch <file>          restart when *.fg / fogu.json change
 fogu check [paths] [opts]    syntax, names and types (files or folders; no args: every .fg here)
 fogu build --compile [file]  standalone executable in dist/ (-o <folder>, --target <platform>|all)
 fogu test [paths] [-t text]  run the tests of *.test.fg files
+fogu disasm <file.fg>        the bytecode of the file's functions and methods (see bytecode.md)
 fogu init | add | remove | install | update | list | pm   (see packages.md)
 fogu --version | --help
 ```
 
-Options: `--no-jit`, `--jit-stats`, `--jit-debug`, `--jit-dump`, `--strict`,
-`--cores <n|cpus>`.
+Options: `--no-jit`, `--jit-stats`, `--jit-debug`, `--jit-dump`, `--engine <tree|vm>`,
+`--strict`, `--cores <n|cpus>`.
 Environment: `FOGU_HOME`, `NO_COLOR`, `FOGU_JIT=0`, `FOGU_JIT_CALLS`, `FOGU_JIT_LOOPS`,
-`FOGU_DOTENV=0`, `FOGU_CORES`.
+`FOGU_ENGINE=vm`, `FOGU_VM_DEBUG=1`, `FOGU_DOTENV=0`, `FOGU_CORES`.
+
+`--engine=vm` (or `FOGU_ENGINE=vm`) runs function bodies on the bytecode VM
+instead of the tree-walking interpreter. It is opt-in in 0.8.1: the output is
+the same (the spec suite runs on both), most programs with functions, structs
+and text are 2–3× faster, and a function the VM does not cover yet runs on the
+tree-walker (`FOGU_VM_DEBUG=1` lists them). `fogu disasm file.fg` prints the
+bytecode. See [bytecode.md](bytecode.md).
 
 `--cores 4` (or `FOGU_CORES=4`, or `Fogu.cores(4)` at the top of a program) sets how many
 threads the runtime uses for networking and blocking work (default: the machine's CPUs, at

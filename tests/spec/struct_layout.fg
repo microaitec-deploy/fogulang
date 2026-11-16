@@ -1,0 +1,68 @@
+// Struct instances are one vector of values over a layout shared by the type
+// (docs/architecture/struct-layouts.md): what a program sees must not change.
+import types from "fogu:types"
+
+struct Base {
+    id = 1
+    tag = "base"
+    fn describe() { return "base " + str(this.id) }
+    fn who() { return "Base" }
+}
+struct Other {
+    tag = "other"
+    extra = 9
+    fn who() { return "Other" }
+}
+struct Both {
+    embed Base
+    embed Other
+    name = "both"
+    fn who() { return "Both" }
+}
+
+// a field two embeds have keeps the value of the first; own methods win;
+// the embeds themselves are fields
+const b = new Both()
+print(b.id, b.tag, b.extra, b.name)
+print(b.describe(), b.who(), b.Base.who(), b.Other.who())
+print(b.Other.tag, typeof(b.Base))
+
+// instances do not share values; methods are shared but bound to their instance
+const c = new Both()
+c.id = 7
+c.Base.id = 8
+print(b.id, c.id, c.describe(), c.Base.describe())
+const say = c.describe
+print(say())
+
+// a field can be assigned, an unknown one cannot be added
+struct P {
+    x = 0
+    y = 0
+    new(x, y) {
+        this.x = x
+        this.y = y
+    }
+    fn sum() { return this.x + this.y }
+    fn move(dx) {
+        this.x += dx
+        return this
+    }
+}
+const p = new P(1, 2)
+print(p.move(10).move(5).sum(), p)
+
+// deep copies and structural equality walk the fields
+const q = types.clone(p)
+q.x = 0
+print(p.x, q.x, types.equal(p, new P(16, 2)), types.equal(p, q))
+
+// the same field name in two types is a different slot in each
+struct A { v = "a"  w = 1 }
+struct Z { w = 2  v = "z" }
+fn readV(o) { return o.v }
+fn setW(o, n) {
+    o.w = n
+    return o.w
+}
+print(readV(new A()), readV(new Z()), readV(new A()), setW(new A(), 5), setW(new Z(), 6), readV({ v: "map" }))

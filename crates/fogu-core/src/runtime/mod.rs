@@ -29,6 +29,7 @@ pub mod sched;
 pub mod token;
 pub mod value;
 
+pub use interpreter::vm;
 pub use interpreter::Interpreter;
 pub use lexer::Lexer;
 pub use parser::Parser;

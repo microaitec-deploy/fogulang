@@ -33,8 +33,9 @@ FOGU_BLESS=1 cargo test --release     # regenerate the .out files (review the di
 ```
 
 **Tests**: `tests/cli.rs` covers `init`, `test` and `build --compile` on temp
-projects. `tests/spec.rs` runs each `tests/spec/<name>.fg` with and without
-the JIT (low thresholds, to force compilation) and compares stdout with
+projects. `tests/spec.rs` runs each `tests/spec/<name>.fg` three times — without
+the JIT, with it (low thresholds, to force compilation) and with `--engine=vm` —
+and compares stdout with
 `<name>.out`; if `<name>.err` exists the program must fail and stderr must
 contain every line. `_name.fg` are helper modules; `*.tmp.*` data files are
 deleted after each test. Every new feature gets a test here, with the expected
@@ -44,6 +45,7 @@ on `127.0.0.1`.
 
 Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
 `FOGU_JIT_DEBUG`, `FOGU_JIT_CALLS` (default 2), `FOGU_JIT_LOOPS` (default 200),
+`FOGU_ENGINE=vm` (the bytecode VM, as `--engine=vm`), `FOGU_VM_DEBUG=1` (what it compiles),
 `FOGU_DOTENV=0` (skip loading `./.env`, done by `toolkit::load_dotenv` at startup).
 
 ## Architecture (Cargo workspace)
@@ -56,7 +58,12 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
     `analyze` collects everything for `fogu check`, `check` returns the first error); `interpreter.rs` — **semantic reference**;
     `environment.rs` (lexical scope, FxHash, each top-level env knows its module;
     loop bodies reuse their scope via `LoopScope` unless a closure captured it);
-    `value.rs` (`Value` uses `Rc<RefCell<..>>` → **not `Send`**); `fstr.rs` (`Str`, the
+    `value.rs` (`Value` uses `Rc<RefCell<..>>` → **not `Send`**; a struct instance is a
+    `StructLayout` shared by its type plus one `Vec<Value>`: read fields with `field(name)` /
+    `fields()`, never a map); `vm/` (the bytecode VM, a child module of `interpreter.rs`:
+    `compiler.rs` AST → `Proto`, `exec.rs` the run loop; opt-in with `--engine=vm`, per function,
+    anything it does not compile runs on the tree-walker; it calls the interpreter's own
+    functions for every non-trivial operation so both engines give the same output); `fstr.rs` (`Str`, the
     string of `Value::Str`: Rc copy-on-write, O(1) clone, cached char count —
     `s = s + x` appends in place); `ops.rs` (checked arithmetic and **the error
     messages shared** by the interpreter and the JIT); `jit.rs` (Cranelift; only the
@@ -231,7 +238,9 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
   and more **do not exist yet**. The real status is in `CHECKLIST.md`; check the
   code before assuming anything.
 - `docs/cli.md`, `docs/packages.md`, `docs/jit.md` — reflect the current state.
-- `docs/bytecode.md` — the design of the bytecode VM (Phase 4): read it before touching `runtime/vm/`.
+- `docs/bytecode.md` — the design of the bytecode VM (Phase 4) and its "Implementation status":
+  read it before touching `runtime/vm/`. `docs/architecture/struct-layouts.md` — how struct
+  instances are stored (a layout per type, a vector per instance) and the VM's inline caches.
 - `docs/analysis.md` — history of fixes and **known gaps**; `CHANGELOG.md` —
   changes per version. Update both.
 - `docs/docs.html` — official user documentation (HTML + Tailwind); keep its

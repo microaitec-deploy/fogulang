@@ -545,6 +545,7 @@ fogu --version | --help
 | `NO_COLOR` | disables colors |
 | `FOGU_DOTENV=0` | do not load `./.env` (loaded by default; variables already set win) |
 | `FOGU_JIT=0` | disables the JIT |
+| `FOGU_ENGINE=vm` | runs function bodies on the bytecode VM (as `--engine=vm`; opt-in, see `docs/bytecode.md`) |
 | `FOGU_JIT_CALLS` | calls before compiling a function (default 2) |
 | `FOGU_JIT_LOOPS` | iterations before compiling a `while` (default 200) |
 

@@ -1,0 +1,109 @@
+// A program, not a kernel: a limit order book. 200k orders are matched against
+// two binary heaps of structs (best bid, best ask): fields, methods, lists.
+const M = 1000003
+let seed = 7
+fn rnd(n) {
+    seed = (seed * 75 + 74) % 65537
+    return seed % n
+}
+
+struct Order {
+    id = 0
+    price = 0
+    qty = 0
+    new(id, price, qty) {
+        this.id = id
+        this.price = price
+        this.qty = qty
+    }
+}
+
+// a binary heap: `sign` 1 keeps the lowest price on top, -1 the highest
+struct Heap {
+    items = []
+    sign = 1
+    new(sign) {
+        this.items = []
+        this.sign = sign
+    }
+    fn less(a, b) {
+        const pa = a.price * this.sign
+        const pb = b.price * this.sign
+        if pa != pb { return pa < pb }
+        return a.id < b.id
+    }
+    fn size() { return this.items.len() }
+    fn top() { return this.items[0] }
+    fn push(o) {
+        const xs = this.items
+        xs.push(o)
+        let i = xs.len() - 1
+        while i > 0 {
+            const parent = (i - 1) / 2
+            if !this.less(xs[i], xs[parent]) { break }
+            const t = xs[i]
+            xs[i] = xs[parent]
+            xs[parent] = t
+            i = parent
+        }
+    }
+    fn pop() {
+        const xs = this.items
+        const last = xs.pop()
+        const n = xs.len()
+        if n == 0 { return }
+        xs[0] = last
+        let i = 0
+        loop {
+            const l = 2 * i + 1
+            const r = l + 1
+            let best = i
+            if l < n && this.less(xs[l], xs[best]) { best = l }
+            if r < n && this.less(xs[r], xs[best]) { best = r }
+            if best == i { break }
+            const t = xs[i]
+            xs[i] = xs[best]
+            xs[best] = t
+            i = best
+        }
+    }
+}
+
+const bids = new Heap(-1)
+const asks = new Heap(1)
+let trades = 0
+let volume = 0
+
+fn submit(id) {
+    const buy = rnd(2) == 0
+    const price = 900 + rnd(200)
+    let qty = 1 + rnd(50)
+    if buy {
+        while qty > 0 && asks.size() > 0 && asks.top().price <= price {
+            const best = asks.top()
+            let q = qty
+            if best.qty < q { q = best.qty }
+            trades += 1
+            volume = (volume + q * best.price) % M
+            qty -= q
+            best.qty -= q
+            if best.qty == 0 { asks.pop() }
+        }
+        if qty > 0 { bids.push(new Order(id, price, qty)) }
+    } else {
+        while qty > 0 && bids.size() > 0 && bids.top().price >= price {
+            const best = bids.top()
+            let q = qty
+            if best.qty < q { q = best.qty }
+            trades += 1
+            volume = (volume + q * best.price) % M
+            qty -= q
+            best.qty -= q
+            if best.qty == 0 { bids.pop() }
+        }
+        if qty > 0 { asks.push(new Order(id, price, qty)) }
+    }
+}
+
+for i in 0..200000 { submit(i) }
+print(trades, volume, bids.size(), asks.size())

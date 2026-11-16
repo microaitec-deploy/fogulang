@@ -4143,6 +4143,17 @@ impl Jit {
         self.inner.as_ref().map(|i| i.ctx.line as u32).unwrap_or(0)
     }
 
+    /// Has the body at `body` (the address of its `Block`) native code for some
+    /// argument types? The VM asks once per function, after its first calls.
+    pub fn compiled(&self, body: usize) -> bool {
+        self.inner.as_ref().is_some_and(|i| i.specs.iter().any(|(k, s)| k.ptr == body && matches!(s, Spec::Done { .. })))
+    }
+
+    /// Number of interpreted calls before a function is compiled.
+    pub fn call_threshold(&self) -> u32 {
+        self.cfg.call_threshold
+    }
+
     /// Tries to run the function natively. `None` = use the interpreter.
     ///
     /// `deadline` ([`deadline_ns`]) is the deadline of the running `fogu:vm`

@@ -210,9 +210,7 @@ fn to_map(v: &Value) -> Option<Value> {
         Value::Nil => new_map(HashMap::new()),
         Value::Struct(s) => {
             let s = s.borrow();
-            let mut keys: Vec<&String> = s.fields.keys().collect();
-            keys.sort();
-            new_map(keys.into_iter().map(|k| (k.clone(), s.fields[k].clone())).collect())
+            new_map(s.fields().map(|(k, v)| (k.clone(), v.clone())).collect())
         }
         Value::List(l) => {
             let mut out = HashMap::new();
@@ -256,8 +254,8 @@ fn deep_equal(a: &Value, b: &Value) -> bool {
             }
             let (x, y) = (x.borrow(), y.borrow());
             x.type_name == y.type_name
-                && x.fields.len() == y.fields.len()
-                && x.fields.iter().all(|(k, v)| y.fields.get(k).is_some_and(|w| deep_equal(v, w)))
+                && x.values.len() == y.values.len()
+                && x.fields().all(|(k, v)| y.field(k).is_some_and(|w| deep_equal(v, w)))
         }
         _ => crate::runtime::interpreter::values_equal(a, b),
     }
@@ -271,11 +269,8 @@ fn deep_clone(v: &Value) -> Value {
         Value::Struct(s) => {
             let s = s.borrow();
             Value::Struct(Rc::new(RefCell::new(StructInstance {
-                type_name: s.type_name.clone(),
-                module: s.module.clone(),
-                fields: s.fields.iter().map(|(k, v)| (k.clone(), deep_clone(v))).collect(),
-                embeds: s.embeds.clone(),
-                methods: s.methods.clone(),
+                layout: Rc::clone(&s.layout),
+                values: s.values.iter().map(deep_clone).collect(),
             })))
         }
         other => other.clone(),
@@ -476,7 +471,7 @@ fn check_list(v: &Value, item: &Value, path: &str, errs: &mut Vec<String>, all: 
 fn fields_of(v: &Value) -> Option<HashMap<String, Value>> {
     match v {
         Value::Map(m) => Some(m.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
-        Value::Struct(s) => Some(s.borrow().fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+        Value::Struct(s) => Some(s.borrow().fields().map(|(k, v)| (k.clone(), v.clone())).collect()),
         _ => None,
     }
 }
