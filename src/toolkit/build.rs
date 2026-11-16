@@ -33,6 +33,13 @@
 //! the install scripts), checked against its SHA-256 and cached in
 //! `$FOGU_HOME/runtimes/<version>/` — so any machine builds for any platform.
 //!
+//! Libraries: `fogu build --lib` appends the same bundle to the embeddable
+//! runtime (`libfogu_rt` .so / .dll / .dylib, the C API of `ffi/fogu.h`)
+//! instead of the executable: the output is a shared library that carries
+//! the program. A host loads it, calls `fogu_load` (which runs the entry file
+//! once, so its top-level functions exist) and then `fogu_call`. A header
+//! with the program's functions is written next to it.
+//!
 //! Services: `--service` (or `"service"` in fogu.json) records service settings
 //! in the bundle; the executable then accepts `install`, `uninstall`, `start`,
 //! `stop` and `status`, and runs as a Windows service / systemd unit
@@ -123,6 +130,7 @@ fn service_spec(bundle: &Bundle, f: &ServiceFlags) -> Result<Option<super::servi
 
 pub fn build(args: &[String]) -> i32 {
     let mut compile = false;
+    let mut lib = false;
     let mut targets: Vec<String> = Vec::new();
     let mut runtime: Option<PathBuf> = None;
     let mut out_dir = PathBuf::from("dist");
@@ -135,6 +143,7 @@ pub fn build(args: &[String]) -> i32 {
     while let Some(a) = it.next() {
         match a.as_str() {
             "--compile" => compile = true,
+            "--lib" => lib = true,
             "--target" => match it.next() {
                 Some(t) => targets.extend(t.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty())),
                 None => return fail("--target expects a platform (fogu build --targets lists them)"),
@@ -173,8 +182,14 @@ pub fn build(args: &[String]) -> i32 {
             s => entry_arg = Some(s.to_string()),
         }
     }
+    if lib {
+        if compile || minimal || full || svc.on {
+            return fail("--lib does not combine with --compile, --minimal, --full or --service");
+        }
+        return build_lib(entry_arg.as_deref(), &embed, &targets, runtime.as_deref(), &out_dir);
+    }
     if !compile {
-        return fail("usage: fogu build --compile [entry.fg] [-o <folder>] [--embed <glob>]... [--target <platform>] [--minimal | --full] [--service [--service-name <n>] [--display-name <n>] [--description <t>] [--start-type auto|manual|delayed]]");
+        return fail("usage: fogu build --compile [entry.fg] [-o <folder>] [--embed <glob>]... [--target <platform>] [--minimal | --full] [--service [--service-name <n>] [--display-name <n>] [--description <t>] [--start-type auto|manual|delayed]]\n       fogu build --lib [entry.fg] [-o <folder>] [--embed <glob>]... [--target <platform>] [--runtime <libfogu_rt>]");
     }
     let started = std::time::Instant::now();
     let bundle = match collect(entry_arg.as_deref(), &embed) {
@@ -547,7 +562,6 @@ fn download_runtime(server: &str, target: &str, file: &str) -> Result<PathBuf, S
 /// `fogu-linux-arm64-network`).
 #[cfg(not(target_family = "wasm"))]
 fn download_runtime_file(server: &str, target: &str, flavor: Option<&str>, file: &str) -> Result<PathBuf, String> {
-    let version = env!("CARGO_PKG_VERSION");
     let stem = match target {
         "linux-x64" | "windows-x64" => "fogu".to_string(),
         t => format!("fogu-{}", t),
@@ -557,6 +571,14 @@ fn download_runtime_file(server: &str, target: &str, flavor: Option<&str>, file:
         None => stem,
     };
     let remote = if target.starts_with("windows") { format!("{}.exe", stem) } else { stem };
+    download_release(server, target, &remote, file)
+}
+
+/// Downloads `remote` of this Fogu version from the server, checks its
+/// SHA-256 (`<remote>.sha256`) and caches it as `$FOGU_HOME/runtimes/<version>/<file>`.
+#[cfg(not(target_family = "wasm"))]
+fn download_release(server: &str, target: &str, remote: &str, file: &str) -> Result<PathBuf, String> {
+    let version = env!("CARGO_PKG_VERSION");
     let url = format!("{}/download/{}/{}", server, version, remote);
     eprintln!("{}", ui::dim(&format!("downloading the {} runtime: {}", target, url)));
     let client = pkg::net::blocking_client();
@@ -595,6 +617,7 @@ fn download_runtime_file(server: &str, target: &str, flavor: Option<&str>, file:
     eprintln!("{}", ui::dim(&format!("cached {}", dest.display())));
     Ok(dest)
 }
+
 
 #[cfg(target_family = "wasm")]
 fn download_runtime_file(_server: &str, target: &str, _flavor: Option<&str>, _file: &str) -> Result<PathBuf, String> {
@@ -676,6 +699,190 @@ fn check_runtime(path: &Path, target: &str) -> Result<(), String> {
         return Err(format!("{} is not a {} runtime ({})", path.display(), target, found));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------
+// fogu build --lib
+// ---------------------------------------------------------------------
+
+/// The C API of the runtime, written next to a built library.
+const FOGU_H: &str = include_str!("../../ffi/fogu.h");
+
+/// The embeddable runtime of a platform: its file names (as built by `cargo
+/// ffi`, as published on the server) and the name of a library built from it.
+fn lib_names(target: &str, name: &str, suffix: bool) -> (Vec<String>, String) {
+    let tag = if suffix { format!("-{}", target) } else { String::new() };
+    if target.starts_with("windows") {
+        (vec![format!("fogu_rt-{}.dll", target), "fogu_rt.dll".into()], format!("{}{}.dll", name, tag))
+    } else if target.starts_with("macos") {
+        (vec![format!("libfogu_rt-{}.dylib", target), "libfogu_rt.dylib".into()], format!("lib{}{}.dylib", name, tag))
+    } else {
+        (vec![format!("libfogu_rt-{}.so", target), "libfogu_rt.so".into()], format!("lib{}{}.so", name, tag))
+    }
+}
+
+/// The `libfogu_rt` of `target`: `$FOGU_RUNTIMES`, next to this executable
+/// (also `runtimes/`), `dist/`, `$FOGU_HOME/runtimes` (and its `<version>/`
+/// cache), else the Fogu server's copy of this version. The plain names
+/// (`libfogu_rt.so`) are only taken for this machine's platform.
+fn find_runtime_lib(target: &str) -> Result<PathBuf, String> {
+    let (names, _) = lib_names(target, "", false);
+    let host = host_target() == Some(target);
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(d) = std::env::var_os("FOGU_RUNTIMES") {
+        dirs.push(PathBuf::from(d));
+    }
+    if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
+        dirs.push(dir.join("runtimes"));
+        dirs.push(dir);
+    }
+    dirs.push(PathBuf::from("dist"));
+    dirs.push(pkg::home().join("runtimes"));
+    dirs.push(pkg::home().join("runtimes").join(env!("CARGO_PKG_VERSION")));
+    for d in &dirs {
+        for (i, n) in names.iter().enumerate() {
+            let p = d.join(n);
+            if (i == 0 || host) && p.is_file() {
+                return Ok(p);
+            }
+        }
+    }
+    #[cfg(not(target_family = "wasm"))]
+    if let Some(server) = server_url() {
+        return download_release(&server, target, &names[0], &names[0]);
+    }
+    Err(format!(
+        "no embeddable runtime for '{}': put {} in {} (build it with 'cargo ffi' in the Fogu sources), pass --runtime <path>, or set FOGU_SERVER to a Fogu server to download it",
+        target,
+        names[0],
+        pkg::home().join("runtimes").display()
+    ))
+}
+
+/// The functions a host can call: the top-level `fn` declarations of the
+/// entry file (exported or not), with their parameters.
+fn entry_functions(bundle: &Bundle) -> Vec<(String, Vec<String>)> {
+    use crate::runtime::ast::ExportKind;
+    let Some(src) = bundle.files.get(&bundle.entry) else { return Vec::new() };
+    let Ok(tokens) = Lexer::new(src).tokenize() else { return Vec::new() };
+    let Ok(program) = Parser::new(tokens).parse_program() else { return Vec::new() };
+    let mut out = Vec::new();
+    for s in &program {
+        match s {
+            Stmt::FnDecl { name, params, .. } if !name.starts_with('_') => out.push((name.clone(), params.clone())),
+            Stmt::Export(k) => {
+                if let ExportKind::Fn { name, params, .. } = &**k {
+                    out.push((name.clone(), params.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// `<name>.h`: the C API plus what this library holds.
+fn library_header(bundle: &Bundle, functions: &[(String, Vec<String>)]) -> String {
+    let guard: String = bundle.name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' }).collect();
+    let mut h = format!(
+        "/* {name}.h — the Fogu program '{name}' as a shared library (fogu build --lib, Fogu {version}).\n *\n * Load the library, then:\n *\n *     FoguRuntime *rt = NULL;\n *     char *r = fogu_load(&rt);            // runs {entry} once; {{\"ok\":true,...}} or {{\"ok\":false,\"error\":...}}\n *     fogu_free_string(r);\n *     r = fogu_call(rt, \"<function>\", \"[<json arguments>]\");\n *     ... r is {{\"ok\":true,\"value\":<json>}} ...\n *     fogu_free_string(r);\n *     fogu_free(rt);\n *\n * Functions of the program (call them by name with fogu_call):\n",
+        name = bundle.name,
+        version = env!("CARGO_PKG_VERSION"),
+        entry = bundle.entry,
+    );
+    if functions.is_empty() {
+        h.push_str(" *     (the entry file declares no top-level function)\n");
+    }
+    for (name, params) in functions {
+        h.push_str(&format!(" *     {}({})\n", name, params.join(", ")));
+    }
+    h.push_str(" */\n");
+    h.push_str(&format!("#ifndef {guard}_FOGU_LIB_H\n#define {guard}_FOGU_LIB_H\n\n", guard = guard));
+    h.push_str(FOGU_H);
+    h.push_str(&format!("\n#endif /* {}_FOGU_LIB_H */\n", guard));
+    h
+}
+
+/// `fogu build --lib`: the program as a shared library for each target.
+fn build_lib(entry_arg: Option<&str>, embed: &[String], targets: &[String], runtime: Option<&Path>, out_dir: &Path) -> i32 {
+    let started = std::time::Instant::now();
+    let bundle = match collect(entry_arg, embed) {
+        Ok(b) => b,
+        Err(e) => return fail(&e),
+    };
+    let mut names: Vec<&'static str> = Vec::new();
+    let all = targets.iter().any(|t| t == "all");
+    if targets.is_empty() {
+        match host_target() {
+            Some(h) => names.push(h),
+            None => return fail("--lib needs --target on this platform"),
+        }
+    }
+    for t in targets {
+        if t == "all" {
+            names.extend(TARGETS.iter().map(|t| t.0).filter(|n| *n != "wasm"));
+            continue;
+        }
+        match target_name(t) {
+            Some("wasm") => return fail("--lib has no WebAssembly target (use --compile --target wasm)"),
+            Some(n) => names.push(n),
+            None => return fail(&format!("unknown target '{}' (fogu build --targets lists them)", t)),
+        }
+    }
+    names.dedup();
+    if runtime.is_some() && names.len() > 1 {
+        return fail("--runtime works with a single --target");
+    }
+    for f in bundle.files.keys() {
+        println!("  {} {}", ui::dim("+"), f);
+    }
+    let functions = entry_functions(&bundle);
+    let mut built = 0;
+    for n in names {
+        let base = match runtime.map(|r| Ok(r.to_path_buf())).unwrap_or_else(|| find_runtime_lib(n)) {
+            Ok(p) => p,
+            // with `all`, the platforms without a runtime are skipped
+            Err(e) if all => {
+                ui::warn(&e);
+                continue;
+            }
+            Err(e) => return fail(&e),
+        };
+        if let Err(e) = check_runtime(&base, n) {
+            return fail(&e);
+        }
+        let (_, file) = lib_names(n, &bundle.name, !targets.is_empty());
+        match write_bundled(&bundle, None, out_dir, &base, None, &file) {
+            Ok(path) => {
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                println!(
+                    "{} {} {}",
+                    ui::green("built"),
+                    path.display(),
+                    ui::dim(&format!("({}, {} file(s), {}ms)", ui::human_size(size), bundle.files.len(), started.elapsed().as_millis()))
+                );
+                if n.starts_with("macos") {
+                    ui::warn("macOS: sign the library before loading it (codesign --force -s - <file>); appending the program changed its contents");
+                }
+                built += 1;
+            }
+            Err(e) => return fail(&e),
+        }
+    }
+    if built == 0 {
+        return fail("no embeddable runtime found for any target (build them with 'cargo ffi')");
+    }
+    let header = out_dir.join(format!("{}.h", bundle.name));
+    match std::fs::write(&header, library_header(&bundle, &functions)) {
+        Ok(()) => println!("{} {}", ui::green("wrote"), header.display()),
+        Err(e) => return fail(&format!("{}: {}", header.display(), e)),
+    }
+    if functions.is_empty() {
+        ui::warn("the entry file declares no top-level function: a host has nothing to call");
+    } else {
+        println!("  {} {}", ui::dim("functions:"), functions.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", "));
+    }
+    0
 }
 
 fn fail(msg: &str) -> i32 {
@@ -992,6 +1199,17 @@ fn copy_package(dir: &Path, prefix: &str, files: &mut BTreeMap<String, String>) 
 /// Copies the runtime (without any previous bundle) and appends the bundle.
 /// With a target the file is named `<name>-<target>`.
 fn write_executable(bundle: &Bundle, service: Option<&super::service::ServiceSpec>, out_dir: &Path, exe: &Path, target: Option<&str>) -> Result<PathBuf, String> {
+    let file_name = match target {
+        Some(t) => exe_name(&format!("{}-{}", bundle.name, t), t),
+        None if cfg!(windows) => format!("{}.exe", bundle.name),
+        None => bundle.name.clone(),
+    };
+    write_bundled(bundle, service, out_dir, exe, target, &file_name)
+}
+
+/// Writes `out_dir/file_name`: the binary `exe` (an executable or the
+/// embeddable runtime library) followed by the bundle.
+fn write_bundled(bundle: &Bundle, service: Option<&super::service::ServiceSpec>, out_dir: &Path, exe: &Path, target: Option<&str>, file_name: &str) -> Result<PathBuf, String> {
     let mut bytes = std::fs::read(exe).map_err(|e| format!("cannot read {}: {}", exe.display(), e))?;
     if let Some((start, _)) = find_bundle(&bytes) {
         bytes.truncate(start);
@@ -1016,11 +1234,6 @@ fn write_executable(bundle: &Bundle, service: Option<&super::service::ServiceSpe
     }
 
     std::fs::create_dir_all(out_dir).map_err(|e| format!("{}: {}", out_dir.display(), e))?;
-    let file_name = match target {
-        Some(t) => exe_name(&format!("{}-{}", bundle.name, t), t),
-        None if cfg!(windows) => format!("{}.exe", bundle.name),
-        None => bundle.name.clone(),
-    };
     let out = out_dir.join(file_name);
     std::fs::write(&out, &bytes).map_err(|e| format!("cannot write {}: {}", out.display(), e))?;
     #[cfg(unix)]
@@ -1110,6 +1323,14 @@ pub fn embedded_in_memory() -> Option<Result<Embedded, String>> {
     let exe = std::env::current_exe().ok()?;
     let bytes = read_tail(&exe)?;
     Some(extract(&bytes, true))
+}
+
+/// The program appended to the file at `path` (a shared library built by
+/// `fogu build --lib` asks for its own file), extracted once.
+#[cfg(not(target_family = "wasm"))]
+pub fn embedded_at(path: &Path) -> Option<Result<Embedded, String>> {
+    let bytes = read_tail(path)?;
+    Some(extract(&bytes, false))
 }
 
 /// Whether a bundle file stays in memory with `embedded_in_memory`.

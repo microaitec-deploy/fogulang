@@ -10,6 +10,7 @@ fogu -e '<code>'             run code;  fogu -p '1+2*3' prints the result
 fogu --watch <file>          restart when *.fg / fogu.json change
 fogu check [paths] [opts]    syntax, names and types (files or folders; no args: every .fg here)
 fogu build --compile [file]  standalone executable in dist/ (-o <folder>, --target <platform>|all)
+fogu build --lib [file]      the program as a shared library (.so / .dll / .dylib) plus its C header
 fogu test [paths] [-t text]  run the tests of *.test.fg files
 fogu disasm <file.fg>        the bytecode of the file's functions and methods (see bytecode.md)
 fogu init | add | remove | install | update | list | pm   (see packages.md)
@@ -74,6 +75,82 @@ cargo ffi --target x86_64-pc-windows-gnu   # fogu_rt.dll from Linux (mingw-w64)
 Builds `target/[<target>/]release/libfogu_rt.so` (`fogu_rt.dll`, `libfogu_rt.dylib`)
 from the `ffi/` crate; the header is `ffi/fogu.h`. The normal `cargo build` does not
 build it.
+
+## `fogu build --lib`
+
+```text
+fogu build --lib                         # the project's entry → dist/lib<name>.so (+ dist/<name>.h)
+fogu build --lib tools.fg -o out
+fogu build --lib --target windows-x64    # dist/<name>-windows-x64.dll
+fogu build --lib --target linux-x64,linux-arm64,windows-x64
+fogu build --lib --runtime path/to/libfogu_rt.so
+```
+
+Turns a Fogu program into a **shared library** another program loads: C, C++,
+Python (`ctypes`), C# (`DllImport`), Go (cgo), Node / Bun (FFI), Rust… The
+output is the embeddable runtime (`libfogu_rt`, the C API above) with the
+program appended — the entry file, every `.fg` it imports, its packages and
+its embedded files, exactly the bundle of `fogu build --compile` — so the one
+file is all a host needs. The names are `lib<name>.so` on Linux,
+`<name>.dll` on Windows and `lib<name>.dylib` on macOS (`<name>` from
+`fogu.json`, else the folder); with `--target` the platform is part of the
+name, as for executables.
+
+The host calls `fogu_load`, which starts a runtime and runs the entry file
+once: what the file declares at its top level then exists, and `fogu_call`
+calls its functions by name. Arguments and results cross as JSON:
+
+```c
+#include "mathlib.h"                       /* written next to the library */
+
+FoguRuntime *rt = NULL;
+char *r = fogu_load(&rt);                  /* {"ok":true,"value":null} */
+fogu_free_string(r);
+r = fogu_call(rt, "add", "[2, 40]");       /* {"ok":true,"value":42} */
+fogu_free_string(r);
+fogu_free(rt);
+```
+
+```python
+import ctypes, json
+lib = ctypes.CDLL("dist/libmathlib.so")
+lib.fogu_load.restype = lib.fogu_call.restype = ctypes.c_void_p
+lib.fogu_load.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+lib.fogu_call.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
+lib.fogu_free_string.argtypes = [ctypes.c_void_p]
+rt = ctypes.c_void_p()
+lib.fogu_free_string(lib.fogu_load(ctypes.byref(rt)))
+p = lib.fogu_call(rt, b"add", json.dumps([2, 40]).encode())
+print(json.loads(ctypes.string_at(p)))     # {'ok': True, 'value': 42}
+lib.fogu_free_string(p)
+```
+
+- Every top-level `fn` of the entry file can be called (exported or not; names
+  starting with `_` are left out of the header, not hidden). The header lists
+  them with their parameters. Top-level variables are read and written with
+  `fogu_get` / `fogu_set`; the rest of the C API works as on any runtime
+  (`fogu_eval`, `fogu_register` for functions the host gives the program,
+  `fogu_on_host` for `Fogu.host.emit`).
+- An error is `{"ok":false,"error":"message"}`: a runtime error, an `error`
+  value returned by the function, or the error of a `return value, error(...)`
+  pair. A function that returns `value, nil` gives the host the pair
+  `[value, null]`.
+- The runtime lives on its own thread: globals, `fg` tasks and servers the
+  program started stay alive between calls, until `fogu_free`. Calls on one
+  runtime are serialized.
+- The runtime library of each platform is looked up like the runtimes of
+  `--compile`: `$FOGU_RUNTIMES`, next to the `fogu` executable (also
+  `runtimes/`), `dist/`, `$FOGU_HOME/runtimes`, else downloaded from the Fogu
+  server and checked against its SHA-256. Its names are
+  `libfogu_rt-<target>.so`, `fogu_rt-<target>.dll`, `libfogu_rt-<target>.dylib`
+  (and the plain `libfogu_rt.so` … of `cargo ffi` for this machine's platform).
+  The server publishes linux-x64, linux-arm64 and windows-x64; the others are
+  built with `cargo ffi --target <triple>` on a machine that can link them.
+- macOS: appending the program changes the file, so sign the library before
+  loading it (`codesign --force -s - dist/lib<name>.dylib`). This step was not
+  tested: no macOS runtime library is built yet.
+- The library is the full runtime (about 60 MB on linux-x64) whatever the
+  program uses; there are no per-program "flavors" for libraries yet.
 
 ## `fogu check`
 

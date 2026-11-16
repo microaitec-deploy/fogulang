@@ -1,5 +1,6 @@
 //! Integration tests of CLI commands that work on whole projects:
-//! `fogu init`, `fogu test`, `fogu build --compile`, `fogu fmt`, `fogu check` and `.env` loading.
+//! `fogu init`, `fogu test`, `fogu build --compile`, `fogu build --lib`, `fogu fmt`, `fogu check`
+//! and `.env` loading.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -442,4 +443,93 @@ fn check_strict_fails_on_warnings() {
     let o = fogu(d.path(), &["main.fg"]);
     assert!(o.status.success(), "{}", text(&o));
     assert_eq!(text(&o).trim(), "1");
+}
+
+/// `fogu build --lib`: the program appended to the embeddable runtime is a
+/// shared library a host loads; `fogu_load` runs it and `fogu_call` calls its
+/// functions. Needs `libfogu_rt` next to the fogu binary (`cargo build
+/// --release -p fogu-ffi`, or `--workspace`); without it the test only checks
+/// the error message.
+#[cfg(unix)]
+#[test]
+fn build_lib_makes_a_loadable_shared_library() {
+    use std::ffi::{c_char, c_void, CStr, CString};
+
+    let d = TempDir::new("buildlib");
+    d.write("fogu.json", "{ \"name\": \"mathlib\", \"version\": \"1.0.0\", \"entry\": \"main.fg\" }\n");
+    d.write("util.fg", "export fn double(n) { return n * 2 }\n");
+    d.write(
+        "main.fg",
+        "import { double } from \"./util.fg\"\nlet calls = 0\nfn add(a, b) {\n    calls += 1\n    return a + b\n}\nfn greet(name) { return `Hello, ${name}! ${double(21)}` }\nfn fail(msg) { return nil, error(msg) }\nfn _hidden() { return 0 }\n",
+    );
+
+    let bin_dir = Path::new(env!("CARGO_BIN_EXE_fogu")).parent().unwrap().to_path_buf();
+    let runtime = bin_dir.join(if cfg!(target_os = "macos") { "libfogu_rt.dylib" } else { "libfogu_rt.so" });
+    if !runtime.is_file() {
+        // no runtime library: the command must say what is missing
+        let o = Command::new(env!("CARGO_BIN_EXE_fogu"))
+            .args(["build", "--lib"])
+            .current_dir(d.path())
+            .env("NO_COLOR", "1")
+            .env("FOGU_HOME", d.path().join(".fogu-home"))
+            .env_remove("FOGU_SERVER")
+            .env_remove("FOGU_RUNTIMES")
+            .output()
+            .unwrap();
+        let out = text(&o);
+        assert!(!o.status.success() && out.contains("no embeddable runtime"), "{}", out);
+        eprintln!("build_lib: {} not built, the library was not loaded", runtime.display());
+        return;
+    }
+
+    let o = fogu(d.path(), &["build", "--lib", "--runtime", &runtime.to_string_lossy()]);
+    let out = text(&o);
+    assert!(o.status.success(), "{}", out);
+    assert!(out.contains("functions: add, greet, fail"), "{}", out);
+    let lib = d.path().join("dist").join(if cfg!(target_os = "macos") { "libmathlib.dylib" } else { "libmathlib.so" });
+    assert!(lib.is_file(), "missing {}", lib.display());
+    let header = fs::read_to_string(d.path().join("dist").join("mathlib.h")).unwrap();
+    assert!(header.contains("add(a, b)") && header.contains("fogu_load") && !header.contains("_hidden"), "{}", header);
+
+    // load it as a host would (from another folder: nothing of the project is needed)
+    type Load = unsafe extern "C" fn(*mut *mut c_void) -> *mut c_char;
+    type Call = unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> *mut c_char;
+    type FreeStr = unsafe extern "C" fn(*mut c_char);
+    type Free = unsafe extern "C" fn(*mut c_void);
+    let elsewhere = TempDir::new("buildlib-run");
+    std::env::set_current_dir(elsewhere.path()).unwrap();
+    unsafe {
+        let path = CString::new(lib.to_string_lossy().as_bytes()).unwrap();
+        let handle = libc::dlopen(path.as_ptr(), libc::RTLD_NOW);
+        assert!(!handle.is_null(), "dlopen failed");
+        let sym = |name: &str| {
+            let n = CString::new(name).unwrap();
+            let p = libc::dlsym(handle, n.as_ptr());
+            assert!(!p.is_null(), "missing symbol {}", name);
+            p
+        };
+        let load: Load = std::mem::transmute(sym("fogu_load"));
+        let call: Call = std::mem::transmute(sym("fogu_call"));
+        let free_str: FreeStr = std::mem::transmute(sym("fogu_free_string"));
+        let free: Free = std::mem::transmute(sym("fogu_free"));
+        let take = |p: *mut c_char| {
+            let s = CStr::from_ptr(p).to_string_lossy().to_string();
+            free_str(p);
+            s
+        };
+
+        let mut rt: *mut c_void = std::ptr::null_mut();
+        assert_eq!(take(load(&mut rt)), "{\"ok\":true,\"value\":null}");
+        assert!(!rt.is_null());
+        let ask = |name: &str, args: &str| {
+            let (n, a) = (CString::new(name).unwrap(), CString::new(args).unwrap());
+            take(call(rt, n.as_ptr(), a.as_ptr()))
+        };
+        assert_eq!(ask("add", "[2, 40]"), "{\"ok\":true,\"value\":42}");
+        assert_eq!(ask("greet", "[\"host\"]"), "{\"ok\":true,\"value\":\"Hello, host! 42\"}");
+        // `return nil, error(msg)` is the error of the call
+        assert_eq!(ask("fail", "[\"boom\"]"), "{\"ok\":false,\"error\":\"boom\"}");
+        assert!(ask("nope", "[]").contains("\"ok\":false"));
+        free(rt);
+    }
 }

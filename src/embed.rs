@@ -65,7 +65,16 @@ fn result_of(r: Result<Value, String>) -> Result<String, String> {
     match r {
         Err(e) => Err(plain(e)),
         Ok(Value::Error(e)) => Err(e.message.clone()),
-        Ok(v) => Ok(json(&v)),
+        Ok(v) => {
+            // `return value, error(...)`: the error of the pair is the host's error
+            if let Value::List(l) = &v {
+                let l = l.borrow();
+                if let (2, Some(Value::Error(e))) = (l.len(), l.get(1)) {
+                    return Err(e.message.clone());
+                }
+            }
+            Ok(json(&v))
+        }
     }
 }
 

@@ -31,6 +31,11 @@ typedef char *(*fogu_native_fn)(const char *args_json, void *user);
 const char  *fogu_version(void);                                   /* static, do not free */
 FoguRuntime *fogu_new(void);                                       /* NULL on failure */
 void         fogu_free(FoguRuntime *rt);                           /* stops tasks and servers */
+
+/* A library built by `fogu build --lib` carries a program: this starts a runtime,
+ * runs the program's entry file once (its top-level functions then exist for
+ * fogu_call) and stores the runtime in *rt (NULL on failure). */
+char        *fogu_load(FoguRuntime **rt);
 void         fogu_free_string(char *s);
 
 char *fogu_eval(FoguRuntime *rt, const char *code);                /* value of the last expression */

@@ -25,8 +25,19 @@ be incompatible changes (spec §75).
   the results); they are the target of the VM work and are not yet part of the "within 1.5×
   of Go" requirement.
 
+- **`fogu build --lib`**: a Fogu program as a shared library (`lib<name>.so`, `<name>.dll`,
+  `lib<name>.dylib`) with a C header. The program is appended to the embeddable runtime; a
+  host calls the new `fogu_load` (it runs the entry file once) and then `fogu_call` with JSON
+  arguments. `--target` builds for other platforms from their `libfogu_rt` (found locally or
+  downloaded from the server). Tested on linux-x64 by loading the library from a host
+  (`tests/cli.rs`); the Windows code that finds the library's own file is type-checked for
+  `x86_64-pc-windows-gnu` but was not run, and no macOS runtime library exists yet. See `docs/cli.md`.
+
 ### Changed
 
+- **The C API reports the error of a `value, error` pair**: a function that ends with
+  `return nil, error("msg")` now gives the host `{"ok":false,"error":"msg"}` instead of
+  `{"ok":true,"value":[null,"<error>"]}`.
 - **Struct instances are a vector over a layout shared by the type**
   (`docs/architecture/struct-layouts.md`) instead of two hash maps per instance: `new` no
   longer builds a map of field names and a function value per method, and the VM reads a

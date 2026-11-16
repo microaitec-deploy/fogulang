@@ -72,6 +72,86 @@ pub extern "C" fn fogu_new() -> *mut FoguRuntime {
     }
 }
 
+/// The path of the file this library was loaded from.
+#[cfg(unix)]
+fn own_path() -> Result<std::path::PathBuf, String> {
+    use std::ffi::c_int;
+    #[repr(C)]
+    struct DlInfo {
+        fname: *const c_char,
+        fbase: *mut c_void,
+        sname: *const c_char,
+        saddr: *mut c_void,
+    }
+    unsafe extern "C" {
+        fn dladdr(addr: *const c_void, info: *mut DlInfo) -> c_int;
+    }
+    let mut info = DlInfo { fname: std::ptr::null(), fbase: std::ptr::null_mut(), sname: std::ptr::null(), saddr: std::ptr::null_mut() };
+    // SAFETY: `info` is a valid Dl_info to fill; the address is a function of this library
+    let ok = unsafe { dladdr(fogu_version as *const c_void, &mut info) };
+    if ok == 0 || info.fname.is_null() {
+        return Err("cannot find the file of this library".into());
+    }
+    // SAFETY: dladdr returned a NUL-terminated path that lives as long as the library
+    let bytes = unsafe { CStr::from_ptr(info.fname) }.to_bytes();
+    use std::os::unix::ffi::OsStrExt;
+    Ok(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+}
+
+/// The path of the file this library was loaded from.
+#[cfg(windows)]
+fn own_path() -> Result<std::path::PathBuf, String> {
+    unsafe extern "system" {
+        fn GetModuleHandleExW(flags: u32, address: *const u16, module: *mut *mut c_void) -> i32;
+        fn GetModuleFileNameW(module: *mut c_void, name: *mut u16, size: u32) -> u32;
+    }
+    // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT
+    const FLAGS: u32 = 0x4 | 0x2;
+    let mut module: *mut c_void = std::ptr::null_mut();
+    // SAFETY: the address is a function of this library; `module` receives its handle
+    if unsafe { GetModuleHandleExW(FLAGS, fogu_version as *const u16, &mut module) } == 0 {
+        return Err("cannot find the module of this library".into());
+    }
+    let mut buf = vec![0u16; 32768];
+    // SAFETY: `buf` has `buf.len()` elements
+    let n = unsafe { GetModuleFileNameW(module, buf.as_mut_ptr(), buf.len() as u32) } as usize;
+    if n == 0 || n >= buf.len() {
+        return Err("cannot find the file of this library".into());
+    }
+    use std::os::windows::ffi::OsStringExt;
+    Ok(std::path::PathBuf::from(std::ffi::OsString::from_wide(&buf[..n])))
+}
+
+/// Starts a runtime with the program this library carries (a library built
+/// by `fogu build --lib`): its entry file runs once, so its top-level
+/// functions and variables exist for `fogu_call` / `fogu_get`. `*out`
+/// receives the runtime (NULL on failure); the result says what went wrong.
+///
+/// # Safety
+/// `out` points to a `FoguRuntime *` to fill.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fogu_load(out_rt: *mut *mut FoguRuntime) -> *mut c_char {
+    if out_rt.is_null() {
+        return out(Err("fogu_load: NULL out pointer".into()));
+    }
+    unsafe { *out_rt = std::ptr::null_mut() };
+    let loaded = (|| -> Result<Runtime, String> {
+        let path = own_path()?;
+        let program = fogu::toolkit::build::embedded_at(&path)
+            .ok_or_else(|| format!("{} carries no program (build it with 'fogu build --lib')", path.display()))??;
+        let rt = Runtime::new()?;
+        rt.run_file(&program.entry.to_string_lossy())?;
+        Ok(rt)
+    })();
+    match loaded {
+        Ok(rt) => {
+            unsafe { *out_rt = Box::into_raw(Box::new(FoguRuntime(rt))) };
+            out(Ok("null".into()))
+        }
+        Err(e) => out(Err(e)),
+    }
+}
+
 /// Stops the runtime (its tasks and servers end) and frees it.
 ///
 /// # Safety
