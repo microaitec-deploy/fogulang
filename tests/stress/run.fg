@@ -1,0 +1,72 @@
+// Stress suite: programs that push one limit each (call depth, live tasks, channel
+// traffic, collection sizes, allocation churn, error volume) on every engine.
+// A program passes when it prints its expected output (`<name>.out`), fails the
+// way `<name>.err` says when there is one, and never dies from a signal.
+//
+//   fogu tests/stress/run.fg            // every program, the three engines
+//   fogu tests/stress/run.fg tasks      // only the programs whose name has "tasks"
+//
+// The Fogu measured is $FOGU_BIN, else target/release/fogu, else `fogu` from PATH.
+// Linux: wall time and peak memory come from /usr/bin/time; each run has 300 s.
+import process from "fogu:process"
+import fs from "fogu:fs"
+import path from "fogu:path"
+
+const pick = fn(cond, yes, no) {
+    if cond { return yes }
+    return no
+}
+const dir = pick(fs.exists("tests/stress/run.fg"), "tests/stress", ".")
+const fogu = Fogu.env["FOGU_BIN"] ?? pick(fs.exists("target/release/fogu"), "target/release/fogu", "fogu")
+const engines = [
+    { name: "interpreter", args: ["--no-jit"] },
+    { name: "jit", args: [] },
+    { name: "vm", args: ["--engine=vm"] },
+]
+
+const names = []
+for f in fs.list(dir)? {
+    if f.ends_with(".fg") && f != "run.fg" {
+        const name = f.slice(0, len(f) - 3)
+        if Fogu.args.len() == 0 || Fogu.args.any(fn(a) { return name.contains(a) }) { names.push(name) }
+    }
+}
+
+let failures = 0
+print("program · engine · result · seconds · peak MB")
+for name in names.sort() {
+    const expected = fs.readText(path.join(dir, name + ".out"))?.trim()
+    const [errText, noErr] = fs.readText(path.join(dir, name + ".err"))
+    for e in engines {
+        const cmd = ["-f", "\n%e %M", "timeout", "300", fogu].concat(e.args).concat([path.join(dir, name + ".fg")])
+        const [r, runErr] = process.run("/usr/bin/time", cmd, { env: { NO_COLOR: "1" } })
+        if runErr != nil {
+            print(name, "·", e.name, "· could not run:", runErr.message)
+            failures += 1
+            continue
+        }
+        // the last line of stderr is the one /usr/bin/time wrote
+        const lines = r.stderr.trim().split("\n")
+        const stats = lines.pop().split(" ")
+        const stderr = lines.join("\n")
+        let why = ""
+        if r.code >= 124 { why = "killed or timed out (exit " + str(r.code) + ")" }
+        if why == "" && r.stdout.trim() != expected { why = "different output: " + r.stdout.trim().slice(0, 80) }
+        if why == "" && noErr == nil {
+            if r.ok { why = "should have failed" }
+            for line in errText.trim().split("\n") {
+                if why == "" && !stderr.contains(line.trim()) { why = "stderr lacks: " + line.trim() }
+            }
+        }
+        if why == "" && noErr != nil && !r.ok { why = "failed: " + stderr.slice(0, 120) }
+        if why != "" { failures += 1 }
+        const mb = int(stats[1]) / 1024
+        print(name, "·", e.name, "·", pick(why == "", "ok", "FAIL " + why), "·", stats[0], "·", mb)
+    }
+}
+print("")
+if failures > 0 {
+    print(failures, "failed")
+    process.exit(1)
+}
+print("all passed")

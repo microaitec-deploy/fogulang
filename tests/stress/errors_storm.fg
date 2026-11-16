@@ -1,0 +1,26 @@
+// Half a million failures handled as values: `?` through three levels, no leak, no crash.
+fn leaf(i) {
+    if i % 2 == 0 { return nil, error("even " + str(i)) }
+    return i, nil
+}
+fn middle(i) {
+    const v = leaf(i)?
+    return v * 2, nil
+}
+fn top(i) {
+    const v = middle(i)?
+    return v + 1, nil
+}
+let ok = 0
+let failed = 0
+let last = ""
+for i in 0..1000000 {
+    const [v, err] = top(i)
+    if err != nil {
+        failed += 1
+        last = err.message
+    } else {
+        ok += v
+    }
+}
+print(ok, failed, last)

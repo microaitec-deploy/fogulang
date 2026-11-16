@@ -1,0 +1,8 @@
+// Integer overflow and division by zero stop the program with an error, in a
+// function called a million times first (so every engine has compiled it).
+fn step(a, b) { return a * b + 1 }
+let x = 0
+for i in 0..1000000 { x = step(i, 2) }
+print(x)
+let big = 9223372036854775807
+print(step(big, 2))

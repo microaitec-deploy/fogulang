@@ -1,0 +1,4 @@
+// Unbounded recursion must end with an error, never with a crash of the runtime.
+fn forever(n) { return forever(n + 1) + 1 }
+print("start")
+forever(0)

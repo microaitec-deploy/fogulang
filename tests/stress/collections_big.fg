@@ -1,0 +1,23 @@
+// Large collections: 3 million list items, 300 000 map keys, a 20 MB text.
+fn fill() {
+    const xs = []
+    for i in 0..3000000 { xs.push(i) }
+    let sum = 0
+    for x in xs { sum += x }
+    return sum
+}
+fn keys() {
+    const m = {}
+    for i in 0..300000 { m["k" + str(i)] = i }
+    let hits = 0
+    for i in 0..300000 {
+        if m["k" + str(i)] == i { hits += 1 }
+    }
+    return hits
+}
+fn text() {
+    let s = ""
+    for i in 0..2000000 { s += "0123456789" }
+    return len(s)
+}
+print(fill(), keys(), text())

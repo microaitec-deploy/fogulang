@@ -1,0 +1,23 @@
+// One million struct instances created, linked and dropped: memory must come back.
+struct Node {
+    value = 0
+    next = nil
+    new(value, next) {
+        this.value = value
+        this.next = next
+    }
+}
+fn chain(n) {
+    let head = nil
+    for i in 0..n { head = new Node(i, head) }
+    let sum = 0
+    let at = head
+    while at != nil {
+        sum += at.value
+        at = at.next
+    }
+    return sum
+}
+let total = 0
+for round in 0..5 { total += chain(200000) }
+print(total)

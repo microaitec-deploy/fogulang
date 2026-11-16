@@ -1,0 +1,11 @@
+// One million messages through a small buffer: four producers, one consumer.
+const c = chan(16)
+const per = 250000
+for p in 0..4 {
+    fg fn() {
+        for i in 0..per { c <- 1 }
+    }()
+}
+let got = 0
+for i in 0..(per * 4) { got += <-c }
+print(got)

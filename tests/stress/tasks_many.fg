@@ -1,0 +1,16 @@
+// 20 000 tasks alive at once, each waiting on its own channel, then all released.
+const n = 20000
+const gates = []
+const done = chan(n)
+for i in 0..n {
+    const gate = chan(1)
+    gates.push(gate)
+    fg fn() {
+        const v = <-gate
+        done <- v * 2
+    }()
+}
+for i in 0..n { gates[i] <- i }
+let sum = 0
+for i in 0..n { sum += <-done }
+print(sum)
