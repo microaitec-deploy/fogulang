@@ -30,6 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::runtime::sched;
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::json::{parse_value, stringify_value};
@@ -720,7 +721,7 @@ fn connect(args: &[Value]) -> Result<Value, String> {
         Some(Value::Str(u)) => u.to_string(),
         Some(other) => return Err(format!("mqtt.connect expects a url, got '{}'", other.type_name())),
     };
-    let o: HashMap<String, Value> = match args.get(1) {
+    let o: HashMap<Str, Value> = match args.get(1) {
         None | Some(Value::Nil) => HashMap::new(),
         Some(Value::Map(m)) => m.borrow().clone(),
         Some(other) => return Err(format!("mqtt.connect: options must be a map, got '{}'", other.type_name())),
@@ -888,7 +889,7 @@ impl FoguObject for MqttValue {
                     user: match o.get("userProperties") {
                         Some(Value::Map(m)) => {
                             let m = m.borrow();
-                            let mut v: Vec<(String, String)> = m.iter().map(|(k, v)| (k.clone(), v.to_display_string())).collect();
+                            let mut v: Vec<(String, String)> = m.iter().map(|(k, v)| (k.to_string(), v.to_display_string())).collect();
                             v.sort();
                             v
                         }
@@ -1007,7 +1008,7 @@ impl FoguObject for MessageValue {
             "correlationData" => self.m.props.correlation.as_ref().map_or(Value::Nil, |c| Value::Str(String::from_utf8_lossy(c).into_owned().into())),
             "messageExpiry" => self.m.props.message_expiry.map_or(Value::Nil, |e| Value::Int(e as i64)),
             "userProperties" => {
-                let m: HashMap<String, Value> = self.m.props.user.iter().map(|(k, v)| (k.clone(), Value::Str(v.clone().into()))).collect();
+                let m: HashMap<Str, Value> = self.m.props.user.iter().map(|(k, v)| (k.as_str().into(), Value::Str(v.clone().into()))).collect();
                 Value::Map(std::rc::Rc::new(RefCell::new(m.into_iter().collect())))
             }
             _ => return None,

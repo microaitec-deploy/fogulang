@@ -31,6 +31,12 @@ be incompatible changes (spec §75).
   (`docs/architecture/struct-layouts.md`) instead of two hash maps per instance: `new` no
   longer builds a map of field names and a function value per method, and the VM reads a
   field by its slot. Nothing a program can observe changes (`tests/spec/struct_layout.fg`).
+- **Map keys are `Str`** (`docs/architecture/map-keys.md`) instead of `String`: a key of up
+  to 15 bytes is stored inline and a longer one is shared, so a map literal no longer
+  allocates and copies one text per key each time it is evaluated (tree-walker, VM and JIT),
+  and `m[k] = v` moves the key. `bench/maps` is 20% faster and `bench/records` 10% faster
+  than 0.8.0; the other programs are equal or slightly faster. Nothing a program can observe
+  changes (`tests/spec/map_keys.fg`).
 - The conformance suite runs every test a third time on the VM (`tests/spec.rs`).
 
 ## [0.8.0] - 2026-11-13

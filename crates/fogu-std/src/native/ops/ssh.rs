@@ -33,6 +33,7 @@ use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef, Poller};
@@ -256,7 +257,7 @@ fn connect(a: &[Value]) -> Result<Value, String> {
         options: Vec::new(),
     };
     let opts_map;
-    let opts: Option<std::cell::Ref<HashMap<String, Value>>>;
+    let opts: Option<std::cell::Ref<HashMap<Str, Value>>>;
     match &a[0] {
         Value::Str(s) => {
             let (u, h, p) = parse_target(s)?;
@@ -310,7 +311,7 @@ fn connect(a: &[Value]) -> Result<Value, String> {
         }
         if let Some(Value::Map(o)) = m.get("options") {
             let mut pairs: Vec<(String, String)> =
-                o.borrow().iter().map(|(k, v)| (k.clone(), v.to_display_string())).collect();
+                o.borrow().iter().map(|(k, v)| (k.to_string(), v.to_display_string())).collect();
             pairs.sort();
             t.options.extend(pairs);
         }
@@ -798,7 +799,7 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 impl SshShell {
-    fn open(t: &Target, o: &HashMap<String, Value>) -> Result<SshShell, String> {
+    fn open(t: &Target, o: &HashMap<Str, Value>) -> Result<SshShell, String> {
         for k in o.keys() {
             if !["pty", "shell", "cwd", "env"].contains(&k.as_str()) {
                 return Err(format!("shell: unknown option '{}' (pty shell cwd env)", k));

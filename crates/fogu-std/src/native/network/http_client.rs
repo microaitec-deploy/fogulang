@@ -27,6 +27,7 @@ use ahash::AHashMap as HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::runtime::value::Str;
 use crate::runtime::value::Value;
 
 use crate::native::object::{FoguObject, NativeObjectRef};
@@ -146,13 +147,13 @@ fn pairs(v: &Value, what: &str) -> Result<Vec<(String, String)>, String> {
             let mut out = Vec::new();
             // alphabetical, like json.stringify: the same request every time
             let m = m.borrow();
-            let mut keys: Vec<&String> = m.keys().collect();
+            let mut keys: Vec<&Str> = m.keys().collect();
             keys.sort();
             for (k, v) in keys.into_iter().map(|k| (k, &m[k])) {
                 match v {
                     Value::Nil => {}
-                    Value::List(l) => out.extend(l.borrow().iter().map(|x| (k.clone(), x.to_display_string()))),
-                    v => out.push((k.clone(), v.to_display_string())),
+                    Value::List(l) => out.extend(l.borrow().iter().map(|x| (k.to_string(), x.to_display_string()))),
+                    v => out.push((k.to_string(), v.to_display_string())),
                 }
             }
             Ok(out)
@@ -192,7 +193,7 @@ fn multipart_parts(v: &Value) -> Result<Vec<Part>, String> {
         Ok(())
     }
     let m = m.borrow();
-    let mut keys: Vec<&String> = m.keys().collect();
+    let mut keys: Vec<&Str> = m.keys().collect();
     keys.sort();
     for k in keys {
         one(k, &m[k], &mut out)?;
@@ -462,9 +463,9 @@ impl FoguObject for ClientResponse {
             "body" | "text" => Some(Value::Str(String::from_utf8_lossy(&self.body).into_owned().into())),
             // the first value of each header (lower case); `header(name)` joins repeated ones
             "headers" => {
-                let mut m: HashMap<String, Value> = HashMap::new();
+                let mut m: HashMap<Str, Value> = HashMap::new();
                 for (k, v) in &self.headers {
-                    m.entry(k.clone()).or_insert_with(|| Value::Str(v.clone().into()));
+                    m.entry(k.as_str().into()).or_insert_with(|| Value::Str(v.clone().into()));
                 }
                 Some(Value::Map(Rc::new(std::cell::RefCell::new(m.into_iter().collect()))))
             }

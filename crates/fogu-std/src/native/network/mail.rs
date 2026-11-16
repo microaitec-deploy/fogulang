@@ -27,6 +27,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef, Poller};
@@ -190,7 +191,7 @@ fn api_of(name: &str) -> Option<Api> {
     })
 }
 
-fn get_str(m: &HashMap<String, Value>, k: &str) -> Option<String> {
+fn get_str(m: &HashMap<Str, Value>, k: &str) -> Option<String> {
     match m.get(k) {
         Some(Value::Str(s)) if !s.is_empty() => Some(s.to_string()),
         Some(Value::Int(n)) => Some(n.to_string()),
@@ -203,9 +204,9 @@ fn env(k: &str) -> Option<String> {
 }
 
 /// `smtp://user:pass@host:587`, `smtps://…:465`, `?tls=none`; `console://`.
-fn config_from_url(url: &str) -> Result<HashMap<String, Value>, String> {
+fn config_from_url(url: &str) -> Result<HashMap<Str, Value>, String> {
     let (scheme, rest) = url.split_once("://").ok_or_else(|| format!("mail.connect: invalid url '{}'", url))?;
-    let mut m: HashMap<String, Value> = HashMap::new();
+    let mut m: HashMap<Str, Value> = HashMap::new();
     let s = |v: &str| Value::Str(v.to_string().into());
     match scheme {
         "console" => {
@@ -508,7 +509,7 @@ fn parse_mail(v: &Value, default_from: &Option<Addr>) -> Result<Mail, String> {
         Some(one) => vec![parse_attachment(one)?],
     };
     let mut headers: Vec<(String, String)> = match m.get("headers") {
-        Some(Value::Map(h)) => h.borrow().iter().map(|(k, v)| (k.clone(), v.to_display_string())).collect(),
+        Some(Value::Map(h)) => h.borrow().iter().map(|(k, v)| (k.to_string(), v.to_display_string())).collect(),
         None | Some(Value::Nil) => Vec::new(),
         Some(other) => return Err(format!("send: headers must be a map, got '{}'", other.type_name())),
     };

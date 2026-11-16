@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use ahash::AHashMap as HashMap;
 use std::rc::Rc;
 
-use crate::runtime::value::{NativeFnValue, Value};
+use crate::runtime::value::{NativeFnValue, Str, Value};
 pub use crate::runtime::value::{Num, TypedNative};
 
 /// Native function with at least `min` arguments (the rest are optional).
@@ -87,7 +87,7 @@ pub fn str_list<I: IntoIterator<Item = String>>(items: I) -> Value {
 }
 
 pub fn map(pairs: Vec<(&str, Value)>) -> Value {
-    let m: HashMap<String, Value> = pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+    let m: HashMap<Str, Value> = pairs.into_iter().map(|(k, v)| (Str::from(k), v)).collect();
     Value::Map(Rc::new(RefCell::new(m)))
 }
 

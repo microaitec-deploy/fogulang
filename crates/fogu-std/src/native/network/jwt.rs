@@ -18,6 +18,7 @@ use ahash::AHashMap as HashMap;
 use hmac::{Hmac, Mac};
 use sha2::{Sha256, Sha384, Sha512};
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::json::{parse_value, stringify_value};
@@ -149,7 +150,7 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-fn opts_arg(args: &[Value], i: usize, what: &str) -> Result<HashMap<String, Value>, String> {
+fn opts_arg(args: &[Value], i: usize, what: &str) -> Result<HashMap<Str, Value>, String> {
     match args.get(i) {
         None | Some(Value::Nil) => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().clone()),
@@ -175,7 +176,7 @@ fn secret_arg(args: &[Value], i: usize, what: &str) -> Result<Vec<u8>, String> {
     Ok(s.into_bytes())
 }
 
-fn str_opt(o: &HashMap<String, Value>, k: &str) -> Option<String> {
+fn str_opt(o: &HashMap<Str, Value>, k: &str) -> Option<String> {
     match o.get(k) {
         Some(Value::Str(s)) => Some(s.to_string()),
         _ => None,
@@ -221,7 +222,7 @@ fn sign(args: &[Value]) -> Result<Value, String> {
     header.insert("alg".into(), Value::Str(alg.name().into()));
     header.insert("typ".into(), Value::Str("JWT".into()));
 
-    let enc = |m: HashMap<String, Value>| b64_encode(stringify_value(&Value::Map(std::rc::Rc::new(RefCell::new(m)))).as_bytes());
+    let enc = |m: HashMap<Str, Value>| b64_encode(stringify_value(&Value::Map(std::rc::Rc::new(RefCell::new(m)))).as_bytes());
     let signing_input = format!("{}.{}", enc(header), enc(claims));
     let sig = b64_encode(&mac(alg, &key, signing_input.as_bytes()));
     Ok(Value::Str(format!("{}.{}", signing_input, sig).into()))
@@ -265,7 +266,7 @@ fn claim(v: &Value, k: &str) -> Value {
 }
 
 /// Checked claims of a token, or an operational error.
-fn verify_token(token: &str, key: &[u8], o: &HashMap<String, Value>) -> Result<Value, String> {
+fn verify_token(token: &str, key: &[u8], o: &HashMap<Str, Value>) -> Result<Value, String> {
     let parts = split(token)?;
     let alg_name = claim(&parts.header, "alg").to_display_string();
     let alg = Alg::parse(&alg_name).ok_or_else(|| io_err!("jwt: unsupported algorithm '{}'", alg_name))?;
@@ -344,7 +345,7 @@ fn decode(args: &[Value]) -> Result<Value, String> {
 /// otherwise answers 401.
 struct JwtMiddleware {
     key: Vec<u8>,
-    opts: HashMap<String, Value>,
+    opts: HashMap<Str, Value>,
     property: String,
     optional: bool,
 }
@@ -397,7 +398,7 @@ impl FoguObject for JwtMiddleware {
         match verify_token(token, &self.key, &self.opts) {
             Ok(claims) => {
                 if let Value::Map(c) = &ctx {
-                    c.borrow_mut().insert(self.property.clone(), claims);
+                    c.borrow_mut().insert(self.property.as_str().into(), claims);
                 }
                 Ok(Value::Nil)
             }

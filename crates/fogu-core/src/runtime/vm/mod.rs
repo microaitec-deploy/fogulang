@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use super::super::ast::{BinaryOp, Block, Stmt, TypeExpr};
 use super::super::symbol::Sym;
-use super::super::value::{FnValue, Value};
+use super::super::value::{FnValue, Str, Value};
 use super::Interpreter;
 
 pub use compiler::compile;
@@ -155,7 +155,7 @@ pub struct Proto {
     pub names: Vec<String>,
     /// Method / struct name and number of arguments of a call site.
     pub sites: Vec<(String, u16)>,
-    pub keys: Vec<Vec<String>>,
+    pub keys: Vec<Vec<Str>>,
     pub types: Vec<(String, TypeExpr)>,
     pub pairs: Vec<(String, String)>,
     pub ret_type: Option<TypeExpr>,

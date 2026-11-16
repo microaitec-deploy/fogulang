@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use ahash::AHashMap as HashMap;
 use std::rc::Rc;
 
-use crate::runtime::value::{ModuleValue, Value};
+use crate::runtime::value::{ModuleValue, Str, Value};
 
 use crate::native::math::nfn;
 
@@ -86,7 +86,7 @@ fn write_value(v: &Value, out: &mut String) {
         }
         Value::Map(m) => {
             let b = m.borrow();
-            let mut entries: Vec<(&String, &Value)> = b.iter().collect();
+            let mut entries: Vec<(&Str, &Value)> = b.iter().collect();
             entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
             out.push('{');
             for (i, (k, v)) in entries.into_iter().enumerate() {
@@ -345,7 +345,7 @@ impl JsonParser<'_> {
             }
             self.pos += 1;
             let value = self.parse_value()?;
-            map.insert(key, value);
+            map.insert(key.into(), value);
             self.skip_ws();
             match self.peek() {
                 Some(b',') => self.pos += 1,

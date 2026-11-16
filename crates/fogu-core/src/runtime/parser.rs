@@ -1591,7 +1591,7 @@ impl Parser {
             }
 
             Token::LBrace => {
-                let mut entries: Vec<(String, Expr)> = Vec::new();
+                let mut entries: Vec<(super::fstr::Str, Expr)> = Vec::new();
                 while !self.check(&Token::RBrace) {
                     let key = match self.peek().clone() {
                         Token::Ident(s) | Token::Str(s) => {
@@ -1609,7 +1609,7 @@ impl Parser {
                     };
                     self.expect(Token::Colon, "expected ':'")?;
                     let value = self.parse_expr()?;
-                    entries.push((key, value));
+                    entries.push((key.into(), value));
                     if !self.matches(&Token::Comma) {
                         break;
                     }

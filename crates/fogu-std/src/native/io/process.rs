@@ -15,6 +15,7 @@ use ahash::AHashMap as HashMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::math::nfn;
@@ -86,7 +87,7 @@ pub fn build() -> ModuleValue {
 pub fn env_map() -> Value {
     let mut pairs: Vec<(String, Value)> = std::env::vars().map(|(k, v)| (k, Value::Str(v.into()))).collect();
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
-    let m: HashMap<String, Value> = pairs.into_iter().collect();
+    let m: HashMap<Str, Value> = pairs.into_iter().map(|(k, v)| (Str::from(k), v)).collect();
     Value::Map(std::rc::Rc::new(std::cell::RefCell::new(m)))
 }
 

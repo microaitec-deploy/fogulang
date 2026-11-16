@@ -24,6 +24,7 @@ use std::rc::Rc;
 
 use serde_json::Value as J;
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::json::stringify_value;
@@ -44,14 +45,14 @@ fn to_json(v: &Value) -> J {
     serde_json::from_str(&stringify_value(v)).unwrap_or(J::Null)
 }
 
-fn opts(a: &[Value], i: usize) -> HashMap<String, Value> {
+fn opts(a: &[Value], i: usize) -> HashMap<Str, Value> {
     match a.get(i) {
         Some(Value::Map(m)) => m.borrow().clone(),
         _ => HashMap::new(),
     }
 }
 
-fn flag(o: &HashMap<String, Value>, k: &str, default: bool) -> bool {
+fn flag(o: &HashMap<Str, Value>, k: &str, default: bool) -> bool {
     o.get(k).map_or(default, |v| v.is_truthy())
 }
 
@@ -105,7 +106,7 @@ fn cell_text(v: &Value) -> String {
 }
 
 /// Column names: the `columns` option, or every key in first-seen order.
-fn columns(rows: &[Value], o: &HashMap<String, Value>) -> Vec<String> {
+fn columns(rows: &[Value], o: &HashMap<Str, Value>) -> Vec<String> {
     if let Some(Value::List(c)) = o.get("columns") {
         return c.borrow().iter().map(|v| v.to_display_string()).collect();
     }
@@ -113,11 +114,11 @@ fn columns(rows: &[Value], o: &HashMap<String, Value>) -> Vec<String> {
     for r in rows {
         if let Value::Map(m) = r {
             let b = m.borrow();
-            let mut keys: Vec<&String> = b.keys().collect();
+            let mut keys: Vec<&Str> = b.keys().collect();
             keys.sort();
             for k in keys {
-                if !cols.contains(k) {
-                    cols.push(k.clone());
+                if !cols.iter().any(|c| c.as_str() == k.as_str()) {
+                    cols.push(k.to_string());
                 }
             }
         }
@@ -161,7 +162,7 @@ pub fn csv_build() -> ModuleValue {
     )
 }
 
-fn delimiter(o: &HashMap<String, Value>, text: Option<&str>) -> Result<u8, String> {
+fn delimiter(o: &HashMap<Str, Value>, text: Option<&str>) -> Result<u8, String> {
     match o.get("delimiter") {
         Some(Value::Str(d)) if d.len() == 1 => Ok(d.as_bytes()[0]),
         Some(Value::Str(d)) if d == "\\t" || d == "tab" => Ok(b'\t'),
@@ -176,7 +177,7 @@ fn delimiter(o: &HashMap<String, Value>, text: Option<&str>) -> Result<u8, Strin
 }
 
 /// `{ header = true, delimiter (guessed), types = true, trim = false }`
-pub(crate) fn csv_parse(text: &str, o: &HashMap<String, Value>) -> Result<Value, String> {
+pub(crate) fn csv_parse(text: &str, o: &HashMap<Str, Value>) -> Result<Value, String> {
     let header = flag(o, "header", true);
     let types = flag(o, "types", true);
     let trim = flag(o, "trim", false);
@@ -202,9 +203,9 @@ pub(crate) fn csv_parse(text: &str, o: &HashMap<String, Value>) -> Result<Value,
         let rec = rec.map_err(|e| io_err!("csv: {}", e))?;
         out.push(match &names {
             Some(names) => {
-                let mut m: HashMap<String, Value> = HashMap::new();
+                let mut m: HashMap<Str, Value> = HashMap::new();
                 for (i, name) in names.iter().enumerate() {
-                    m.insert(name.clone(), rec.get(i).map_or(Value::Nil, cell));
+                    m.insert(name.as_str().into(), rec.get(i).map_or(Value::Nil, cell));
                 }
                 Value::Map(Rc::new(RefCell::new(m)))
             }
@@ -215,7 +216,7 @@ pub(crate) fn csv_parse(text: &str, o: &HashMap<String, Value>) -> Result<Value,
 }
 
 /// rows: maps (a header line is written) or lists. `{ header = true, delimiter = ",", columns }`
-pub(crate) fn csv_stringify(rows: &[Value], o: &HashMap<String, Value>) -> Result<String, String> {
+pub(crate) fn csv_stringify(rows: &[Value], o: &HashMap<Str, Value>) -> Result<String, String> {
     let mut w = csv::WriterBuilder::new().delimiter(delimiter(o, None)?).from_writer(Vec::new());
     let maps = rows.iter().any(|r| matches!(r, Value::Map(_)));
     let cols = if maps { columns(rows, o) } else { Vec::new() };
@@ -226,7 +227,7 @@ pub(crate) fn csv_stringify(rows: &[Value], o: &HashMap<String, Value>) -> Resul
         let cells: Vec<String> = match r {
             Value::Map(m) => {
                 let m = m.borrow();
-                cols.iter().map(|c| m.get(c).map_or(String::new(), cell_text)).collect()
+                cols.iter().map(|c| m.get(c.as_str()).map_or(String::new(), cell_text)).collect()
             }
             Value::List(l) => l.borrow().iter().map(cell_text).collect(),
             other => vec![cell_text(other)],
@@ -397,7 +398,7 @@ pub fn load_data(ext: &str, text: &str) -> Option<Result<Value, String>> {
 
 /// The root element as `{ name, attrs, children, text }`; children are
 /// elements (maps) or text (str). `text` joins the direct text of the element.
-fn xml_parse(text: &str, o: &HashMap<String, Value>) -> Result<Value, String> {
+fn xml_parse(text: &str, o: &HashMap<Str, Value>) -> Result<Value, String> {
     use quick_xml::events::Event;
     let keep_ws = flag(o, "whitespace", false);
     // whitespace is trimmed here, not by the reader: quick-xml splits text around
@@ -516,7 +517,7 @@ fn xml_node(v: &Value, pretty: bool, depth: usize, out: &mut String) -> Result<(
             out.push_str(&format!("{}<{}", pad, name));
             if let Some(Value::Map(attrs)) = m.get("attrs") {
                 let a = attrs.borrow();
-                let mut keys: Vec<&String> = a.keys().collect();
+                let mut keys: Vec<&Str> = a.keys().collect();
                 keys.sort();
                 for k in keys {
                     out.push_str(&format!(" {}=\"{}\"", k, xml_escape(&a[k].to_display_string(), true)));
@@ -554,7 +555,7 @@ fn xml_node(v: &Value, pretty: bool, depth: usize, out: &mut String) -> Result<(
     Ok(())
 }
 
-fn xml_stringify(v: &Value, o: &HashMap<String, Value>) -> Result<String, String> {
+fn xml_stringify(v: &Value, o: &HashMap<Str, Value>) -> Result<String, String> {
     let pretty = flag(o, "pretty", true);
     let mut out = String::new();
     if flag(o, "declaration", true) {
@@ -633,7 +634,7 @@ fn excel_cell(c: &calamine::Data) -> Value {
 }
 
 /// `{ sheet (name or index; "*" for all), header = true }` → rows (or `{ sheet: rows }`)
-fn excel_read(path: &str, o: &HashMap<String, Value>) -> Result<Value, String> {
+fn excel_read(path: &str, o: &HashMap<Str, Value>) -> Result<Value, String> {
     use calamine::Reader;
     let mut wb = calamine::open_workbook_auto(path).map_err(|e| io_err!("excel: {}: {}", path, e))?;
     let names = wb.sheet_names();
@@ -659,7 +660,7 @@ fn excel_read(path: &str, o: &HashMap<String, Value>) -> Result<Value, String> {
             }
             out.push(match &cols {
                 Some(cols) => {
-                    let m: HashMap<String, Value> = cols.iter().enumerate().map(|(i, c)| (c.clone(), r.get(i).map_or(Value::Nil, excel_cell))).collect();
+                    let m: HashMap<Str, Value> = cols.iter().enumerate().map(|(i, c)| (Str::from(c.as_str()), r.get(i).map_or(Value::Nil, excel_cell))).collect();
                     Value::Map(Rc::new(RefCell::new(m)))
                 }
                 None => list(r.iter().map(excel_cell).collect()),
@@ -693,15 +694,15 @@ fn excel_read(path: &str, o: &HashMap<String, Value>) -> Result<Value, String> {
 }
 
 /// `write(path, rows | { Sheet: rows, … }, { header = true, columns })`
-fn excel_write(path: &str, data: &Value, o: &HashMap<String, Value>) -> Result<Value, String> {
+fn excel_write(path: &str, data: &Value, o: &HashMap<Str, Value>) -> Result<Value, String> {
     use rust_xlsxwriter::{Format, Workbook};
     let sheets: Vec<(String, Vec<Value>)> = match data {
         Value::List(l) => vec![("Sheet1".to_string(), l.borrow().clone())],
         Value::Map(m) => {
             let m = m.borrow();
-            let mut keys: Vec<&String> = m.keys().collect();
+            let mut keys: Vec<&Str> = m.keys().collect();
             keys.sort();
-            keys.into_iter().map(|k| Ok((k.clone(), rows_arg(&m[k], "excel.write")?))).collect::<Result<_, String>>()?
+            keys.into_iter().map(|k| Ok((k.to_string(), rows_arg(&m[k], "excel.write")?))).collect::<Result<_, String>>()?
         }
         other => return Err(format!("excel.write: expected rows or {{ sheet: rows }}, got '{}'", other.type_name())),
     };
@@ -725,7 +726,7 @@ fn excel_write(path: &str, data: &Value, o: &HashMap<String, Value>) -> Result<V
             let cells: Vec<Value> = match r {
                 Value::Map(m) => {
                     let m = m.borrow();
-                    cols.iter().map(|c| m.get(c).cloned().unwrap_or(Value::Nil)).collect()
+                    cols.iter().map(|c| m.get(c.as_str()).cloned().unwrap_or(Value::Nil)).collect()
                 }
                 Value::List(l) => l.borrow().clone(),
                 other => vec![other.clone()],

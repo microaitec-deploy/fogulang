@@ -52,6 +52,7 @@ use serde_json::{json, Value as Json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef};
@@ -1085,7 +1086,7 @@ fn start(a: &[Value]) -> Result<Value, String> {
         (Some(Value::Int(p)), o) => (format!("127.0.0.1:{}", p), o.and_then(|v| if let Value::Map(m) = v { Some(m.clone()) } else { None })),
         (Some(v), o) => (v.to_display_string(), o.and_then(|v| if let Value::Map(m) = v { Some(m.clone()) } else { None })),
     };
-    let o: HashMap<String, Value> = o.map(|m| m.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
+    let o: HashMap<Str, Value> = o.map(|m| m.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
     for k in o.keys() {
         if !["token", "db", "node", "peers", "secret", "log", "purgeEvery"].contains(&k.as_str()) {
             return Err(format!("broker.start: unknown option '{}' (token db node peers secret log purgeEvery)", k));

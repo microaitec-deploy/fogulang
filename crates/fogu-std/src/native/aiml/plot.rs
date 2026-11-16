@@ -22,6 +22,7 @@ use std::cell::RefCell;
 use ahash::AHashMap as HashMap;
 use std::fmt::Write;
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value, display_float};
 
 use crate::native::object::{FoguObject, NativeObjectRef};
@@ -60,7 +61,7 @@ fn quick(kind: &str, a: &[Value]) -> Result<Value, String> {
     Ok(NativeObjectRef::new(fig).to_value())
 }
 
-fn opts(v: Option<&Value>, what: &str) -> Result<HashMap<String, Value>, String> {
+fn opts(v: Option<&Value>, what: &str) -> Result<HashMap<Str, Value>, String> {
     match v {
         None => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().clone()),
@@ -169,7 +170,7 @@ fn fmt_tick(v: f64) -> String {
 }
 
 impl Figure {
-    fn new(o: HashMap<String, Value>) -> Result<Figure, String> {
+    fn new(o: HashMap<Str, Value>) -> Result<Figure, String> {
         let s = |k: &str| o.get(k).filter(|v| !matches!(v, Value::Nil)).map(|v| v.to_display_string());
         let n = |k: &str| o.get(k).and_then(|v| num(v, "plot").ok());
         Ok(Figure {
@@ -199,7 +200,7 @@ impl Figure {
         PALETTE[self.series.len() % PALETTE.len()].to_string()
     }
 
-    fn add(&mut self, kind: Kind, x: Vec<f64>, y: Vec<f64>, o: &HashMap<String, Value>) -> Result<(), String> {
+    fn add(&mut self, kind: Kind, x: Vec<f64>, y: Vec<f64>, o: &HashMap<Str, Value>) -> Result<(), String> {
         if x.len() != y.len() {
             return Err(format!("plot: x has {} values but y has {}", x.len(), y.len()));
         }
@@ -587,7 +588,7 @@ impl FoguObject for Figure {
                 let mut ro = HashMap::new();
                 if let Some(Value::Map(m)) = a.first() {
                     if let Some(sc) = m.borrow().get("scale") {
-                        ro.insert("scale".to_string(), sc.clone());
+                        ro.insert("scale".into(), sc.clone());
                     }
                 }
                 return Ok(crate::native::image::wrap(crate::native::image::render_svg(&self.render(), &ro)?));
@@ -601,7 +602,7 @@ impl FoguObject for Figure {
                     return Ok(Value::Nil);
                 }
                 let mut ro = HashMap::new();
-                ro.insert("scale".to_string(), o.get("scale").cloned().unwrap_or(Value::Int(2)));
+                ro.insert("scale".into(), o.get("scale").cloned().unwrap_or(Value::Int(2)));
                 let img = crate::native::image::render_svg(&svg, &ro)?;
                 let data = crate::native::image::encode(&img, crate::native::image::format_of(&path)?, &o)?;
                 std::fs::write(&path, data).map_err(|e| io_err!("plot.save: {}: {}", path, e))?;

@@ -373,9 +373,8 @@ fn params_arg(v: Option<&Value>) -> Result<Vec<Value>, String> {
 fn row_to_map(row: AnyRow) -> Result<Value, String> {
     let mut map = HashMap::new();
     for (i, col) in row.columns().iter().enumerate() {
-        let name = col.name().to_string();
         let v = value_ref_to_value(&row, i)?;
-        map.insert(name, v);
+        map.insert(col.name().into(), v);
     }
     Ok(Value::Map(Rc::new(RefCell::new(map))))
 }

@@ -35,6 +35,7 @@ use std::time::{Duration, Instant};
 use crate::runtime::environment::Environment;
 use crate::runtime::interpreter::Interpreter;
 use crate::runtime::sched;
+use crate::runtime::value::Str;
 use crate::runtime::value::{ErrorValue, ModuleValue, Value, ERR_VALUE_PREFIX};
 
 use crate::native::http as fogu_http;
@@ -194,7 +195,7 @@ fn parse_path(path: &str) -> Vec<Segment> {
         .collect()
 }
 
-fn match_segments(pattern: &[Segment], path: &[&str]) -> Option<HashMap<String, Value>> {
+fn match_segments(pattern: &[Segment], path: &[&str]) -> Option<HashMap<Str, Value>> {
     let mut params = HashMap::new();
     let mut pi = 0;
     for seg in pattern {
@@ -210,7 +211,7 @@ fn match_segments(pattern: &[Segment], path: &[&str]) -> Option<HashMap<String, 
                 if pi >= path.len() {
                     return None;
                 }
-                params.insert(name.clone(), Value::Str(url_decode(path[pi]).into()));
+                params.insert(name.as_str().into(), Value::Str(url_decode(path[pi]).into()));
                 pi += 1;
             }
         }
@@ -232,12 +233,12 @@ fn under_prefix(prefix: &str, path: &str) -> bool {
 pub(crate) use crate::native::util::url_decode;
 
 /// `a=1&b=x%20y&flag` → `{ a: "1", b: "x y", flag: "" }`.
-fn parse_query(q: &str) -> HashMap<String, Value> {
+fn parse_query(q: &str) -> HashMap<Str, Value> {
     q.split('&')
         .filter(|p| !p.is_empty())
         .map(|p| {
             let (k, v) = p.split_once('=').unwrap_or((p, ""));
-            (url_decode(k), Value::Str(url_decode(v).into()))
+            (Str::from(url_decode(k)), Value::Str(url_decode(v).into()))
         })
         .collect()
 }
@@ -258,7 +259,7 @@ struct AppState {
     middlewares: Vec<(String, Value)>,
     after: Vec<Value>,
     on_error: Vec<Value>,
-    store: Rc<RefCell<HashMap<String, Value>>>,
+    store: Rc<RefCell<HashMap<Str, Value>>>,
     statics: Vec<fogu_http::StaticMount>,
     ws_routes: Vec<WsRoute>,
     /// fogu:topcoat shards (`POST /_tc/s/<name>`) and procedures (`POST /_tc/p/<name>`).
@@ -394,7 +395,7 @@ impl FoguObject for AppValue {
                 }
                 match &args[0] {
                     Value::Str(k) => {
-                        self.state.borrow().store.borrow_mut().insert(k.to_string(), args[1].clone());
+                        self.state.borrow().store.borrow_mut().insert(k.into(), args[1].clone());
                         Ok(self.same())
                     }
                     other => Err(format!("set: key must be str, got '{}'", other.type_name())),
@@ -596,8 +597,8 @@ pub fn dispatch(
     if let Some(q) = req_str(req, "query") {
         query = Some(q);
     }
-    let headers: HashMap<String, Value> = match req_field(req, "headers") {
-        Some(Value::Map(h)) => h.borrow().iter().map(|(k, v)| (k.to_lowercase(), v.clone())).collect(),
+    let headers: HashMap<Str, Value> = match req_field(req, "headers") {
+        Some(Value::Map(h)) => h.borrow().iter().map(|(k, v)| (Str::from(k.to_lowercase()), v.clone())).collect(),
         _ => HashMap::new(),
     };
     let segments: Vec<&str> = path.trim_matches('/').split('/').filter(|s| !s.is_empty()).collect();
@@ -725,7 +726,7 @@ pub fn dispatch(
             headers.insert("sec-websocket-protocol".to_string(), p.clone());
         }
         let raw_headers: Vec<(String, String)> = match field_of(&ctx, "headers") {
-            Value::Map(h) => h.borrow().iter().map(|(k, v)| (k.clone(), v.to_display_string())).collect(),
+            Value::Map(h) => h.borrow().iter().map(|(k, v)| (k.to_string(), v.to_display_string())).collect(),
             _ => Vec::new(),
         };
         let host = raw_headers.iter().find(|(k, _)| k == "host").map(|(_, v)| v.clone()).unwrap_or_default();
@@ -1093,7 +1094,7 @@ fn apply_set(resp: Value, set: &Value) -> Value {
         _ => String::new().into(),
     };
     let mut headers: HashMap<String, String> = match o.get("headers") {
-        Some(Value::Map(h)) => h.borrow().iter().map(|(k, v)| (k.clone(), v.to_display_string())).collect(),
+        Some(Value::Map(h)) => h.borrow().iter().map(|(k, v)| (k.to_string(), v.to_display_string())).collect(),
         _ => HashMap::new(),
     };
     for (k, v) in extra.borrow().iter() {
@@ -1125,7 +1126,7 @@ pub fn json_response(status: i64, body: &Value) -> Value {
 /// `ctx.set.headers[name] = value` from native middleware.
 pub fn set_header(ctx: &Value, name: &str, value: &str) {
     if let Value::Map(h) = field_of(&field_of(ctx, "set"), "headers") {
-        h.borrow_mut().insert(name.to_string(), Value::Str(value.to_string().into()));
+        h.borrow_mut().insert(name.into(), Value::Str(value.to_string().into()));
     }
 }
 
@@ -1422,7 +1423,7 @@ impl FoguObject for ResponseValue {
             "headers" => {
                 let mut m = HashMap::new();
                 for (k, v) in &self.headers {
-                    m.insert(k.clone(), Value::Str(v.clone().into()));
+                    m.insert(Str::from(k.as_str()), Value::Str(v.clone().into()));
                 }
                 Some(Value::Map(Rc::new(RefCell::new(m))))
             }

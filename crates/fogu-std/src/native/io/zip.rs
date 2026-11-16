@@ -23,6 +23,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::util::{bytes_of, bytes_value};
@@ -71,7 +72,7 @@ pub fn build() -> ModuleValue {
         let o = opts(opt_arg(a, 2))?;
         let file = File::create(&dest).map_err(|e| io_err!("zip.write: {}: {}", dest, e))?;
         let mut w = zip::ZipWriter::new(file);
-        let mut items: Vec<(String, Value)> = m.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let mut items: Vec<(String, Value)> = m.borrow().iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
         items.sort_by(|x, y| x.0.cmp(&y.0));
         for (name, content) in items {
             put(&mut w, &name, &content, &o)?;
@@ -324,7 +325,7 @@ pub fn build() -> ModuleValue {
     }
 }
 
-fn opts(v: Option<&Value>) -> Result<HashMap<String, Value>, String> {
+fn opts(v: Option<&Value>) -> Result<HashMap<Str, Value>, String> {
     match v {
         None | Some(Value::Nil) => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().clone()),
@@ -365,7 +366,7 @@ fn collect(p: &Path, out: &mut Vec<(PathBuf, String)>) -> std::io::Result<()> {
     walk(p, base, out)
 }
 
-fn file_options<'a>(o: &HashMap<String, Value>, pw: Option<&'a str>) -> Result<zip::write::FileOptions<'a, 'static, ()>, String> {
+fn file_options<'a>(o: &HashMap<Str, Value>, pw: Option<&'a str>) -> Result<zip::write::FileOptions<'a, 'static, ()>, String> {
     let mut fo = zip::write::SimpleFileOptions::default().unix_permissions(0o644);
     if o.get("store").is_some_and(Value::is_truthy) {
         fo = fo.compression_method(zip::CompressionMethod::Stored);
@@ -383,7 +384,7 @@ fn file_options<'a>(o: &HashMap<String, Value>, pw: Option<&'a str>) -> Result<z
     })
 }
 
-fn put(w: &mut zip::ZipWriter<File>, name: &str, content: &Value, o: &HashMap<String, Value>) -> Result<(), String> {
+fn put(w: &mut zip::ZipWriter<File>, name: &str, content: &Value, o: &HashMap<Str, Value>) -> Result<(), String> {
     let pw = o.get("password").map(|v| v.to_display_string());
     let fo = file_options(o, pw.as_deref())?;
     if name.ends_with('/') || matches!(content, Value::Nil) {
@@ -399,7 +400,7 @@ fn open_zip(path: &str, what: &str) -> Result<zip::ZipArchive<File>, String> {
     zip::ZipArchive::new(f).map_err(|e| io_err!("{}: {}: {}", what, path, e))
 }
 
-fn by_index<'a>(ar: &'a mut zip::ZipArchive<File>, i: usize, o: &HashMap<String, Value>, what: &str) -> Result<zip::read::ZipFile<'a, File>, String> {
+fn by_index<'a>(ar: &'a mut zip::ZipArchive<File>, i: usize, o: &HashMap<Str, Value>, what: &str) -> Result<zip::read::ZipFile<'a, File>, String> {
     match o.get("password") {
         Some(pw) => ar.by_index_decrypt(i, pw.to_display_string().as_bytes()).map_err(|e| io_err!("{}: {}", what, e)),
         None => ar.by_index(i).map_err(|e| match e {
@@ -458,7 +459,7 @@ fn safe_link(dest: &Path, rel: &Path, target: &Path) -> bool {
     true
 }
 
-fn text_or_bytes(data: Vec<u8>, o: &HashMap<String, Value>) -> Value {
+fn text_or_bytes(data: Vec<u8>, o: &HashMap<Str, Value>) -> Value {
     if !o.get("bytes").is_some_and(Value::is_truthy) {
         if let Ok(s) = String::from_utf8(data.clone()) {
             return Value::Str(s.into());

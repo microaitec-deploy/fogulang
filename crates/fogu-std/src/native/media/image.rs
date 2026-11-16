@@ -32,6 +32,7 @@ use image::{AnimationDecoder, Delay, DynamicImage, Frame, ImageFormat, Rgba, Rgb
 use resvg::tiny_skia::{self, Paint, PathBuilder, Pixmap, Stroke, Transform};
 use resvg::usvg;
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef};
@@ -185,7 +186,7 @@ fn num_at(a: &[Value], i: usize, what: &str) -> Result<f32, String> {
     }
 }
 
-fn opts(v: Option<&Value>, what: &str) -> Result<HashMap<String, Value>, String> {
+fn opts(v: Option<&Value>, what: &str) -> Result<HashMap<Str, Value>, String> {
     match v {
         None => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().clone()),
@@ -382,7 +383,7 @@ fn svg_tree(svg: &str) -> Result<usvg::Tree, String> {
 
 /// Renders an SVG at `{ width, height, scale }` (keeping the aspect ratio
 /// when only one side is given) over an optional `background`.
-pub fn render_svg(svg: &str, o: &HashMap<String, Value>) -> Result<RgbaImage, String> {
+pub fn render_svg(svg: &str, o: &HashMap<Str, Value>) -> Result<RgbaImage, String> {
     let tree = svg_tree(svg)?;
     let size = tree.size();
     let (sw, sh) = (size.width(), size.height());
@@ -487,7 +488,7 @@ pub fn format_of(name: &str) -> Result<ImageFormat, String> {
     ImageFormat::from_extension(&ext).ok_or_else(|| io_err!("image: unknown image format '{}' (png jpg webp gif bmp ico tiff)", name))
 }
 
-pub fn encode(img: &RgbaImage, fmt: ImageFormat, o: &HashMap<String, Value>) -> Result<Vec<u8>, String> {
+pub fn encode(img: &RgbaImage, fmt: ImageFormat, o: &HashMap<Str, Value>) -> Result<Vec<u8>, String> {
     let mut out = Cursor::new(Vec::new());
     match fmt {
         ImageFormat::Jpeg => {
@@ -525,7 +526,7 @@ pub struct Image {
 
 /// Stroke/fill options shared by the shape methods: `{ fill, stroke, width }`
 /// (`color` is an alias of `fill`; with neither, the shape is filled black).
-fn shape_paints(o: &HashMap<String, Value>) -> Result<(Option<Rgba<u8>>, Option<(Rgba<u8>, f32)>), String> {
+fn shape_paints(o: &HashMap<Str, Value>) -> Result<(Option<Rgba<u8>>, Option<(Rgba<u8>, f32)>), String> {
     let fill = o.get("fill").or_else(|| o.get("color")).map(color).transpose()?;
     let stroke = match o.get("stroke") {
         Some(c) => Some((color(c)?, o.get("width").map(|w| num(w, "width")).transpose()?.unwrap_or(1.0))),
@@ -538,7 +539,7 @@ fn shape_paints(o: &HashMap<String, Value>) -> Result<(Option<Rgba<u8>>, Option<
 }
 
 impl Image {
-    fn draw_path(&mut self, path: tiny_skia::Path, o: &HashMap<String, Value>) -> Result<(), String> {
+    fn draw_path(&mut self, path: tiny_skia::Path, o: &HashMap<Str, Value>) -> Result<(), String> {
         let (fill, stroke) = shape_paints(o)?;
         let mut pm = to_pixmap(&self.img);
         if let Some(c) = fill {

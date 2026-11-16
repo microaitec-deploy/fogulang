@@ -45,6 +45,7 @@ use socketioxide::SocketIo;
 use crate::runtime::environment::Environment;
 use crate::runtime::interpreter::Interpreter;
 use crate::runtime::sched::{self, IoGuard};
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef, Poller};
@@ -76,7 +77,7 @@ fn to_json(v: &Value) -> serde_json::Value {
     serde_json::from_str(&crate::native::json::stringify_value(v)).unwrap_or(serde_json::Value::Null)
 }
 
-fn opts(v: Option<&Value>, what: &str) -> Result<HashMap<String, Value>, String> {
+fn opts(v: Option<&Value>, what: &str) -> Result<HashMap<Str, Value>, String> {
     match v {
         None | Some(Value::Nil) => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
@@ -687,7 +688,7 @@ impl FoguObject for SioSocket {
                     let mut pairs: Vec<(String, Value)> =
                         parts.headers.iter().map(|(k, v)| (k.as_str().to_string(), Value::Str(String::from_utf8_lossy(v.as_bytes()).into_owned().into()))).collect();
                     pairs.sort_by(|a, b| a.0.cmp(&b.0));
-                    Value::Map(Rc::new(RefCell::new(pairs.into_iter().collect())))
+                    Value::Map(Rc::new(RefCell::new(pairs.into_iter().map(|(k, v)| (Str::from(k), v)).collect())))
                 }),
                 ("query", Value::Str(parts.uri.query().unwrap_or("").to_string().into())),
                 ("auth", self.auth.clone()),
@@ -1034,7 +1035,7 @@ fn connect(args: &[Value], interp: &Interpreter, env: &Rc<RefCell<Environment>>)
         }
     }
     let headers: Vec<(String, String)> = match o.get("headers") {
-        Some(Value::Map(h)) => h.borrow().iter().map(|(k, v)| (k.clone(), v.to_display_string())).collect(),
+        Some(Value::Map(h)) => h.borrow().iter().map(|(k, v)| (k.to_string(), v.to_display_string())).collect(),
         _ => Vec::new(),
     };
     let timeout = match o.get("timeout") {

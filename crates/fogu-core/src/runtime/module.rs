@@ -93,7 +93,7 @@ impl Imported {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect()),
             Imported::Data { name, value } => match value {
-                Value::Map(m) => Ok(m.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+                Value::Map(m) => Ok(m.borrow().iter().map(|(k, v)| (k.to_string(), v.clone())).collect()),
                 other => Err(format!(
                     "cannot re-export the keys of '{}': its value is a {}, not a map",
                     name,

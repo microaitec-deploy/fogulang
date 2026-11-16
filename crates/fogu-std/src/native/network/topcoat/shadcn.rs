@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use ahash::AHashMap as HashMap;
 use std::rc::Rc;
 
+use crate::runtime::value::Str;
 use crate::runtime::value::Value;
 
 use super::{children, element, escape, html_value, opt_str, reactive, signal_name, split_opts};
@@ -32,7 +33,7 @@ fn kids(v: Option<&Value>) -> String {
 }
 
 /// `variant-x size-y` from the options, checked against the allowed values.
-fn modifiers(o: &HashMap<String, Value>, variants: &[&str], sizes: &[&str], default_size: Option<&str>) -> Result<String, String> {
+fn modifiers(o: &HashMap<Str, Value>, variants: &[&str], sizes: &[&str], default_size: Option<&str>) -> Result<String, String> {
     let mut out = String::new();
     let variant = opt_str(o, "variant").unwrap_or_else(|| "default".into());
     if !variants.is_empty() {
@@ -102,7 +103,7 @@ pub fn module() -> Value {
         ("toaster", 0, |_| Ok(html_value("<ol class=\"sonner sonner-bottom-right\" data-tc-toaster></ol>".into()))),
     ];
     for (n, min, f) in fns {
-        m.insert(n.to_string(), nfn_var(n, min, f));
+        m.insert(Str::from(n), nfn_var(n, min, f));
     }
     // layout helpers shared with tc.ui
     let layout: [(&str, fn(&[Value]) -> Result<Value, String>); 4] = [
@@ -112,7 +113,7 @@ pub fn module() -> Value {
         ("container", |a| super::simple("div", "tc-container", a, false)),
     ];
     for (n, f) in layout {
-        m.insert(n.to_string(), nfn_var(n, 0, f));
+        m.insert(Str::from(n), nfn_var(n, 0, f));
     }
     Value::Map(Rc::new(RefCell::new(m)))
 }
@@ -211,7 +212,7 @@ fn alert(a: &[Value]) -> Result<Value, String> {
     Ok(html_value(el("div", &attrs, &inner)?))
 }
 
-fn state_classes(base: &str, o: &HashMap<String, Value>, attrs: &mut Attrs) -> String {
+fn state_classes(base: &str, o: &HashMap<Str, Value>, attrs: &mut Attrs) -> String {
     let mut class = base.to_string();
     if o.get("error").is_some_and(Value::is_truthy) {
         class.push_str(&format!(" {}-error", base));
@@ -389,7 +390,7 @@ fn table(a: &[Value]) -> Result<Value, String> {
         let mut tr = String::new();
         for (i, (key, _)) in cols.iter().enumerate() {
             let cell = match row {
-                Value::Map(m) => m.borrow().get(key).cloned().unwrap_or(Value::Nil),
+                Value::Map(m) => m.borrow().get(key.as_str()).cloned().unwrap_or(Value::Nil),
                 Value::List(l) => l.borrow().get(i).cloned().unwrap_or(Value::Nil),
                 other if i == 0 => other.clone(),
                 _ => Value::Nil,

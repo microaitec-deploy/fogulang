@@ -1,0 +1,52 @@
+// Map keys are stored as `Str` (docs/architecture/map-keys.md): a key of up to
+// 15 bytes lives inside the key itself, a longer one is shared. What a program
+// sees must not change: lookup by any text, alphabetical (byte) order, copies.
+import json from "fogu:json"
+
+const long = "a_key_longer_than_fifteen_bytes"
+const m = { b: 2, a: 1, fifteen_bytes_k: 15, sixteen_bytes_ke: 16 }
+m[long] = "long"
+m["ação"] = "utf8"
+m[""] = "empty"
+m.zeta = 26
+
+// a key is found whatever built the text: a literal, a field, a concatenation
+print(m.a, m["b"], m["fifteen_" + "bytes_k"], m["sixteen_" + "bytes_ke"])
+print(m[long], m["a_key_longer_than_" + "fifteen_bytes"], m["aç" + "ão"], m[""])
+print(m.has("zeta"), m.has("zet"), m.has(long + "!"), m.get("nope", "default"))
+
+// order: by bytes, so "" first, upper case before lower, "ação" after "a_..."
+m.Z = 0
+print(m.keys())
+for k in m { print(k, m[k]) }
+for k, v in { long_key_number_two_here: 2, k: 1, long_key_number_one_here: 1 } { print(k, v) }
+print(json.stringify(m))
+print(m)
+
+// a key taken from a map is an ordinary text
+const ks = m.keys()
+print(len(ks), ks[3], len(ks[3]), ks[3] + "?", ks[3] == long)
+
+// set, remove and merge keep one entry per key
+m[long] = "again"
+m.set("a", 100)
+print(m.remove("b"), m.remove("b"), len(m), m[long], m.a)
+const merged = { a: 1, shared_long_key_in_both_maps: "left" }.merge({ shared_long_key_in_both_maps: "right", c: 3 })
+print(merged)
+
+// the same literal evaluated many times gives independent maps
+fn make(i) { return { index: i, a_rather_long_field_name: i * 2 } }
+const made = []
+for i in 0..3 { made.push(make(i)) }
+made[0].index = 99
+made[1].a_rather_long_field_name = -1
+print(made)
+
+// keys that come from data
+const parsed = json.parse("{\"short\":1,\"a key with spaces and more than 15 bytes\":2}")
+print(parsed.short, parsed["a key with spaces and more than 15 bytes"], parsed.keys())
+const counts = {}
+for w in "the quick brown fox jumps over the lazy dog the end".split(" ") {
+    counts[w] = (counts[w] ?? 0) + 1
+}
+print(counts)

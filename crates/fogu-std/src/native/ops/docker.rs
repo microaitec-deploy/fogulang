@@ -30,6 +30,7 @@ use std::cell::RefCell;
 use ahash::AHashMap as HashMap;
 use std::process::{Command, Stdio};
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::json::stringify_value;
@@ -152,7 +153,7 @@ fn json_lines(s: &str) -> Value {
     )
 }
 
-fn opts(v: Option<&Value>, what: &str) -> Result<HashMap<String, Value>, String> {
+fn opts(v: Option<&Value>, what: &str) -> Result<HashMap<Str, Value>, String> {
     match v {
         None => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().clone()),
@@ -160,8 +161,8 @@ fn opts(v: Option<&Value>, what: &str) -> Result<HashMap<String, Value>, String>
     }
 }
 
-fn sorted(m: &HashMap<String, Value>) -> Vec<(String, Value)> {
-    let mut v: Vec<_> = m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+fn sorted(m: &HashMap<Str, Value>) -> Vec<(String, Value)> {
+    let mut v: Vec<_> = m.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
     v.sort_by(|a, b| a.0.cmp(&b.0));
     v
 }

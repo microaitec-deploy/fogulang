@@ -48,6 +48,7 @@ use serde_json::{json, Value as J};
 use crate::runtime::environment::Environment;
 use crate::runtime::interpreter::Interpreter;
 use crate::runtime::sched;
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::json::{parse_value, stringify_value};
@@ -119,7 +120,7 @@ struct Cfg {
     stateful: bool,
 }
 
-fn get_s(m: &HashMap<String, Value>, k: &str) -> Option<String> {
+fn get_s(m: &HashMap<Str, Value>, k: &str) -> Option<String> {
     match m.get(k) {
         Some(Value::Str(s)) if !s.is_empty() => Some(s.to_string()),
         _ => None,
@@ -133,7 +134,7 @@ fn env(k: &str) -> Option<String> {
     std::env::var(k).ok().filter(|v| !v.is_empty())
 }
 
-fn get_bool(m: &HashMap<String, Value>, k: &str) -> bool {
+fn get_bool(m: &HashMap<Str, Value>, k: &str) -> bool {
     m.get(k).map(|v| v.is_truthy()).unwrap_or(false)
 }
 
@@ -141,15 +142,15 @@ fn get_bool(m: &HashMap<String, Value>, k: &str) -> bool {
 /// maxTokens, stateful }`, or a string `"provider"` / `"provider/model"`.
 /// Default provider: openai.
 fn parse_cfg(arg: Option<&Value>) -> Result<Cfg, String> {
-    let mut m: HashMap<String, Value> = match arg {
+    let mut m: HashMap<Str, Value> = match arg {
         None | Some(Value::Nil) => HashMap::new(),
         Some(Value::Map(m)) => m.borrow().clone(),
         Some(Value::Str(s)) => {
             let mut m = HashMap::new();
             let (p, model) = s.split_once('/').map_or((s.as_str(), None), |(a, b)| (a, Some(b)));
-            m.insert("provider".to_string(), Value::Str(p.to_string().into()));
+            m.insert("provider".into(), Value::Str(p.to_string().into()));
             if let Some(model) = model {
-                m.insert("model".to_string(), Value::Str(model.to_string().into()));
+                m.insert("model".into(), Value::Str(model.to_string().into()));
             }
             m
         }
@@ -184,7 +185,7 @@ fn parse_cfg(arg: Option<&Value>) -> Result<Cfg, String> {
     let headers = match m.get("headers") {
         Some(Value::Map(h)) => {
             let mut v: Vec<(String, String)> =
-                h.borrow().iter().map(|(k, v)| (k.clone(), v.to_display_string())).collect();
+                h.borrow().iter().map(|(k, v)| (k.to_string(), v.to_display_string())).collect();
             v.sort();
             v
         }
@@ -295,7 +296,7 @@ fn content_text(v: Option<&Value>) -> String {
 }
 
 /// Lê uma lista de strings de um campo (ex.: `thoughtSignatures`).
-fn str_list_of(m: &HashMap<String, Value>, k: &str) -> Vec<String> {
+fn str_list_of(m: &HashMap<Str, Value>, k: &str) -> Vec<String> {
     match m.get(k) {
         Some(Value::List(l)) => l.borrow().iter().filter_map(|v| match v {
             Value::Str(s) => Some(s.to_string()),
@@ -396,7 +397,7 @@ fn parse_tool(v: &Value) -> Result<(ToolDef, Option<Value>), String> {
     Ok((ToolDef { name, description: get_s(&m, "description").unwrap_or_default(), parameters }, run))
 }
 
-fn num(m: &HashMap<String, Value>, k: &str) -> Option<f64> {
+fn num(m: &HashMap<Str, Value>, k: &str) -> Option<f64> {
     match m.get(k) {
         Some(Value::Int(n)) => Some(*n as f64),
         Some(Value::Float(f)) => Some(*f),
@@ -410,7 +411,7 @@ fn parse_req(cfg: &Cfg, arg: Option<&Value>, what: &str) -> Result<ChatReq, Stri
     let m = match arg {
         Some(Value::Str(s)) => {
             let mut m = HashMap::new();
-            m.insert("prompt".to_string(), Value::Str(s.clone()));
+            m.insert("prompt".into(), Value::Str(s.clone()));
             m
         }
         Some(Value::Map(m)) => m.borrow().clone(),

@@ -36,6 +36,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
 use sha2::Digest;
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef};
@@ -77,7 +78,7 @@ pub fn build() -> ModuleValue {
     }
 }
 
-fn opts(v: Option<&Value>, what: &str) -> Result<HashMap<String, Value>, String> {
+fn opts(v: Option<&Value>, what: &str) -> Result<HashMap<Str, Value>, String> {
     match v {
         None | Some(Value::Nil) => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
@@ -85,7 +86,7 @@ fn opts(v: Option<&Value>, what: &str) -> Result<HashMap<String, Value>, String>
     }
 }
 
-fn int_opt(o: &HashMap<String, Value>, k: &str, d: i64) -> i64 {
+fn int_opt(o: &HashMap<Str, Value>, k: &str, d: i64) -> i64 {
     match o.get(k) {
         Some(Value::Int(i)) => *i,
         Some(Value::Float(f)) => *f as i64,
@@ -93,7 +94,7 @@ fn int_opt(o: &HashMap<String, Value>, k: &str, d: i64) -> i64 {
     }
 }
 
-fn dur_opt(o: &HashMap<String, Value>, k: &str, d: Duration, what: &str) -> Result<Duration, String> {
+fn dur_opt(o: &HashMap<Str, Value>, k: &str, d: Duration, what: &str) -> Result<Duration, String> {
     match o.get(k) {
         None | Some(Value::Nil) => Ok(d),
         Some(v) => duration_arg(v, what),
@@ -640,19 +641,19 @@ fn audit_headers(r: &HeaderReport) -> Value {
         (2, _) => "D",
         _ => "F",
     };
-    let present: HashMap<String, Value> = checks.iter().filter(|c| c.2).filter_map(|c| get(c.0).map(|v| (c.0.to_string(), Value::Str(v.into())))).collect();
+    let present: HashMap<Str, Value> = checks.iter().filter(|c| c.2).filter_map(|c| get(c.0).map(|v| (Str::from(c.0), Value::Str(v.into())))).collect();
     Value::Map(std::rc::Rc::new(RefCell::new(
         [
-            ("url".to_string(), Value::Str(r.url.clone().into())),
-            ("status".to_string(), Value::Int(r.status as i64)),
-            ("grade".to_string(), Value::Str(grade.into())),
-            ("score".to_string(), Value::Int(score as i64)),
-            ("present".to_string(), Value::Map(std::rc::Rc::new(RefCell::new(present.into_iter().collect())))),
+            (Str::from("url"), Value::Str(r.url.clone().into())),
+            ("status".into(), Value::Int(r.status as i64)),
+            ("grade".into(), Value::Str(grade.into())),
+            ("score".into(), Value::Int(score as i64)),
+            ("present".into(), Value::Map(std::rc::Rc::new(RefCell::new(present.into_iter().collect())))),
             (
-                "missing".to_string(),
+                "missing".into(),
                 list(checks.iter().filter(|c| !c.2).map(|c| map(vec![("header", Value::Str(c.0.into())), ("why", Value::Str(c.1.into()))])).collect()),
             ),
-            ("warnings".to_string(), list(warnings)),
+            ("warnings".into(), list(warnings)),
         ]
         .into_iter()
         .collect(),

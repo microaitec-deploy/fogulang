@@ -37,6 +37,7 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::net::{closed, op, opt_timeout, TcpStreamValue};
@@ -124,13 +125,13 @@ fn alpn_of(v: &Value, what: &str) -> Result<Vec<Vec<u8>>, String> {
 }
 
 /// The options map (copied), checking for unknown keys.
-fn options(v: Option<&Value>, what: &str, known: &[&str]) -> Result<HashMap<String, Value>, String> {
-    let o: HashMap<String, Value> = match v {
+fn options(v: Option<&Value>, what: &str, known: &[&str]) -> Result<HashMap<Str, Value>, String> {
+    let o: HashMap<Str, Value> = match v {
         None | Some(Value::Nil) => HashMap::new(),
         Some(Value::Map(m)) => m.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         Some(other) => return Err(format!("{}: options must be a map, got '{}'", what, other.type_name())),
     };
-    let mut keys: Vec<&String> = o.keys().collect();
+    let mut keys: Vec<&Str> = o.keys().collect();
     keys.sort();
     for k in keys {
         if !known.contains(&k.as_str()) {

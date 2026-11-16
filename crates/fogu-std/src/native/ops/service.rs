@@ -24,6 +24,7 @@ use std::cell::RefCell;
 use ahash::AHashMap as HashMap;
 use std::process::{Command, Stdio};
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef};
@@ -316,7 +317,7 @@ fn unit_string(v: &Value) -> Result<String, String> {
         return Err("service.unitString: expects { Unit: {…}, Service: {…}, Install: {…} }".into());
     };
     let m = m.borrow();
-    let mut names: Vec<&String> = m.keys().collect();
+    let mut names: Vec<&Str> = m.keys().collect();
     let rank = |s: &str| match s {
         "Unit" => 0,
         "Service" | "Socket" | "Timer" | "Mount" | "Path" => 1,
@@ -334,7 +335,7 @@ fn unit_string(v: &Value) -> Result<String, String> {
             return Err(format!("service.unitString: section '{}' must be a map", n));
         };
         let sec = sec.borrow();
-        let mut keys: Vec<&String> = sec.keys().collect();
+        let mut keys: Vec<&Str> = sec.keys().collect();
         keys.sort_by_key(|k| key_rank(k));
         for k in keys {
             match &sec[k] {
@@ -395,7 +396,7 @@ fn shell_quote(s: &str) -> String {
 }
 
 impl Spec {
-    fn from(o: &HashMap<String, Value>) -> Result<Spec, String> {
+    fn from(o: &HashMap<Str, Value>) -> Result<Spec, String> {
         const KEYS: &[&str] = &[
             "name", "description", "exec", "args", "user", "group", "workdir", "after", "type", "restart", "restartSec",
             "limitNofile", "wantedBy", "env", "envFile", "extra", "sudo", "dir", "ssh",
@@ -420,7 +421,7 @@ impl Spec {
         }
         let env = match o.get("env") {
             Some(Value::Map(m)) => {
-                let mut v: Vec<(String, String)> = m.borrow().iter().map(|(k, v)| (k.clone(), v.to_display_string())).collect();
+                let mut v: Vec<(String, String)> = m.borrow().iter().map(|(k, v)| (k.to_string(), v.to_display_string())).collect();
                 v.sort();
                 v
             }
@@ -429,11 +430,11 @@ impl Spec {
         };
         let mut extra = Vec::new();
         if let Some(Value::Map(m)) = o.get("extra") {
-            let mut secs: Vec<(String, Value)> = m.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let mut secs: Vec<(String, Value)> = m.borrow().iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
             secs.sort_by(|a, b| a.0.cmp(&b.0));
             for (sec, kv) in secs {
                 let Value::Map(kv) = kv else { return Err("service.define: 'extra' is { Section: { Key: value } }".into()) };
-                let mut items: Vec<(String, String)> = kv.borrow().iter().map(|(k, v)| (k.clone(), v.to_display_string())).collect();
+                let mut items: Vec<(String, String)> = kv.borrow().iter().map(|(k, v)| (k.to_string(), v.to_display_string())).collect();
                 items.sort();
                 extra.push((sec, items));
             }

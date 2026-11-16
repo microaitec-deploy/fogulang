@@ -48,6 +48,7 @@ use crate::runtime::ast::Stmt;
 use crate::runtime::interpreter::Deadline;
 use crate::runtime::sched;
 use crate::runtime::environment::Environment;
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 use crate::runtime::{resolver, Interpreter, Lexer, Parser};
 
@@ -128,7 +129,7 @@ fn opts(v: Option<&Value>, what: &str) -> Result<Opts, String> {
     Ok(o)
 }
 
-fn sandbox_arg(v: Option<&Value>, what: &str) -> Result<Option<Rc<RefCell<HashMap<String, Value>>>>, String> {
+fn sandbox_arg(v: Option<&Value>, what: &str) -> Result<Option<Rc<RefCell<HashMap<Str, Value>>>>, String> {
     match v {
         None | Some(Value::Nil) => Ok(None),
         Some(Value::Map(m)) => Ok(Some(Rc::clone(m))),
@@ -157,7 +158,7 @@ fn run(interp: &Interpreter, program: &[Stmt], env: &Rc<RefCell<Environment>>, o
 /// are copied to the sandbox map after each one.
 pub struct ContextValue {
     env: Rc<RefCell<Environment>>,
-    sandbox: Rc<RefCell<HashMap<String, Value>>>,
+    sandbox: Rc<RefCell<HashMap<Str, Value>>>,
     lock: CtxLock,
 }
 
@@ -197,7 +198,7 @@ impl CtxLock {
 }
 
 impl ContextValue {
-    fn new(interp: &Interpreter, sandbox: Option<Rc<RefCell<HashMap<String, Value>>>>) -> Self {
+    fn new(interp: &Interpreter, sandbox: Option<Rc<RefCell<HashMap<Str, Value>>>>) -> Self {
         Self {
             env: interp.vm_env(true, DEFAULT_FILE),
             sandbox: sandbox.unwrap_or_default(),
@@ -222,7 +223,7 @@ impl ContextValue {
         let mut sb = self.sandbox.borrow_mut();
         for name in env.names() {
             if let Some((v, _)) = env.get_own(&name) {
-                sb.insert(name, v);
+                sb.insert(name.into(), v);
             }
         }
     }
@@ -279,7 +280,7 @@ fn run_in_context(interp: &Interpreter, program: &[Stmt], ctx: &NativeObjectRef,
 fn run_in_new_context(
     interp: &Interpreter,
     program: &[Stmt],
-    sandbox: Option<Rc<RefCell<HashMap<String, Value>>>>,
+    sandbox: Option<Rc<RefCell<HashMap<Str, Value>>>>,
     o: &Opts,
 ) -> Result<Value, String> {
     let ctx = ContextValue::new(interp, sandbox);
@@ -356,7 +357,7 @@ impl FoguObject for ScriptValue {
 
 /// What a spawned run executes.
 enum Target {
-    New(Option<Rc<RefCell<HashMap<String, Value>>>>),
+    New(Option<Rc<RefCell<HashMap<Str, Value>>>>),
     Context(NativeObjectRef),
 }
 

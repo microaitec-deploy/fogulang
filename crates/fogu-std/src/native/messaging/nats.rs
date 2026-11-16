@@ -37,6 +37,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value as J};
 
 use crate::runtime::sched;
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::json::{parse_value, stringify_value};
@@ -72,7 +73,7 @@ struct Cfg {
     timeout: Duration,
 }
 
-fn get_s(m: &HashMap<String, Value>, k: &str) -> Option<String> {
+fn get_s(m: &HashMap<Str, Value>, k: &str) -> Option<String> {
     match m.get(k) {
         Some(Value::Str(s)) if !s.is_empty() => Some(s.to_string()),
         _ => None,
@@ -451,10 +452,10 @@ fn payload(v: Option<&Value>) -> Vec<u8> {
     }
 }
 
-fn headers_opt(o: &HashMap<String, Value>) -> Vec<(String, String)> {
+fn headers_opt(o: &HashMap<Str, Value>) -> Vec<(String, String)> {
     match o.get("headers") {
         Some(Value::Map(h)) => {
-            let mut v: Vec<(String, String)> = h.borrow().iter().map(|(k, v)| (k.clone(), v.to_display_string())).collect();
+            let mut v: Vec<(String, String)> = h.borrow().iter().map(|(k, v)| (k.to_string(), v.to_display_string())).collect();
             v.sort();
             v
         }
@@ -462,7 +463,7 @@ fn headers_opt(o: &HashMap<String, Value>) -> Vec<(String, String)> {
     }
 }
 
-fn opts(args: &[Value], i: usize, what: &str) -> Result<HashMap<String, Value>, String> {
+fn opts(args: &[Value], i: usize, what: &str) -> Result<HashMap<Str, Value>, String> {
     match args.get(i) {
         None | Some(Value::Nil) => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().clone()),
@@ -470,7 +471,7 @@ fn opts(args: &[Value], i: usize, what: &str) -> Result<HashMap<String, Value>, 
     }
 }
 
-fn timeout_opt(o: &HashMap<String, Value>, default: Duration, what: &str) -> Result<Duration, String> {
+fn timeout_opt(o: &HashMap<Str, Value>, default: Duration, what: &str) -> Result<Duration, String> {
     match o.get("timeout") {
         None | Some(Value::Nil) => Ok(default),
         Some(t) => duration_arg(t, what),

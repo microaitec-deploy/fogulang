@@ -17,7 +17,7 @@ use ahash::AHashMap as HashMap;
 use super::super::super::ast::{BinaryOp, TypeExpr};
 use super::super::super::environment::Environment;
 use super::super::super::ops;
-use super::super::super::value::{ChanValue, FnValue, Value};
+use super::super::super::value::{ChanValue, FnValue, Str, Value};
 use super::super::{
     assign_index, chan_recv, check_arity, compare_values, describe_for, eval_binary, eval_index, norm_index, undefined, values_equal, Interpreter,
     RecvError, PROPAGATE,
@@ -708,7 +708,7 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
                     Value::Str(s) => Iter::Items(s.chars().map(|c| Value::Str(c.into())).collect::<Vec<_>>().into_iter()),
                     Value::Map(m) => {
                         // deterministic (alphabetical) key order
-                        let mut keys: Vec<String> = m.borrow().keys().cloned().collect();
+                        let mut keys: Vec<Str> = m.borrow().keys().cloned().collect();
                         keys.sort();
                         Iter::Items(keys.into_iter().map(|k| Value::Str(k.into())).collect::<Vec<_>>().into_iter())
                     }
@@ -721,7 +721,7 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
                 let pairs: Vec<(Value, Value)> = match &r!(b) {
                     Value::Map(m) => {
                         let m = m.borrow();
-                        let mut keys: Vec<&String> = m.keys().collect();
+                        let mut keys: Vec<&Str> = m.keys().collect();
                         keys.sort();
                         keys.into_iter().map(|k| (Value::Str(k.clone().into()), m[k].clone())).collect()
                     }

@@ -34,6 +34,7 @@ use bullmq_rs::{
 use serde_json::{json, Value as J};
 
 use crate::runtime::sched;
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef, Poller};
@@ -67,7 +68,7 @@ fn to_json(v: &Value) -> J {
     serde_json::from_str(&crate::native::json::stringify_value(v)).unwrap_or(J::Null)
 }
 
-fn opts_map(args: &[Value], i: usize, what: &str) -> Result<HashMap<String, Value>, String> {
+fn opts_map(args: &[Value], i: usize, what: &str) -> Result<HashMap<Str, Value>, String> {
     match args.get(i) {
         None | Some(Value::Nil) => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().clone()),
@@ -75,21 +76,21 @@ fn opts_map(args: &[Value], i: usize, what: &str) -> Result<HashMap<String, Valu
     }
 }
 
-fn get_s(o: &HashMap<String, Value>, k: &str) -> Option<String> {
+fn get_s(o: &HashMap<Str, Value>, k: &str) -> Option<String> {
     match o.get(k) {
         Some(Value::Str(s)) if !s.is_empty() => Some(s.to_string()),
         _ => None,
     }
 }
 
-fn dur(o: &HashMap<String, Value>, k: &str, what: &str) -> Result<Option<Duration>, String> {
+fn dur(o: &HashMap<Str, Value>, k: &str, what: &str) -> Result<Option<Duration>, String> {
     match o.get(k) {
         None | Some(Value::Nil) => Ok(None),
         Some(v) => duration_arg(v, &format!("{}: {}", what, k)).map(Some),
     }
 }
 
-fn int(o: &HashMap<String, Value>, k: &str) -> Option<u64> {
+fn int(o: &HashMap<Str, Value>, k: &str) -> Option<u64> {
     match o.get(k) {
         Some(Value::Int(n)) if *n >= 0 => Some(*n as u64),
         _ => None,
@@ -99,7 +100,7 @@ fn int(o: &HashMap<String, Value>, k: &str) -> Option<u64> {
 /// `{ connection | url, prefix }` → (connection, prefix). The server is
 /// probed first: an unreachable Redis is an error in seconds, not after the
 /// client's long reconnection loop.
-fn connection(o: &HashMap<String, Value>) -> Result<(RedisConnection, String), String> {
+fn connection(o: &HashMap<Str, Value>) -> Result<(RedisConnection, String), String> {
     let url = get_s(o, "connection")
         .or_else(|| get_s(o, "url"))
         .or_else(|| std::env::var("REDIS_URL").ok())
@@ -127,7 +128,7 @@ fn connection(o: &HashMap<String, Value>) -> Result<(RedisConnection, String), S
 
 /// Job options in BullMQ's names: `{ delay, attempts, backoff: { type, delay, max },
 /// priority, jobId, ttl, deduplication: { id, ttl } }`.
-fn job_options(o: &HashMap<String, Value>, what: &str) -> Result<Option<JobOptions>, String> {
+fn job_options(o: &HashMap<Str, Value>, what: &str) -> Result<Option<JobOptions>, String> {
     if o.is_empty() {
         return Ok(None);
     }

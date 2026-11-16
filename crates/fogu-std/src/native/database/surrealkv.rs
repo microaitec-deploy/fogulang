@@ -23,6 +23,7 @@ use std::sync::{Arc, Mutex};
 
 use surrealkv::{Durability, HistoryOptions, LSMIterator, SoftwareKeyManager, Transaction, Tree, TreeBuilder};
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::json::{parse_value, stringify_value};
@@ -38,7 +39,7 @@ pub fn build() -> ModuleValue {
     }
 }
 
-fn opts(args: &[Value], i: usize, what: &str) -> Result<HashMap<String, Value>, String> {
+fn opts(args: &[Value], i: usize, what: &str) -> Result<HashMap<Str, Value>, String> {
     match args.get(i) {
         None | Some(Value::Nil) => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().clone()),
@@ -46,7 +47,7 @@ fn opts(args: &[Value], i: usize, what: &str) -> Result<HashMap<String, Value>, 
     }
 }
 
-fn flag(o: &HashMap<String, Value>, k: &str) -> bool {
+fn flag(o: &HashMap<Str, Value>, k: &str) -> bool {
     o.get(k).is_some_and(Value::is_truthy)
 }
 
@@ -167,7 +168,7 @@ struct Scan {
     keys_only: bool,
 }
 
-fn scan_opts(o: &HashMap<String, Value>) -> Result<Scan, String> {
+fn scan_opts(o: &HashMap<Str, Value>) -> Result<Scan, String> {
     let s = |k: &str| o.get(k).filter(|v| !matches!(v, Value::Nil)).map(|v| v.to_display_string());
     let (mut start, mut end) = (None, None);
     if let Some(p) = s("prefix") {
@@ -245,7 +246,7 @@ fn read(tx: &Transaction, method: &str, args: &[Value], versions: bool) -> Optio
             max_args(args, 1, &what)?;
             let mut o = HashMap::new();
             if let Some(p) = args.first().filter(|v| !matches!(v, Value::Nil)) {
-                o.insert("prefix".to_string(), p.clone());
+                o.insert("prefix".into(), p.clone());
             }
             let mut s = scan_opts(&o)?;
             s.keys_only = true;

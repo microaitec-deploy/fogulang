@@ -7,7 +7,7 @@ use ahash::AHashMap as HashMap;
 use std::rc::Rc;
 
 use crate::runtime::Interpreter;
-use crate::runtime::value::{ErrorValue, Value};
+use crate::runtime::value::{ErrorValue, Str, Value};
 
 use crate::native::context::NativeContext;
 
@@ -315,20 +315,20 @@ fn list_method(
 }
 
 fn map_method(
-    m: &Rc<RefCell<HashMap<String, Value>>>,
+    m: &Rc<RefCell<HashMap<Str, Value>>>,
     name: &str,
     args: &[Value],
 ) -> Option<Result<Value, String>> {
-    let key = |args: &[Value]| -> Result<String, String> {
+    let key = |args: &[Value]| -> Result<Str, String> {
         match args.first() {
-            Some(Value::Str(s)) => Ok(s.to_string()),
+            Some(Value::Str(s)) => Ok(s.clone()),
             Some(o) => Err(format!("map key must be str, got '{}'", o.type_name())),
             None => Err(format!("'{}' expects a key", name)),
         }
     };
     let sorted = || {
         let b = m.borrow();
-        let mut ks: Vec<String> = b.keys().cloned().collect();
+        let mut ks: Vec<Str> = b.keys().cloned().collect();
         ks.sort();
         ks
     };

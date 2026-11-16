@@ -1168,7 +1168,7 @@ impl Interpreter {
 
             Value::Map(m) => {
                 // Deterministic (alphabetical) key order.
-                let mut keys: Vec<String> = m.borrow().keys().cloned().collect();
+                let mut keys: Vec<Str> = m.borrow().keys().cloned().collect();
                 keys.sort();
                 for k in keys {
                     if let Some(f) = run_body!(Value::Str(k.into())) {
@@ -1220,7 +1220,7 @@ impl Interpreter {
         let pairs: Vec<(Value, Value)> = match &iterable {
             Value::Map(m) => {
                 let b = m.borrow();
-                let mut keys: Vec<&String> = b.keys().collect();
+                let mut keys: Vec<&Str> = b.keys().collect();
                 keys.sort();
                 keys.into_iter()
                     .map(|k| (Value::Str(k.clone().into()), b[k].clone()))
@@ -1546,7 +1546,7 @@ impl Interpreter {
     }
 
     #[inline(never)]
-    fn eval_map(&self, entries: &[(String, Expr)], env: Rc<RefCell<Environment>>) -> Result<Value, String> {
+    fn eval_map(&self, entries: &[(Str, Expr)], env: Rc<RefCell<Environment>>) -> Result<Value, String> {
         let mut map = HashMap::new();
         for (k, v) in entries {
             map.insert(k.clone(), self.eval(v, env.clone())?);
@@ -1938,7 +1938,7 @@ impl Interpreter {
     fn assign_field(&self, target: &Value, field: &str, v: Value) -> Result<(), String> {
         match target {
             Value::Map(m) => {
-                m.borrow_mut().insert(field.to_string(), v);
+                m.borrow_mut().insert(field.into(), v);
                 Ok(())
             }
             Value::Struct(s) => {
@@ -2720,7 +2720,7 @@ fn satisfies(v: &Value, iface: &InterfaceDecl) -> bool {
         Value::Map(m) => {
             let m = m.borrow();
             iface.methods.iter().all(|(name, _)| {
-                matches!(m.get(name), Some(Value::Fn(_) | Value::NativeFn(_)))
+                matches!(m.get(name.as_str()), Some(Value::Fn(_) | Value::NativeFn(_)))
             })
         }
         _ => false,
@@ -2872,7 +2872,7 @@ fn assign_index(target: &Value, index: Value, v: Value) -> Result<(), String> {
             Ok(())
         }
         (Value::Map(m), Value::Str(k)) => {
-            m.borrow_mut().insert(k.into_string(), v);
+            m.borrow_mut().insert(k, v);
             Ok(())
         }
         (Value::Buffer(b), Value::Int(i)) => {

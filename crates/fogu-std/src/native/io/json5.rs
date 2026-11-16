@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use ahash::AHashMap as HashMap;
 use std::rc::Rc;
 
-use crate::runtime::value::{ModuleValue, Value};
+use crate::runtime::value::{ModuleValue, Str, Value};
 
 use crate::native::util::{max_args, nfn_var, opt_arg, str_arg};
 
@@ -122,7 +122,7 @@ fn write_value(v: &Value, indent: &str, depth: usize, out: &mut String) {
         }
         Value::Map(m) => {
             let b = m.borrow();
-            let mut entries: Vec<(&String, &Value)> = b.iter().collect();
+            let mut entries: Vec<(&Str, &Value)> = b.iter().collect();
             entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
             write_seq(entries.len(), '{', '}', indent, depth, out, |i, out| {
                 let (k, v) = entries[i];
@@ -549,7 +549,7 @@ impl Parser<'_> {
             }
             self.skip()?;
             let value = self.value(depth + 1)?;
-            map.insert(key, value);
+            map.insert(Str::from(key), value);
             self.skip()?;
             match self.peek() {
                 Some(',') => {

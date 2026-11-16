@@ -40,6 +40,7 @@ use tokio_tungstenite::tungstenite::{Bytes, Message};
 use tokio_tungstenite::WebSocketStream;
 
 use crate::runtime::sched::{self, IoGuard};
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::json::{parse_value, stringify_value};
@@ -407,7 +408,7 @@ impl FoguObject for MsgValue {
 fn connect(args: &[Value]) -> Result<Value, String> {
     max_args(args, 2, "websocket.connect")?;
     let url = str_arg(args, 0, "websocket.connect")?;
-    let o: HashMap<String, Value> = match args.get(1) {
+    let o: HashMap<Str, Value> = match args.get(1) {
         None | Some(Value::Nil) => HashMap::new(),
         Some(Value::Map(m)) => m.borrow().clone(),
         Some(other) => return Err(format!("websocket.connect: options must be a map, got '{}'", other.type_name())),
@@ -417,7 +418,7 @@ fn connect(args: &[Value]) -> Result<Value, String> {
         Some(v) => duration_arg(v, "websocket.connect: timeout")?,
     };
     let headers: Vec<(String, String)> = match o.get("headers") {
-        Some(Value::Map(h)) => h.borrow().iter().map(|(k, v)| (k.clone(), v.to_display_string())).collect(),
+        Some(Value::Map(h)) => h.borrow().iter().map(|(k, v)| (k.to_string(), v.to_display_string())).collect(),
         _ => Vec::new(),
     };
     let protocols = match o.get("protocols") {

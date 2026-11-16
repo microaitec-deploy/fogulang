@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value as Json};
 
 use crate::runtime::sched;
+use crate::runtime::value::Str;
 use crate::runtime::value::Value;
 
 use crate::native::json::stringify_value;
@@ -252,9 +253,9 @@ impl Drop for Conn {
 /// `mcpClient({ command, args, env, cwd, stderr } | { url, headers }, { timeout = 30s })`
 pub fn connect(args: &[Value]) -> Result<Value, String> {
     max_args(args, 1, "ai.mcpClient")?;
-    let o: HashMap<String, Value> = match args.first() {
+    let o: HashMap<Str, Value> = match args.first() {
         Some(Value::Map(m)) => m.borrow().clone(),
-        Some(Value::Str(u)) => HashMap::from([("url".to_string(), Value::Str(u.clone()))]),
+        Some(Value::Str(u)) => HashMap::from([("url".into(), Value::Str(u.clone()))]),
         _ => return Err("ai.mcpClient expects { command, args } (stdio) or { url } (HTTP)".into()),
     };
     let s = |k: &str| o.get(k).filter(|v| !matches!(v, Value::Nil)).map(|v| v.to_display_string());
@@ -270,7 +271,7 @@ pub fn connect(args: &[Value]) -> Result<Value, String> {
     };
     let pairs = |k: &str| -> Vec<(String, String)> {
         match o.get(k) {
-            Some(Value::Map(m)) => m.borrow().iter().map(|(k, v)| (k.clone(), v.to_display_string())).collect(),
+            Some(Value::Map(m)) => m.borrow().iter().map(|(k, v)| (k.to_string(), v.to_display_string())).collect(),
             _ => Vec::new(),
         }
     };

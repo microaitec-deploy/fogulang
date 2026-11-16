@@ -31,6 +31,7 @@ use prost_reflect::{DescriptorPool, DynamicMessage, SerializeOptions};
 use serde_json::{json, Value as Json};
 
 use crate::runtime::sched::{self, IoGuard};
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::grpc::RawCodec;
@@ -144,7 +145,7 @@ struct Cfg {
     connect_timeout: Duration,
 }
 
-fn get_s(m: &HashMap<String, Value>, k: &str) -> Option<String> {
+fn get_s(m: &HashMap<Str, Value>, k: &str) -> Option<String> {
     match m.get(k) {
         Some(Value::Str(s)) if !s.is_empty() => Some(s.to_string()),
         _ => None,
@@ -153,10 +154,10 @@ fn get_s(m: &HashMap<String, Value>, k: &str) -> Option<String> {
 
 /// `connect("http://host:2379" | { endpoints, endpoint, user, password, tls, timeout = 15s, connectTimeout = 5s })`
 fn parse_cfg(arg: Option<&Value>) -> Result<Cfg, String> {
-    let m: HashMap<String, Value> = match arg {
+    let m: HashMap<Str, Value> = match arg {
         None | Some(Value::Nil) => HashMap::new(),
         Some(Value::Map(m)) => m.borrow().clone(),
-        Some(Value::Str(s)) => HashMap::from([("endpoint".to_string(), Value::Str(s.clone()))]),
+        Some(Value::Str(s)) => HashMap::from([("endpoint".into(), Value::Str(s.clone()))]),
         Some(other) => return Err(format!("etcd.connect expects an options map or a url, got '{}'", other.type_name())),
     };
     let mut endpoints: Vec<String> = match m.get("endpoints") {
@@ -290,7 +291,7 @@ impl Conn {
 // requests
 // ---------------------------------------------------------------------
 
-fn opts(args: &[Value], i: usize, what: &str) -> Result<HashMap<String, Value>, String> {
+fn opts(args: &[Value], i: usize, what: &str) -> Result<HashMap<Str, Value>, String> {
     match args.get(i) {
         None | Some(Value::Nil) => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().clone()),
@@ -298,11 +299,11 @@ fn opts(args: &[Value], i: usize, what: &str) -> Result<HashMap<String, Value>, 
     }
 }
 
-fn truthy(m: &HashMap<String, Value>, k: &str) -> bool {
+fn truthy(m: &HashMap<Str, Value>, k: &str) -> bool {
     m.get(k).is_some_and(Value::is_truthy)
 }
 
-fn int_of(m: &HashMap<String, Value>, k: &str) -> Option<i64> {
+fn int_of(m: &HashMap<Str, Value>, k: &str) -> Option<i64> {
     match m.get(k) {
         Some(Value::Int(n)) => Some(*n),
         _ => None,
@@ -331,7 +332,7 @@ fn prefix_end(prefix: &str) -> Vec<u8> {
 }
 
 /// `range_end` from `{ prefix }` / `{ rangeEnd }`.
-fn range_end(key: &str, o: &HashMap<String, Value>) -> Option<String> {
+fn range_end(key: &str, o: &HashMap<Str, Value>) -> Option<String> {
     if truthy(o, "prefix") {
         Some(b64_bytes(&prefix_end(key)))
     } else {
@@ -339,7 +340,7 @@ fn range_end(key: &str, o: &HashMap<String, Value>) -> Option<String> {
     }
 }
 
-fn range_request(key: &str, o: &HashMap<String, Value>) -> Json {
+fn range_request(key: &str, o: &HashMap<Str, Value>) -> Json {
     let mut r = json!({ "key": b64(key) });
     if let Some(e) = range_end(key, o) {
         r["rangeEnd"] = e.into();
@@ -368,7 +369,7 @@ fn range_request(key: &str, o: &HashMap<String, Value>) -> Json {
     r
 }
 
-fn put_request(key: &str, value: &str, o: &HashMap<String, Value>) -> Json {
+fn put_request(key: &str, value: &str, o: &HashMap<Str, Value>) -> Json {
     let mut r = json!({ "key": b64(key), "value": b64(value) });
     if let Some(l) = int_of(o, "lease") {
         r["lease"] = l.into();
@@ -381,7 +382,7 @@ fn put_request(key: &str, value: &str, o: &HashMap<String, Value>) -> Json {
     r
 }
 
-fn delete_request(key: &str, o: &HashMap<String, Value>) -> Json {
+fn delete_request(key: &str, o: &HashMap<Str, Value>) -> Json {
     let mut r = json!({ "key": b64(key) });
     if let Some(e) = range_end(key, o) {
         r["rangeEnd"] = e.into();

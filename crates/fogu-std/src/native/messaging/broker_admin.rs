@@ -11,6 +11,7 @@ use crate::runtime::environment::Environment;
 use crate::runtime::interpreter::Interpreter;
 use crate::runtime::lexer::Lexer;
 use crate::runtime::parser::Parser;
+use crate::runtime::value::Str;
 use crate::runtime::value::Value;
 
 const SOURCE: &str = include_str!("broker_admin.fg");
@@ -27,7 +28,7 @@ pub fn intercept(callee: &Value, args: &[Value], interp: &Interpreter) -> Option
 
 fn start(broker: Value, args: &[Value], interp: &Interpreter) -> Result<Value, String> {
     crate::native::util::max_args(args, 2, "broker.admin")?;
-    let mut opts: HashMap<String, Value> = match args.get(1) {
+    let mut opts: HashMap<Str, Value> = match args.get(1) {
         None | Some(Value::Nil) => HashMap::new(),
         Some(Value::Map(m)) => m.borrow().clone(),
         Some(other) => return Err(format!("broker.admin: options must be a map, got '{}'", other.type_name())),

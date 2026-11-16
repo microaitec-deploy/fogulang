@@ -34,6 +34,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::runtime::sched;
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::json::{parse_value, stringify_value};
@@ -65,7 +66,7 @@ struct Cfg {
     name: Option<String>,
 }
 
-fn get_s(m: &HashMap<String, Value>, k: &str) -> Option<String> {
+fn get_s(m: &HashMap<Str, Value>, k: &str) -> Option<String> {
     match m.get(k) {
         Some(Value::Str(s)) if !s.is_empty() => Some(s.to_string()),
         _ => None,
@@ -400,7 +401,7 @@ fn push_arg(out: &mut Vec<Vec<u8>>, v: &Value, what: &str) -> Result<(), String>
         Value::Duration(ns) => out.push((ns / 1_000_000_000).to_string().into_bytes()),
         Value::Map(m) => {
             let m = m.borrow();
-            let mut keys: Vec<&String> = m.keys().collect();
+            let mut keys: Vec<&Str> = m.keys().collect();
             keys.sort();
             for k in keys {
                 out.push(k.as_bytes().to_vec());
@@ -459,7 +460,7 @@ fn pairs_map(r: Resp) -> Result<Value, String> {
             let mut m = HashMap::new();
             for pair in items.chunks(2) {
                 if let [k, v] = pair {
-                    m.insert(k.to_display_string(), v.clone());
+                    m.insert(Str::from(k.to_display_string()), v.clone());
                 }
             }
             Ok(Value::Map(Rc::new(RefCell::new(m))))
@@ -468,7 +469,7 @@ fn pairs_map(r: Resp) -> Result<Value, String> {
     }
 }
 
-fn opts(args: &[Value], i: usize) -> HashMap<String, Value> {
+fn opts(args: &[Value], i: usize) -> HashMap<Str, Value> {
     match args.get(i) {
         Some(Value::Map(m)) => m.borrow().clone(),
         _ => HashMap::new(),

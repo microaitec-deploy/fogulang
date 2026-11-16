@@ -38,6 +38,7 @@ use ahash::AHashMap as HashMap;
 use std::rc::Rc;
 
 use crate::runtime::interpreter::values_equal;
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef};
@@ -118,11 +119,11 @@ enum Dialect {
     Mysql,
 }
 
-fn get<'a>(m: &'a HashMap<String, Value>, k: &str) -> Option<&'a Value> {
+fn get<'a>(m: &'a HashMap<Str, Value>, k: &str) -> Option<&'a Value> {
     m.get(k).filter(|v| !matches!(v, Value::Nil))
 }
 
-fn as_map(v: &Value, what: &str) -> Result<Rc<RefCell<HashMap<String, Value>>>, String> {
+fn as_map(v: &Value, what: &str) -> Result<Rc<RefCell<HashMap<Str, Value>>>, String> {
     match v {
         Value::Map(m) => Ok(Rc::clone(m)),
         other => Err(format!("{} must be a map, got '{}'", what, other.type_name())),
@@ -133,14 +134,14 @@ fn truthy(v: Option<&Value>) -> bool {
     v.is_some_and(|v| v.is_truthy())
 }
 
-fn parse_models(models: &HashMap<String, Value>) -> Result<HashMap<String, Model>, String> {
+fn parse_models(models: &HashMap<Str, Value>) -> Result<HashMap<String, Model>, String> {
     let mut out = HashMap::new();
     for (name, def) in models {
         let def = as_map(def, &format!("model {}", name))?;
         let def = def.borrow();
         let fdefs = as_map(get(&def, "fields").ok_or(format!("model {} has no fields", name))?, "fields")?;
         let mut fields = Vec::new();
-        let mut names: Vec<String> = fdefs.borrow().keys().cloned().collect();
+        let mut names: Vec<Str> = fdefs.borrow().keys().cloned().collect();
         names.sort();
         for fname in names {
             let fd = as_map(&fdefs.borrow()[&fname], &format!("{}.{}", name, fname))?;
@@ -161,7 +162,7 @@ fn parse_models(models: &HashMap<String, Value>) -> Result<HashMap<String, Model
             };
             let primary = truthy(get(&fd, "primary")) || truthy(get(&fd, "id"));
             fields.push(Field {
-                name: fname.clone(),
+                name: fname.to_string(),
                 ty,
                 primary,
                 autoincrement: truthy(get(&fd, "autoincrement")),
@@ -195,18 +196,18 @@ fn parse_models(models: &HashMap<String, Value>) -> Result<HashMap<String, Model
                 let foreign_key =
                     s("foreignKey").ok_or(format!("relation {}.{}: missing \"foreignKey\"", name, rname))?;
                 relations.insert(
-                    rname.clone(),
+                    rname.to_string(),
                     Relation { model, kind, foreign_key, references: s("references") },
                 );
             }
         }
-        out.insert(name.clone(), Model { name: name.clone(), fields, relations });
+        out.insert(name.to_string(), Model { name: name.to_string(), fields, relations });
     }
     // relations must point to existing models and fields
     for m in out.values() {
         for (rname, r) in &m.relations {
             let target = out
-                .get(&r.model)
+                .get(r.model.as_str())
                 .ok_or(format!("relation {}.{}: unknown model '{}'", m.name, rname, r.model))?;
             let fk_owner = if fk_on_self(m, r) { m } else { target };
             if fk_owner.field(&r.foreign_key).is_none() {
@@ -631,7 +632,7 @@ fn where_sql(sql: &mut Sql, m: &Model, w: &Value) -> Result<String, String> {
         Value::Map(w) => w.borrow().clone(),
         other => return Err(format!("where must be a map, got '{}'", other.type_name())),
     };
-    let mut keys: Vec<&String> = w.keys().collect();
+    let mut keys: Vec<&Str> = w.keys().collect();
     keys.sort();
     let mut parts = Vec::new();
     for k in keys {
@@ -683,7 +684,7 @@ fn field_cond(sql: &mut Sql, f: &Field, v: &Value) -> Result<String, String> {
         }
     };
     let insensitive = matches!(ops.get("mode"), Some(Value::Str(s)) if s == "insensitive");
-    let mut keys: Vec<&String> = ops.keys().collect();
+    let mut keys: Vec<&Str> = ops.keys().collect();
     keys.sort();
     let mut parts = Vec::new();
     for op in keys {
@@ -759,7 +760,7 @@ fn order_sql(inner: &Inner, m: &Model, o: Option<&Value>) -> Result<String, Stri
     let mut parts = Vec::new();
     for it in items {
         let mm = as_map(&it, "orderBy")?;
-        let mut keys: Vec<(String, Value)> = mm.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let mut keys: Vec<(String, Value)> = mm.borrow().iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
         keys.sort_by(|a, b| a.0.cmp(&b.0));
         for (k, dir) in keys {
             if m.field(&k).is_none() {
@@ -786,7 +787,7 @@ pub struct ModelValue {
 }
 
 /// The arguments map of a model method (`{}` when omitted).
-fn args_map(args: &[Value], what: &str) -> Result<HashMap<String, Value>, String> {
+fn args_map(args: &[Value], what: &str) -> Result<HashMap<Str, Value>, String> {
     max_args(args, 1, what)?;
     match args.first() {
         None | Some(Value::Nil) => Ok(HashMap::new()),
@@ -798,16 +799,16 @@ fn args_map(args: &[Value], what: &str) -> Result<HashMap<String, Value>, String
 fn record(m: &Model, row: Value) -> Value {
     let Value::Map(r) = row else { return row };
     let r = r.borrow();
-    let pairs: HashMap<String, Value> = m
+    let pairs: HashMap<Str, Value> = m
         .fields
         .iter()
         .map(|f| {
             let v = r
-                .get(&f.name)
+                .get(f.name.as_str())
                 .or_else(|| r.iter().find(|(k, _)| k.eq_ignore_ascii_case(&f.name)).map(|(_, v)| v))
                 .cloned()
                 .unwrap_or(Value::Nil);
-            (f.name.clone(), from_db(f, v))
+            (Str::from(f.name.as_str()), from_db(f, v))
         })
         .collect();
     Value::Map(Rc::new(RefCell::new(pairs)))
@@ -828,7 +829,7 @@ impl ModelValue {
     /// SELECT … with where / orderBy / take / skip, then includes and select.
     /// `extra` restricts the rows to `field IN (values)` (relation loading);
     /// those rows keep every field until they are attached to their parents.
-    fn find_many(&self, model: &str, opts: &HashMap<String, Value>, extra: Option<(String, Vec<Value>)>) -> Result<Vec<Value>, String> {
+    fn find_many(&self, model: &str, opts: &HashMap<Str, Value>, extra: Option<(String, Vec<Value>)>) -> Result<Vec<Value>, String> {
         let nested = extra.is_some();
         let inner = &*self.inner;
         let m = inner.model(model);
@@ -876,14 +877,14 @@ impl ModelValue {
     }
 
     /// Loads `include` (and the relation keys inside `select`).
-    fn with_relations(&self, model: &str, rows: Vec<Value>, opts: &HashMap<String, Value>) -> Result<Vec<Value>, String> {
+    fn with_relations(&self, model: &str, rows: Vec<Value>, opts: &HashMap<Str, Value>) -> Result<Vec<Value>, String> {
         let m = self.inner.model(model).clone();
         let mut wanted: Vec<(String, Value)> = Vec::new();
         for key in ["include", "select"] {
             if let Some(Value::Map(inc)) = opts.get(key) {
                 for (rname, spec) in inc.borrow().iter() {
-                    if m.relations.contains_key(rname) && spec.is_truthy() {
-                        wanted.push((rname.clone(), spec.clone()));
+                    if m.relations.contains_key(rname.as_str()) && spec.is_truthy() {
+                        wanted.push((rname.to_string(), spec.clone()));
                     } else if key == "include" && spec.is_truthy() {
                         return Err(format!("include: '{}' is not a relation of model {}", rname, m.name));
                     }
@@ -893,7 +894,7 @@ impl ModelValue {
         wanted.sort_by(|a, b| a.0.cmp(&b.0));
         for (rname, spec) in wanted {
             let r = m.relations[&rname].clone();
-            let sub: HashMap<String, Value> = match &spec {
+            let sub: HashMap<Str, Value> = match &spec {
                 Value::Map(s) => s.borrow().clone(),
                 _ => HashMap::new(),
             };
@@ -930,14 +931,14 @@ impl ModelValue {
         Ok(rows)
     }
 
-    fn data(&self, opts: &HashMap<String, Value>, key: &str) -> Result<HashMap<String, Value>, String> {
+    fn data(&self, opts: &HashMap<Str, Value>, key: &str) -> Result<HashMap<Str, Value>, String> {
         match opts.get(key) {
             Some(Value::Map(d)) => Ok(d.borrow().clone()),
             _ => Err(format!("{}.{}: '{}' must be a map", accessor(&self.model), "create", key)),
         }
     }
 
-    fn insert(&self, data: HashMap<String, Value>) -> Result<Value, String> {
+    fn insert(&self, data: HashMap<Str, Value>) -> Result<Value, String> {
         let inner = &*self.inner;
         let m = self.m();
         for k in data.keys() {
@@ -949,7 +950,7 @@ impl ModelValue {
         let mut sql = Sql::new(inner);
         let mut phs = Vec::new();
         for f in &m.fields {
-            let v = match data.get(&f.name) {
+            let v = match data.get(f.name.as_str()) {
                 Some(v) if !matches!(v, Value::Nil) => v.clone(),
                 _ => match &f.default {
                     Some(Value::Str(s)) if s == "now" => Value::Str(iso(now_ms()).into()),
@@ -978,7 +979,7 @@ impl ModelValue {
             Dialect::Mysql => {
                 let (_, last) = inner.exec(&head, &sql.params)?;
                 let pk = m.pk();
-                let key = data.get(&pk.name).cloned().filter(|v| !matches!(v, Value::Nil)).or(last.map(Value::Int)).unwrap_or(Value::Nil);
+                let key = data.get(pk.name.as_str()).cloned().filter(|v| !matches!(v, Value::Nil)).or(last.map(Value::Int)).unwrap_or(Value::Nil);
                 self.by_pk(&m.name, &key)?.ok_or_else(|| io_err!("orm: the inserted row was not found"))
             }
             _ => {
@@ -999,9 +1000,9 @@ impl ModelValue {
     }
 
     /// SET clause, supporting `{ increment, decrement, multiply, divide, set }`.
-    fn set_sql(&self, sql: &mut Sql, data: &HashMap<String, Value>) -> Result<String, String> {
+    fn set_sql(&self, sql: &mut Sql, data: &HashMap<Str, Value>) -> Result<String, String> {
         let m = self.m();
-        let mut keys: Vec<&String> = data.keys().collect();
+        let mut keys: Vec<&Str> = data.keys().collect();
         keys.sort();
         let mut parts = Vec::new();
         for k in keys {
@@ -1032,15 +1033,15 @@ impl ModelValue {
         Ok(parts.join(", "))
     }
 
-    fn first_pk(&self, opts: &HashMap<String, Value>) -> Result<Option<Value>, String> {
+    fn first_pk(&self, opts: &HashMap<Str, Value>) -> Result<Option<Value>, String> {
         let mut o = HashMap::new();
-        o.insert("where".to_string(), opts.get("where").cloned().unwrap_or(Value::Nil));
-        o.insert("take".to_string(), Value::Int(1));
+        o.insert("where".into(), opts.get("where").cloned().unwrap_or(Value::Nil));
+        o.insert("take".into(), Value::Int(1));
         let rows = self.find_many(&self.model, &o, None)?;
         Ok(rows.first().map(|r| field_of(r, &self.m().pk().name)))
     }
 
-    fn update_one(&self, pk: &Value, data: &HashMap<String, Value>) -> Result<(), String> {
+    fn update_one(&self, pk: &Value, data: &HashMap<Str, Value>) -> Result<(), String> {
         let inner = &*self.inner;
         let m = self.m();
         let mut sql = Sql::new(inner);
@@ -1050,7 +1051,7 @@ impl ModelValue {
         inner.exec(&text, &sql.params).map(|_| ())
     }
 
-    fn one_with(&self, rec: Value, opts: &HashMap<String, Value>) -> Result<Value, String> {
+    fn one_with(&self, rec: Value, opts: &HashMap<Str, Value>) -> Result<Value, String> {
         let rows = self.with_relations(&self.model, vec![rec], opts)?;
         apply_select(self.m(), &rows, opts)?;
         Ok(rows.into_iter().next().unwrap_or(Value::Nil))
@@ -1058,9 +1059,9 @@ impl ModelValue {
 }
 
 /// `select`: keeps only the chosen fields (and the loaded relations).
-fn apply_select(m: &Model, rows: &[Value], opts: &HashMap<String, Value>) -> Result<(), String> {
+fn apply_select(m: &Model, rows: &[Value], opts: &HashMap<Str, Value>) -> Result<(), String> {
     if let Some(Value::Map(sel)) = opts.get("select") {
-        let keep: HashSet<String> = sel.borrow().iter().filter(|(_, v)| v.is_truthy()).map(|(k, _)| k.clone()).collect();
+        let keep: HashSet<String> = sel.borrow().iter().filter(|(_, v)| v.is_truthy()).map(|(k, _)| k.to_string()).collect();
         for k in &keep {
             if m.field(k).is_none() && !m.relations.contains_key(k) {
                 return Err(format!("select: unknown field '{}' on model {}", k, m.name));
@@ -1068,7 +1069,7 @@ fn apply_select(m: &Model, rows: &[Value], opts: &HashMap<String, Value>) -> Res
         }
         for row in rows {
             if let Value::Map(r) = row {
-                r.borrow_mut().retain(|k, _| keep.contains(k));
+                r.borrow_mut().retain(|k, _| keep.contains(k.as_str()));
             }
         }
     }
@@ -1087,7 +1088,7 @@ fn dedup(it: impl Iterator<Item = Value>) -> Vec<Value> {
 
 fn set(row: &Value, k: &str, v: Value) {
     if let Value::Map(m) = row {
-        m.borrow_mut().insert(k.to_string(), v);
+        m.borrow_mut().insert(k.into(), v);
     }
 }
 

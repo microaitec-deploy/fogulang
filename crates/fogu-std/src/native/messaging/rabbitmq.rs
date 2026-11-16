@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::runtime::sched;
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::amqp::{self, Conn, Delivery, Field, Inbox, Props, Table};
@@ -106,7 +107,7 @@ fn connect(args: &[Value]) -> Result<Value, String> {
 // Conversions
 // ---------------------------------------------------------------------
 
-fn opts(args: &[Value], i: usize, what: &str) -> Result<HashMap<String, Value>, String> {
+fn opts(args: &[Value], i: usize, what: &str) -> Result<HashMap<Str, Value>, String> {
     match args.get(i) {
         None | Some(Value::Nil) => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().clone()),
@@ -114,11 +115,11 @@ fn opts(args: &[Value], i: usize, what: &str) -> Result<HashMap<String, Value>, 
     }
 }
 
-fn flag(o: &HashMap<String, Value>, k: &str) -> bool {
+fn flag(o: &HashMap<Str, Value>, k: &str) -> bool {
     o.get(k).is_some_and(|v| v.is_truthy())
 }
 
-fn get_s(o: &HashMap<String, Value>, k: &str) -> Option<String> {
+fn get_s(o: &HashMap<Str, Value>, k: &str) -> Option<String> {
     match o.get(k) {
         Some(Value::Str(s)) if !s.is_empty() => Some(s.to_string()),
         _ => None,
@@ -144,9 +145,9 @@ fn table(v: Option<&Value>) -> Table {
     match v {
         Some(Value::Map(m)) => {
             let m = m.borrow();
-            let mut keys: Vec<&String> = m.keys().collect();
+            let mut keys: Vec<&Str> = m.keys().collect();
             keys.sort();
-            keys.into_iter().map(|k| (k.clone(), field(&m[k]))).collect()
+            keys.into_iter().map(|k| (k.to_string(), field(&m[k]))).collect()
         }
         _ => Vec::new(),
     }
@@ -179,7 +180,7 @@ fn payload(v: Option<&Value>) -> (Vec<u8>, Option<&'static str>) {
     }
 }
 
-fn properties(o: &HashMap<String, Value>, json: Option<&str>) -> Result<Props, String> {
+fn properties(o: &HashMap<Str, Value>, json: Option<&str>) -> Result<Props, String> {
     let expiration = match o.get("expiration") {
         None | Some(Value::Nil) => None,
         Some(v) => Some(duration_arg(v, "publish: expiration")?.as_millis().to_string()),

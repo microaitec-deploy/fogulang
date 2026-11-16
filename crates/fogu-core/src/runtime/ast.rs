@@ -1,3 +1,4 @@
+use super::fstr::Str;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -86,7 +87,7 @@ pub enum Expr {
     Ident(Name),
 
     List(Vec<Expr>),
-    Map(Vec<(String, Expr)>),
+    Map(Vec<(Str, Expr)>),
 
     Unary {
         op: UnaryOp,

@@ -34,6 +34,7 @@ use std::rc::Rc;
 
 use crate::runtime::environment::Environment;
 use crate::runtime::interpreter::Interpreter;
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::json::stringify_value;
@@ -302,8 +303,8 @@ fn attrs_of(v: &Value) -> Vec<(String, Value)> {
 }
 
 /// A map's entries in key order (maps are hash maps; the HTML must not vary).
-fn sorted(m: &HashMap<String, Value>) -> Vec<(String, Value)> {
-    let mut v: Vec<(String, Value)> = m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+fn sorted(m: &HashMap<Str, Value>) -> Vec<(String, Value)> {
+    let mut v: Vec<(String, Value)> = m.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
     v.sort_by(|a, b| a.0.cmp(&b.0));
     v
 }
@@ -400,26 +401,26 @@ fn page(args: &[Value]) -> Result<Value, String> {
 // ================= SIGNALS AND EXPRESSIONS =================
 
 /// The per-request state kept in `ctx.tc`: `{ signals, input, rerun, app }`.
-pub fn ctx_state(ctx: &Value) -> Option<Rc<RefCell<HashMap<String, Value>>>> {
+pub fn ctx_state(ctx: &Value) -> Option<Rc<RefCell<HashMap<Str, Value>>>> {
     let Value::Map(c) = ctx else { return None };
     if let Some(Value::Map(t)) = c.borrow().get("tc") {
         return Some(Rc::clone(t));
     }
     let t = Rc::new(RefCell::new(HashMap::from([
-        ("signals".to_string(), map(vec![])),
-        ("input".to_string(), map(vec![])),
-        ("rerun".to_string(), Value::Bool(false)),
+        (Str::from("signals"), map(vec![])),
+        ("input".into(), map(vec![])),
+        ("rerun".into(), Value::Bool(false)),
     ])));
     c.borrow_mut().insert("tc".into(), Value::Map(Rc::clone(&t)));
     Some(t)
 }
 
-fn sub_map(t: &Rc<RefCell<HashMap<String, Value>>>, k: &str) -> Rc<RefCell<HashMap<String, Value>>> {
+fn sub_map(t: &Rc<RefCell<HashMap<Str, Value>>>, k: &str) -> Rc<RefCell<HashMap<Str, Value>>> {
     if let Some(Value::Map(m)) = t.borrow().get(k) {
         return Rc::clone(m);
     }
     let m = Rc::new(RefCell::new(HashMap::new()));
-    t.borrow_mut().insert(k.to_string(), Value::Map(Rc::clone(&m)));
+    t.borrow_mut().insert(k.into(), Value::Map(Rc::clone(&m)));
     m
 }
 
@@ -438,19 +439,19 @@ fn signal(args: &[Value]) -> Result<Value, String> {
     }
     let t = ctx_state(ctx).ok_or("tc.signal: the first argument must be the request ctx")?;
     let signals = sub_map(&t, "signals");
-    if let Some(Value::Map(entry)) = signals.borrow().get(&name) {
+    if let Some(Value::Map(entry)) = signals.borrow().get(name.as_str()) {
         return Ok(NativeObjectRef::new(Signal { name, entry: Rc::clone(entry) }).to_value());
     }
     let input = sub_map(&t, "input");
-    let v = input.borrow().get(&name).cloned().unwrap_or_else(|| args[2].clone());
-    let entry = Rc::new(RefCell::new(HashMap::from([("v".to_string(), v), ("t".to_string(), Value::Bool(false))])));
-    signals.borrow_mut().insert(name.clone(), Value::Map(Rc::clone(&entry)));
+    let v = input.borrow().get(name.as_str()).cloned().unwrap_or_else(|| args[2].clone());
+    let entry = Rc::new(RefCell::new(HashMap::from([(Str::from("v"), v), ("t".into(), Value::Bool(false))])));
+    signals.borrow_mut().insert(name.as_str().into(), Value::Map(Rc::clone(&entry)));
     Ok(NativeObjectRef::new(Signal { name, entry }).to_value())
 }
 
 struct Signal {
     name: String,
-    entry: Rc<RefCell<HashMap<String, Value>>>,
+    entry: Rc<RefCell<HashMap<Str, Value>>>,
 }
 
 impl Signal {
@@ -566,7 +567,7 @@ impl AnyChecked for dyn FoguObject {
 }
 
 /// `<script data-tc-signals>` with the signals declared while rendering.
-fn signals_script(signals: &Rc<RefCell<HashMap<String, Value>>>) -> String {
+fn signals_script(signals: &Rc<RefCell<HashMap<Str, Value>>>) -> String {
     if signals.borrow().is_empty() {
         return String::new();
     }
@@ -673,8 +674,8 @@ fn render_in_page(interp: &Interpreter, env: &Rc<RefCell<Environment>>, name: &s
             }
         }
     }
-    let props = Value::Map(Rc::new(RefCell::new(values.into_iter().collect())));
-    let spec = Value::Map(Rc::new(RefCell::new(spec.into_iter().collect())));
+    let props = Value::Map(Rc::new(RefCell::new(values.into_iter().map(|(k, v)| (Str::from(k), v)).collect())));
+    let spec = Value::Map(Rc::new(RefCell::new(spec.into_iter().map(|(k, v)| (Str::from(k), v)).collect())));
     let inner = match render_shard(interp, env, func, &ctx, props)? {
         Ok(html) => html,
         Err(e) => return Ok(e),
@@ -743,7 +744,7 @@ fn ui_module() -> Value {
         ("stack", 0, |a| simple("div", "tc-stack", a, false)),
     ];
     for (n, min, f) in fns {
-        m.insert(n.to_string(), nfn_var(n, min, f));
+        m.insert(Str::from(n), nfn_var(n, min, f));
     }
     let more: [(&str, usize, fn(&[Value]) -> Result<Value, String>); 6] = [
         ("icon", 1, kit::icon),
@@ -754,17 +755,17 @@ fn ui_module() -> Value {
         ("themeToggle", 0, kit::theme_toggle),
     ];
     for (n, min, f) in more {
-        m.insert(n.to_string(), nfn_var(n, min, f));
+        m.insert(Str::from(n), nfn_var(n, min, f));
     }
-    m.insert("grid".to_string(), nfn_var("grid", 0, ui_grid));
-    m.insert("row".to_string(), nfn_var("row", 0, |a| simple("div", "tc-row", a, false)));
-    m.insert("container".to_string(), nfn_var("container", 0, |a| simple("div", "tc-container", a, false)));
+    m.insert("grid".into(), nfn_var("grid", 0, ui_grid));
+    m.insert("row".into(), nfn_var("row", 0, |a| simple("div", "tc-row", a, false)));
+    m.insert("container".into(), nfn_var("container", 0, |a| simple("div", "tc-container", a, false)));
     Value::Map(Rc::new(RefCell::new(m)))
 }
 
 /// Splits `opts` into the component's own keys and the extra attributes; the
 /// component's class comes first, a `class` from the caller is appended.
-fn split_opts(v: Option<&Value>, own: &[&str], base_class: &str) -> Result<(HashMap<String, Value>, Vec<(String, Value)>), String> {
+fn split_opts(v: Option<&Value>, own: &[&str], base_class: &str) -> Result<(HashMap<Str, Value>, Vec<(String, Value)>), String> {
     let mut mine = HashMap::new();
     let mut attrs = Vec::new();
     let mut class = base_class.to_string();
@@ -774,7 +775,7 @@ fn split_opts(v: Option<&Value>, own: &[&str], base_class: &str) -> Result<(Hash
             for (k, v) in sorted(&m.borrow()) {
                 let (k, v) = (&k, &v);
                 if own.contains(&k.as_str()) {
-                    mine.insert(k.clone(), v.clone());
+                    mine.insert(Str::from(k.as_str()), v.clone());
                 } else if k == "class" {
                     let extra = class_value(v);
                     if !extra.is_empty() {
@@ -801,11 +802,11 @@ fn set_base_class(attrs: &mut [(String, Value)], base: &str, class: String) {
     attrs[0].1 = Value::Str((class + &extra).into());
 }
 
-fn opt_str(o: &HashMap<String, Value>, k: &str) -> Option<String> {
+fn opt_str(o: &HashMap<Str, Value>, k: &str) -> Option<String> {
     o.get(k).filter(|v| !matches!(v, Value::Nil)).map(|v| v.to_display_string())
 }
 
-fn variant_class(base: &str, o: &HashMap<String, Value>, allowed: &[&str]) -> Result<String, String> {
+fn variant_class(base: &str, o: &HashMap<Str, Value>, allowed: &[&str]) -> Result<String, String> {
     let mut class = base.to_string();
     for key in ["variant", "size"] {
         if let Some(v) = opt_str(o, key) {
@@ -1014,7 +1015,7 @@ fn ui_table(a: &[Value]) -> Result<Value, String> {
         let mut tr = String::new();
         for (i, (key, _, al)) in cols.iter().enumerate() {
             let cell = match row {
-                Value::Map(m) => m.borrow().get(key).cloned().unwrap_or(Value::Nil),
+                Value::Map(m) => m.borrow().get(key.as_str()).cloned().unwrap_or(Value::Nil),
                 Value::List(l) => l.borrow().get(i).cloned().unwrap_or(Value::Nil),
                 other => if i == 0 { other.clone() } else { Value::Nil },
             };

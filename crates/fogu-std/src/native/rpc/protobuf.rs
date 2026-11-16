@@ -72,7 +72,7 @@ pub fn build() -> ModuleValue {
         let mut sources = HashMap::new();
         if let Some(Value::Map(imp)) = o.get("imports") {
             for (k, v) in imp.borrow().iter() {
-                sources.insert(k.clone(), v.to_display_string());
+                sources.insert(k.to_string(), v.to_display_string());
             }
         }
         sources.insert(name.clone(), src);

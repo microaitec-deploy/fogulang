@@ -56,6 +56,7 @@ use tonic::{Code, Status};
 use crate::runtime::environment::Environment;
 use crate::runtime::interpreter::Interpreter;
 use crate::runtime::sched::{self, IoGuard};
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef, Poller};
@@ -216,12 +217,12 @@ fn metadata_pairs(h: &http::HeaderMap) -> Vec<(String, String)> {
 }
 
 fn metadata_value(pairs: &[(String, String)]) -> Value {
-    let m: HashMap<String, Value> = pairs.iter().map(|(k, v)| (k.clone(), Value::Str(v.clone().into()))).collect();
+    let m: HashMap<Str, Value> = pairs.iter().map(|(k, v)| (k.as_str().into(), Value::Str(v.clone().into()))).collect();
     Value::Map(Rc::new(RefCell::new(m.into_iter().collect())))
 }
 
 /// `{ metadata: { k: v } }` → pairs (keys lower case, as HTTP/2 wants them).
-fn metadata_opt(o: &HashMap<String, Value>) -> Result<Vec<(String, String)>, String> {
+fn metadata_opt(o: &HashMap<Str, Value>) -> Result<Vec<(String, String)>, String> {
     match o.get("metadata") {
         None | Some(Value::Nil) => Ok(Vec::new()),
         Some(Value::Map(m)) => Ok(m.borrow().iter().map(|(k, v)| (k.to_ascii_lowercase(), v.to_display_string())).collect()),
@@ -229,7 +230,7 @@ fn metadata_opt(o: &HashMap<String, Value>) -> Result<Vec<(String, String)>, Str
     }
 }
 
-fn opts_map(v: Option<&Value>, what: &str) -> Result<HashMap<String, Value>, String> {
+fn opts_map(v: Option<&Value>, what: &str) -> Result<HashMap<Str, Value>, String> {
     match v {
         None | Some(Value::Nil) => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect()),

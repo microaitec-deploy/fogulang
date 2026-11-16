@@ -23,7 +23,7 @@ pub enum Value {
     List(Rc<RefCell<Vec<Value>>>),
     /// Mutable byte sequence (`bytes(...)`, network/file data).
     Buffer(Rc<RefCell<Vec<u8>>>),
-    Map(Rc<RefCell<HashMap<String, Value>>>),
+    Map(Rc<RefCell<HashMap<Str, Value>>>),
     Module(Rc<ModuleValue>),
     Object(NativeObjectRef),
     /// `obj.method` of a native object, not called yet (behind an `Rc` so the
@@ -321,7 +321,7 @@ impl Value {
             }
             Value::Map(m) => {
                 let b = m.borrow();
-                let mut keys: Vec<&String> = b.keys().collect();
+                let mut keys: Vec<&Str> = b.keys().collect();
                 keys.sort();
                 let items: Vec<String> = keys
                     .into_iter()

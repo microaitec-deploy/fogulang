@@ -26,6 +26,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef, Poller};
@@ -58,7 +59,7 @@ struct Cfg {
     timeout: Duration,
 }
 
-fn get_s(m: &HashMap<String, Value>, k: &str) -> Option<String> {
+fn get_s(m: &HashMap<Str, Value>, k: &str) -> Option<String> {
     match m.get(k) {
         Some(Value::Str(s)) if !s.is_empty() => Some(s.to_string()),
         _ => None,
@@ -538,14 +539,14 @@ fn guess_type(key: &str) -> &'static str {
 }
 
 impl S3Value {
-    fn bucket(&self, o: &HashMap<String, Value>, what: &str) -> Result<String, String> {
+    fn bucket(&self, o: &HashMap<Str, Value>, what: &str) -> Result<String, String> {
         get_s(o, "bucket")
             .or_else(|| self.cfg.bucket.clone())
             .ok_or_else(|| format!("{}: no bucket (pass {{ bucket }} or connect with one)", what))
     }
 }
 
-fn opts(args: &[Value], i: usize, what: &str) -> Result<HashMap<String, Value>, String> {
+fn opts(args: &[Value], i: usize, what: &str) -> Result<HashMap<Str, Value>, String> {
     match args.get(i) {
         None | Some(Value::Nil) => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().clone()),

@@ -22,6 +22,7 @@ use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 
 use pulldown_cmark::{Alignment, BlockQuoteKind, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value, ERR_VALUE_PREFIX};
 
 use crate::native::util::{list, map, max_args, nfn_var, opt_arg, str_arg};
@@ -114,7 +115,7 @@ pub fn build() -> ModuleValue {
 }
 
 /// The options map at argument `i` (missing or nil → empty).
-fn opts(a: &[Value], i: usize, what: &str) -> Result<HashMap<String, Value>, String> {
+fn opts(a: &[Value], i: usize, what: &str) -> Result<HashMap<Str, Value>, String> {
     match opt_arg(a, i) {
         None => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().clone()),

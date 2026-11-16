@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 use super::super::super::ast::*;
 use super::super::super::symbol::{self, Sym};
-use super::super::super::value::Value;
+use super::super::super::value::{Str, Value};
 use super::{Op, Proto, Reg};
 
 type CResult<T> = Result<T, String>;
@@ -40,7 +40,7 @@ struct Compiler {
     globals: Vec<(Sym, Rc<str>)>,
     names: Vec<String>,
     sites: Vec<(String, u16)>,
-    keys: Vec<Vec<String>>,
+    keys: Vec<Vec<Str>>,
     types: Vec<(String, TypeExpr)>,
     pairs: Vec<(String, String)>,
     locals: Vec<Local>,

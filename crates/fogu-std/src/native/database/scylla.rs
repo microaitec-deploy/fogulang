@@ -34,6 +34,7 @@ use scylla::value::{
 };
 use tokio::runtime::Runtime;
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef};
@@ -412,9 +413,9 @@ fn to_cql(v: &Value, ty: &ColumnType) -> Result<Option<CqlValue>, String> {
             }
             CollectionType::Map(kt, vt) => match v {
                 Value::Map(m) => {
-                    let mut entries: Vec<(&String, &Value)> = Vec::new();
+                    let mut entries: Vec<(&Str, &Value)> = Vec::new();
                     let m = m.borrow();
-                    let mut keys: Vec<&String> = m.keys().collect();
+                    let mut keys: Vec<&Str> = m.keys().collect();
                     keys.sort();
                     for k in keys {
                         entries.push((k, &m[k]));
@@ -497,17 +498,17 @@ fn from_cql(v: CqlValue) -> Value {
             list(xs.into_iter().map(from_cql).collect())
         }
         CqlValue::Map(pairs) => {
-            let m: HashMap<String, Value> = pairs
+            let m: HashMap<Str, Value> = pairs
                 .into_iter()
-                .map(|(k, v)| (from_cql(k).to_display_string(), from_cql(v)))
+                .map(|(k, v)| (Str::from(from_cql(k).to_display_string()), from_cql(v)))
                 .collect();
             Value::Map(std::rc::Rc::new(std::cell::RefCell::new(m)))
         }
         CqlValue::Tuple(xs) => list(xs.into_iter().map(|x| x.map(from_cql).unwrap_or(Value::Nil)).collect()),
         CqlValue::UserDefinedType { fields, .. } => {
-            let m: HashMap<String, Value> = fields
+            let m: HashMap<Str, Value> = fields
                 .into_iter()
-                .map(|(k, v)| (k, v.map(from_cql).unwrap_or(Value::Nil)))
+                .map(|(k, v)| (Str::from(k), v.map(from_cql).unwrap_or(Value::Nil)))
                 .collect();
             Value::Map(std::rc::Rc::new(std::cell::RefCell::new(m)))
         }

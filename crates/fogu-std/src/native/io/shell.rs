@@ -1349,7 +1349,7 @@ fn run_args(a: &[Value], what: &str) -> Result<(Script, Ctx, Vec<u8>), String> {
             let m = m.borrow();
             if let Some(Value::Map(e)) = m.get("env") {
                 for (k, v) in e.borrow().iter() {
-                    env.insert(k.clone(), v.to_display_string());
+                    env.insert(k.to_string(), v.to_display_string());
                 }
             }
             if let Some(Value::Str(d)) = m.get("cwd") {

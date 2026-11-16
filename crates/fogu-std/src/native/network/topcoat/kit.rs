@@ -3,6 +3,7 @@
 
 use ahash::AHashMap as HashMap;
 
+use crate::runtime::value::Str;
 use crate::runtime::value::Value;
 
 use super::{children, element, escape, html_value, opt_str, split_opts};
@@ -254,7 +255,7 @@ pub fn theme_toggle(a: &[Value]) -> Result<Value, String> {
 }
 
 /// The icon of a nav item, if it names one.
-pub fn nav_icon(m: &HashMap<String, Value>) -> Result<String, String> {
+pub fn nav_icon(m: &HashMap<Str, Value>) -> Result<String, String> {
     match opt_str(m, "icon") {
         Some(i) => icon_or_err(&i, 16, "", "ui.shell"),
         None => Ok(String::new()),

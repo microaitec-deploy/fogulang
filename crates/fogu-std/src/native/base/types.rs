@@ -40,6 +40,7 @@ use std::rc::Rc;
 use ahash::AHashMap as HashMap;
 
 use crate::runtime::ops::Sized;
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, StructInstance, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef};
@@ -210,7 +211,7 @@ fn to_map(v: &Value) -> Option<Value> {
         Value::Nil => new_map(HashMap::new()),
         Value::Struct(s) => {
             let s = s.borrow();
-            new_map(s.fields().map(|(k, v)| (k.clone(), v.clone())).collect())
+            new_map(s.fields().map(|(k, v)| (k.as_str().into(), v.clone())).collect())
         }
         Value::List(l) => {
             let mut out = HashMap::new();
@@ -219,7 +220,7 @@ fn to_map(v: &Value) -> Option<Value> {
                 let pair = pair.borrow();
                 match pair.as_slice() {
                     [k, v] => {
-                        out.insert(k.to_display_string(), v.clone());
+                        out.insert(Str::from(k.to_display_string()), v.clone());
                     }
                     _ => return None,
                 }
@@ -230,7 +231,7 @@ fn to_map(v: &Value) -> Option<Value> {
     })
 }
 
-fn new_map(m: HashMap<String, Value>) -> Value {
+fn new_map(m: HashMap<Str, Value>) -> Value {
     Value::Map(Rc::new(RefCell::new(m.into_iter().collect())))
 }
 
@@ -372,7 +373,7 @@ fn check_name(v: &Value, s: &str, path: &str, errs: &mut Vec<String>, all: bool,
             return Ok(());
         };
         let item = Value::Str(inner.trim().into());
-        let mut keys: Vec<String> = m.borrow().keys().cloned().collect();
+        let mut keys: Vec<Str> = m.borrow().keys().cloned().collect();
         keys.sort();
         let mut built = HashMap::new();
         for k in keys {
@@ -468,17 +469,17 @@ fn check_list(v: &Value, item: &Value, path: &str, errs: &mut Vec<String>, all: 
 }
 
 /// The fields of a map or a struct.
-fn fields_of(v: &Value) -> Option<HashMap<String, Value>> {
+fn fields_of(v: &Value) -> Option<HashMap<Str, Value>> {
     match v {
         Value::Map(m) => Some(m.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
-        Value::Struct(s) => Some(s.borrow().fields().map(|(k, v)| (k.clone(), v.clone())).collect()),
+        Value::Struct(s) => Some(s.borrow().fields().map(|(k, v)| (k.as_str().into(), v.clone())).collect()),
         _ => None,
     }
 }
 
 fn check_fields(
     v: &Value,
-    spec: &HashMap<String, Value>,
+    spec: &HashMap<Str, Value>,
     strict: bool,
     path: &str,
     errs: &mut Vec<String>,
@@ -489,7 +490,7 @@ fn check_fields(
         errs.push(format!("{}: expected map, got {}", at(path), describe(v)));
         return Ok(());
     };
-    let mut built: HashMap<String, Value> = fields.clone();
+    let mut built: HashMap<Str, Value> = fields.clone();
     let mut known = Vec::new();
     for (key, fspec) in sorted(spec) {
         let (name, optional) = match key.strip_suffix('?') {
@@ -498,10 +499,10 @@ fn check_fields(
         };
         known.push(name.clone());
         let dflt = default_of(&fspec);
-        match fields.get(&name) {
+        match fields.get(name.as_str()) {
             None | Some(Value::Nil) if dflt.is_some() => {
                 if out.is_some() {
-                    built.insert(name, dflt.unwrap_or(Value::Nil));
+                    built.insert(name.into(), dflt.unwrap_or(Value::Nil));
                 }
             }
             None | Some(Value::Nil) if optional => {}
@@ -510,13 +511,13 @@ fn check_fields(
                 let mut o = out.as_ref().map(|_| Value::Nil);
                 check(x, &fspec, &join(path, &name), errs, all, &mut o)?;
                 if let Some(o) = o {
-                    built.insert(name, o);
+                    built.insert(name.into(), o);
                 }
             }
         }
     }
     if strict {
-        let mut extra: Vec<&String> = fields.keys().filter(|k| !known.contains(k)).collect();
+        let mut extra: Vec<&Str> = fields.keys().filter(|k| !known.iter().any(|n| n.as_str() == k.as_str())).collect();
         extra.sort();
         for k in extra {
             errs.push(format!("{}: unknown field", join(path, k)));
@@ -532,15 +533,15 @@ fn check_fields(
 }
 
 /// The entries of a map spec in a stable order.
-fn sorted(m: &HashMap<String, Value>) -> Vec<(String, Value)> {
-    let mut v: Vec<(String, Value)> = m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+fn sorted(m: &HashMap<Str, Value>) -> Vec<(String, Value)> {
+    let mut v: Vec<(String, Value)> = m.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
     v.sort_by(|a, b| a.0.cmp(&b.0));
     v
 }
 
 fn check_constrained(
     v: &Value,
-    m: &HashMap<String, Value>,
+    m: &HashMap<Str, Value>,
     path: &str,
     errs: &mut Vec<String>,
     all: bool,
@@ -679,7 +680,7 @@ fn check_map_values(v: &Value, item: &Value, path: &str, errs: &mut Vec<String>,
         errs.push(format!("{}: expected map, got {}", at(path), describe(v)));
         return Ok(());
     };
-    let mut keys: Vec<String> = m.borrow().keys().cloned().collect();
+    let mut keys: Vec<Str> = m.borrow().keys().cloned().collect();
     keys.sort();
     let mut built = HashMap::new();
     for k in keys {
@@ -719,15 +720,15 @@ fn apply_defaults(v: &Value, spec: &Value) -> Value {
         }
         for (key, fspec) in sorted(&fields.borrow()) {
             let name = key.strip_suffix('?').unwrap_or(&key).to_string();
-            match built.get(&name) {
+            match built.get(name.as_str()) {
                 None | Some(Value::Nil) => {
                     if let Some(d) = default_of(&fspec) {
-                        built.insert(name, d);
+                        built.insert(name.into(), d);
                     }
                 }
                 Some(x) => {
                     let filled = apply_defaults(x, &fspec);
-                    built.insert(name, filled);
+                    built.insert(name.into(), filled);
                 }
             }
         }
@@ -753,7 +754,7 @@ fn apply_defaults(v: &Value, spec: &Value) -> Value {
 #[derive(Clone)]
 pub struct Schema {
     /// the constrained spec (`$type` and the constraints)
-    spec: HashMap<String, Value>,
+    spec: HashMap<Str, Value>,
     /// `.optional()`: as a field of `types.object`, the key becomes `"name?"`
     optional: bool,
 }
@@ -761,13 +762,13 @@ pub struct Schema {
 impl Schema {
     fn of_type(t: Value) -> Schema {
         let mut spec = HashMap::new();
-        spec.insert("$type".to_string(), t);
+        spec.insert("$type".into(), t);
         Schema { spec, optional: false }
     }
 
     fn with(&self, key: &str, v: Value) -> Value {
         let mut s = self.clone();
-        s.spec.insert(key.to_string(), v);
+        s.spec.insert(key.into(), v);
         NativeObjectRef::new(s).to_value()
     }
 
@@ -1001,7 +1002,7 @@ fn install_schema(e: &mut HashMap<String, Value>) {
         let mut built = HashMap::new();
         for (k, v) in fields.borrow().iter() {
             let (spec, optional) = spec_arg(v);
-            let key = if optional && !k.ends_with('?') { format!("{}?", k) } else { k.clone() };
+            let key: Str = if optional && !k.ends_with('?') { format!("{}?", k).into() } else { k.clone() };
             built.insert(key, spec);
         }
         let mut s = Schema::of_type(Value::Str("map".into()));

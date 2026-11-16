@@ -31,6 +31,7 @@ use tokio::net::TcpListener;
 use crate::runtime::environment::Environment;
 use crate::runtime::interpreter::Interpreter;
 use crate::runtime::sched;
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, NativeFnValue, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef};
@@ -257,7 +258,7 @@ pub fn send_response(resp: Value, tx: Reply) {
                     .borrow()
                     .iter()
                     .filter_map(|(k, v)| match v {
-                        Value::Str(s) => Some((k.clone(), s.to_string())),
+                        Value::Str(s) => Some((k.to_string(), s.to_string())),
                         _ => None,
                     })
                     .collect(),
@@ -828,7 +829,7 @@ impl FoguObject for RequestValue {
             "upgrade" => Some(Value::Bool(self.upgrade)),
             "remote" => Some(Value::Str(self.remote.clone().into())),
             "headers" => {
-                let m: HashMap<String, Value> = self.headers.iter().map(|(k, v)| (k.clone(), Value::Str(v.clone().into()))).collect();
+                let m: HashMap<Str, Value> = self.headers.iter().map(|(k, v)| (k.as_str().into(), Value::Str(v.clone().into()))).collect();
                 Some(Value::Map(Rc::new(RefCell::new(m))))
             }
             _ => None,
@@ -937,15 +938,15 @@ pub fn parse_multipart(body: &[u8], boundary: &str) -> Result<Vec<Part>, String>
 }
 
 fn form_value(content_type: &str, body: &[u8]) -> Result<Value, String> {
-    let mut out: HashMap<String, Value> = HashMap::new();
-    let mut add = |name: String, v: Value| match out.get_mut(&name) {
+    let mut out: HashMap<Str, Value> = HashMap::new();
+    let mut add = |name: String, v: Value| match out.get_mut(name.as_str()) {
         Some(Value::List(l)) => l.borrow_mut().push(v),
         Some(existing) => {
             let first = existing.clone();
             *existing = crate::native::util::list(vec![first, v]);
         }
         None => {
-            out.insert(name, v);
+            out.insert(name.into(), v);
         }
     };
     let ct = content_type.to_lowercase();
@@ -1054,7 +1055,7 @@ impl FoguObject for ResponseValue {
             "status" => Some(Value::Int(self.status)),
             "body" => Some(Value::Str(self.body.clone().into())),
             "headers" => {
-                let m: HashMap<String, Value> = self.headers.iter().map(|(k, v)| (k.clone(), Value::Str(v.clone().into()))).collect();
+                let m: HashMap<Str, Value> = self.headers.iter().map(|(k, v)| (k.as_str().into(), Value::Str(v.clone().into()))).collect();
                 Some(Value::Map(Rc::new(RefCell::new(m))))
             }
             _ => None,

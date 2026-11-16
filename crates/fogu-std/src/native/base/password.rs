@@ -31,6 +31,7 @@ use argon2::password_hash::{self, PasswordHash, PasswordHasher, PasswordVerifier
 use base64::Engine as _;
 use hmac::{Hmac, Mac};
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::util::{list, map, max_args, nfn_var, opt_arg, str_arg};
@@ -78,13 +79,13 @@ const ALGORITHMS: [&str; 7] = ["argon2id", "argon2i", "argon2d", "bcrypt", "scry
 
 const HASH_KEYS: [&str; 10] = ["algorithm", "memory", "time", "parallelism", "cost", "n", "r", "p", "iterations", "pepper"];
 
-fn opts(v: Option<&Value>, keys: &[&str], what: &str) -> Result<HashMap<String, Value>, String> {
-    let m: HashMap<String, Value> = match v {
+fn opts(v: Option<&Value>, keys: &[&str], what: &str) -> Result<HashMap<Str, Value>, String> {
+    let m: HashMap<Str, Value> = match v {
         None | Some(Value::Nil) => return Ok(HashMap::new()),
         Some(Value::Map(m)) => m.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         Some(other) => return Err(format!("{}: options must be a map, got '{}'", what, other.type_name())),
     };
-    let mut names: Vec<&String> = m.keys().collect();
+    let mut names: Vec<&Str> = m.keys().collect();
     names.sort();
     for k in names {
         if !keys.contains(&k.as_str()) {
@@ -94,7 +95,7 @@ fn opts(v: Option<&Value>, keys: &[&str], what: &str) -> Result<HashMap<String, 
     Ok(m)
 }
 
-fn opt_u32(o: &HashMap<String, Value>, k: &str, lo: u32, hi: u32, what: &str) -> Result<Option<u32>, String> {
+fn opt_u32(o: &HashMap<Str, Value>, k: &str, lo: u32, hi: u32, what: &str) -> Result<Option<u32>, String> {
     match o.get(k) {
         None | Some(Value::Nil) => Ok(None),
         Some(Value::Int(i)) if (lo as i64..=hi as i64).contains(i) => Ok(Some(*i as u32)),
@@ -103,7 +104,7 @@ fn opt_u32(o: &HashMap<String, Value>, k: &str, lo: u32, hi: u32, what: &str) ->
     }
 }
 
-fn opt_bool(o: &HashMap<String, Value>, k: &str, default: bool, what: &str) -> Result<bool, String> {
+fn opt_bool(o: &HashMap<Str, Value>, k: &str, default: bool, what: &str) -> Result<bool, String> {
     match o.get(k) {
         None | Some(Value::Nil) => Ok(default),
         Some(Value::Bool(b)) => Ok(*b),
@@ -111,7 +112,7 @@ fn opt_bool(o: &HashMap<String, Value>, k: &str, default: bool, what: &str) -> R
     }
 }
 
-fn pepper_opt(o: &HashMap<String, Value>, what: &str) -> Result<Option<Vec<u8>>, String> {
+fn pepper_opt(o: &HashMap<Str, Value>, what: &str) -> Result<Option<Vec<u8>>, String> {
     match o.get("pepper") {
         None | Some(Value::Nil) => Ok(None),
         Some(Value::Str(s)) if !s.is_empty() => Ok(Some(s.as_bytes().to_vec())),

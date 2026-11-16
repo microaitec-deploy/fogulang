@@ -161,7 +161,7 @@ fn fields_of(v: Option<&Value>, what: &str) -> Result<Vec<(String, Value)>, Stri
     match v {
         None | Some(Value::Nil) => Ok(Vec::new()),
         Some(Value::Map(m)) => {
-            let mut f: Vec<(String, Value)> = m.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let mut f: Vec<(String, Value)> = m.borrow().iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
             f.sort_by(|a, b| a.0.cmp(&b.0));
             Ok(f)
         }

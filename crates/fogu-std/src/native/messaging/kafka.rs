@@ -34,6 +34,7 @@ use rskafka::client::{Client, ClientBuilder, Credentials, SaslConfig};
 use rskafka::record::{Record, RecordAndOffset};
 
 use crate::runtime::sched;
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef, Poller};
@@ -52,7 +53,7 @@ fn kerr(what: &str, e: impl std::fmt::Display) -> String {
     io_err!("kafka.{}: {}", what, e)
 }
 
-fn opts(v: Option<&Value>, what: &str) -> Result<HashMap<String, Value>, String> {
+fn opts(v: Option<&Value>, what: &str) -> Result<HashMap<Str, Value>, String> {
     match v {
         None | Some(Value::Nil) => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
@@ -60,7 +61,7 @@ fn opts(v: Option<&Value>, what: &str) -> Result<HashMap<String, Value>, String>
     }
 }
 
-fn int_opt(o: &HashMap<String, Value>, k: &str) -> Option<i64> {
+fn int_opt(o: &HashMap<Str, Value>, k: &str) -> Option<i64> {
     match o.get(k) {
         Some(Value::Int(i)) => Some(*i),
         _ => None,
@@ -193,9 +194,9 @@ fn payload(v: &Value) -> Option<Vec<u8>> {
 }
 
 /// `value` or `{ value, key, headers }` (for sendBatch) + options → a record.
-fn out_record(value: &Value, o: &HashMap<String, Value>) -> Out {
+fn out_record(value: &Value, o: &HashMap<Str, Value>) -> Out {
     let headers = match o.get("headers") {
-        Some(Value::Map(h)) => h.borrow().iter().map(|(k, v)| (k.clone(), v.to_display_string().into_bytes())).collect(),
+        Some(Value::Map(h)) => h.borrow().iter().map(|(k, v)| (k.to_string(), v.to_display_string().into_bytes())).collect(),
         _ => BTreeMap::new(),
     };
     Out { key: o.get("key").and_then(payload), value: payload(value), headers }
@@ -206,7 +207,7 @@ fn key_hash(k: &[u8]) -> u64 {
     k.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x100000001b3))
 }
 
-fn compression(o: &HashMap<String, Value>) -> Result<Compression, String> {
+fn compression(o: &HashMap<Str, Value>) -> Result<Compression, String> {
     Ok(match o.get("compression").map(|v| v.to_display_string()).as_deref() {
         None | Some("none") => Compression::NoCompression,
         Some("gzip") => Compression::Gzip,
@@ -297,9 +298,9 @@ impl FoguObject for Kafka {
                             Ok(out)
                         },
                         |v| {
-                            let m: HashMap<String, Value> = v
+                            let m: HashMap<Str, Value> = v
                                 .into_iter()
-                                .map(|(p, e, l)| (p.to_string(), map(vec![("earliest", Value::Int(e)), ("latest", Value::Int(l))])))
+                                .map(|(p, e, l)| (Str::from(p.to_string()), map(vec![("earliest", Value::Int(e)), ("latest", Value::Int(l))])))
                                 .collect();
                             Ok(Value::Map(Rc::new(RefCell::new(m.into_iter().collect()))))
                         },
@@ -493,7 +494,7 @@ pub struct Consumer {
 fn record_value(topic: &str, i: In) -> Value {
     let r = i.rec.record;
     let text = |b: Option<Vec<u8>>| b.map(|b| Value::Str(String::from_utf8_lossy(&b).into_owned().into())).unwrap_or(Value::Nil);
-    let headers: HashMap<String, Value> = r.headers.into_iter().map(|(k, v)| (k, Value::Str(String::from_utf8_lossy(&v).into_owned().into()))).collect();
+    let headers: HashMap<Str, Value> = r.headers.into_iter().map(|(k, v)| (Str::from(k), Value::Str(String::from_utf8_lossy(&v).into_owned().into()))).collect();
     NativeObjectRef::new(KafkaRecord {
         fields: vec![
             ("topic", Value::Str(topic.to_string().into())),
@@ -587,7 +588,7 @@ impl FoguObject for Consumer {
         match field {
             "topic" => Some(Value::Str(self.topic.clone().into())),
             "offsets" => {
-                let m: HashMap<String, Value> = self.st.borrow().offsets.iter().map(|(p, o)| (p.to_string(), Value::Int(*o))).collect();
+                let m: HashMap<Str, Value> = self.st.borrow().offsets.iter().map(|(p, o)| (Str::from(p.to_string()), Value::Int(*o))).collect();
                 Some(Value::Map(Rc::new(RefCell::new(m.into_iter().collect()))))
             }
             "buffered" => Some(Value::Int(self.st.borrow().buffer.len() as i64)),

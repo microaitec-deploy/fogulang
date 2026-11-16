@@ -35,6 +35,7 @@ use console::{Color, Style, Term};
 use dialoguer::theme::ColorfulTheme;
 use indicatif::{ProgressBar, ProgressStyle};
 
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::object::{FoguObject, NativeObjectRef};
@@ -96,7 +97,7 @@ pub fn build() -> ModuleValue {
 // Prompts
 // ---------------------------------------------------------------------
 
-fn opts_of(args: &[Value], i: usize, what: &str) -> Result<HashMap<String, Value>, String> {
+fn opts_of(args: &[Value], i: usize, what: &str) -> Result<HashMap<Str, Value>, String> {
     match args.get(i) {
         None | Some(Value::Nil) => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().clone()),
@@ -695,7 +696,7 @@ fn table(args: &[Value]) -> Result<Value, String> {
     };
     if headers.is_none() {
         if let Some(Value::Map(m)) = rows.first() {
-            let mut keys: Vec<String> = m.borrow().keys().cloned().collect();
+            let mut keys: Vec<String> = m.borrow().keys().map(|k| k.to_string()).collect();
             keys.sort();
             headers = Some(keys);
         }
@@ -729,7 +730,7 @@ fn table(args: &[Value]) -> Result<Value, String> {
             Value::List(l) => l.borrow().iter().map(cell).collect(),
             Value::Map(m) => {
                 let m = m.borrow();
-                headers.as_ref().map(|h| h.iter().map(|k| m.get(k).map(cell).unwrap_or_default()).collect()).unwrap_or_default()
+                headers.as_ref().map(|h| h.iter().map(|k| m.get(k.as_str()).map(cell).unwrap_or_default()).collect()).unwrap_or_default()
             }
             other => vec![cell(other)],
         };
@@ -746,7 +747,7 @@ fn table(args: &[Value]) -> Result<Value, String> {
             && rows.iter().all(|r| {
                 let v = match r {
                     Value::List(l) => l.borrow().get(i).cloned(),
-                    Value::Map(m) => headers.as_ref().and_then(|h| h.get(i)).and_then(|k| m.borrow().get(k).cloned()),
+                    Value::Map(m) => headers.as_ref().and_then(|h| h.get(i)).and_then(|k| m.borrow().get(k.as_str()).cloned()),
                     _ => None,
                 };
                 matches!(v, Some(Value::Int(_) | Value::Float(_)) | None)
@@ -776,7 +777,7 @@ struct ArgSpec {
     multiple: bool,
 }
 
-fn s_of(m: &HashMap<String, Value>, k: &str) -> Option<String> {
+fn s_of(m: &HashMap<Str, Value>, k: &str) -> Option<String> {
     match m.get(k) {
         Some(Value::Str(s)) => Some(s.to_string()),
         _ => None,
@@ -784,7 +785,7 @@ fn s_of(m: &HashMap<String, Value>, k: &str) -> Option<String> {
 }
 
 /// Builds a clap command from `{ name, version, about, args: [...], commands: [...] }`.
-fn command_of(spec: &HashMap<String, Value>, fallback: &str) -> Result<(clap::Command, Vec<ArgSpec>), String> {
+fn command_of(spec: &HashMap<Str, Value>, fallback: &str) -> Result<(clap::Command, Vec<ArgSpec>), String> {
     use clap::{Arg, ArgAction, Command};
     let name = s_of(spec, "name").unwrap_or_else(|| fallback.to_string());
     let mut cmd = Command::new(name);
@@ -874,7 +875,7 @@ fn command_of(spec: &HashMap<String, Value>, fallback: &str) -> Result<(clap::Co
     Ok((cmd, specs))
 }
 
-fn matches_value(spec: &HashMap<String, Value>, m: &clap::ArgMatches, fallback: &str) -> Result<Value, String> {
+fn matches_value(spec: &HashMap<Str, Value>, m: &clap::ArgMatches, fallback: &str) -> Result<Value, String> {
     let (_, specs) = command_of(spec, fallback)?;
     let mut out: Vec<(String, Value)> = Vec::new();
     for a in &specs {
@@ -912,7 +913,7 @@ fn matches_value(spec: &HashMap<String, Value>, m: &clap::ArgMatches, fallback: 
     }
     let mut map = HashMap::new();
     for (k, v) in out {
-        map.insert(k, v);
+        map.insert(Str::from(k), v);
     }
     Ok(Value::Map(std::rc::Rc::new(RefCell::new(map))))
 }

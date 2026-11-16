@@ -1,0 +1,24 @@
+1 2 15 16
+long long utf8 empty
+true false false default
+[, Z, a, a_key_longer_than_fifteen_bytes, ação, b, fifteen_bytes_k, sixteen_bytes_ke, zeta]
+ empty
+Z 0
+a 1
+a_key_longer_than_fifteen_bytes long
+ação utf8
+b 2
+fifteen_bytes_k 15
+sixteen_bytes_ke 16
+zeta 26
+k 1
+long_key_number_one_here 1
+long_key_number_two_here 2
+{"":"empty","Z":0,"a":1,"a_key_longer_than_fifteen_bytes":"long","ação":"utf8","b":2,"fifteen_bytes_k":15,"sixteen_bytes_ke":16,"zeta":26}
+{: empty, Z: 0, a: 1, a_key_longer_than_fifteen_bytes: long, ação: utf8, b: 2, fifteen_bytes_k: 15, sixteen_bytes_ke: 16, zeta: 26}
+9 a_key_longer_than_fifteen_bytes 31 a_key_longer_than_fifteen_bytes? true
+2 nil 8 again 100
+{a: 1, c: 3, shared_long_key_in_both_maps: right}
+[{a_rather_long_field_name: 0, index: 99}, {a_rather_long_field_name: -1, index: 1}, {a_rather_long_field_name: 4, index: 2}]
+1 2 [a key with spaces and more than 15 bytes, short]
+{brown: 1, dog: 1, end: 1, fox: 1, jumps: 1, lazy: 1, over: 1, quick: 1, the: 3}

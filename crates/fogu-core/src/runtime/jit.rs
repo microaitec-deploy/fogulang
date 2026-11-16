@@ -39,7 +39,7 @@ use super::ast::*;
 use super::environment::{redefine_epoch, Environment};
 use super::ops;
 use super::sched;
-use super::value::{display_float, FnValue, Value};
+use super::value::{display_float, FnValue, Str, Value};
 
 // ======================================================================
 // Configuration
@@ -393,7 +393,7 @@ extern "C" fn h_v_map_set(m: i64, kp: i64, kn: i64, v: i64) {
     // boxed map from `h_v_map`, still owned by native code
     let key = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(kp as *const u8, kn as usize)) };
     if let Value::Map(x) = unsafe { &*(m as *const Value) } {
-        x.borrow_mut().insert(key.to_string(), vtake(v));
+        x.borrow_mut().insert(key.into(), vtake(v));
     }
 }
 extern "C" fn h_list_push_v(list: i64, v: i64) {
@@ -439,7 +439,7 @@ extern "C" fn h_list_len(list: i64) -> i64 {
     l.borrow().len() as i64
 }
 extern "C" fn h_map_len(map: i64) -> i64 {
-    let m = unsafe { &*(map as *const RefCell<HashMap<String, Value>>) };
+    let m = unsafe { &*(map as *const RefCell<HashMap<Str, Value>>) };
     m.borrow().len() as i64
 }
 /// Element `idx` of the snapshot `items` (a `*const Value` array), typed.
@@ -527,7 +527,7 @@ extern "C" fn h_list_get_bool(ctx: *mut JitCtx, list: i64, i: i64) -> i64 {
 fn map_at(map: i64, b: i64) -> Option<Value> {
     // SAFETY: `b` comes from `h_sb_new` and is consumed exactly once here
     let key = unsafe { Box::from_raw(b as *mut String) };
-    let m = unsafe { &*(map as *const RefCell<HashMap<String, Value>>) };
+    let m = unsafe { &*(map as *const RefCell<HashMap<Str, Value>>) };
     let r = m.borrow().get(key.as_str()).cloned();
     r
 }
@@ -562,8 +562,8 @@ extern "C" fn h_map_get_bool(ctx: *mut JitCtx, map: i64, b: i64) -> i64 {
 fn map_set(map: i64, b: i64, v: Value) {
     // SAFETY: `b` comes from `h_sb_new` and is consumed exactly once here
     let key = unsafe { Box::from_raw(b as *mut String) };
-    let m = unsafe { &*(map as *const RefCell<HashMap<String, Value>>) };
-    m.borrow_mut().insert(*key, v);
+    let m = unsafe { &*(map as *const RefCell<HashMap<Str, Value>>) };
+    m.borrow_mut().insert(Str::from(*key), v);
 }
 extern "C" fn h_map_set_i64(map: i64, b: i64, v: i64) {
     map_set(map, b, Value::Int(v));

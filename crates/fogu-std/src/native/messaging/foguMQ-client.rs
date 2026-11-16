@@ -56,6 +56,7 @@ use tokio::sync::{oneshot, Mutex, Notify};
 use tokio::time::timeout;
 
 use crate::runtime::sched;
+use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::json::stringify_value;
@@ -1503,7 +1504,7 @@ fn opt_str(args: &[Value], i: usize, what: &str) -> Result<String, String> {
 }
 
 /// `opts.key` as a non-negative int that fits `max`.
-fn opt_int(m: &HashMap<String, Value>, key: &str, max: i64, what: &str) -> Result<Option<i64>, String> {
+fn opt_int(m: &HashMap<Str, Value>, key: &str, max: i64, what: &str) -> Result<Option<i64>, String> {
     match m.get(key) {
         None | Some(Value::Nil) => Ok(None),
         Some(Value::Int(n)) if (0..=max).contains(n) => Ok(Some(*n)),
@@ -1512,7 +1513,7 @@ fn opt_int(m: &HashMap<String, Value>, key: &str, max: i64, what: &str) -> Resul
 }
 
 /// `opts.key` as milliseconds (a duration or an int).
-fn opt_ms(m: &HashMap<String, Value>, key: &str, what: &str) -> Result<Option<u32>, String> {
+fn opt_ms(m: &HashMap<Str, Value>, key: &str, what: &str) -> Result<Option<u32>, String> {
     match m.get(key) {
         None | Some(Value::Nil) => Ok(None),
         Some(v) => {
@@ -1522,7 +1523,7 @@ fn opt_ms(m: &HashMap<String, Value>, key: &str, what: &str) -> Result<Option<u3
     }
 }
 
-fn opts_map(args: &[Value], i: usize, what: &str) -> Result<HashMap<String, Value>, String> {
+fn opts_map(args: &[Value], i: usize, what: &str) -> Result<HashMap<Str, Value>, String> {
     match opt_arg(args, i) {
         None => Ok(HashMap::new()),
         Some(Value::Map(m)) => Ok(m.borrow().clone()),

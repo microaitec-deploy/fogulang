@@ -67,7 +67,7 @@ fn err_payload(code: &str) -> Vec<u8> {
 fn headers_of(v: Option<&Value>) -> Vec<(String, String)> {
     match v {
         Some(Value::Map(m)) => {
-            let mut h: Vec<(String, String)> = m.borrow().iter().map(|(k, v)| (k.clone(), v.to_display_string())).collect();
+            let mut h: Vec<(String, String)> = m.borrow().iter().map(|(k, v)| (k.to_string(), v.to_display_string())).collect();
             h.sort();
             h
         }
