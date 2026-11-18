@@ -6,6 +6,8 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
+- Built with Rust 1.100.0 (`rust-toolchain.toml`; the build image `docker/Dockerfile` is pinned to `rust:1.100.0-bookworm` instead of the moving `rust:1`).
+
 ### Added
 
 - **Bytecode VM, opt-in** (`--engine=vm`, `FOGU_ENGINE=vm`): a function body is compiled to

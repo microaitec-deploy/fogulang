@@ -1,7 +1,7 @@
 
 # syntax=docker/dockerfile:1.7
 
-FROM rust:1-bookworm AS toolchain
+FROM rust:1.100.0-bookworm AS toolchain
 
 ARG DEBIAN_FRONTEND=noninteractive
 
