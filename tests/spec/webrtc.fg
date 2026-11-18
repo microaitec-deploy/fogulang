@@ -35,6 +35,12 @@ print(typeof(bin), bin.toList())
 other.send(bytes([250, 0]))
 print(ch.recv(5s).toList())
 print(other.recv(100ms))
+// a message larger than the send buffer is an error value (it used to be lost
+// and to block every later message)
+const big = ch.send("y".repeat(200000))
+print(typeof(big), big.message)
+ch.send("after the big one")
+print(other.recv(5s))
 
 // a channel `b` opens after the connection; handlers on `a`
 const got = chan(4)

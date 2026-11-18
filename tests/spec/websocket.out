@@ -5,3 +5,5 @@ nil
 false 1000
 chat:yo
 [fast, slow]
+error
+chat chat

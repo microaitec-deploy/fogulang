@@ -49,3 +49,22 @@ c2.disconnect()
 ws.disconnect()
 io.close()
 io2.close()
+
+// a server handler can ask a client for an ack and disconnect it (both used
+// to panic outside the runtime), and a client cannot raise "disconnect"
+const io3 = socketio.server()
+const log3 = []
+io3.on("connection", fn(s) {
+    s.on("disconnect", fn(reason) { log3.push("disconnect " + reason) })
+    s.on("ask", fn() {
+        log3.push("ack " + typeof(s.emitWithAck("q", 1, { timeout: 300ms })))
+        s.disconnect()
+    })
+})
+const p3 = io3.listen("127.0.0.1:0")
+const c3 = socketio.connect("http://127.0.0.1:" + str(p3))?
+c3.emit("disconnect", "forged")
+c3.emit("ask")
+time.delay(1s)
+print(log3)
+io3.close()

@@ -302,8 +302,8 @@ impl GrpcServer {
             return Err("listen: the server is already listening".into());
         }
         let addr = match args.first() {
-            Some(Value::Int(p)) => format!("0.0.0.0:{}", p),
-            Some(Value::Str(s)) if s.starts_with(':') => format!("0.0.0.0{}", s),
+            Some(Value::Int(p)) => format!("127.0.0.1:{}", p), // like app.listen: the network only when asked ("0.0.0.0:port")
+            Some(Value::Str(s)) if s.starts_with(':') => format!("127.0.0.1{}", s),
             Some(Value::Str(s)) => s.to_string(),
             _ => return Err("listen(port | \"host:port\", { cert, key })".into()),
         };
@@ -767,9 +767,17 @@ async fn start_call(
     grpc.ready().await.map_err(|e| io_err!("grpc: UNAVAILABLE: {}", e))?;
     let mut req = tonic::Request::new(tokio_stream::iter(msgs));
     for (k, v) in metadata {
+        // `-bin` keys carry binary values (base64 on the wire); a bad key or
+        // value is an error value of the call, not the end of the program
+        if k.ends_with("-bin") {
+            let key = tonic::metadata::MetadataKey::<tonic::metadata::Binary>::from_bytes(k.as_bytes())
+                .map_err(|_| io_err!("grpc: invalid metadata key '{}'", k))?;
+            req.metadata_mut().insert_bin(key, tonic::metadata::MetadataValue::from_bytes(v.as_bytes()));
+            continue;
+        }
         let key = tonic::metadata::MetadataKey::<tonic::metadata::Ascii>::from_bytes(k.as_bytes())
-            .map_err(|_| format!("grpc: invalid metadata key '{}'", k))?;
-        let val = v.parse().map_err(|_| format!("grpc: invalid metadata value for '{}'", k))?;
+            .map_err(|_| io_err!("grpc: invalid metadata key '{}'", k))?;
+        let val = v.parse().map_err(|_| io_err!("grpc: invalid metadata value for '{}'", k))?;
         req.metadata_mut().insert(key, val);
     }
     if let Some(t) = timeout {

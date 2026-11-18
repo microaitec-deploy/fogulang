@@ -9,6 +9,8 @@ hello from b
 buffer [1, 2, 3]
 [250, 0]
 nil
+error webrtc: a message of 200000 bytes is larger than the maximum of 131072 bytes (split it)
+after the big one
 events: one
 events: two
 events 2

@@ -4,3 +4,4 @@ welcome {id: true} 3 true true
 [conn {token: t1}, chat hi, pair 1 two, chat ack-me, bye client has manually disconnected the socket from the namespace]
 pong 7
 pong ws
+[ack error, disconnect socket was forcefully disconnected from the namespace]
