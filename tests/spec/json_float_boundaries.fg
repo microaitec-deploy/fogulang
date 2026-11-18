@@ -1,0 +1,12 @@
+// The boundaries of the float text, in print and JSON alike: decimal from 1e-6 up
+// to below 1e21, an exponent outside; zero keeps its sign; each value comes back
+// from JSON as the same float (compared by its text, so -0.0 is not 0.0).
+import json from "fogu:json"
+const xs = [-0.0, 0.0, 9.99e20, 1e21, 9.99e-7, 1e-6, 1e20, 1e22, -1e-6, -9.99e-7]
+print(xs)
+const text = json.stringify(xs)
+print(text)
+const back = json.parse(text)
+for i, x in back {
+    print(str(x) == str(xs[i]), typeof(x), x)
+}
