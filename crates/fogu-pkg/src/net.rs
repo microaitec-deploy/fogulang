@@ -23,7 +23,24 @@ pub fn blocking_client() -> &'static reqwest::blocking::Client {
     CLIENT.get_or_init(|| {
         reqwest::blocking::Client::builder()
             .timeout(None)
+            .redirect(redirect_policy())
             .build()
             .expect("cannot build the HTTP client")
+    })
+}
+
+/// Follows up to 10 redirects, and only to `http`/`https`: a server cannot
+/// send the client to `file:`, `gopher:` or any other scheme (the 3xx is
+/// returned as it is).
+#[cfg(not(target_family = "wasm"))]
+pub fn redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|a| {
+        if !matches!(a.url().scheme(), "http" | "https") {
+            a.stop()
+        } else if a.previous().len() >= 10 {
+            a.error("too many redirects")
+        } else {
+            a.follow()
+        }
     })
 }

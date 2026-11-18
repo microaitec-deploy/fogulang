@@ -199,4 +199,4 @@ pub fn pid() -> u32 {
 /// The HTTP client of the package manager, shared with the runtime.
 pub use fogu_pkg::net::error_chain;
 #[cfg(not(target_family = "wasm"))]
-pub use fogu_pkg::net::blocking_client;
+pub use fogu_pkg::net::{blocking_client, redirect_policy};

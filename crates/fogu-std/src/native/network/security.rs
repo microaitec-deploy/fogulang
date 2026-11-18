@@ -173,7 +173,11 @@ fn tls(args: &[Value]) -> Result<Value, String> {
     let (host, port) = split_host_port(&target, int_opt(&o, "port", 443) as u16);
     let sni = o.get("sni").map(|v| v.to_display_string()).unwrap_or_else(|| host.clone());
     let timeout = dur_opt(&o, "timeout", Duration::from_secs(5), "security.tls timeout")?;
-    let ca = o.get("ca").map(|v| v.to_display_string());
+    // PEM text, a buffer or a file path, as everywhere else (fogu:tls)
+    let ca = match o.get("ca") {
+        None | Some(Value::Nil) => None,
+        Some(v) => Some(crate::native::tls::pem_arg(v, "security.tls: ca")?),
+    };
     let alpn: Vec<Vec<u8>> = match o.get("alpn") {
         Some(Value::List(l)) => l.borrow().iter().map(|v| v.to_display_string().into_bytes()).collect(),
         _ => Vec::new(),
@@ -214,14 +218,13 @@ fn split_host_port(s: &str, default: u16) -> (String, u16) {
     }
 }
 
-fn roots(ca: Option<&str>) -> Result<rustls::RootCertStore, String> {
+fn roots(ca: Option<&[u8]>) -> Result<rustls::RootCertStore, String> {
     let mut store = rustls::RootCertStore::empty();
     match ca {
-        Some(path) => {
-            let data = std::fs::read(path).map_err(|e| io_err!("security.tls: ca {}: {}", path, e))?;
-            for c in <rustls::pki_types::CertificateDer as rustls::pki_types::pem::PemObject>::pem_slice_iter(&data) {
-                let c = c.map_err(|e| io_err!("security.tls: ca {}: {}", path, e))?;
-                store.add(c).map_err(|e| io_err!("security.tls: ca {}: {}", path, e))?;
+        Some(data) => {
+            for c in <rustls::pki_types::CertificateDer as rustls::pki_types::pem::PemObject>::pem_slice_iter(data) {
+                let c = c.map_err(|e| io_err!("security.tls: ca: {:?}", e))?;
+                store.add(c).map_err(|e| io_err!("security.tls: ca: {}", e))?;
             }
         }
         None => {
@@ -233,7 +236,7 @@ fn roots(ca: Option<&str>) -> Result<rustls::RootCertStore, String> {
     Ok(store)
 }
 
-fn tls_inspect(host: &str, port: u16, sni: &str, timeout: Duration, ca: Option<&str>, alpn: Vec<Vec<u8>>) -> Result<TlsReport, String> {
+fn tls_inspect(host: &str, port: u16, sni: &str, timeout: Duration, ca: Option<&[u8]>, alpn: Vec<Vec<u8>>) -> Result<TlsReport, String> {
     use std::io::Write;
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let inner = rustls::client::WebPkiServerVerifier::builder_with_provider(Arc::new(roots(ca)?), provider.clone())
@@ -248,13 +251,28 @@ fn tls_inspect(host: &str, port: u16, sni: &str, timeout: Duration, ca: Option<&
         .with_no_client_auth();
     cfg.alpn_protocols = alpn;
     let name = rustls::pki_types::ServerName::try_from(sni.to_string()).map_err(|e| format!("security.tls: invalid name '{}': {}", sni, e))?;
-    let addr = (host, port)
-        .to_socket_addrs()
-        .map_err(|e| io_err!("security.tls: {}: {}", host, e))?
-        .next()
-        .ok_or_else(|| io_err!("security.tls: {}: no address", host))?;
+    let addrs: Vec<std::net::SocketAddr> = (host, port).to_socket_addrs().map_err(|e| io_err!("security.tls: {}: {}", host, e))?.collect();
+    if addrs.is_empty() {
+        return Err(io_err!("security.tls: {}: no address", host));
+    }
     let start = Instant::now();
-    let mut tcp = std::net::TcpStream::connect_timeout(&addr, timeout).map_err(|e| io_err!("security.tls: {}:{}: {}", host, port, e))?;
+    // every address the name resolves to, in order (`localhost` is often
+    // ::1 first, where nothing listens), until one connects
+    let mut last = None;
+    let mut tcp = None;
+    for addr in &addrs {
+        match std::net::TcpStream::connect_timeout(addr, timeout) {
+            Ok(t) => {
+                tcp = Some(t);
+                break;
+            }
+            Err(e) => last = Some(e),
+        }
+    }
+    let mut tcp = match tcp {
+        Some(t) => t,
+        None => return Err(io_err!("security.tls: {}:{}: {}", host, port, last.map(|e| e.to_string()).unwrap_or_default())),
+    };
     tcp.set_read_timeout(Some(timeout)).ok();
     tcp.set_write_timeout(Some(timeout)).ok();
     let mut conn = rustls::ClientConnection::new(Arc::new(cfg), name).map_err(|e| io_err!("security.tls: {}", e))?;
@@ -460,12 +478,19 @@ fn scan(args: &[Value]) -> Result<Value, String> {
     let conc = int_opt(&o, "concurrency", 200).clamp(1, 2000) as usize;
     let banner = o.get("banner").is_some_and(Value::is_truthy);
     let r = crate::native::rt::block_on(async move {
-        let ip = tokio::net::lookup_host((host.as_str(), 0))
+        // a name with IPv4 and IPv6 addresses is scanned on IPv4 (servers
+        // listen on 127.0.0.1 by default; `localhost` often resolves to ::1 first)
+        let addrs: Vec<std::net::IpAddr> = tokio::net::lookup_host((host.as_str(), 0))
             .await
             .map_err(|e| io_err!("security.scan: {}: {}", host, e))?
-            .next()
-            .ok_or_else(|| io_err!("security.scan: {}: no address", host))?
-            .ip();
+            .map(|a| a.ip())
+            .collect();
+        let ip = addrs
+            .iter()
+            .find(|a| a.is_ipv4())
+            .or(addrs.first())
+            .copied()
+            .ok_or_else(|| io_err!("security.scan: {}: no address", host))?;
         let sem = Arc::new(tokio::sync::Semaphore::new(conc));
         let mut tasks = Vec::with_capacity(ports.len());
         for p in ports {
@@ -1017,10 +1042,49 @@ fn in_cidr(a: &[Value]) -> Result<Value, String> {
 /// isPrivate(ip) → true for private, loopback, link-local, CGNAT and unique-local addresses
 fn is_private(a: &[Value]) -> Result<Value, String> {
     max_args(a, 1, "security.isPrivate")?;
-    Ok(Value::Bool(match ip_arg(&a[0], "security.isPrivate")? {
-        IpAddr::V4(v) => v.is_private() || v.is_loopback() || v.is_link_local() || v.is_unspecified() || (v.octets()[0] == 100 && (64..128).contains(&v.octets()[1])),
-        IpAddr::V6(v) => v.is_loopback() || v.is_unspecified() || (v.segments()[0] & 0xfe00) == 0xfc00 || (v.segments()[0] & 0xffc0) == 0xfe80,
-    }))
+    Ok(Value::Bool(not_public(ip_arg(&a[0], "security.isPrivate")?)))
+}
+
+/// Not a public unicast address (what an SSRF filter must refuse): private,
+/// loopback, link-local, unspecified, CGNAT, multicast, broadcast, benchmark
+/// and reserved ranges — also when an IPv4 address hides inside an IPv6 one
+/// (IPv4-mapped `::ffff:a.b.c.d`, IPv4-compatible `::a.b.c.d`, NAT64
+/// `64:ff9b::/96`, 6to4 `2002::/16`).
+fn not_public(ip: IpAddr) -> bool {
+    fn v4(v: std::net::Ipv4Addr) -> bool {
+        let o = v.octets();
+        v.is_private()
+            || v.is_loopback()
+            || v.is_link_local()
+            || v.is_unspecified()
+            || v.is_broadcast()
+            || v.is_multicast()
+            || o[0] == 0
+            || o[0] >= 240
+            || (o[0] == 100 && (64..128).contains(&o[1]))
+            || (o[0] == 198 && (o[1] == 18 || o[1] == 19))
+            || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+    }
+    match ip {
+        IpAddr::V4(v) => v4(v),
+        IpAddr::V6(v) => {
+            let s = v.segments();
+            let embedded = |hi: u16, lo: u16| std::net::Ipv4Addr::new((hi >> 8) as u8, hi as u8, (lo >> 8) as u8, lo as u8);
+            // ::ffff:a.b.c.d and ::a.b.c.d (not :: and ::1, handled below)
+            if s[..5] == [0, 0, 0, 0, 0] && (s[5] == 0xffff || (s[5] == 0 && (s[6] != 0 || s[7] > 1))) {
+                return v4(embedded(s[6], s[7]));
+            }
+            // NAT64 64:ff9b::a.b.c.d
+            if s[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+                return v4(embedded(s[6], s[7]));
+            }
+            // 6to4 2002:aabb:ccdd::
+            if s[0] == 0x2002 {
+                return v4(embedded(s[1], s[2]));
+            }
+            v.is_loopback() || v.is_unspecified() || v.is_multicast() || (s[0] & 0xfe00) == 0xfc00 || (s[0] & 0xffc0) == 0xfe80
+        }
+    }
 }
 
 /// hosts(cidr, { limit = 65536 }) → the usable addresses

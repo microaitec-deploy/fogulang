@@ -377,8 +377,16 @@ fn sanitize(text: &str, opts: Option<&Value>) -> Result<Value, String> {
     }
     b.add_tags(add.iter().map(String::as_str));
     b.rm_tags(remove.iter().map(String::as_str));
+    // ammonia panics on contradictory settings; resolve them as asked:
+    // a tag allowed explicitly (`script`, `style`) keeps its content…
+    let allowed: Vec<&str> = tags.iter().chain(add.iter()).map(String::as_str).collect();
+    b.rm_clean_content_tags(allowed.iter().copied());
     // attributes allowed on every tag
     b.add_generic_attributes(attrs.iter().map(String::as_str));
+    // …and an allowed `rel` attribute is kept as written
+    if attrs.iter().any(|a| a.eq_ignore_ascii_case("rel")) {
+        b.link_rel(None);
+    }
     if let Some(v) = o.get("stripComments") {
         b.strip_comments(v.is_truthy());
     }
@@ -607,8 +615,9 @@ pub fn markdown_to_html(md: &str) -> String {
 fn new_env(autoescape: bool) -> Environment<'static> {
     let mut env = Environment::new();
     env.set_auto_escape_callback(move |_| if autoescape { AutoEscape::Html } else { AutoEscape::None });
-    // {{ text | markdown }} → HTML (not escaped again)
-    env.add_filter("markdown", |s: String| minijinja::Value::from_safe_string(markdown_to_html(&s)));
+    // {{ text | markdown }} → HTML (not escaped again), sanitized: Markdown
+    // passes raw HTML through, so `<script>` in the text would reach the page
+    env.add_filter("markdown", |s: String| minijinja::Value::from_safe_string(ammonia::clean(&markdown_to_html(&s))));
     env.add_filter("striptags", |s: String| to_text(Html::parse_fragment(&s).tree.root()));
     env
 }

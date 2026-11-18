@@ -16,3 +16,4 @@ John Doe
 401 {"error":"malformed token"} Bearer
 401 {"error":"invalid signature"} Bearer
 200 open nil
+error error map

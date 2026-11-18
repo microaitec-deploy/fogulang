@@ -1,0 +1,6 @@
+// clientAuth without a ca would accept any client while promising mTLS: refused
+import tls from "fogu:tls"
+
+const pair = tls.selfSigned(["localhost"])?
+tls.listen("127.0.0.1:0", { cert: pair.cert, key: pair.key, clientAuth: "require" })
+print("not reached")

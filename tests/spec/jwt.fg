@@ -46,3 +46,6 @@ call("/api/me", nil)
 call("/api/me", "Bearer abc.def.ghi")
 call("/api/me", `Bearer ${jwt.sign({ sub: "1" }, "other")}`)
 call("/public", nil)
+
+// a token has one spelling: spaces around it or `=` padding are refused
+print(typeof(jwt.verify(" " + token + " ", secret)), typeof(jwt.verify(token + "==", secret)), typeof(jwt.verify(token, secret)))
