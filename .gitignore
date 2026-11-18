@@ -11,3 +11,6 @@ examples/**/*.exe
 build.md
 copy.md
 bench/.venv/
+
+# Windows download marks (alternate data streams copied as files)
+*:Zone.Identifier
