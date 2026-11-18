@@ -10,8 +10,20 @@ ignore = [
     # patched version (0.10 is a release candidate). Exposure: a MySQL login
     # without TLS to a server an attacker can time. Use TLS for MySQL.
     "RUSTSEC-2023-0071",
+    # libsqlite3-sys 0.30 (bundled SQLite < 3.54: a database file opened with a
+    # crafted sibling -wal file of another page size can return uninitialized
+    # page-cache memory to queries). Transitive through sqlx-sqlite: sqlx 0.8.6
+    # and 0.9.1 both require libsqlite3-sys 0.30, the fix is in >= 0.39, so no
+    # sqlx release can take it yet (checked 2026-11-18). Exposure: a Fogu program
+    # that opens SQLite files an attacker can write (local attack). Closes when
+    # sqlx moves to libsqlite3-sys >= 0.39; until then, do not open untrusted
+    # SQLite files with fogu:sql.
+    "RUSTSEC-2026-0459",
 ]
-# unmaintained crates stay as warnings (paste: a proc-macro helper pinned by rav1e / pulp, the image codecs,
+# unmaintained crates stay as warnings (chrono / chrono-tz: the date arithmetic and
+# time zones of fogu:time, fogu:cron and bullmq-rs; replacing them (jiff or time) is a
+# rewrite of fogu:time, not a dependency bump — planned after the 0.8 consolidation;
+# paste: a proc-macro helper pinned by rav1e / pulp, the image codecs,
 # dependencies; ttf-parser: via ab_glyph for fogu:image text, the maintained
 # replacement skrifa would need a new text renderer). serde_yaml was replaced
 # by serde_norway (the maintained fork, same API, parser unsafe-libyaml-norway).
