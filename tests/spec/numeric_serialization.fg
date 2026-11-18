@@ -1,0 +1,26 @@
+// Numeric representation and serialization: ints, floats, the limits of i64 and
+// f64 (2^53), text form, JSON round trip of lists and maps.
+import json from "fogu:json"
+
+// ints inside i64 stay ints, exactly
+const ints = [0, -1, 42, 9007199254740993, 9223372036854775807, -9223372036854775807]
+print(json.stringify(ints))
+print(json.parse(json.stringify(ints)) == ints)
+print(typeof(json.parse("9223372036854775807")), typeof(json.parse("9223372036854775808")))
+
+// integers beyond i64 become floats (and say so)
+const big = json.parse("100000000000000000000")
+print(typeof(big), big == 1e20)
+
+// floats keep being floats: 42.0 is not 42 after a round trip
+const floats = [42.0, 2.0, -0.5, 1e20, 1e21, 1e300, 0.1 + 0.2, 5e-324]
+print(json.stringify(floats))
+const back = json.parse(json.stringify(floats))
+print(back == floats, typeof(back[0]))
+
+// above 2^53 not every integer is a float: the int keeps its value, the float rounds
+print(9007199254740993, float(9007199254740993) == 9007199254740992.0)
+
+// maps of numbers
+const m = { a: 1, b: 1.5, c: 1e21, d: -7, e: 0.0 }
+print(json.parse(json.stringify(m)) == m)

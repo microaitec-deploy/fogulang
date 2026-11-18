@@ -1,0 +1,163 @@
+// Compares two Fogu binaries on the programs of bench/, by the protocol every
+// performance claim of the project follows:
+//
+//   1. a quiet machine: refuses to start when the 1-minute load is above
+//      FOGU_MAX_LOAD (default 1.0), and records the load before and after;
+//   2. a warm-up run of each program on each binary (not measured);
+//   3. N valid runs per binary (default 7), interleaved A B B A, B A A B, …
+//      so that drift (heat, frequency, background work) hits both alike;
+//   4. every run is checked: exit code 0 and the same output as the first run of
+//      binary A — an incomplete or different run is rejected and reported, never
+//      averaged;
+//   5. the report gives median, p95 and spread (max/min) per binary, and the
+//      ratio of the medians.
+//
+//   fogu bench/compare.fg <binary A> <binary B> [runs] [program ...]
+//   fogu bench/compare.fg ~/fogu-0.8.0 target/release/fogu 9 parser orders
+//
+// Programs are names of bench/<name>.fg (default: every program of bench/run.fg
+// and bench/run.fg programs). Extra flags for B (for example --engine=vm) go in
+// FOGU_B_FLAGS. Results are printed and written to bench/compare.json.
+import process from "fogu:process"
+import fs from "fogu:fs"
+import json from "fogu:json"
+import time from "fogu:time"
+import path from "fogu:path"
+
+const pick = fn(cond, yes, no) {
+    if cond { return yes }
+    return no
+}
+
+fn isInt(s) {
+    for c in s.chars() {
+        if c.code() < 48 || c.code() > 57 { return false }
+    }
+    return len(s) > 0
+}
+
+// `s` cut or filled with spaces to `n` characters
+fn pad(s, n) {
+    if len(s) >= n { return s.slice(0, n) }
+    return s + " ".repeat(n - len(s))
+}
+
+fn loadavg() {
+    const [text, err] = fs.readText("/proc/loadavg")
+    if err != nil { return -1.0 }
+    return float(text.split(" ")[0])
+}
+
+fn usage() {
+    print("usage: fogu bench/compare.fg <binary A> <binary B> [runs] [program ...]")
+    Fogu.exit(2)
+}
+
+if Fogu.args.len() < 2 { usage() }
+const binA = Fogu.args[0]
+const binB = Fogu.args[1]
+let runs = 7
+let programs = []
+for a in Fogu.args.slice(2) {
+    if isInt(a) { runs = int(a) } else { programs.push(a) }
+}
+if programs.len() == 0 {
+    programs = ["fib", "loop", "mandel", "strings", "maps", "records", "sort", "parser", "orders", "wordfreq"]
+}
+const dir = pick(fs.exists("bench/fib.fg"), "bench", ".")
+const flagsB = (Fogu.env["FOGU_B_FLAGS"] ?? "").split(" ").filter((s) => len(s) > 0)
+const maxLoad = float(Fogu.env["FOGU_MAX_LOAD"] ?? "1.0")
+
+const load0 = loadavg()
+if load0 > maxLoad {
+    print(`the machine is busy (load ${load0} > ${maxLoad}): wait, or set FOGU_MAX_LOAD`)
+    Fogu.exit(1)
+}
+
+fn version(bin) {
+    const [r, err] = process.run(bin, ["--version"])
+    if err != nil { return "?" }
+    return r.stdout.trim()
+}
+
+// one run: milliseconds, or an error value saying why it is not valid
+fn once(bin, flags, file, expected) {
+    const t0 = time.monotonic()
+    const [r, err] = process.run(bin, flags.concat([file]))
+    const ms = (time.monotonic() - t0) * 1000.0
+    if err != nil { return nil, err }
+    if !r.ok { return nil, error(`exit ${r.code}: ${r.stderr.trim().slice(0, 120)}`) }
+    if expected != nil && r.stdout != expected { return nil, error("different output") }
+    return [ms, r.stdout], nil
+}
+
+fn stats(xs) {
+    const s = xs.sort((a, b) => a < b)
+    const n = s.len()
+    // median: the middle value, or the mean of the two middle ones
+    let median = s[n / 2]
+    if n % 2 == 0 { median = (s[n / 2 - 1] + s[n / 2]) / 2.0 }
+    // p95 by the nearest-rank method: the smallest value with 95% of the runs at or below it
+    let rank = int(0.95 * float(n))
+    if float(rank) < 0.95 * float(n) { rank += 1 }
+    return { median: median, p95: s[rank - 1], min: s[0], max: s[n - 1], spread: s[n - 1] / s[0] }
+}
+
+const results = []
+let rejected = 0
+print(`A: ${binA} (${version(binA)})`)
+print(`B: ${binB} ${flagsB.join(" ")} (${version(binB)})`)
+print(`runs: ${runs} per binary, interleaved ABBA · load at start: ${load0}`)
+print("")
+print("program        A median    A p95  A spread   B median    B p95  B spread    B/A")
+for name in programs {
+    const file = path.join(dir, name + ".fg")
+    // warm-up, and the reference output
+    const [warm, werr] = once(binA, [], file, nil)
+    if werr != nil {
+        print(name, "· A failed the warm-up:", werr.message)
+        continue
+    }
+    const expected = warm[1]
+    once(binB, flagsB, file, nil)
+    const times = { A: [], B: [] }
+    const why = []
+    let round = 0
+    while times.A.len() < runs || times.B.len() < runs {
+        // A B B A, then B A A B
+        const order = pick(round % 2 == 0, ["A", "B", "B", "A"], ["B", "A", "A", "B"])
+        for who in order {
+            if times[who].len() >= runs { continue }
+            const bin = pick(who == "A", binA, binB)
+            const flags = pick(who == "A", [], flagsB)
+            const [r, err] = once(bin, flags, file, expected)
+            if err != nil {
+                rejected += 1
+                why.push(`${who}: ${err.message}`)
+                if why.len() > runs { break }
+                continue
+            }
+            times[who].push(r[0])
+        }
+        if why.len() > runs { break }
+        round += 1
+    }
+    if times.A.len() < runs || times.B.len() < runs {
+        print(name, "· not enough valid runs:", why.slice(0, 3).join("; "))
+        results.push({ program: name, error: why })
+        continue
+    }
+    const a = stats(times.A)
+    const b = stats(times.B)
+    const ratio = b.median / a.median
+    const f = (x) => str(int(x * 10.0) / 10.0)
+    print(`${pad(name, 14)}${f(a.median)} ms  ${f(a.p95)}  ${f(a.spread)}x   ${f(b.median)} ms  ${f(b.p95)}  ${f(b.spread)}x   ${str(int(ratio * 1000.0) / 1000.0)}`)
+    results.push({ program: name, A: a, B: b, ratio: ratio, rejected: why })
+}
+const load1 = loadavg()
+print("")
+print(`load at start ${load0}, at end ${load1}; rejected runs: ${rejected}`)
+fs.writeText(path.join(dir, "compare.json"), json.stringify({
+    date: time.now(), a: { bin: binA, version: version(binA) }, b: { bin: binB, flags: flagsB, version: version(binB) },
+    runs: runs, load: [load0, load1], results: results,
+}) + "\n")?
