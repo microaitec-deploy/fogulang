@@ -123,6 +123,12 @@ fn open_expired_gates() {
     }
 }
 
+/// Are there enough tasks waiting that resuming each one to ask its
+/// condition (every pass) costs more than parking it behind a gate?
+pub fn crowded() -> bool {
+    QUEUE.with(|q| q.borrow().len()) + PARKED.with(|p| p.borrow().len()) >= 16
+}
+
 /// Lets the other tasks run once (`time.delay(0)`, `Fogu.sleep(0)`): a
 /// task goes to the back of the run queue; the main program runs one pass.
 pub fn yield_now() -> Result<(), String> {

@@ -146,6 +146,7 @@ impl Environment {
     /// functions: they are garbage. The bindings are then dropped, which breaks
     /// the cycle, and true is returned. Otherwise (the function escaped, a task
     /// or a child scope still uses the scope…) nothing changes.
+    #[inline(never)]
     pub fn break_cycles(env: &Rc<RefCell<Self>>, holders: usize) -> bool {
         let count = Rc::strong_count(env);
         if count <= holders || Rc::weak_count(env) != 0 {

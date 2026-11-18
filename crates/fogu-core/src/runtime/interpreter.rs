@@ -1380,11 +1380,15 @@ impl Interpreter {
                 match r {
                     Ready::Recv(c) => {
                         c.recv_waiters.add(&gate);
+                        c.note_parked();
                         if let Some(d) = c.timer.get() {
                             timers.push(sched::open_at(d, &gate));
                         }
                     }
-                    Ready::Send(c, _) => c.send_waiters.add(&gate),
+                    Ready::Send(c, _) => {
+                        c.send_waiters.add(&gate);
+                        c.note_parked();
+                    }
                 }
             }
             let r = self.keep_loc(|| sched::wait_until_on(Some(&gate), || gate.load(std::sync::atomic::Ordering::Acquire)));
@@ -1396,8 +1400,8 @@ impl Interpreter {
             // will not take: hand it on to the next task waiting on that channel
             for r in &evaluated {
                 match r {
-                    Ready::Recv(c) if !c.queue.borrow().is_empty() || c.closed.get() => c.recv_waiters.wake_one(),
-                    Ready::Send(c, _) if c.closed.get() || c.queue.borrow().len() < c.capacity() => c.send_waiters.wake_one(),
+                    Ready::Recv(c) if !c.queue.borrow().is_empty() || c.closed.get() => c.wake_receiver(),
+                    Ready::Send(c, _) if c.closed.get() || c.queue.borrow().len() < c.capacity() => c.wake_sender(),
                     _ => {}
                 }
             }
@@ -2863,28 +2867,35 @@ fn chan_push(ch: &Rc<ChanValue>, v: Value) -> Result<(), String> {
     }
     ch.queue.borrow_mut().push_back(v);
     ch.sent.set(ch.sent.get() + 1);
-    ch.recv_waiters.wake_one();
+    ch.wake_receiver();
     sched::note_progress();
     Ok(())
 }
 
 /// Can an `fg` task park behind a gate (instead of being resumed by every
 /// pass of the scheduler to check its condition)? Not the main program, which
-/// runs the passes, and not on WebAssembly, where tasks never suspend.
+/// runs the passes, and not on WebAssembly, where tasks never suspend. With
+/// few tasks, resuming them to check costs less than a gate (an allocation
+/// and the parked set): they park once there are many.
 fn can_park() -> bool {
-    !cfg!(target_family = "wasm") && sched::in_task()
+    !cfg!(target_family = "wasm") && sched::in_task() && sched::crowded()
 }
 
 /// Waits until `ready()`. A task parks behind a gate added to `waiters` (and
 /// opened at `timer`, the deadline of a `timeout` channel): only a change of
 /// the channel that may satisfy it wakes it, so many blocked tasks cost nothing.
-fn chan_wait(waiters: &crate::runtime::value::Waiters, timer: Option<std::time::Instant>, mut ready: impl FnMut() -> bool) -> Result<(), String> {
+fn chan_wait(ch: &ChanValue, waiters: &crate::runtime::value::Waiters, timer: Option<std::time::Instant>, mut ready: impl FnMut() -> bool) -> Result<(), String> {
+    // the common case: no wait at all
+    if ready() {
+        return Ok(());
+    }
     if !can_park() {
         return sched::wait_until(ready);
     }
     while !ready() {
         let gate = sched::new_local_gate();
         waiters.add(&gate);
+        ch.note_parked();
         let key = timer.map(|d| sched::open_at(d, &gate));
         let r = sched::wait_until_on(Some(&gate), || gate.load(std::sync::atomic::Ordering::Acquire));
         if let Some(k) = key {
@@ -2901,22 +2912,26 @@ pub fn chan_send(ch: &Rc<ChanValue>, v: Value) -> Result<(), String> {
     if cfg!(target_family = "wasm") {
         return chan_push(ch, v);
     }
-    chan_wait(&ch.send_waiters, None, || ch.closed.get() || ch.queue.borrow().len() < ch.capacity())?;
+    chan_wait(ch, &ch.send_waiters, None, || ch.closed.get() || ch.queue.borrow().len() < ch.capacity())?;
     chan_push(ch, v)?;
     // room left: the next sender waiting for it may go too
-    if ch.queue.borrow().len() < ch.capacity() {
-        ch.send_waiters.wake_one();
+    if ch.parked.get() && ch.queue.borrow().len() < ch.capacity() {
+        ch.wake_sender();
     }
     if ch.buffer == 0 {
         // Rendezvous: wait for the receiver to take the value.
         let my_seq = ch.sent.get();
         let taken = || ch.recvd.get() >= my_seq || ch.closed.get();
+        if taken() {
+            return Ok(());
+        }
         if !can_park() {
             return sched::wait_until(taken);
         }
         while !taken() {
             let gate = sched::new_local_gate();
             ch.taken_waiters.borrow_mut().push_back((my_seq, sched::Gate::clone(&gate)));
+            ch.note_parked();
             sched::wait_until_on(Some(&gate), || gate.load(std::sync::atomic::Ordering::Acquire))?;
         }
     }
@@ -2925,7 +2940,7 @@ pub fn chan_send(ch: &Rc<ChanValue>, v: Value) -> Result<(), String> {
 
 /// Blocking (cooperative) receive.
 pub fn chan_recv(ch: &Rc<ChanValue>) -> Result<Value, RecvError> {
-    chan_wait(&ch.recv_waiters, ch.timer.get(), || {
+    chan_wait(ch, &ch.recv_waiters, ch.timer.get(), || {
         ch.poll_timer();
         !ch.queue.borrow().is_empty() || ch.closed.get()
     })
@@ -2936,15 +2951,15 @@ pub fn chan_recv(ch: &Rc<ChanValue>) -> Result<Value, RecvError> {
             ch.recvd.set(ch.recvd.get() + 1);
             ch.taken();
             // more to take (or closed): the next receiver may go too
-            if !ch.queue.borrow().is_empty() || ch.closed.get() {
-                ch.recv_waiters.wake_one();
+            if ch.parked.get() && (!ch.queue.borrow().is_empty() || ch.closed.get()) {
+                ch.wake_receiver();
             }
             sched::note_progress();
             Ok(v)
         }
         None => {
             // closed and empty: every receiver ends
-            ch.recv_waiters.wake_one();
+            ch.wake_receiver();
             Err(RecvError::Closed)
         }
     }
@@ -3192,6 +3207,7 @@ pub fn map_key_is_method(m: &RefCell<HashMap<Str, Value>>, name: &str) -> bool {
 /// `==` semantics (structural for lists and maps, identity for the rest).
 /// Structs compare by identity here; [`Interpreter::equal`] also asks their
 /// `equals(other)` method.
+#[inline]
 pub fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::List(_), Value::List(_)) | (Value::Map(_), Value::Map(_)) => {
@@ -3239,13 +3255,26 @@ where
             if x.borrow().len() != y.borrow().len() {
                 return Ok(false);
             }
-            // item by item, without holding a borrow: `equals` may change the lists
+            // scalars compared in place; a nested list, map or struct is copied
+            // out first and compared without holding a borrow (`equals` may
+            // change the lists)
             let mut i = 0;
             loop {
-                let (p, q) = match (x.borrow().get(i), y.borrow().get(i)) {
-                    (Some(p), Some(q)) => (p.clone(), q.clone()),
-                    (None, None) => return Ok(true),
-                    _ => return Ok(false),
+                let (p, q) = {
+                    let (xb, yb) = (x.borrow(), y.borrow());
+                    if xb.len() != yb.len() {
+                        return Ok(false);
+                    }
+                    while i < xb.len() && !is_container(&xb[i]) && !is_container(&yb[i]) {
+                        if !scalar_equal(&xb[i], &yb[i]) {
+                            return Ok(false);
+                        }
+                        i += 1;
+                    }
+                    if i == xb.len() {
+                        return Ok(true);
+                    }
+                    (xb[i].clone(), yb[i].clone())
                 };
                 if !deep_equal(&p, &q, depth + 1, seen, structs)? {
                     return Ok(false);
@@ -3279,7 +3308,13 @@ where
     }
 }
 
+#[inline]
+fn is_container(v: &Value) -> bool {
+    matches!(v, Value::List(_) | Value::Map(_) | Value::Struct(_))
+}
+
 /// `==` of everything but the contents of lists and maps.
+#[inline]
 fn scalar_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Nil, Value::Nil) => true,

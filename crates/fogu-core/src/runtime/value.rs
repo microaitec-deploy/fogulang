@@ -146,6 +146,9 @@ pub struct ChanValue {
     /// Senders on an unbuffered channel parked until their value is taken:
     /// the number of their value (see `sent`) and their gate, in that order.
     pub taken_waiters: RefCell<VecDeque<(u64, super::sched::Gate)>>,
+    /// Some task may be parked on this channel: without, a send or a receive
+    /// skips the waiter lists altogether.
+    pub parked: Cell<bool>,
 }
 
 /// The `fg` tasks parked on one side of a channel, each behind its gate: a
@@ -206,7 +209,36 @@ impl ChanValue {
             recv_waiters: Waiters::default(),
             send_waiters: Waiters::default(),
             taken_waiters: RefCell::new(VecDeque::new()),
+            parked: Cell::new(false),
         }
+    }
+
+    /// A task is about to park on this channel (its gate is in one of the lists).
+    pub fn note_parked(&self) {
+        self.parked.set(true);
+    }
+
+    /// A value arrived: wakes one task waiting to receive.
+    #[inline]
+    pub fn wake_receiver(&self) {
+        if self.parked.get() {
+            self.recv_waiters.wake_one();
+            self.settle();
+        }
+    }
+
+    /// Room was made: wakes one task waiting to send.
+    #[inline]
+    pub fn wake_sender(&self) {
+        if self.parked.get() {
+            self.send_waiters.wake_one();
+            self.settle();
+        }
+    }
+
+    fn settle(&self) {
+        let empty = self.recv_waiters.is_empty() && self.send_waiters.is_empty() && self.taken_waiters.borrow().is_empty();
+        self.parked.set(!empty);
     }
 
     /// `close(ch)`: receives drain the buffer and then end; sends fail. Every
@@ -224,6 +256,9 @@ impl ChanValue {
     /// A value was taken: wakes the senders whose value it was (unbuffered)
     /// and one task waiting for room.
     pub fn taken(&self) {
+        if !self.parked.get() {
+            return;
+        }
         let recvd = self.recvd.get();
         loop {
             let g = {
@@ -241,6 +276,7 @@ impl ChanValue {
             }
         }
         self.send_waiters.wake_one();
+        self.settle();
     }
 
     /// Channel that receives `nil` once the deadline passes (spec §36: `timeout(d)`).
@@ -259,7 +295,7 @@ impl ChanValue {
                 self.timer.set(None);
                 self.queue.borrow_mut().push_back(Value::Nil);
                 self.sent.set(self.sent.get() + 1);
-                self.recv_waiters.wake_one();
+                self.wake_receiver();
                 super::sched::note_progress();
             }
         }
@@ -392,8 +428,15 @@ impl Value {
     }
 
     pub fn to_display_string(&self) -> String {
-        if let Value::Str(s) = self {
-            return s.to_string();
+        // the common scalars directly (`str(i)` in a loop: `to_string` of an
+        // int is faster than going through a formatter)
+        match self {
+            Value::Str(s) => return s.to_string(),
+            Value::Int(n) => return n.to_string(),
+            Value::Float(n) => return display_float(*n),
+            Value::Nil => return "nil".into(),
+            Value::Bool(b) => return b.to_string(),
+            _ => {}
         }
         let mut out = String::new();
         self.write_display(&mut out, &mut WalkPath::default());
@@ -408,9 +451,7 @@ impl Value {
         match self {
             Value::Nil => out.push_str("nil"),
             Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-            Value::Int(n) => {
-                let _ = write!(out, "{}", n);
-            }
+            Value::Int(n) => out.push_str(&n.to_string()),
             Value::Float(n) => out.push_str(&display_float(*n)),
             Value::Str(s) => out.push_str(s),
             Value::Duration(ns) => out.push_str(&display_duration(*ns)),

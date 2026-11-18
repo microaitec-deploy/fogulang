@@ -151,6 +151,10 @@ pub fn open_at(deadline: Instant, _gate: &Gate) -> (Instant, u64) {
 
 pub fn cancel_open_at(_key: (Instant, u64)) {}
 
+pub fn crowded() -> bool {
+    false
+}
+
 /// Nothing else can run on WebAssembly.
 pub fn yield_now() -> Result<(), String> {
     Ok(())
