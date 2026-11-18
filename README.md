@@ -811,7 +811,7 @@ Not implemented yet (planned in the [specification](docs/spec.md)):
 
 - permissions (`--allow-net`, `--allow-fs`, …);
 - `fogu audit`, `fogu publish`, `fogu build --target wasm`;
-- the bytecode VM, `fogu:kafka`;
+- the bytecode VM as the default engine (today it is opt-in: `--engine=vm`); consumer groups in `fogu:kafka`;
 - a central package registry and signatures.
 
 Known gaps:

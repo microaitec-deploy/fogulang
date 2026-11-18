@@ -1,6 +1,6 @@
 # Design note: `fogu:events`
 
-Source: [`src/native/events.rs`](../../src/native/events.rs).
+Source: [`crates/fogu-core/src/native/events.rs`](../../crates/fogu-core/src/native/events.rs).
 
 ## API
 

@@ -161,7 +161,7 @@ Exports: `export fn/const/let/struct/interface …`, `export const [a, b] = …`
 `import x, { a } from` combines both; `import * as ns from` is always the module.
 
 Globals (no import): `print len typeof str int float bytes clock close timeout error
-panic`, and the `Fogu` object: `Fogu.file(path).text()/.json()/.write(s)`,
+panic`, and the `Fogu` object: `Fogu.file(path).text()/.json()/.write(str or buffer)`,
 `Fogu.env.NAME`, `Fogu.args`, `Fogu.run(cmd, args)`, `Fogu.glob("src/**/*.fg")`,
 `Fogu.sleep(d)`, `Fogu.exit(code)`, `Fogu.os`, `Fogu.asset(path)`,
 `Fogu.signal.wait()` (keep a server alive until Ctrl+C/SIGTERM),

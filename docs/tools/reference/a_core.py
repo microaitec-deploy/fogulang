@@ -236,9 +236,9 @@ print(checksum(bytes("abc")), bytes("x") == bytes("x"))
                     ("Fogu.cores() · Fogu.cores(n) · Fogu.cores([cpus])", "int · list · error", "How many threads the runtime uses for networking and blocking work (default: the machine's CPUs) · use <code>n</code> · run only on those CPUs (Linux, Windows). Set it at the top of the program — once the runtime has started it is an error value. Also <code>--cores 4</code>, <code>--cores 0,2-3</code>, <code>$FOGU_CORES</code>."),
                     ("Fogu.env", "map", "Environment variables."),
                     ("Fogu.args", "list", "Arguments after the script name (<code>fogu run app.fg a b</code>)."),
-                    ("Fogu.file(path)", "File", "<code>text() lines() json() write(s) append(s) exists() size() remove()</code>, fields <code>path name ext dir</code>."),
+                    ("Fogu.file(path)", "File", "<code>text() lines() json() write(data) append(data) exists() size() remove()</code>, fields <code>path name ext dir</code>. <code>data</code> is a str (UTF-8) or a buffer (its bytes); another type stops the program."),
                     ("Fogu.asset(path)", "str", "A project file: relative to the project root — and inside <code>fogu build --compile</code> executables, the extracted embedded files."),
-                    ("Fogu.run(cmd, args?, opts?)", "map", "Runs a program → <code>{ ok, code, stdout, stderr }</code> (see <a class=\"underline\" href=\"#mod-process\">fogu:process</a>)."),
+                    ("Fogu.run(cmd, args?, opts?)", "map · error", "Runs a program → <code>{ ok, code, stdout, stderr }</code> (see <a class=\"underline\" href=\"#mod-process\">fogu:process</a>)."),
                     ("Fogu.glob(pattern)", "list", "Files matching <code>*</code>, <code>?</code> and <code>**</code>."),
                     ("Fogu.hash(data, algo?)", "str", "Hex digest, <code>sha256</code> (default) or <code>sha512</code>."),
                     ("Fogu.sql(url)", "Database", "Same as <code>sql.open(url)</code>."),
@@ -247,7 +247,7 @@ print(checksum(bytes("abc")), bytes("x") == bytes("x"))
                     ("Fogu.signal.on(name, fn(data)) · off(name) · emit(name, data?) · last · names", "", "Handlers for OS signals (<code>SIGINT SIGTERM SIGHUP SIGQUIT SIGUSR1 SIGUSR2</code>; Windows: <code>SIGINT SIGBREAK SIGTERM</code>) or the program's own events; they run as <code>fg</code> tasks. With no handler and nobody waiting, SIGINT/SIGTERM still end the program (exit code 130/143) — after releasing sshfs mounts, browsers and SurrealKV/broker stores. <code>emit</code> also simulates a signal."),
                     ("Fogu.host.embedded · Fogu.host.emit(name, data)", "bool", "When the runtime is embedded through the C API (<a class=\"underline\" href=\"#embed\">libfogu_rt</a>): calls the host's callback; <code>false</code> without one."),
                     ("Fogu.write(...values)", "nil", "Like <code>print</code>, without spaces or newline (streaming output)."),
-                    ("Fogu.watch(path | [paths], { recursive = true, debounce = 50ms })", "Watcher · error", "File system events: <code>w.next(timeout?)</code> → <code>{ kind, path, paths }</code> (<code>create modify remove rename</code>), <code>tryNext()</code>, <code>close()</code>."),
+                    ("Fogu.watch(path | [paths], { recursive = true, debounce = 50ms })", "Watcher · error", "File system events: <code>w.next(timeout?)</code> → <code>{ kind, path, paths }</code> (<code>create modify remove rename</code>; absolute paths, written with <code>/</code>), <code>tryNext()</code>, <code>close()</code>."),
                     ("Fogu.exit(code?)", "—", "Ends the program."),
                 ],
                 "example": r'''
@@ -287,7 +287,7 @@ while true {
 }
 ''',
                 "title": "watch.fg",
-                "output": "modify src/app.fg\ncreate src/new.fg\nremove src/old.fg",
+                "output": "modify /home/ana/app/src/app.fg\ncreate /home/ana/app/src/new.fg\nremove /home/ana/app/src/old.fg",
             },
         ],
     },
@@ -297,7 +297,8 @@ while true {
         "group": C,
         "title": "fogu:math",
         "import": 'import math from "fogu:math"',
-        "intro": "Numbers. Rounding to an int (<code>floor ceil trunc round</code>) keeps ints as they are; "
+        "intro": "Numbers. Rounding to an int (<code>floor ceil trunc round</code>) keeps ints as they are; a float with no int value "
+        "(NaN, ±inf, beyond ±2^63) stops the program instead of becoming 0 or MAX_INT; "
         "the other functions return floats. The JIT compiles these calls inside hot code with the same results.",
         "blocks": [
             {
@@ -569,7 +570,7 @@ print(path.normalize("a/./b/../c"), path.isAbsolute("/etc"), path.isAbsolute("et
         "blocks": [
             {
                 "api": [
-                    ("process.run(cmd, args?, { cwd, env, input })", "map · error", "<code>{ ok, code, stdout, stderr }</code>."),
+                    ("process.run(cmd, args?, { cwd, env, input })", "map · error", "<code>{ ok, code, stdout, stderr }</code>. <code>input</code> is a str or a buffer; a missing <code>cwd</code> folder or a program that cannot start → error value; an unknown option stops the program."),
                     ("process.shell(command)", "map", "Through <code>sh -c</code> / <code>cmd /C</code>."),
                     ("process.env(name) · process.setEnv(name, value)", "str · nil", ""),
                     ("process.cwd() · process.chdir(path)", "str · nil", ""),
@@ -728,7 +729,7 @@ log.error("failed", { code: 23 })
                     ("re.replace(text, repl) · re.replaceAll(text, repl)", "str", "<code>$1</code>, <code>${name}</code>, <code>$$</code> in <code>repl</code>."),
                     ("re.split(text, limit?)", "list", ""),
                     ("re.source · re.groups · re.names", "", "Pattern · group count · group names."),
-                    ("regex.test/find/findAll/replace/replaceAll/split/matches(text, pattern, …)", "", "One-off shortcuts."),
+                    ("regex.test/find/findAll/replace/replaceAll/split/matches(text, pattern, …, opts?)", "", "One-off shortcuts; a trailing map is the options of <code>compile</code>. In a replacement, <code>$1x</code> is the group named <code>1x</code>: write <code>${1}x</code>."),
                     ("regex.escape(text)", "str", "A literal pattern."),
                 ],
                 "example": r'''
@@ -758,10 +759,10 @@ print(regex.findAll("v1.2 and v3.10", "\\d+\\.\\d+").map((x) => x.text))
                     ("crypto.hashFile(algo, path, { base64 })", "str · error", "The digest of a file's bytes (executables, archives: files <code>fs.readText</code> cannot read). Missing file → error value."),
                     ("crypto.hmac(algo, key, data, { base64 })", "str", ""),
                     ("crypto.encrypt(data, key)", "str", "AES-256-GCM; <code>key</code> is a password (argon2id) or 64 hex chars. Base64 output with salt and nonce."),
-                    ("crypto.decrypt(box, key, { bytes })", "str · error", "Wrong key or altered data → error value."),
+                    ("crypto.decrypt(box, key, { bytes })", "str · buffer · error", "Wrong key or altered data → error value. <code>{ bytes: true }</code> returns a buffer; without it, data that is not UTF-8 text is an error value."),
                     ("crypto.hashPassword(password)", "str", "argon2id PHC string (OWASP parameters), for storing passwords. <a href=\"#mod-password\"><code>fogu:password</code></a> adds bcrypt, scrypt, PBKDF2, peppers and rehash checks."),
                     ("crypto.verifyPassword(password, hash)", "bool · error", "Any hash <code>password.verify</code> understands; a malformed hash → error value."),
-                    ("crypto.randomBytes(n) · crypto.randomHex(n)", "list · str", "Secure random."),
+                    ("crypto.randomBytes(n) · crypto.randomHex(n)", "buffer · str", "Secure random."),
                     ("crypto.generateKeyPair(algorithm = \"ed25519\", { bits }?)", "{ algorithm, bits, privateKey, publicKey }", "A new key pair as PEM text (private: PKCS#8, public: SPKI — what OpenSSL, JWT libraries and <code>fogu:tls</code> read). Algorithms: <code>ed25519</code>, <code>p256</code> (ECDSA, also <code>es256</code>), <code>p384</code> (<code>es384</code>) and <code>rsa</code> with <code>bits</code> 2048 (default), 3072 or 4096 (also written <code>\"rsa-4096\"</code>; big RSA keys take a moment). Certificates: <code>tls.selfSigned</code>."),
                     ("crypto.randomInt(min, max)", "int", "Inclusive, unbiased."),
                     ("crypto.uuid(version = 4, namespace?, name?)", "str", "<code>uuid()</code> / <code>uuid(4)</code> random, <code>uuid(7)</code> time-ordered, <code>uuid(5, namespace, name)</code> name-based."),
@@ -802,8 +803,8 @@ print(crypto.uuidInfo("not-a-uuid"))
         "blocks": [
             {
                 "api": [
-                    ("password.hash(pw, { algorithm, memory, time, parallelism, cost, n, r, p, iterations, pepper })", "str · error", "<code>algorithm</code>: <code>argon2id</code> (default), <code>argon2i</code>, <code>argon2d</code>, <code>bcrypt</code>, <code>scrypt</code>, <code>pbkdf2-sha256</code>, <code>pbkdf2-sha512</code>. argon2: <code>memory</code> (KiB), <code>time</code>, <code>parallelism</code>; bcrypt: <code>cost</code> 4..31; scrypt: <code>n</code> (power of two), <code>r</code>, <code>p</code>; PBKDF2: <code>iterations</code>. Returns a PHC string (<code>$argon2id$…</code>, <code>$scrypt$…</code>, <code>$pbkdf2-sha256$…</code>) or bcrypt's <code>$2b$…</code>. Unknown options stop the program."),
-                    ("password.verify(pw, hash, { pepper })", "bool · error", "Detects the algorithm from the hash (<code>$argon2id$</code>, <code>$2a$</code>/<code>$2b$</code>/<code>$2y$</code>, <code>$scrypt$</code>, <code>$pbkdf2-sha256$</code>…); constant-time comparison. A malformed or unsupported hash → error value. Accepts the same options map as <code>hash</code>."),
+                    ("password.hash(pw, { algorithm, memory, time, parallelism, cost, n, r, p, iterations, pepper })", "str · error", "<code>algorithm</code>: <code>argon2id</code> (default), <code>argon2i</code>, <code>argon2d</code>, <code>bcrypt</code>, <code>scrypt</code>, <code>pbkdf2-sha256</code>, <code>pbkdf2-sha512</code>. argon2: <code>memory</code> (KiB), <code>time</code>, <code>parallelism</code>; bcrypt: <code>cost</code> 4..20; scrypt: <code>n</code> (power of two), <code>r</code>, <code>p</code>; PBKDF2: <code>iterations</code>. Costs beyond any recommended setting are refused, for new and stored hashes alike: argon2 memory above 2 GiB or memory × time above 8 GiB, scrypt above 2 GiB of memory or 8 GiB of work, bcrypt cost above 20, more than 20 000 000 PBKDF2 iterations. Returns a PHC string (<code>$argon2id$…</code>, <code>$scrypt$…</code>, <code>$pbkdf2-sha256$…</code>) or bcrypt's <code>$2b$…</code>. Unknown options stop the program."),
+                    ("password.verify(pw, hash, { pepper })", "bool · error", "Detects the algorithm from the hash (<code>$argon2id$</code>, <code>$2a$</code>/<code>$2b$</code>/<code>$2y$</code>, <code>$scrypt$</code>, <code>$pbkdf2-sha256$</code>…); constant-time comparison. A malformed or unsupported hash, or one whose parameters are too large (a hash with <code>m=4294967295</code> would abort the process) → error value. Accepts the same options map as <code>hash</code>."),
                     ("password.needsRehash(hash, options?)", "bool · error", "True when the hash uses another algorithm or weaker parameters than <code>options</code> (default: argon2id with the defaults), or bcrypt <code>$2a$</code>. Check it after a successful login and store a new hash."),
                     ("password.info(hash)", "map · error", "<code>{ algorithm, version, … }</code> without salt or hash: argon2 <code>memory time parallelism length</code>, bcrypt <code>cost</code>, scrypt <code>n r p length</code>, PBKDF2 <code>iterations length</code>."),
                     ("password.generate(length = 16, { upper, lower, digits, symbols, excludeAmbiguous })", "str", "From the OS CSPRNG, unbiased, with at least one character of every class chosen (all on by default). <code>symbols</code>: a bool or the set of symbols to use; <code>excludeAmbiguous</code> drops <code>Il1O0o</code>."),

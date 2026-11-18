@@ -16,6 +16,7 @@ SECTIONS = [
             {
                 "api": [
                     ("mail.connect({ provider, … } | url)", "Mailer", "No connection is made yet."),
+                    ("mail.providers", "list", "The names accepted by <code>provider</code>."),
                     ("SMTP: { provider: \"gmail\" | \"smtp\" | …, host, port, secure, user, password, region }", "", "<code>secure</code>: <code>tls</code> (465), <code>starttls</code> (587), <code>none</code>; URLs <code>smtp://user:pass@host:587</code>, <code>smtps://…</code>."),
                     ("APIs: { provider: \"resend\" | \"sendgrid\" | …, apiKey, domain, region, baseUrl }", "", "<code>apiKey</code> defaults to <code>$RESEND_API_KEY</code>, <code>$SENDGRID_API_KEY</code>…; Mailgun needs <code>domain</code>, Mailjet <code>apiSecret</code>."),
                     ("common: { from, timeout }", "", "Default sender."),
@@ -69,6 +70,7 @@ print(err)
             {
                 "h3": "Tools and agents",
                 "api": [
+                    ("ai.providers", "list", "The names accepted by <code>provider</code>."),
                     ("ai.tool(name, description, parameters, run?)", "map", "<code>parameters</code> is a JSON schema; also a plain map <code>{ name, description, parameters, run }</code>."),
                     ("ai.agent({ client, model, instructions, tools, maxSteps = 10, temperature, maxTokens, memory, onStep })", "Agent", "Tools need <code>run(args)</code>."),
                     ("agent.run(input)", "map · error", "Calls the model and the tools until it answers: <code>{ text, steps, messages, usage, finishReason }</code>."),

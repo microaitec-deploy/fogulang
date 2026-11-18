@@ -15,7 +15,7 @@ SECTIONS = [
                     ("e.on(event, fn) · e.once(event, fn)", "nil", "Listeners receive every emitted argument (declare them all)."),
                     ("e.off(event, fn?) · e.removeAll(event?)", "nil", ""),
                     ("e.emit(event, ...args)", "bool", "<code>true</code> when someone listened."),
-                    ("e.listeners(event) · e.eventNames() · e.hasListeners(event)", "", ""),
+                    ("e.listeners(event) · e.eventNames() · e.hasListeners(event)", "int · list · bool", "<code>listeners</code> is the number of listeners of the event (Node's <code>listenerCount</code>)."),
                 ],
                 "example": r'''
 import events from "fogu:events"
@@ -39,8 +39,8 @@ print(bus.emit("nobody-listens"), bus.eventNames())
         "blocks": [
             {
                 "api": [
-                    ("cron.every(interval, fn)", "nil", "A job every <code>interval</code> (duration or ms)."),
-                    ("cron.schedule(expression, fn)", "nil", "5-field cron expression (<code>\"*/5 * * * *\"</code>); an invalid one stops the program."),
+                    ("cron.every(interval, fn)", "nil", "A job every <code>interval</code> (duration, ms or a str like <code>\"2s\"</code>; at least 1 ms)."),
+                    ("cron.schedule(expression, fn)", "nil", "5-field cron expression (<code>\"*/5 * * * *\"</code>), evaluated in <b>UTC</b>: each field is a list of <code>*</code>, <code>n</code> or <code>a-b</code>, each with an optional <code>/step</code>; month and weekday names (<code>JAN</code>, <code>MON-FRI</code>); weekday 7 is Sunday; the macros <code>@yearly @monthly @weekly @daily @hourly</code>. When both day of month and day of week are restricted, a day matches either (as in Vixie cron). An invalid expression, one that never matches a date (<code>0 0 31 2 *</code>) or <code>L W # ?</code> stops the program."),
                     ("cron.tick()", "int", "Runs the jobs that are due; returns how many ran."),
                     ("cron.list()", "list", "Job names (<code>every(10ms)</code>, the cron expression…)."),
                     ("cron.clear()", "nil", "Removes every job."),

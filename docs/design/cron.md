@@ -1,6 +1,6 @@
 # Design note: `fogu:cron`
 
-Source: [`src/native/cron.rs`](../../src/native/cron.rs).
+Source: [`crates/fogu-std/src/native/base/cron.rs`](../../crates/fogu-std/src/native/base/cron.rs).
 
 ## API
 
@@ -18,9 +18,14 @@ while true {
 cron.clear()
 ```
 
-Cron expressions have 5 fields — `minute hour day month weekday` — with `*`,
-`*/step`, lists `a,b,c` and ranges `a-b`. The next run is found by advancing
-minute by minute (giving up after 4 years, as a guard).
+Cron expressions have 5 fields — `minute hour day month weekday` — and are evaluated in
+**UTC**. Each field is a list of items `*`, `n` or `a-b`, each with an optional `/step`
+(`5/15` is "from 5, every 15"); months and weekdays also take names (`JAN`, `MON-FRI`),
+weekday 7 is Sunday, and `@yearly @monthly @weekly @daily @hourly` are accepted. As in Vixie
+cron, when both the day of month and the day of week are restricted (neither starts with `*`)
+a day matches if either does. `L`, `W`, `#` and `?` are refused. Each field is a bit set; the
+next run is found day by day over 28 years (the weekday/leap-year cycle), and an expression
+with no date in that span (`0 0 31 2 *`) is refused when it is scheduled.
 
 ## Why `tick()` instead of a background thread
 

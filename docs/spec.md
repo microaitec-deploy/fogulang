@@ -1309,6 +1309,8 @@ pins the exact versions and their checksums.
 
 ## 41. Dependency security
 
+> **Not implemented yet** (planned; see `CHECKLIST.md`). The examples of this section show the design.
+
 Published packages:
 
 * MUST be immutable;
@@ -1328,6 +1330,8 @@ checks known vulnerabilities and licenses.
 ---
 
 ## 42. Permissions
+
+> **Not implemented yet** (planned; see `CHECKLIST.md`). The examples of this section show the design.
 
 Fogu programs start without external permissions.
 
@@ -1455,9 +1459,10 @@ Example:
 ```fogu
 import net from "fogu:net"
 
-const server = net.tcp.listen(":9000")?
+const server = net.tcpListen("127.0.0.1:9000")?
 
-for conn in server {
+while true {
+    const conn = server.accept()?
     fg process(conn)
 }
 ```
@@ -1479,19 +1484,15 @@ Example:
 ```fogu
 import http from "fogu:http"
 
-http.serve({
-    port: 3000,
-
-    fetch(req) {
-        if req.path == "/ping" {
-            return http.text("pong")
-        }
-
-        return http.text(
-            "not found",
-            { status: 404 }
-        )
+http.serve(3000, (req) => {
+    if req.path == "/ping" {
+        return http.text("pong")
     }
+
+    return http.text(
+        "not found",
+        { status: 404 }
+    )
 })
 ```
 
@@ -1578,15 +1579,9 @@ Example:
 ```fogu
 import ffi from "fogu:ffi"
 
-const [lib, err] = ffi.open("libm.so.6")?
+const lib = ffi.open("m")?
 
-const cos = lib.fn(
-    "cos",
-    {
-        args: ["f64"],
-        ret: "f64"
-    }
-)
+const cos = lib.func("cos", ["f64"], "f64")?
 
 print(cos(0))
 ```
@@ -2379,19 +2374,15 @@ fn health() {
     }
 }
 
-http.serve({
-    port: port,
-
-    fetch(req) {
-        if req.path == "/health" {
-            return http.json(health())
-        }
-
-        return http.text(
-            "not found",
-            { status: 404 }
-        )
+http.serve(port, (req) => {
+    if req.path == "/health" {
+        return http.json(health())
     }
+
+    return http.text(
+        "not found",
+        { status: 404 }
+    )
 })
 
 cron.every(5m, () => {

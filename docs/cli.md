@@ -2,7 +2,7 @@
 
 ```text
 fogu                         REPL (history, multi-line input, value echo)
-fogu <file.fg> [args]        run (the args are in system.info.args())
+fogu <file.fg> [args]        run (the args are in Fogu.args / system.args)
 fogu run [file|script]       run; without a target uses "entry" from fogu.json
 fogu <script>                script from fogu.json (e.g. fogu dev)
 fogu .                       the project in this folder: its "start" script, or its "entry" (also fogu <folder>)
@@ -238,7 +238,8 @@ Produces `dist/<name>` (`.exe` on Windows): the `fogu` runtime with the program
 appended (entry file, the modules it imports and the packages it uses). The
 name comes from `fogu.json` (or the entry file). The executable passes every
 command-line argument to the program and extracts its bundle once to
-`<temp>/fogu-bundles/<hash>`. `--target wasm` is not supported yet.
+`<temp>/fogu-bundles/<hash>`. `--target wasm` (WASI, `wasm32-wasip1`) needs a `fogu-wasm.wasm`
+runtime, which is not published yet: build it yourself and pass `--runtime <path>`.
 
 ### Other platforms
 

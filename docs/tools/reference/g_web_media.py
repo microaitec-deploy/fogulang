@@ -38,9 +38,9 @@ print(doc.find("b").closest("li").find("a").text, doc.find(".missing"))
             {
                 "h3": "Templates (Jinja)",
                 "api": [
-                    ("html.render(source, data)", "str · error", "Autoescaped; <code>{{ x | markdown }}</code> and <code>| striptags</code> are added to the Jinja filters."),
+                    ("html.render(source, data)", "str · error", "Autoescaped; <code>{{ x | markdown }}</code> (its HTML is sanitized like <code>html.sanitize</code>: no scripts, event attributes or <code>javascript:</code> links) and <code>| striptags</code> are added to the Jinja filters. <code>nil</code> prints nothing and booleans print <code>true</code>/<code>false</code>."),
                     ("html.template(source, { autoescape = true })", "Template", "<code>t.render(data)</code>."),
-                    ("html.templates(folder, { autoescape })", "Templates", "<code>render(name, data)</code>, <code>renderString(source, data)</code>, <code>has(name)</code>; <code>extends</code>/<code>include</code>/<code>import</code> load from the folder; autoescape by extension."),
+                    ("html.templates(folder, { autoescape })", "Templates", "<code>render(name, data)</code>, <code>renderString(source, data)</code>, <code>has(name)</code>; <code>extends</code>/<code>include</code>/<code>import</code> load from the folder; autoescape by extension (an inline <code>renderString</code> template counts as <code>.html</code>)."),
                 ],
                 "example": r'''
 import html from "fogu:html"
@@ -135,7 +135,7 @@ browser.close()
                     ("image.info(path)", "{ width, height, format } · error", "Without decoding the pixels."),
                     ("image.gif(frames, { delay = 100ms, loop = 0, speed }) · image.writeGif(path, frames, opts)", "buffer · nil", "Frames: images or <code>{ image, delay }</code>."),
                     ("image.frames(path | buffer)", "list · error", "<code>[{ image, delay }]</code> of an animated GIF."),
-                    ("image.color(c)", "list", "<code>[r, g, b, a]</code>."),
+                    ("image.color(c)", "list · error", "<code>[r, g, b, a]</code>; an invalid colour is an error value (elsewhere it stops the program)."),
                     ("img.width · img.height", "int", ""),
                     ("img.resize(w, h?, { fit = \"fill\" | \"contain\" | \"cover\", filter }) · thumbnail(w, h?) · crop(x, y, w, h)", "Image", "One side keeps the aspect ratio."),
                     ("img.rotate(degrees, { background }) · flipH() · flipV()", "Image", "Any angle; 90/180/270 are exact."),
@@ -183,6 +183,7 @@ print(len(image.frames("pulse.gif")?))
             {
                 "api": [
                     ("plot.figure({ title, xlabel, ylabel, width = 800, height = 450, theme = \"light\" | \"dark\", grid = true, legend = true, xmin, xmax, ymin, ymax, background })", "Figure", ""),
+                    ("plot.palette", "list", "The default series colours, in order."),
                     ("fig.line(x?, y, { label, color, width, dash, marker, size, opacity }) · scatter(…) · area(…)", "nil", "<code>line(y)</code> uses 0, 1, 2… as x."),
                     ("fig.bar(categories, values, { label, color })", "nil", "Several <code>bar</code> calls are grouped."),
                     ("fig.hist(values, { bins = 10 }) · fig.pie(labels, values, { donut })", "nil", ""),
