@@ -22,6 +22,8 @@ pub struct Diag {
     /// `syntax`, `lexical`, `name`, `type` or `runtime`.
     pub kind: Option<&'static str>,
     pub help: Vec<String>,
+    /// Context lines (`note: ...`), e.g. the `fg` task an error ended.
+    pub notes: Vec<String>,
 }
 
 /// Splits the messages produced by the lexer, parser, resolver and
@@ -34,9 +36,12 @@ pub fn parse(err: &str) -> Diag {
     let mut lines = err.lines();
     let first = lines.next().unwrap_or("");
     let mut help: Vec<String> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
     for l in lines {
         if let Some(h) = l.trim().strip_prefix("help:") {
             help.push(h.trim().to_string());
+        } else if let Some(n) = l.trim().strip_prefix("note:") {
+            notes.push(n.trim().to_string());
         }
     }
 
@@ -47,6 +52,7 @@ pub fn parse(err: &str) -> Diag {
         msg: first.to_string(),
         kind: None,
         help,
+        notes,
     };
 
     // runtime errors first: their message may itself contain ": line "
@@ -304,7 +310,16 @@ pub fn render(err: &str) -> String {
     for h in helps {
         out.push_str(&format!("\n   {} {}", ui::cyan_err("= help:"), h));
     }
+    for n in &d.notes {
+        out.push_str(&format!("\n   {} {}", ui::cyan_err("= note:"), n));
+    }
     out
+}
+
+/// Shows the error that ended an `fg` task (installed as the scheduler's
+/// reporter): the same diagnostic as an error of the main program.
+pub fn report_task_error(err: &str) {
+    eprintln!("{}", render(err));
 }
 
 #[cfg(test)]

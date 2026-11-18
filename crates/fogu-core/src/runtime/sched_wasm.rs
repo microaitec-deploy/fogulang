@@ -28,6 +28,22 @@ pub fn set_strict(on: bool) {
     STRICT.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
+static TASK_ERROR_REPORTER: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+
+/// See the native scheduler.
+pub fn set_task_error_reporter(f: fn(&str)) {
+    let _ = TASK_ERROR_REPORTER.set(f);
+}
+
+thread_local! {
+    static TASK_FAILURES: Cell<u64> = const { Cell::new(0) };
+    static LAST_TASK_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+pub fn task_failures() -> (u64, Option<String>) {
+    (TASK_FAILURES.with(|c| c.get()), LAST_TASK_ERROR.with(|l| l.borrow().clone()))
+}
+
 pub fn add_timer(deadline: Instant) {
     TIMERS.with(|t| t.borrow_mut().push(deadline));
 }
@@ -85,7 +101,12 @@ pub fn spawn(f: Box<dyn FnOnce() -> Result<(), String>>) -> Result<(), String> {
     DEPTH.with(|d| d.set(d.get() - 1));
     note_progress();
     if let Err(e) = r {
-        eprintln!("error in task (fg): {}", e);
+        TASK_FAILURES.with(|c| c.set(c.get() + 1));
+        LAST_TASK_ERROR.with(|l| *l.borrow_mut() = Some(e.clone()));
+        match TASK_ERROR_REPORTER.get() {
+            Some(report) => report(&e),
+            None => eprintln!("error in task (fg): {}", e),
+        }
         if STRICT.load(std::sync::atomic::Ordering::Relaxed) {
             eprintln!("--strict: terminating the process");
             std::process::exit(1);

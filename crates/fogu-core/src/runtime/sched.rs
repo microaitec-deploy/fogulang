@@ -385,6 +385,36 @@ fn recycle(task: Task) {
 
 static STRICT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// How the error that ended an `fg` task is shown (the CLI renders it as a
+/// diagnostic, with its code and source line).
+static TASK_ERROR_REPORTER: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+
+/// Installs the reporter of task errors (once; later calls are ignored).
+pub fn set_task_error_reporter(f: fn(&str)) {
+    let _ = TASK_ERROR_REPORTER.set(f);
+}
+
+thread_local! {
+    /// Tasks of this thread that ended with an error, and the last error.
+    static TASK_FAILURES: Cell<u64> = const { Cell::new(0) };
+    static LAST_TASK_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// How many `fg` tasks of this thread ended with an error, and the last one
+/// (`fogu test` fails a test during which one did).
+pub fn task_failures() -> (u64, Option<String>) {
+    (TASK_FAILURES.with(|c| c.get()), LAST_TASK_ERROR.with(|l| l.borrow().clone()))
+}
+
+fn report_task_error(e: &str) {
+    TASK_FAILURES.with(|c| c.set(c.get() + 1));
+    LAST_TASK_ERROR.with(|l| *l.borrow_mut() = Some(e.to_string()));
+    match TASK_ERROR_REPORTER.get() {
+        Some(report) => report(e),
+        None => eprintln!("error in task (fg): {}", e),
+    }
+}
+
 /// `--strict`: an error in an `fg` task terminates the process (spec §31).
 /// By default the error is reported and the other tasks keep running.
 pub fn set_strict(on: bool) {
@@ -680,7 +710,7 @@ fn step(task: &mut Task) -> bool {
         CoroutineResult::Return(res) => {
             note_progress();
             if let Err(e) = res {
-                eprintln!("error in task (fg): {}", e);
+                report_task_error(&e);
                 if STRICT.load(std::sync::atomic::Ordering::Relaxed) {
                     eprintln!("--strict: terminating the process");
                     std::process::exit(1);

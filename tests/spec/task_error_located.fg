@@ -1,0 +1,12 @@
+// An error that ends an fg task is reported like one of the main program:
+// with its file and line, and where the task started. The others go on.
+fn helper(n) {
+    return n / 0
+}
+fg fn() {
+    helper(1)
+}()
+Fogu.sleep(10ms)
+print("main goes on")
+// (exit 1 so the test also checks what was written to stderr)
+Fogu.exit(1)

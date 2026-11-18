@@ -176,6 +176,7 @@ pub fn run_test_file(path: &Path, filter: Option<&str>) -> Result<Vec<TestOutcom
             continue;
         }
         let started = std::time::Instant::now();
+        let failures = sched::task_failures().0;
         let r = interp.call_value(t.func, Vec::new(), Rc::clone(interp.globals_ref()));
         sched::shutdown();
         let status = match r {
@@ -188,7 +189,11 @@ pub fn run_test_file(path: &Path, filter: Option<&str>) -> Result<Vec<TestOutcom
                 };
                 TestStatus::Failed(format!("returned an error: {}", msg))
             }
-            Ok(_) => TestStatus::Passed,
+            // an `fg` task the test started failed: so does the test
+            Ok(_) => match sched::task_failures() {
+                (n, Some(e)) if n != failures => TestStatus::Failed(e),
+                _ => TestStatus::Passed,
+            },
         };
         out.push(TestOutcome { name: t.name, status, millis: started.elapsed().as_millis() });
     }

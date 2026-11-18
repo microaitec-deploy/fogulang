@@ -1689,13 +1689,32 @@ impl Interpreter {
         self.install_switch_hook();
         let me = self as *const Interpreter as usize;
         let genv = env.clone();
+        let started = self.position();
         self.keep_loc(|| sched::spawn(Box::new(move || {
             // SAFETY: the interpreter lives until the end of the program;
             // pending tasks are discarded in `shutdown`.
             let it = unsafe { &*(me as *const Interpreter) };
-            it.call_value(callee_val, arg_vals, genv).map(|_| ())
+            it.call_value(callee_val, arg_vals, genv).map(|_| ()).map_err(|e| it.task_error(e, &started))
         })))?;
         Ok(Value::Nil)
+    }
+
+    /// `file:line` of the code running now.
+    fn position(&self) -> String {
+        format!("{}:{}", self.cur_file.borrow(), self.cur_line.get())
+    }
+
+    /// The error that ended an `fg` task, located like an error of the main
+    /// program (`file:line: runtime error: msg`), with where the task started.
+    fn task_error(&self, e: String, started: &str) -> String {
+        let msg = self.finish_err(e);
+        // already located (a native module ran the code and formatted it)
+        if msg.lines().next().is_some_and(|l| l.contains(": runtime error: ")) {
+            return format!("{}\nnote: in the fg task started at {}", msg, started);
+        }
+        let (file, line) = self.error_location();
+        let at = if line > 0 { format!("{}:{}", file, line) } else { file };
+        format!("{}: runtime error: {}\nnote: in the fg task started at {}", at, msg, started)
     }
 
     #[inline(never)]
@@ -1703,6 +1722,7 @@ impl Interpreter {
         let buf = match buffer {
             Some(b) => match self.eval(b, env)? {
                 Value::Int(n) if n >= 0 => n as usize,
+                Value::Int(n) => return Err(format!("chan buffer must be >= 0, got {}", n)),
                 other => {
                     return Err(format!(
                         "chan buffer must be an int >= 0, got '{}'",
@@ -2026,11 +2046,12 @@ impl Interpreter {
     pub fn spawn_task(&self, f: Box<dyn FnOnce(&Interpreter) -> Result<(), String>>) -> Result<(), String> {
         self.install_switch_hook();
         let me = self as *const Interpreter as usize;
+        let started = self.position();
         sched::spawn(Box::new(move || {
             // SAFETY: as for `fg`: the interpreter lives until the end of the
             // program and pending tasks are discarded in `shutdown`.
             let it = unsafe { &*(me as *const Interpreter) };
-            f(it)
+            f(it).map_err(|e| it.task_error(e, &started))
         }))
     }
 
