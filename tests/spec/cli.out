@@ -11,6 +11,6 @@ bool
 |---|---|
 | x | 2 |
 {args: {lines: 5}, command: logs, env: prod, force: true, retries: 3, tag: [a, b], verbose: 2}
-nil error: error: invalid value 'abc' for '--n <n>': invalid digit found in string
+nil error: invalid value 'abc' for '--n <n>': invalid digit found in string
 
 For more information, try '--help'.
