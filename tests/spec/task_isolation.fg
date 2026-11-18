@@ -1,0 +1,37 @@
+// What one fg task does stays its own while others run between its steps:
+// the error a `?` propagates, the position of a runtime error, and a vm
+// timeout of one task does not stop another.
+import vm from "fogu:vm"
+fn fail(tag) {
+    Fogu.sleep(1ms)
+    return nil, error(tag)
+}
+fn work(tag) {
+    const v = fail(tag)?
+    return v, nil
+}
+const out = chan(10)
+for t in ["a", "b", "c"] {
+    fg fn(t) {
+        const r = work(t)
+        out <- r[1].message
+    }(t)
+}
+const got = []
+for i in 0..3 { got.push(<-out) }
+print(got.sort())
+
+const done = chan(2)
+fg fn() {
+    done <- vm.runInNewContext("while true {}", nil, { timeout: 30ms }).message
+}()
+fg fn() {
+    let n = 0
+    for i in 0..20 {
+        Fogu.sleep(2ms)
+        n += 1
+    }
+    done <- n
+}()
+const r = [<-done, <-done]
+print(r.contains(20), r.any((x) => typeof(x) == "str" && x.contains("timed out")))
