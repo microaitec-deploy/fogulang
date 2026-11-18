@@ -1,0 +1,3 @@
+error[E0201]: division by zero
+task_error_located.fg:4
+in the fg task started at

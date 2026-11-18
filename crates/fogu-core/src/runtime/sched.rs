@@ -71,6 +71,72 @@ pub fn gate_opened(gate: Gate) {
     OPENED.with(|o| o.borrow_mut().push(gate));
 }
 
+/// A new gate that this thread opens (see [`local_gate`]): what a task parks
+/// behind while it waits for a channel, a timer or a lock of this thread.
+pub fn new_local_gate() -> Gate {
+    let g = Gate::default();
+    local_gate(&g);
+    g
+}
+
+/// Opens a [`local_gate`]: its task runs in the next pass. False if it was
+/// already open (its task was woken by something else).
+pub fn open_gate(gate: &Gate) -> bool {
+    if gate.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+    gate_opened(Gate::clone(gate));
+    true
+}
+
+/// Opens `gate` (a [`local_gate`]) when `deadline` passes. The returned key
+/// withdraws it ([`cancel_open_at`]) when the wait ends earlier.
+pub fn open_at(deadline: Instant, gate: &Gate) -> (Instant, u64) {
+    let key = (deadline, GATE_SEQ.with(|s| s.replace(s.get() + 1)));
+    GATE_TIMERS.with(|t| t.borrow_mut().insert(key, Gate::clone(gate)));
+    add_timer(deadline);
+    key
+}
+
+pub fn cancel_open_at(key: (Instant, u64)) {
+    GATE_TIMERS.with(|t| t.borrow_mut().remove(&key));
+}
+
+/// Opens the gates whose deadline passed, earliest first (so the tasks
+/// sleeping on them resume in that order).
+fn open_expired_gates() {
+    let now = Instant::now();
+    loop {
+        let g = GATE_TIMERS.with(|t| {
+            let mut t = t.borrow_mut();
+            match t.first_key_value() {
+                Some((k, _)) if k.0 <= now => t.pop_first().map(|(_, g)| g),
+                _ => None,
+            }
+        });
+        match g {
+            Some(g) => {
+                open_gate(&g);
+            }
+            None => return,
+        }
+    }
+}
+
+/// Are there enough tasks waiting that resuming each one to ask its
+/// condition (every pass) costs more than parking it behind a gate?
+pub fn crowded() -> bool {
+    QUEUE.with(|q| q.borrow().len()) + PARKED.with(|p| p.borrow().len()) >= 16
+}
+
+/// Lets the other tasks run once (`time.delay(0)`, `Fogu.sleep(0)`): a
+/// task goes to the back of the run queue; the main program runs one pass.
+pub fn yield_now() -> Result<(), String> {
+    note_progress();
+    let mut first = true;
+    wait_until(|| !std::mem::replace(&mut first, false))
+}
+
 /// Puts a task that suspended back where the scheduler finds it: parked
 /// behind its gate when this thread is the one that opens it, queued otherwise.
 fn requeue(task: Task) {
@@ -230,6 +296,9 @@ mod slab {
 struct Ctx {
     yielder: *const Yielder<(), ()>,
     stack_limit: usize,
+    /// [`task_id`]: unique for the whole run (a yielder's address is not: a
+    /// pooled stack gives the next task the same one).
+    id: usize,
 }
 
 thread_local! {
@@ -248,7 +317,13 @@ thread_local! {
     static OPENED: RefCell<Vec<Gate>> = const { RefCell::new(Vec::new()) };
     /// Gates that are opened on this thread, and announced with [`gate_opened`].
     static LOCAL_GATES: RefCell<rustc_hash::FxHashSet<usize>> = RefCell::new(rustc_hash::FxHashSet::default());
-    static CTX: Cell<Ctx> = const { Cell::new(Ctx { yielder: std::ptr::null(), stack_limit: 0 }) };
+    static CTX: Cell<Ctx> = const { Cell::new(Ctx { yielder: std::ptr::null(), stack_limit: 0, id: 0 }) };
+    /// The id of the next task (0 is the main program).
+    static NEXT_TASK_ID: Cell<usize> = const { Cell::new(1) };
+    /// Gates to open at a deadline (sleeping tasks, `timeout` channels), by
+    /// deadline and then by arrival.
+    static GATE_TIMERS: RefCell<std::collections::BTreeMap<(Instant, u64), Gate>> = const { RefCell::new(std::collections::BTreeMap::new()) };
+    static GATE_SEQ: Cell<u64> = const { Cell::new(0) };
     static PROGRESS: Cell<u64> = const { Cell::new(0) };
     /// Pending deadlines of `timeout(d)` channels.
     /// Pending deadlines, ordered and without duplicates: waiters re-add theirs
@@ -324,6 +399,36 @@ fn recycle(task: Task) {
 }
 
 static STRICT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// How the error that ended an `fg` task is shown (the CLI renders it as a
+/// diagnostic, with its code and source line).
+static TASK_ERROR_REPORTER: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+
+/// Installs the reporter of task errors (once; later calls are ignored).
+pub fn set_task_error_reporter(f: fn(&str)) {
+    let _ = TASK_ERROR_REPORTER.set(f);
+}
+
+thread_local! {
+    /// Tasks of this thread that ended with an error, and the last error.
+    static TASK_FAILURES: Cell<u64> = const { Cell::new(0) };
+    static LAST_TASK_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// How many `fg` tasks of this thread ended with an error, and the last one
+/// (`fogu test` fails a test during which one did).
+pub fn task_failures() -> (u64, Option<String>) {
+    (TASK_FAILURES.with(|c| c.get()), LAST_TASK_ERROR.with(|l| l.borrow().clone()))
+}
+
+fn report_task_error(e: &str) {
+    TASK_FAILURES.with(|c| c.set(c.get() + 1));
+    LAST_TASK_ERROR.with(|l| *l.borrow_mut() = Some(e.to_string()));
+    match TASK_ERROR_REPORTER.get() {
+        Some(report) => report(e),
+        None => eprintln!("error in task (fg): {}", e),
+    }
+}
 
 /// `--strict`: an error in an `fg` task terminates the process (spec §31).
 /// By default the error is reported and the other tasks keep running.
@@ -501,9 +606,11 @@ fn capture() -> Option<Restore> {
     hook.map(|f| f())
 }
 
-/// An id of the running task (0 for the main program), unique while it runs.
+/// The id of the running task (0 for the main program): never given to
+/// another task of the same run, so state keyed by it (a `fogu:vm`
+/// cancellation, a lock's owner) cannot reach a later task.
 pub fn task_id() -> usize {
-    CTX.with(|c| c.get().yielder as usize)
+    CTX.with(|c| c.get().id)
 }
 
 /// Is the current code running inside an `fg` task?
@@ -591,11 +698,13 @@ fn progress() -> u64 {
 /// Creates a task and runs it right away until it blocks/finishes.
 pub fn spawn(f: Box<dyn FnOnce() -> Result<(), String>>) -> Result<(), String> {
     let stack = take_stack()?;
+    let id = NEXT_TASK_ID.with(|n| n.replace(n.get() + 1));
     let mut task: Task = Coroutine::with_stack(stack, move |yielder, ()| {
         let limit = sp().saturating_sub(TASK_STACK - STACK_MARGIN);
         let mine = Ctx {
             yielder: yielder as *const _,
             stack_limit: limit,
+            id,
         };
         CTX.with(|c| c.set(mine));
         f()
@@ -610,24 +719,6 @@ pub fn spawn(f: Box<dyn FnOnce() -> Result<(), String>>) -> Result<(), String> {
     Ok(())
 }
 
-thread_local! {
-    /// Errors that ended `fg` tasks, for `fogu test` (`take_task_errors`): a failed `expect`
-    /// inside a task must fail the test that started it.
-    static TASK_ERRORS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
-    static COLLECT_TASK_ERRORS: Cell<bool> = const { Cell::new(false) };
-}
-
-/// Starts (or stops) keeping the errors of `fg` tasks for [`take_task_errors`] (only `fogu test`:
-/// a long-running program must not accumulate them).
-pub fn collect_task_errors(on: bool) {
-    COLLECT_TASK_ERRORS.with(|c| c.set(on));
-}
-
-/// The errors of the `fg` tasks that ended since the last call.
-pub fn take_task_errors() -> Vec<String> {
-    TASK_ERRORS.with(|n| std::mem::take(&mut *n.borrow_mut()))
-}
-
 /// Resumes a task once. Returns `true` if it finished.
 fn step(task: &mut Task) -> bool {
     let prev = CTX.with(|c| c.get());
@@ -638,10 +729,7 @@ fn step(task: &mut Task) -> bool {
         CoroutineResult::Return(res) => {
             note_progress();
             if let Err(e) = res {
-                eprintln!("error in task (fg): {}", e);
-                if COLLECT_TASK_ERRORS.with(|c| c.get()) {
-                    TASK_ERRORS.with(|n| n.borrow_mut().push(e));
-                }
+                report_task_error(&e);
                 if STRICT.load(std::sync::atomic::Ordering::Relaxed) {
                     eprintln!("--strict: terminating the process");
                     std::process::exit(1);
@@ -654,7 +742,8 @@ fn step(task: &mut Task) -> bool {
 
 /// Runs one round over all queued tasks.
 fn run_pass() {
-    // tasks whose socket became ready
+    open_expired_gates();
+    // tasks whose socket (channel, timer…) became ready
     let opened = OPENED.with(|o| std::mem::take(&mut *o.borrow_mut()));
     for g in opened {
         let key = std::sync::Arc::as_ptr(&g) as usize;
@@ -788,4 +877,56 @@ pub fn shutdown() {
 #[allow(dead_code)]
 pub fn pending_tasks() -> usize {
     QUEUE.with(|q| q.borrow().len()) + PARKED.with(|p| p.borrow().len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_ids_are_never_reused() {
+        // a finished task's stack goes back to the pool and the next task
+        // gets it: its id must still be new (state keyed by it, such as a
+        // `fogu:vm` cancellation, must not reach the next task)
+        let ids = Rc::new(RefCell::new(Vec::new()));
+        for _ in 0..3 {
+            let ids = Rc::clone(&ids);
+            spawn(Box::new(move || {
+                ids.borrow_mut().push(task_id());
+                Ok(())
+            }))
+            .unwrap();
+        }
+        let ids = ids.borrow();
+        assert_eq!(ids.len(), 3);
+        assert!(ids.iter().all(|&i| i != 0));
+        assert!(ids[0] != ids[1] && ids[1] != ids[2] && ids[0] != ids[2]);
+    }
+
+    #[test]
+    fn a_parked_task_wakes_when_its_gate_opens() {
+        let woke = Rc::new(Cell::new(false));
+        let gate = Rc::new(RefCell::new(None::<Gate>));
+        {
+            let (woke, gate) = (Rc::clone(&woke), Rc::clone(&gate));
+            spawn(Box::new(move || {
+                let g = new_local_gate();
+                *gate.borrow_mut() = Some(Gate::clone(&g));
+                wait_until_on(Some(&g), || g.load(Ordering::Acquire))?;
+                woke.set(true);
+                Ok(())
+            }))
+            .unwrap();
+        }
+        assert!(!woke.get());
+        // parked: a pass does not resume it
+        run_pass();
+        assert!(!woke.get());
+        let g = gate.borrow_mut().take().unwrap();
+        assert!(open_gate(&g));
+        assert!(!open_gate(&g));
+        let w = Rc::clone(&woke);
+        wait_until(move || w.get()).unwrap();
+        assert!(woke.get());
+    }
 }

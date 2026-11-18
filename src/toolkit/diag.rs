@@ -22,6 +22,8 @@ pub struct Diag {
     /// `syntax`, `lexical`, `name`, `type` or `runtime`.
     pub kind: Option<&'static str>,
     pub help: Vec<String>,
+    /// Context lines (`note: ...`), e.g. the `fg` task an error ended.
+    pub notes: Vec<String>,
 }
 
 /// Splits the messages produced by the lexer, parser, resolver and
@@ -34,9 +36,12 @@ pub fn parse(err: &str) -> Diag {
     let mut lines = err.lines();
     let mut message = lines.next().unwrap_or("").trim_end().to_string();
     let mut help: Vec<String> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
     for l in lines {
         if let Some(h) = l.trim().strip_prefix("help:") {
             help.push(h.trim().to_string());
+        } else if let Some(n) = l.trim().strip_prefix("note:") {
+            notes.push(n.trim().to_string());
         } else if help.is_empty() && !l.trim().is_empty() {
             // a message of several lines (an OS error text with a line break, error("a\nb"))
             // is kept whole, on one line, instead of being cut at the first one
@@ -53,6 +58,7 @@ pub fn parse(err: &str) -> Diag {
         msg: first.to_string(),
         kind: None,
         help,
+        notes,
     };
 
     // runtime errors first: their message may itself contain ": line "
@@ -103,10 +109,11 @@ fn split_kind(s: &str) -> (Option<&'static str>, String) {
     (None, s.to_string())
 }
 
-/// `<eval>`, `<print>` and `<repl>` are not files.
+/// The file of a message. `<eval>`, `<print>` and `<repl>` are kept (the
+/// position is still shown) but have no source to quote.
 fn real_file(f: &str) -> Option<String> {
     let f = f.trim();
-    if f.is_empty() || f.starts_with('<') {
+    if f.is_empty() {
         None
     } else {
         Some(f.to_string())
@@ -134,6 +141,12 @@ fn classify(msg: &str, kind: Option<&str>) -> (Option<&'static str>, Option<&'st
         ("arguments, got", "E0209", Some("check the number of arguments the function takes")),
         ("operator not applicable", "E0210", Some("convert one side first, e.g. str(n) or int(s)")),
         ("operator '-' not applicable", "E0210", None),
+        ("operator '~' not applicable", "E0210", None),
+        ("operator '!' not applicable", "E0210", None),
+        ("negative shift count", "E0211", Some("shift by 0 or more bits")),
+        ("negative integer exponent", "E0211", Some("an int raised to a negative power is a fraction: use a float base")),
+        ("cannot convert the float to int", "E0211", Some("check math.isNaN(x) / math.isFinite(x) first")),
+        ("does not exist on", "E0212", Some("declare the field in the struct (fields cannot be added to an instance)")),
         ("cannot compare", "E0210", Some("only numbers, strings and durations can be ordered")),
         ("deadlock", "E0300", Some("some channel never receives or sends; use close(), a buffer, or select with default/timeout")),
     ];
@@ -309,7 +322,7 @@ pub fn render(err: &str) -> String {
         };
         out.push_str(&format!("\n  {} {}", ui::cyan_err("-->"), pos));
 
-        let src_line = d.line.and_then(|l| source_line(file, l));
+        let src_line = d.line.filter(|_| !file.starts_with('<')).and_then(|l| source_line(file, l));
         if let (Some(l), Some(src)) = (d.line, src_line) {
             let num = l.to_string();
             let pad = " ".repeat(num.len());
@@ -333,7 +346,16 @@ pub fn render(err: &str) -> String {
     for h in helps {
         out.push_str(&format!("\n   {} {}", ui::cyan_err("= help:"), h));
     }
+    for n in &d.notes {
+        out.push_str(&format!("\n   {} {}", ui::cyan_err("= note:"), n));
+    }
     out
+}
+
+/// Shows the error that ended an `fg` task (installed as the scheduler's
+/// reporter): the same diagnostic as an error of the main program.
+pub fn report_task_error(err: &str) {
+    eprintln!("{}", render(err));
 }
 
 #[cfg(test)]

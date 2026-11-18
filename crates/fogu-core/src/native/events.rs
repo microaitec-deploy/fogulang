@@ -143,11 +143,28 @@ impl FoguObject for EventEmitterValue {
                     return Err("off(event) expects at least 1 argument".into());
                 }
                 let event = str_arg(&args[0], "off")?;
-                self.remove_all_listeners(&event);
+                match args.get(1) {
+                    // only that listener (its first registration), like Node's removeListener
+                    Some(f) => {
+                        let id = self.listeners.get(&event).and_then(|l| {
+                            l.iter().find(|x| crate::runtime::interpreter::values_equal(&x.func, f)).map(|x| x.id)
+                        });
+                        if let Some(id) = id {
+                            self.remove_listener_by_id(&event, id);
+                        }
+                    }
+                    None => self.remove_all_listeners(&event),
+                }
                 Ok(Value::Nil)
             }
             "removeAll" | "clear" => {
-                self.clear_all();
+                match args.first() {
+                    Some(e) => {
+                        let event = str_arg(e, "removeAll")?;
+                        self.remove_all_listeners(&event);
+                    }
+                    None => self.clear_all(),
+                }
                 Ok(Value::Nil)
             }
             "listeners" => {

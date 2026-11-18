@@ -168,9 +168,12 @@ Checks files without running them. Folders are searched recursively, skipping
 hidden folders (`.git`, `.fogu`…), `node_modules`, `target`, `dist` and
 `fogu_modules`. Every error of a file is reported (not only the first).
 
-**Errors** — syntax, undefined names, use before declaration, unknown type
-names, `?` in a function whose return type has no `error`, non-exhaustive
-`match`, and the type errors the code would hit when it runs, found by a small
+**Errors** — syntax, undefined names, use before declaration, a name declared
+twice in a scope, an assignment to a `const`, function, struct, import or loop
+variable, imports of a `fogu:` module that does not exist, of a package that is
+not installed, of a missing file or of a name the module does not export,
+unknown type names, `?` in a function whose return type has no `error`,
+non-exhaustive `match`, and the type errors the code would hit when it runs, found by a small
 conservative inference over literals, annotated variables, variables that are
 never reassigned and the signatures of the functions declared with `fn`:
 
@@ -184,6 +187,10 @@ fn add(a: int, b = 0): int { return a + b }
 add(1, 2, 3)                // E0209 function 'add' expects at most 2 arguments, got 3
 add("1")                    // E0207 type mismatch: parameter 'a' expects int, got str
 fn name(): str { return 1 } // E0207 type mismatch: function 'name' must return str, got int
+const k = 5
+k()                         // E0204 value of type 'int' is not callable
+k = 6                       // E0103 cannot assign to 'k' because it is a const binding
+let k = 7                   // E0102 'k' is already declared in this scope
 ```
 
 When a type is not known (a parameter without annotation, a variable that is

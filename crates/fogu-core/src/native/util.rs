@@ -96,12 +96,20 @@ pub fn duration_arg(v: &Value, what: &str) -> Result<std::time::Duration, String
     match v {
         Value::Duration(ns) if *ns >= 0 => Ok(std::time::Duration::from_nanos(*ns as u64)),
         Value::Int(ms) if *ms >= 0 => Ok(std::time::Duration::from_millis(*ms as u64)),
+        Value::Duration(_) | Value::Int(_) => Err(format!("{}: the duration must be >= 0, got {}", what, v.to_display_string())),
         other => Err(format!(
             "{} expects a duration (e.g. 500ms) or int ms >= 0, got '{}'",
             what,
             other.type_name()
         )),
     }
+}
+
+/// The instant `d` from now; a duration too long for the clock waits "forever"
+/// (a hundred years) instead of overflowing it.
+pub fn deadline_after(d: std::time::Duration) -> std::time::Instant {
+    let now = std::time::Instant::now();
+    now.checked_add(d).unwrap_or_else(|| now + std::time::Duration::from_secs(100 * 365 * 86_400))
 }
 
 /// Paths are shown with forward slashes on every platform.
@@ -151,9 +159,23 @@ pub fn json_to_value(j: &serde_json::Value) -> Value {
 /// Sleeps without blocking the other `fg` tasks: they run while this one
 /// (or the main program) waits.
 pub fn sleep_coop(d: std::time::Duration) -> Result<(), String> {
+    use crate::runtime::sched;
+    // a zero sleep still lets the others run once (`time.delay(0ms)` yields)
+    if d.is_zero() {
+        return sched::yield_now();
+    }
     let deadline = std::time::Instant::now()
         .checked_add(d)
         .ok_or_else(|| format!("sleep: a duration of {} s is too large", d.as_secs()))?;
+    // a task parks behind a gate opened at its deadline: waking costs nothing
+    // before, and tasks wake in the order of their deadlines
+    if !cfg!(target_family = "wasm") && sched::in_task() {
+        let gate = sched::new_local_gate();
+        let key = sched::open_at(deadline, &gate);
+        let r = sched::wait_until_on(Some(&gate), || gate.load(std::sync::atomic::Ordering::Acquire));
+        sched::cancel_open_at(key);
+        return r;
+    }
     crate::runtime::sched::add_timer(deadline);
     crate::runtime::sched::wait_until(|| {
         let done = std::time::Instant::now() >= deadline;
@@ -162,6 +184,47 @@ pub fn sleep_coop(d: std::time::Duration) -> Result<(), String> {
         }
         done
     })
+}
+
+/// The error of an allocation the system refused: a size that comes from the
+/// program (or its input) stops it with this message, never aborts the process.
+pub fn alloc_error(what: &str, n: impl std::fmt::Display) -> String {
+    format!("{}: cannot allocate {} bytes (out of memory)", what, n)
+}
+
+/// `n` zero bytes, or [`alloc_error`] when the memory cannot be had.
+pub fn zeroed_bytes(n: usize, what: &str) -> Result<Vec<u8>, String> {
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    let layout = std::alloc::Layout::array::<u8>(n).map_err(|_| alloc_error(what, n))?;
+    // SAFETY: a non-empty layout of `n` bytes from the global allocator, all
+    // zeroed: exactly what a `Vec<u8>` of length and capacity `n` owns.
+    unsafe {
+        let p = std::alloc::alloc_zeroed(layout);
+        if p.is_null() {
+            return Err(alloc_error(what, n));
+        }
+        Ok(Vec::from_raw_parts(p, n, n))
+    }
+}
+
+/// `s` repeated `n` times, or [`alloc_error`] when the text would not fit.
+pub fn repeat_str(s: &str, n: usize, what: &str) -> Result<String, String> {
+    if s.is_empty() || n == 0 {
+        return Ok(String::new());
+    }
+    let total = s.len().checked_mul(n).ok_or_else(|| alloc_error(what, format!("{} × {}", s.len(), n)))?;
+    let mut out = String::new();
+    out.try_reserve_exact(total).map_err(|_| alloc_error(what, total))?;
+    out.push_str(s);
+    while out.len() < total {
+        // a prefix of whole copies: `out` is k copies and what is missing a multiple of `s`
+        let take = (total - out.len()).min(out.len());
+        // SAFETY: `take` ends between two copies of `s`, so the bytes stay UTF-8.
+        unsafe { out.as_mut_vec().extend_from_within(..take) };
+    }
+    Ok(out)
 }
 
 /// Bytes from a str (UTF-8) or a list of ints.

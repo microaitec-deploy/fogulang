@@ -1,0 +1,5 @@
+{"a":[1,2]}
+nil error
+json.stringify: the value contains itself (a cycle) or is nested too deeply
+error
+still running

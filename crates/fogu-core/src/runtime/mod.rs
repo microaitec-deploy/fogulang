@@ -76,6 +76,7 @@ fn load(path: &Path) -> Result<(Interpreter, Vec<ast::Stmt>, String), String> {
         .unwrap_or_else(|| PathBuf::from("."));
     interp.set_base_dir(&base);
     interp.set_main_file(&filename);
+    interp.enter_main(path);
     crate::pkg::set_main_dir(&base);
     Ok((interp, program, filename))
 }
@@ -176,21 +177,19 @@ pub fn run_test_file(path: &Path, filter: Option<&str>) -> Result<Vec<TestOutcom
             continue;
         }
         let started = std::time::Instant::now();
-        sched::collect_task_errors(true);
-        sched::take_task_errors();
+        let failures = sched::task_failures().0;
         let r = interp.call_value(t.func, Vec::new(), Rc::clone(interp.globals_ref()));
         sched::shutdown();
-        let task_errors = sched::take_task_errors();
         let status = match r {
-            // an error in an `fg` task the test started fails the test too
-            Ok(_) if !task_errors.is_empty() => {
-                TestStatus::Failed(task_errors.iter().map(|e| format!("error in task (fg): {}", e)).collect::<Vec<_>>().join("; "))
-            }
             Err(e) => TestStatus::Failed(located(&interp, &filename, e)),
             // an error, or a tuple ending in one (`return nil, error(...)`)
             Ok(v) => match v.into_result() {
                 Err(e) => TestStatus::Failed(format!("returned an error: {}", e.message)),
-                Ok(_) => TestStatus::Passed,
+                // an `fg` task the test started failed: so does the test
+                Ok(_) => match sched::task_failures() {
+                    (n, Some(e)) if n != failures => TestStatus::Failed(e),
+                    _ => TestStatus::Passed,
+                },
             },
         };
         out.push(TestOutcome { name: t.name, status, millis: started.elapsed().as_millis() });

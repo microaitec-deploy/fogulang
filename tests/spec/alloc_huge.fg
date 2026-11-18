@@ -1,0 +1,7 @@
+// A size the program asks for that the system cannot give stops the program
+// with an error (here caught by fogu:vm), never aborts the process.
+import vm from "fogu:vm"
+print(vm.runInNewContext("bytes(4611686018427387904)"))
+print(vm.runInNewContext("\"ab\".repeat(4611686018427387903)"))
+print(vm.runInNewContext("bytes(-1)"))
+print(len("ab".repeat(3)), len(bytes(16)), "".repeat(9000000000000000000), len("é".repeat(5)))

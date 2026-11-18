@@ -1,0 +1,7 @@
+// break/continue outside a loop (also inside a function called from a loop)
+// is found before the program runs.
+fn f() {
+    continue
+}
+for i in 0..3 { f() }
+print("never")

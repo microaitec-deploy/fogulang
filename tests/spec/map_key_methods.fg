@@ -1,0 +1,10 @@
+// A map key hides the built-in method of the same name only when it holds a
+// function (a map used as a namespace); data keys never do.
+import json from "fogu:json"
+const data = json.parse("{\"has\": true, \"keys\": 5, \"len\": 2}")?
+print(data.has("keys"), data.keys(), data.len(), data.has, data.keys)
+const api = { get: fn(id) { return "item " + str(id) }, len: fn() { return 99 } }
+print(api.get(7), api.len(), api.has("get"))
+let n = 0
+for i in 0..300 { n += api.len() }
+print(n)

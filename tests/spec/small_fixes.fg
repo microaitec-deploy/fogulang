@@ -1,0 +1,39 @@
+// Assorted fixes: keywords as field names, MIN % -1, very large and small
+// floats with an exponent, each() with a one-parameter callback, events off(fn)
+// and removeAll(event), cron expressions.
+import json from "fogu:json"
+import events from "fogu:events"
+import cron from "fogu:cron"
+
+const d = json.parse("{\"if\": 1, \"for\": 2, \"return\": 3, \"nil\": 4, \"true\": 5}")?
+print(d.if, d.for, d.return, d.nil, d.true)
+const MIN = -9223372036854775807 - 1
+let x = MIN
+x %= -1
+print(MIN % -1, x, 7 % -1)
+print(-9223372036854775808 == MIN, -9223372036854775808)
+print(5e-324, 1e300, 1e21, 1e20, 0.0000001, 0.000001, -2.5e-8, 123.0)
+print(json.stringify([1e300, 5e-324, 0.5, 2.0]))
+const seen = []
+const xs = [1, 2]
+xs.each((v) => seen.push(v))
+const ys = [3]
+ys.each((v, i) => seen.push(i))
+print(seen)
+
+const bus = events.EventEmitter()
+const a = () => print("a")
+const b = () => print("b")
+bus.on("x", a)
+bus.on("x", b)
+bus.off("x", a)
+bus.emit("x")
+bus.on("y", () => print("y"))
+bus.removeAll("x")
+print(bus.emit("y"), bus.emit("x"))
+
+cron.schedule("1-10/2 * * * *", () => 1)
+cron.schedule("0 0 * * 7", () => 1)
+cron.schedule("@daily", () => 1)
+cron.schedule("0 9 * JAN-MAR mon-fri", () => 1)
+print("cron ok")

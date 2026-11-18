@@ -1,0 +1,13 @@
+// json.stringify of a value that contains itself returns an error value (it does
+// not overflow the stack, and the program can go on).
+import json from "fogu:json"
+const m = {a: 1}
+m.self = m
+print(json.stringify({a: [1, 2]}))
+const [s, err] = json.stringify(m)
+print(s, typeof(err))
+print(err.message)
+const l = [1]
+l.push(l)
+print(typeof(json.stringify(l)))
+print("still running")

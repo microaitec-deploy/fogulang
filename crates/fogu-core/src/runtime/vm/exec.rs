@@ -227,11 +227,8 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
         ($a:expr, $b:expr, $c:expr, $want:expr) => {{
             let eq = match (&r!($b), &r!($c)) {
                 (Value::Int(x), Value::Int(y)) => x == y,
-                // a struct with `equals(other)` decides
-                (l @ Value::Struct(_), r) => match it.struct_equals(l, r, Rc::clone(env!()))? {
-                    Some(eq) => eq,
-                    None => values_equal(l, r),
-                },
+                // a struct with `equals(other)` decides, also inside lists and maps
+                (l @ (Value::Struct(_) | Value::List(_) | Value::Map(_)), r) => it.equal(l, r, env!())?,
                 (l, r) => values_equal(l, r),
             };
             r!($a) = Value::Bool(eq == $want);
@@ -628,13 +625,18 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
                 let args = take_args!(b + 1, *n);
                 let builtin = match &recv {
                     Value::List(_) | Value::Str(_) | Value::Buffer(_) => true,
-                    Value::Map(m) => !m.borrow().contains_key(name.as_str()),
+                    Value::Map(m) => !crate::runtime::interpreter::map_key_is_method(m, name.as_str()),
                     _ => false,
                 };
                 check_private(it, &recv, name, &cur.f)?;
                 let v = if builtin {
                     match crate::native::collections::call_method(it, &recv, name, &args) {
                         Some(r) => r?,
+                        // a key holding something else: calling it says what it is
+                        None if matches!(&recv, Value::Map(m) if m.borrow().contains_key(name.as_str())) => {
+                            let callee = it.eval_access(recv, name)?;
+                            it.call_value(callee, args, Rc::clone(env!()))?
+                        }
                         None => return Err(format!("'{}' has no method '{}'", recv.type_name(), name)),
                     }
                 } else {

@@ -71,13 +71,19 @@ fn total(...xs) { return xs.reduce((a, b) => a + b, 0) }    // variadic
   template string. Convert with `int(x)`, `float(x)`, `str(x)`.
 - **`int / int` is integer division**: `7 / 2 == 3`, but `7.0 / 2 == 3.5`. Use
   `float(a) / b` when a fraction is wanted. Arithmetic is checked: overflow and
-  division by zero stop the program.
+  division by zero stop the program, and so does `int(x)` / `math.round(x)` of a
+  float that is NaN, infinite or outside the int range.
 - `//` starts a comment (there is no `//` operator). `**` is power, `%` modulo.
-- `==` compares lists and maps by content. Missing map keys read as `nil`; `a?.b?.c`
-  stops at `nil`; `x ?? default` replaces `nil`.
+- `==` compares lists and maps by content (and `contains`/`index_of` use the same
+  equality; a struct's `equals(other)` decides against another of its type). Values
+  that contain themselves print as `[...]`/`{...}` and compare without looping.
+  Missing map keys read as `nil`; `a?.b?.c` stops at `nil`; `x ?? default` replaces `nil`.
 - Lists: `push pop shift unshift insert remove first last contains index_of join
   reverse slice concat sort map filter each find any all reduce`, `xs[-1]`, `len(xs)`.
   Maps: `keys values entries has get set remove merge`; add a key with `m.k = v`.
+  `m.has(k)` is always the method, even when the map has a key `"has"`: a key hides
+  a method of the same name only when it holds a **function** (a map used as a
+  namespace, `api.get(id)`). Read such a key with `m["has"]` or `m.has` (no call).
   Strings: `split upper lower trim replace starts_with ends_with repeat lines chars slice`.
 - Binary data is a `buffer` (mutable bytes), made with `bytes(...)`; network, zip,
   image, protobuf, serial and USB functions return buffers:
@@ -235,12 +241,16 @@ select {
   `process.run`, `shell.run`, `sql` statements, `w.next()` of queues and
   watchers) let other tasks run; a busy `while true {}` does not. Run slow
   calls in `fg` tasks to overlap them.
-- Servers (`fogu:http`, `fogu:web`) and `fogu:cron` do their work **while the
-  main program waits**; each request runs in its own task, so a handler that waits
+- Servers (`fogu:http`, `fogu:web`) do their work **while the main program
+  waits**; each request runs in its own task, so a handler that waits
   does not hold the others. `app.listen(port)` returns at once: keep the program
   alive with `Fogu.signal.wait()` (until Ctrl+C) or a waiting loop, or it exits. The address is a port (127.0.0.1)
   or a string: `app.listen("0.0.0.0:3000")`, `"[::1]:3000"`, `":3000"`.
-  A deadlock between tasks is detected and reported.
+  A deadlock between tasks is detected and reported. `fogu:cron` jobs run when the
+  program calls `cron.tick()` (e.g. in a loop with `time.delay`), not by themselves.
+- `time.delay(0ms)` lets the other tasks run once. An error that ends an `fg` task
+  is printed like any error (file, line, code) and the other tasks go on; under
+  `fogu test` it fails the test that started the task.
 
 ```fogu
 import web from "fogu:web"

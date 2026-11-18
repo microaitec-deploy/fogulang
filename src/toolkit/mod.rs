@@ -191,6 +191,7 @@ pub fn run() {
     }
     crate::runtime::mark("main");
     crate::register();
+    crate::runtime::sched::set_task_error_reporter(diag::report_task_error);
     // OpenSSH may run `fogu` as its SSH_ASKPASS program (fogu:ssh passwords)
     #[cfg(feature = "ops")]
     if let Some(code) = crate::native::ssh::askpass_reply() {

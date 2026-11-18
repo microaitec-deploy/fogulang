@@ -59,11 +59,19 @@ pub struct JitConfig {
 impl JitConfig {
     pub fn from_env() -> Self {
         let get = |k: &str| std::env::var(k).ok();
+        // a value that is not a number is said, not silently replaced by the default
+        let num = |k: &str, default: u32| match get(k) {
+            Some(v) => v.trim().parse().unwrap_or_else(|_| {
+                eprintln!("{}: '{}' is not a number; using {}", k, v, default);
+                default
+            }),
+            None => default,
+        };
         JitConfig {
             enabled: get("FOGU_JIT").map_or(true, |v| v != "0"),
             debug: get("FOGU_JIT_DEBUG").and_then(|v| v.parse().ok()).unwrap_or(0),
-            call_threshold: get("FOGU_JIT_CALLS").and_then(|v| v.parse().ok()).unwrap_or(2),
-            loop_threshold: get("FOGU_JIT_LOOPS").and_then(|v| v.parse().ok()).unwrap_or(200),
+            call_threshold: num("FOGU_JIT_CALLS", 2),
+            loop_threshold: num("FOGU_JIT_LOOPS", 200),
         }
     }
 }
@@ -438,8 +446,13 @@ extern "C" fn h_list_len(list: i64) -> i64 {
     let l = unsafe { &*(list as *const RefCell<Vec<Value>>) };
     l.borrow().len() as i64
 }
-extern "C" fn h_map_len(map: i64) -> i64 {
+extern "C" fn h_map_len(ctx: *mut JitCtx, map: i64) -> i64 {
     let m = unsafe { &*(map as *const RefCell<HashMap<Str, Value>>) };
+    // a function stored under "len" is what `m.len()` calls: the interpreter does it
+    if super::interpreter::map_key_is_method(m, "len") {
+        deopt(ctx);
+        return 0;
+    }
     m.borrow().len() as i64
 }
 /// Element `idx` of the snapshot `items` (a `*const Value` array), typed.
@@ -807,7 +820,8 @@ impl Helper {
             Helper::VMapSet => (vec![I64, I64, I64, I64], None),
             Helper::SbStr => (vec![I64, I64], None),
             Helper::PrintSv => (vec![I64], None),
-            Helper::StrLen | Helper::ListLen | Helper::MapLen => (vec![I64], Some(I64)),
+            Helper::StrLen | Helper::ListLen => (vec![I64], Some(I64)),
+            Helper::MapLen => (vec![I64, I64], Some(I64)),
             Helper::ElemI64 | Helper::ElemBool | Helper::ElemStr => (vec![I64, I64, I64], Some(I64)),
             Helper::ElemF64 => (vec![I64, I64, I64], Some(F64)),
             Helper::ListGetI64 | Helper::ListGetBool | Helper::MapGetI64 | Helper::MapGetBool => (vec![I64, I64, I64], Some(I64)),
@@ -2252,6 +2266,21 @@ impl<'a, 'f> Gen<'a, 'f> {
         self.b.ins().isub(a, qd)
     }
 
+    /// `ops::float_to_int` of a float (truncated toward zero): NaN, ±inf and
+    /// values outside the int range stop with its error.
+    /// `int(x)` of a float: outside [-2^63, 2^63) (NaN and ±inf included: unordered)
+    /// there is no int value — the interpreter's error (`ops::float_to_int`), never a
+    /// saturated int. Two compares: -2^63 itself is an int.
+    fn float_to_int(&mut self, v: ir::Value) -> ir::Value {
+        let lo = self.b.ins().f64const(-9_223_372_036_854_775_808.0);
+        let hi = self.b.ins().f64const(9_223_372_036_854_775_808.0);
+        let below = self.b.ins().fcmp(FloatCC::UnorderedOrLessThan, v, lo);
+        let above = self.b.ins().fcmp(FloatCC::UnorderedOrGreaterThanOrEqual, v, hi);
+        let bad = self.b.ins().bor(below, above);
+        self.trap_if(bad, ops::CODE_FLOAT_INT);
+        self.b.ins().fcvt_to_sint_sat(types::I64, v)
+    }
+
     fn trap_if(&mut self, cond: ir::Value, code: i64) {
         let eb = self.err_block(code);
         let cont = self.b.create_block();
@@ -3214,6 +3243,13 @@ impl<'a, 'f> Gen<'a, 'f> {
         };
         let v = self.b.use_var(l.var);
         let fr = self.helper(h);
+        if h == Helper::MapLen {
+            self.guard_ok()?;
+            let call = self.b.ins().call(fr, &[self.ctx_ptr, v]);
+            let n = self.b.inst_results(call)[0];
+            self.guard_branch();
+            return Ok((n, Ty::Int));
+        }
         let call = self.b.ins().call(fr, &[v]);
         Ok((self.b.inst_results(call)[0], Ty::Int))
     }
@@ -3529,13 +3565,16 @@ impl<'a, 'f> Gen<'a, 'f> {
                 let zero = self.b.ins().icmp_imm_s(IntCC::Equal, b, 0);
                 self.trap_if(zero, ops::CODE_DIV_ZERO);
                 let m1 = self.b.ins().icmp_imm_s(IntCC::Equal, b, -1);
-                let mn = self.b.ins().icmp_imm_s(IntCC::Equal, a, i64::MIN);
-                let both = self.b.ins().band(m1, mn);
-                self.trap_if(both, ops::CODE_OVERFLOW);
                 if op == Div {
+                    let mn = self.b.ins().icmp_imm_s(IntCC::Equal, a, i64::MIN);
+                    let both = self.b.ins().band(m1, mn);
+                    self.trap_if(both, ops::CODE_OVERFLOW);
                     self.b.ins().sdiv(a, b)
                 } else {
-                    self.b.ins().srem(a, b)
+                    // `x % -1` is 0 (`ops::int_rem`); `MIN % -1` would trap in the hardware
+                    let one = self.b.ins().iconst(types::I64, 1);
+                    let d = self.b.ins().select(m1, one, b);
+                    self.b.ins().srem(a, d)
                 }
             }
             Pow => {
@@ -3663,7 +3702,7 @@ impl<'a, 'f> Gen<'a, 'f> {
                 if matches!(c, Callee::ToInt) {
                     match t {
                         Ty::Int => Ok((v, Ty::Int)),
-                        Ty::Float => Ok((self.b.ins().fcvt_to_sint_sat(types::I64, v), Ty::Int)),
+                        Ty::Float => Ok((self.float_to_int(v), Ty::Int)),
                         Ty::Bool => Ok((self.b.ins().uextend(types::I64, v), Ty::Int)),
                         Ty::Unit => bail("int(nil)"),
                         Ty::List | Ty::Map | Ty::Str => bail("int() of a value the JIT does not compile"),
@@ -3883,14 +3922,7 @@ impl<'a, 'f> Gen<'a, 'f> {
                             // halves away from zero, like f64::round (`nearest` rounds to even)
                             _ => self.call_f64(m_round as extern "C" fn(f64) -> f64 as usize, &[a]),
                         };
-                        // NaN, ±inf and |r| >= 2^63 have no int value: the interpreter's error
-                        // (`ops::float_to_int`), never a saturated int. One compare of |r|
-                        // (unordered covers NaN) keeps the check to fabs + ucomisd + branch.
-                        let a = self.b.ins().fabs(r);
-                        let lim = self.b.ins().f64const(9_223_372_036_854_775_808.0);
-                        let bad = self.b.ins().fcmp(FloatCC::UnorderedOrGreaterThanOrEqual, a, lim);
-                        self.trap_if(bad, ops::CODE_FLOAT_INT);
-                        Ok((self.b.ins().fcvt_to_sint_sat(types::I64, r), Ty::Int))
+                        Ok((self.float_to_int(r), Ty::Int))
                     }
                     _ => bail("floor/ceil/trunc/round require a number"),
                 }
@@ -4432,6 +4464,9 @@ impl Jit {
     }
 
     pub fn report(&self) -> String {
+        if !self.cfg.enabled {
+            return "[jit] disabled (--no-jit / FOGU_JIT=0)".into();
+        }
         let Some(i) = &self.inner else {
             return "[jit] no compilation was needed".into();
         };

@@ -1,0 +1,19 @@
+// time.delay(0ms) and Fogu.sleep(0ms) let the other tasks run: a task that
+// "yields" in a loop this way no longer starves the timers of the others.
+import time from "fogu:time"
+let stop = false
+let spins = 0
+fg fn() {
+    while !stop {
+        spins += 1
+        time.delay(0ms)
+    }
+}()
+fg fn() {
+    while !stop { Fogu.sleep(0ms) }
+}()
+const t = time.monotonic()
+time.delay(10ms)
+const waited = time.monotonic() - t
+stop = true
+print("woke", waited < 5.0, spins > 1)

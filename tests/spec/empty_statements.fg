@@ -1,0 +1,8 @@
+// A `;` after a block (or alone) is an empty statement.
+let a = 0
+if true { a = 1 }; print(a)
+fn f() { return 1 }; print(f())
+for i in 0..2 { a += i };;
+while a < 5 { a += 1 }; print(a)
+{ ; }
+print("end");

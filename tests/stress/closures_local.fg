@@ -1,0 +1,56 @@
+// A function stored in the scope it was created in (a local helper of a
+// handler, a nested fn, a closure kept in a struct or map of the scope) is freed
+// with that scope when nothing else holds it: memory stays flat over many calls.
+// (Measured with /proc/self/statm where there is one; elsewhere it only runs.)
+import fs from "fogu:fs"
+
+fn rss_kb() {
+    if !fs.exists("/proc/self/statm") { return -1 }
+    const fields = fs.readText("/proc/self/statm")?.split(" ")
+    return int(fields[1]) * 4
+}
+
+struct Holder { f = nil }
+
+fn handler(i) {
+    const req = { path: "/x", data: [i, i, i] }
+    const fmt = (x) => `item ${x} ${req.path}`
+    fn helper(k) {
+        if k <= 0 { return 0 }
+        return helper(k - 1)
+    }
+    const h = new Holder()
+    h.f = (x) => x + 1
+    const m = { n: i }
+    m.get = fn() { return m.n }
+    if true {
+        const inner = (x) => x * 2
+        inner(i)
+    }
+    for j in 0..2 {
+        const body = (x) => x + j
+        body(j)
+    }
+    return fmt(helper(2) + h.f(i) + m.get())
+}
+
+// a closure that escapes is kept, of course
+fn counter() {
+    let n = 0
+    const inc = fn() { n += 1
+        return n }
+    return inc
+}
+
+const N = 200000
+for i in 0..20000 { handler(i) }
+const before = rss_kb()
+let last = ""
+for i in 0..N { last = handler(i) }
+const after = rss_kb()
+print(last)
+const c = counter()
+c()
+print(c())
+// 200 000 calls used to keep about 200 MB
+print("flat", before < 0 || after - before < 20000)

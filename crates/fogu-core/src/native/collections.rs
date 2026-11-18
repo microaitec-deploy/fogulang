@@ -37,22 +37,22 @@ fn need(args: &[Value], n: usize, name: &str) -> Result<(), String> {
     }
 }
 
-fn eq(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Nil, Value::Nil) => true,
-        (Value::Bool(x), Value::Bool(y)) => x == y,
-        (Value::Int(x), Value::Int(y)) => x == y,
-        (Value::Float(x), Value::Float(y)) => x == y,
-        (Value::Int(x), Value::Float(y)) | (Value::Float(y), Value::Int(x)) => (*x as f64) == *y,
-        (Value::Str(x), Value::Str(y)) => x == y,
-        (Value::List(x), Value::List(y)) => {
-            Rc::ptr_eq(x, y) || {
-                let (x, y) = (x.borrow(), y.borrow());
-                x.len() == y.len() && x.iter().zip(y.iter()).all(|(a, b)| eq(a, b))
+/// The position of the first item `== x` (the same equality as the operator,
+/// `equals(other)` of structs included).
+fn position(it: Option<&Interpreter>, l: &RefCell<Vec<Value>>, x: &Value) -> Result<Option<usize>, String> {
+    use crate::runtime::interpreter::values_equal;
+    match (it, x) {
+        // a struct's `equals` may run any code: compare against a copy of the items
+        (Some(it), Value::Struct(_) | Value::List(_) | Value::Map(_)) => {
+            let items = l.borrow().clone();
+            for (i, v) in items.iter().enumerate() {
+                if it.equal(x, v, it.globals_ref())? {
+                    return Ok(Some(i));
+                }
             }
+            Ok(None)
         }
-        (Value::Map(x), Value::Map(y)) => Rc::ptr_eq(x, y),
-        _ => false,
+        _ => Ok(l.borrow().iter().position(|v| values_equal(x, v))),
     }
 }
 
@@ -66,8 +66,16 @@ fn natural(a: &Value, b: &Value) -> Result<Ordering, String> {
                 Value::Float(f) => *f,
                 _ => 0.0,
             };
-            Ok(f(a).partial_cmp(&f(b)).unwrap_or(Ordering::Equal))
+            let (x, y) = (f(a), f(b));
+            // NaN after every number: still a total order
+            Ok(match (x.is_nan(), y.is_nan()) {
+                (true, true) => Ordering::Equal,
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                _ => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+            })
         }
+        (Value::Duration(x), Value::Duration(y)) => Ok(x.cmp(y)),
         _ => Err(format!(
             "sort: cannot compare '{}' with '{}'",
             a.type_name(),
@@ -160,13 +168,11 @@ fn list_method(
             "last" => l.borrow().last().cloned().unwrap_or(Value::Nil),
             "contains" => {
                 need(args, 1, name)?;
-                Value::Bool(l.borrow().iter().any(|v| eq(v, &args[0])))
+                Value::Bool(position(it, l, &args[0])?.is_some())
             }
             "index_of" => {
                 need(args, 1, name)?;
-                Value::Int(
-                    l.borrow().iter().position(|v| eq(v, &args[0])).map(|i| i as i64).unwrap_or(-1),
-                )
+                Value::Int(position(it, l, &args[0])?.map(|i| i as i64).unwrap_or(-1))
             }
             "join" => {
                 let sep = match args.first() {
@@ -279,7 +285,17 @@ fn list_method(
                         list(o)
                     }
                     "each" => {
-                        for (i, x) in items.into_iter().enumerate() { call_fn(it, f, vec![x, Value::Int(i as i64)], name)?; }
+                        // the index too when the callback takes it: `(v) => …` gets the item only
+                        let index = match f {
+                            Value::Fn(func) => {
+                                func.params.len() >= 2 || func.params.iter().any(|p| p.starts_with(crate::runtime::ast::REST_PREFIX))
+                            }
+                            _ => true,
+                        };
+                        for (i, x) in items.into_iter().enumerate() {
+                            let a = if index { vec![x, Value::Int(i as i64)] } else { vec![x] };
+                            call_fn(it, f, a, name)?;
+                        }
                         Value::Nil
                     }
                     "find" => {
@@ -409,7 +425,7 @@ fn str_method(s: &str, name: &str, args: &[Value]) -> Option<Result<Value, Strin
             }
             "replace" => Value::Str(s.replace(str_arg(args, 0, name)?, str_arg(args, 1, name)?).into()),
             "repeat" => match args.first() {
-                Some(Value::Int(n)) if *n >= 0 => Value::Str(s.repeat(*n as usize).into()),
+                Some(Value::Int(n)) if *n >= 0 => Value::Str(crate::native::util::repeat_str(s, *n as usize, "repeat")?.into()),
                 _ => return Err("repeat expects an int >= 0".into()),
             },
             "slice" => {
@@ -445,8 +461,14 @@ pub fn install(ctx: &mut NativeContext) {
 
     // error(msg, cause?) — spec §29.
     ctx.define_global_variadic("error", 1, |args| {
+        if args.len() > 2 {
+            return Err(format!("native function 'error' expects at most 2 arguments, got {}", args.len()));
+        }
         let message = args[0].to_display_string();
         let cause = args.get(1).cloned().unwrap_or(Value::Nil);
+        if !matches!(cause, Value::Nil | Value::Error(_)) {
+            return Err(format!("error: the cause must be an error or nil, got '{}'", cause.type_name()));
+        }
         Ok(Value::Error(Rc::new(ErrorValue { message, cause, trace: Vec::new() })))
     });
 

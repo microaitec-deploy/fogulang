@@ -18,7 +18,7 @@ s: x
 v: 1.0
  float
 true true
-1.0 1e20 0.1 [2.5,3]
+1.0 100000000000000000000.0 0.1 [2.5,3]
 float true
 ../../a ../../etc/passwd /a ../b
 true true false

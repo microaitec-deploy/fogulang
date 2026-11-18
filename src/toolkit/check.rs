@@ -91,7 +91,7 @@ fn files_of(paths: &[String]) -> (Vec<PathBuf>, Vec<String>) {
 }
 
 /// Every error and warning of one file (each prefixed with the file name).
-fn check_file(f: &Path, builtins: &HashSet<String>) -> (Vec<String>, Vec<String>) {
+fn check_file(f: &Path, builtins: &HashSet<String>, natives: &crate::native::NativeContext) -> (Vec<String>, Vec<String>) {
     let name = f.display().to_string();
     let src = match std::fs::read_to_string(f) {
         Ok(s) => s,
@@ -105,7 +105,7 @@ fn check_file(f: &Path, builtins: &HashSet<String>) -> (Vec<String>, Vec<String>
         Err(e) => return (vec![format!("{}: {}", name, e)], Vec::new()),
     };
     let mut r = crate::runtime::resolver::analyze(&program, builtins);
-    r.errors.extend(missing_imports(f, &program));
+    r.errors.extend(missing_imports(f, &program, natives));
     let mut warnings: Vec<(u32, String)> = r
         .warnings
         .into_iter()
@@ -116,38 +116,135 @@ fn check_file(f: &Path, builtins: &HashSet<String>) -> (Vec<String>, Vec<String>
     (errors, warnings.into_iter().map(|(_, w)| w).collect())
 }
 
-/// Relative imports (`./x.fg`, `./config.json`, `export … from`) whose file
-/// does not exist or has an unknown type. Imported files are not parsed
-/// here: data files are not Fogu, and each module is checked on its own.
-fn missing_imports(f: &Path, program: &[crate::runtime::ast::Stmt]) -> Vec<String> {
-    use crate::runtime::ast::{ExportKind, Stmt};
+/// Imports the program would fail to load: a `fogu:` module that does not
+/// exist, a package that is not installed, a relative file (`./x.fg`,
+/// `./config.json`) that does not exist or has an unknown type, and a name
+/// (`import { x } from "./m.fg"`) that the module does not export. Data files
+/// are not parsed; a Fogu module only for its `export` lines.
+fn missing_imports(f: &Path, program: &[crate::runtime::ast::Stmt], natives: &crate::native::NativeContext) -> Vec<String> {
+    use crate::runtime::ast::{ExportKind, ImportKind, Stmt};
+    fn members(kind: &ImportKind, out: &mut Vec<String>) {
+        match kind {
+            ImportKind::Members { members } => out.extend(members.iter().map(|(orig, _)| orig.clone())),
+            ImportKind::Combined { rest, .. } => members(rest, out),
+            ImportKind::Named { .. } | ImportKind::Namespace { .. } => {}
+        }
+    }
     let dir = f.parent().map(Path::to_path_buf).unwrap_or_default();
     let mut line = 0;
     let mut out = Vec::new();
     for s in program {
+        let mut names = Vec::new();
         let spec = match s {
             Stmt::Line(n) => {
                 line = *n;
                 continue;
             }
-            Stmt::Import { path, .. } => path,
+            Stmt::Import { path, kind } => {
+                members(kind, &mut names);
+                path
+            }
             Stmt::Export(e) => match &**e {
-                ExportKind::Names { from: Some(path), .. } | ExportKind::All { from: path, .. } => path,
+                ExportKind::Names { from: Some(path), names: list } => {
+                    names.extend(list.iter().map(|(orig, _)| orig.clone()));
+                    path
+                }
+                ExportKind::All { from: path, .. } => path,
                 _ => continue,
             },
             _ => continue,
         };
-        if !(spec.starts_with("./") || spec.starts_with("../")) {
+        let mut fail = |msg: String| out.push(format!("line {}: name error: {}", line, msg));
+        if let Some(name) = spec.strip_prefix("fogu:") {
+            if !natives.has_module(name) {
+                fail(format!("unknown built-in module: 'fogu:{}'", name));
+            } else if !names.is_empty() {
+                if let Some(m) = natives.get_module(name) {
+                    let exports = m.exports.borrow();
+                    for n in names.iter().filter(|n| *n != "default" && !exports.contains_key(n.as_str())) {
+                        fail(format!("'{}' is not exported by 'fogu:{}'", n, name));
+                    }
+                }
+            }
             continue;
         }
-        let Ok(target) = crate::runtime::module::resolve_path(spec, &dir) else { continue };
-        if let Some(e) = crate::runtime::module::unknown_type(&target) {
-            out.push(format!("line {}: name error: {}", line, e));
-        } else if !target.is_file() {
-            out.push(format!("line {}: name error: cannot find '{}' (imported from this file)", line, spec));
+        let relative = spec.starts_with("./") || spec.starts_with("../");
+        let bare = !(spec.starts_with('.') || spec.starts_with('/') || spec.contains(":\\"));
+        let target = if bare {
+            match crate::pkg::resolve_import(spec, &dir) {
+                Ok(Some(p)) => p,
+                Ok(None) => match crate::runtime::module::resolve_path(spec, &dir) {
+                    Ok(p) if p.is_file() => p,
+                    _ => {
+                        fail(format!("cannot find the package '{}' (install it with `fogu add {}`)", spec, spec));
+                        continue;
+                    }
+                },
+                Err(e) => {
+                    fail(e);
+                    continue;
+                }
+            }
+        } else if relative {
+            let Ok(target) = crate::runtime::module::resolve_path(spec, &dir) else { continue };
+            if let Some(e) = crate::runtime::module::unknown_type(&target) {
+                fail(e);
+                continue;
+            } else if !target.is_file() {
+                fail(format!("cannot find '{}' (imported from this file)", spec));
+                continue;
+            }
+            target
+        } else {
+            continue;
+        };
+        if names.is_empty() || target.extension().is_none_or(|e| e != "fg") {
+            continue;
+        }
+        let Some(exported) = exported_names(&target) else { continue };
+        for n in &names {
+            if n.starts_with('_') {
+                fail(format!("'{}' is private to module '{}' (names starting with '_')", n, spec));
+            } else if !exported.contains(n.as_str()) {
+                fail(format!("'{}' is not exported by '{}'", n, spec));
+            }
         }
     }
     out
+}
+
+/// The names a Fogu module exports, from its `export` lines; `None` when
+/// they cannot be known without loading it (`export * from …`, a parse error).
+fn exported_names(path: &Path) -> Option<HashSet<String>> {
+    use crate::runtime::ast::{ExportKind, Stmt};
+    let src = std::fs::read_to_string(path).ok()?;
+    let tokens = crate::runtime::Lexer::new(&src).tokenize().ok()?;
+    let program = crate::runtime::Parser::new(tokens).parse_program().ok()?;
+    let mut out = HashSet::new();
+    for s in &program {
+        let Stmt::Export(e) = s else { continue };
+        match &**e {
+            ExportKind::Fn { name, .. } | ExportKind::Let { name, .. } => {
+                out.insert(name.clone());
+            }
+            ExportKind::Struct(d) => {
+                out.insert(d.name.clone());
+            }
+            ExportKind::Interface(d) => {
+                out.insert(d.name.clone());
+            }
+            ExportKind::LetList { names, .. } => out.extend(names.iter().filter(|n| *n != "_").cloned()),
+            ExportKind::Names { names, .. } => out.extend(names.iter().map(|(_, alias)| alias.clone())),
+            ExportKind::All { alias: Some(a), .. } => {
+                out.insert(a.clone());
+            }
+            ExportKind::All { alias: None, .. } => return None,
+            ExportKind::Default(_) | ExportKind::DefaultDecl(_) => {
+                out.insert("default".into());
+            }
+        }
+    }
+    Some(out)
 }
 
 fn finding_json(text: &str, warning: bool) -> Json {
@@ -166,11 +263,8 @@ fn finding_json(text: &str, warning: bool) -> Json {
 /// Checks once; returns the exit code.
 fn run(o: &Opts) -> i32 {
     let (files, missing) = files_of(&o.paths);
-    let builtins: HashSet<String> = crate::native::NativeContext::new()
-        .globals()
-        .into_iter()
-        .map(|(name, _)| name)
-        .collect();
+    let natives = crate::native::NativeContext::new();
+    let builtins: HashSet<String> = natives.globals().into_iter().map(|(name, _)| name).collect();
 
     let (mut n_err, mut n_warn, mut bad) = (0usize, 0usize, 0usize);
     let mut diags: Vec<Json> = Vec::new();
@@ -187,7 +281,7 @@ fn run(o: &Opts) -> i32 {
         }
     }
     for f in &files {
-        let (errors, warnings) = check_file(f, &builtins);
+        let (errors, warnings) = check_file(f, &builtins, &natives);
         n_err += errors.len();
         n_warn += warnings.len();
         if !errors.is_empty() {

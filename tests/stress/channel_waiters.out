@@ -1,0 +1,5 @@
+senders 199990000
+receivers 199990000
+select 40000
+order [0, 5, 10, 20, 30]
+fast true

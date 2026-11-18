@@ -180,6 +180,11 @@ impl Interpreter {
         (self.cur_file.borrow().to_string(), self.cur_line.get())
     }
 
+    /// The program's entry file (an import of it is a cycle, not a second run).
+    pub fn enter_main(&self, path: &Path) {
+        self.module_cache.enter_main(path);
+    }
+
     pub fn set_main_file(&self, f: &str) {
         *self.cur_file.borrow_mut() = Rc::from(f);
         self.globals.borrow_mut().set_module(f);
@@ -560,7 +565,7 @@ impl Interpreter {
         let task = sched::task_id();
         let prev_deadline = self.deadline();
         if let Some(d) = timeout {
-            let at = std::time::Instant::now() + d;
+            let at = crate::native::util::deadline_after(d);
             // a nested timeout cannot outlive the outer one
             if prev_deadline.is_none_or(|outer| at < outer.at) {
                 let cancelled = prev_deadline.is_some_and(|p| p.cancelled);
@@ -645,7 +650,7 @@ impl Interpreter {
             Stmt::Import { kind, path } => {
                 let from_dir = self.base_dir.borrow().clone();
                 let imported = self.module_cache.resolve(path, &from_dir, self)?;
-                self.module_cache.bind_import(kind, &imported, &env)?;
+                self.module_cache.bind_import(kind, &imported, &env, self.redeclare_ok.get())?;
                 Ok(Flow::Normal)
             }
             Stmt::Export(inner) => {
@@ -905,6 +910,7 @@ impl Interpreter {
             return self.exec_block(stmts, env);
         }
         let block_env = Environment::with_parent(env);
+        let _end = ScopeEnd(&block_env);
         for s in stmts {
             match self.exec(s, block_env.clone())? {
                 Flow::Normal => {}
@@ -1366,8 +1372,43 @@ impl Interpreter {
                 return Err("select without cases".into());
             }
 
-            // Block until some case is ready.
-            self.keep_loc(|| sched::wait_until(|| evaluated.iter().any(|r| is_ready(r))))?;
+            // Block until some case is ready: a task parks behind one gate
+            // added to every channel of the select.
+            if !can_park() {
+                self.keep_loc(|| sched::wait_until(|| evaluated.iter().any(|r| is_ready(r))))?;
+                continue;
+            }
+            let gate = sched::new_local_gate();
+            let mut timers = Vec::new();
+            for r in &evaluated {
+                match r {
+                    Ready::Recv(c) => {
+                        c.recv_waiters.add(&gate);
+                        c.note_parked();
+                        if let Some(d) = c.timer.get() {
+                            timers.push(sched::open_at(d, &gate));
+                        }
+                    }
+                    Ready::Send(c, _) => {
+                        c.send_waiters.add(&gate);
+                        c.note_parked();
+                    }
+                }
+            }
+            let r = self.keep_loc(|| sched::wait_until_on(Some(&gate), || gate.load(std::sync::atomic::Ordering::Acquire)));
+            for k in timers {
+                sched::cancel_open_at(k);
+            }
+            r?;
+            // the wake-up that opened the gate may be for a case this select
+            // will not take: hand it on to the next task waiting on that channel
+            for r in &evaluated {
+                match r {
+                    Ready::Recv(c) if !c.queue.borrow().is_empty() || c.closed.get() => c.wake_receiver(),
+                    Ready::Send(c, _) if c.closed.get() || c.queue.borrow().len() < c.capacity() => c.wake_sender(),
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -1634,10 +1675,9 @@ impl Interpreter {
     fn eval_binary_expr(&self, left: &Expr, op: &BinaryOp, right: &Expr, env: Rc<RefCell<Environment>>) -> Result<Value, String> {
         let l = self.eval(left, env.clone())?;
         let r = self.eval(right, env.clone())?;
-        if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
-            if let Some(eq) = self.struct_equals(&l, &r, env)? {
-                return Ok(Value::Bool(eq == (*op == BinaryOp::Eq)));
-            }
+        if matches!(op, BinaryOp::Eq | BinaryOp::Ne) && matches!(l, Value::Struct(_) | Value::List(_) | Value::Map(_)) {
+            let eq = self.equal(&l, &r, &env)?;
+            return Ok(Value::Bool(eq == (*op == BinaryOp::Eq)));
         }
         eval_binary(l, *op, r)
     }
@@ -1670,13 +1710,32 @@ impl Interpreter {
         self.install_switch_hook();
         let me = self as *const Interpreter as usize;
         let genv = env.clone();
+        let started = self.position();
         self.keep_loc(|| sched::spawn(Box::new(move || {
             // SAFETY: the interpreter lives until the end of the program;
             // pending tasks are discarded in `shutdown`.
             let it = unsafe { &*(me as *const Interpreter) };
-            it.call_value(callee_val, arg_vals, genv).map(|_| ())
+            it.call_value(callee_val, arg_vals, genv).map(|_| ()).map_err(|e| it.task_error(e, &started))
         })))?;
         Ok(Value::Nil)
+    }
+
+    /// `file:line` of the code running now.
+    fn position(&self) -> String {
+        format!("{}:{}", self.cur_file.borrow(), self.cur_line.get())
+    }
+
+    /// The error that ended an `fg` task, located like an error of the main
+    /// program (`file:line: runtime error: msg`), with where the task started.
+    fn task_error(&self, e: String, started: &str) -> String {
+        let msg = self.finish_err(e);
+        // already located (a native module ran the code and formatted it)
+        if msg.lines().next().is_some_and(|l| l.contains(": runtime error: ")) {
+            return format!("{}\nnote: in the fg task started at {}", msg, started);
+        }
+        let (file, line) = self.error_location();
+        let at = if line > 0 { format!("{}:{}", file, line) } else { file };
+        format!("{}: runtime error: {}\nnote: in the fg task started at {}", at, msg, started)
     }
 
     #[inline(never)]
@@ -1684,6 +1743,7 @@ impl Interpreter {
         let buf = match buffer {
             Some(b) => match self.eval(b, env)? {
                 Value::Int(n) if n >= 0 => n as usize,
+                Value::Int(n) => return Err(format!("chan buffer must be >= 0, got {}", n)),
                 other => {
                     return Err(format!(
                         "chan buffer must be an int >= 0, got '{}'",
@@ -1777,22 +1837,44 @@ impl Interpreter {
         self.call_value(callee_val, arg_vals, env)
     }
 
-    /// `a == b` between structs uses the `equals(other)` method of the left
-    /// side, if it exists (spec §12). `None` = normal equality.
-    fn struct_equals(
+    /// `s.equals(other)` when `other` is a struct of the same type and the
+    /// type has the method (never with `nil` or a value of another type, so
+    /// `a == b` and `b == a` agree). `None`: identity decides.
+    fn call_equals(
         &self,
-        l: &Value,
-        r: &Value,
-        env: Rc<RefCell<Environment>>,
+        s: &Rc<RefCell<StructInstance>>,
+        other: &Value,
+        env: &Rc<RefCell<Environment>>,
     ) -> Result<Option<bool>, String> {
-        let Value::Struct(s) = l else {
+        let Value::Struct(o) = other else {
             return Ok(None);
         };
-        if !s.borrow().methods.contains_key("equals") {
-            return Ok(None);
+        {
+            let (sb, ob) = (s.borrow(), o.borrow());
+            if !sb.methods.contains_key("equals") || !Rc::ptr_eq(&sb.layout, &ob.layout) && sb.type_name != ob.type_name {
+                return Ok(None);
+            }
         }
         let m = Value::struct_bound(Rc::clone(s), "equals");
-        Ok(Some(self.call_value(m, vec![r.clone()], env)?.is_truthy()))
+        match self.call_value(m, vec![other.clone()], Rc::clone(env))? {
+            Value::Bool(b) => Ok(Some(b)),
+            v => Err(format!(
+                "'{}.equals' must return a bool, got '{}'",
+                s.borrow().type_name,
+                v.type_name()
+            )),
+        }
+    }
+
+    /// `l == r` (spec §12): structural for lists and maps, and a struct with an
+    /// `equals(other)` method decides against another of its type, at any depth.
+    pub fn equal(&self, l: &Value, r: &Value, env: &Rc<RefCell<Environment>>) -> Result<bool, String> {
+        match (l, r) {
+            (Value::Struct(_), _) | (Value::List(_), Value::List(_)) | (Value::Map(_), Value::Map(_)) => {
+                deep_equal(l, r, 0, &mut None, &mut |s, o| self.call_equals(s, o, env))
+            }
+            _ => Ok(scalar_equal(l, r)),
+        }
     }
 
     /// `recv.field(args)`: built-in list/map/str methods (`xs.push(1)`)
@@ -1806,7 +1888,7 @@ impl Interpreter {
     ) -> Result<Value, String> {
         let is_builtin_recv = match &recv {
             Value::List(_) | Value::Str(_) | Value::Buffer(_) => true,
-            Value::Map(m) => !m.borrow().contains_key(field),
+            Value::Map(m) => !map_key_is_method(m, field),
             _ => false,
         };
         let mut arg_vals = Vec::with_capacity(args.len());
@@ -1817,6 +1899,11 @@ impl Interpreter {
         if is_builtin_recv {
             if let Some(r) = crate::native::collections::call_method(self, &recv, field, &arg_vals) {
                 return r;
+            }
+            // a key holding something else (`{keys: 5}.keys2()`): calling it says what it is
+            if matches!(&recv, Value::Map(m) if m.borrow().contains_key(field)) {
+                let callee_val = self.eval_access(recv, field)?;
+                return self.call_value(callee_val, arg_vals, env);
             }
             return Err(format!(
                 "'{}' has no method '{}'",
@@ -1985,11 +2072,12 @@ impl Interpreter {
     pub fn spawn_task(&self, f: Box<dyn FnOnce(&Interpreter) -> Result<(), String>>) -> Result<(), String> {
         self.install_switch_hook();
         let me = self as *const Interpreter as usize;
+        let started = self.position();
         sched::spawn(Box::new(move || {
             // SAFETY: as for `fg`: the interpreter lives until the end of the
             // program and pending tasks are discarded in `shutdown`.
             let it = unsafe { &*(me as *const Interpreter) };
-            f(it)
+            f(it).map_err(|e| it.task_error(e, &started))
         }))
     }
 
@@ -2789,7 +2877,42 @@ fn chan_push(ch: &Rc<ChanValue>, v: Value) -> Result<(), String> {
     }
     ch.queue.borrow_mut().push_back(v);
     ch.sent.set(ch.sent.get() + 1);
+    ch.wake_receiver();
     sched::note_progress();
+    Ok(())
+}
+
+/// Can an `fg` task park behind a gate (instead of being resumed by every
+/// pass of the scheduler to check its condition)? Not the main program, which
+/// runs the passes, and not on WebAssembly, where tasks never suspend. With
+/// few tasks, resuming them to check costs less than a gate (an allocation
+/// and the parked set): they park once there are many.
+fn can_park() -> bool {
+    !cfg!(target_family = "wasm") && sched::in_task() && sched::crowded()
+}
+
+/// Waits until `ready()`. A task parks behind a gate added to `waiters` (and
+/// opened at `timer`, the deadline of a `timeout` channel): only a change of
+/// the channel that may satisfy it wakes it, so many blocked tasks cost nothing.
+fn chan_wait(ch: &ChanValue, waiters: &crate::runtime::value::Waiters, timer: Option<std::time::Instant>, mut ready: impl FnMut() -> bool) -> Result<(), String> {
+    // the common case: no wait at all
+    if ready() {
+        return Ok(());
+    }
+    if !can_park() {
+        return sched::wait_until(ready);
+    }
+    while !ready() {
+        let gate = sched::new_local_gate();
+        waiters.add(&gate);
+        ch.note_parked();
+        let key = timer.map(|d| sched::open_at(d, &gate));
+        let r = sched::wait_until_on(Some(&gate), || gate.load(std::sync::atomic::Ordering::Acquire));
+        if let Some(k) = key {
+            sched::cancel_open_at(k);
+        }
+        r?;
+    }
     Ok(())
 }
 
@@ -2799,19 +2922,35 @@ pub fn chan_send(ch: &Rc<ChanValue>, v: Value) -> Result<(), String> {
     if cfg!(target_family = "wasm") {
         return chan_push(ch, v);
     }
-    sched::wait_until(|| ch.closed.get() || ch.queue.borrow().len() < ch.capacity())?;
+    chan_wait(ch, &ch.send_waiters, None, || ch.closed.get() || ch.queue.borrow().len() < ch.capacity())?;
     chan_push(ch, v)?;
+    // room left: the next sender waiting for it may go too
+    if ch.parked.get() && ch.queue.borrow().len() < ch.capacity() {
+        ch.wake_sender();
+    }
     if ch.buffer == 0 {
         // Rendezvous: wait for the receiver to take the value.
         let my_seq = ch.sent.get();
-        sched::wait_until(|| ch.recvd.get() >= my_seq || ch.closed.get())?;
+        let taken = || ch.recvd.get() >= my_seq || ch.closed.get();
+        if taken() {
+            return Ok(());
+        }
+        if !can_park() {
+            return sched::wait_until(taken);
+        }
+        while !taken() {
+            let gate = sched::new_local_gate();
+            ch.taken_waiters.borrow_mut().push_back((my_seq, sched::Gate::clone(&gate)));
+            ch.note_parked();
+            sched::wait_until_on(Some(&gate), || gate.load(std::sync::atomic::Ordering::Acquire))?;
+        }
     }
     Ok(())
 }
 
 /// Blocking (cooperative) receive.
 pub fn chan_recv(ch: &Rc<ChanValue>) -> Result<Value, RecvError> {
-    sched::wait_until(|| {
+    chan_wait(ch, &ch.recv_waiters, ch.timer.get(), || {
         ch.poll_timer();
         !ch.queue.borrow().is_empty() || ch.closed.get()
     })
@@ -2820,10 +2959,19 @@ pub fn chan_recv(ch: &Rc<ChanValue>) -> Result<Value, RecvError> {
     match v {
         Some(v) => {
             ch.recvd.set(ch.recvd.get() + 1);
+            ch.taken();
+            // more to take (or closed): the next receiver may go too
+            if ch.parked.get() && (!ch.queue.borrow().is_empty() || ch.closed.get()) {
+                ch.wake_receiver();
+            }
             sched::note_progress();
             Ok(v)
         }
-        None => Err(RecvError::Closed),
+        None => {
+            // closed and empty: every receiver ends
+            ch.wake_receiver();
+            Err(RecvError::Closed)
+        }
     }
 }
 
@@ -3096,8 +3244,144 @@ pub(crate) fn propagated_return(ret: Option<&TypeExpr>, err: Value) -> Value {
     }
 }
 
+/// Does `m.name(...)` call the function stored under the key `name`? Only when
+/// that key holds a function: a map used as a namespace (`api.get(id)`). Any
+/// other value leaves the built-in method in charge, so data cannot hide it
+/// (`json.parse("{\"has\": 1}").has("x")` is still the method).
+pub fn map_key_is_method(m: &RefCell<HashMap<Str, Value>>, name: &str) -> bool {
+    matches!(
+        m.borrow().get(name),
+        Some(Value::Fn(_) | Value::NativeFn(_) | Value::BoundMethod(_) | Value::StructBoundMethod(_))
+    )
+}
+
 /// `==` semantics (structural for lists and maps, identity for the rest).
+/// Structs compare by identity here; [`Interpreter::equal`] also asks their
+/// `equals(other)` method.
+#[inline]
 pub fn values_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::List(_), Value::List(_)) | (Value::Map(_), Value::Map(_)) | (Value::Tuple(_), Value::Tuple(_)) => {
+            deep_equal(a, b, 0, &mut None, &mut |_, _| Ok(None)).unwrap_or(false)
+        }
+        _ => scalar_equal(a, b),
+    }
+}
+
+/// Pairs of containers already being compared, once the comparison is deep
+/// (a cyclic value): meeting a pair again assumes it equal, as Python does.
+type SeenPairs = Option<rustc_hash::FxHashSet<(usize, usize)>>;
+
+/// Below this depth no pair is recorded: shallow values pay nothing for the
+/// cycle check.
+const EQ_TRACK_DEPTH: u32 = 64;
+
+/// Structural equality of lists and maps (any depth, cycles included);
+/// `structs` decides a pair of distinct structs (`None`: they differ).
+fn deep_equal<F>(a: &Value, b: &Value, depth: u32, seen: &mut SeenPairs, structs: &mut F) -> Result<bool, String>
+where
+    F: FnMut(&Rc<RefCell<StructInstance>>, &Value) -> Result<Option<bool>, String>,
+{
+    // a tuple cannot contain itself (it is built once, immutable): its values in order
+    if let (Value::Tuple(x), Value::Tuple(y)) = (a, b) {
+        if Rc::ptr_eq(x, y) {
+            return Ok(true);
+        }
+        if x.len() != y.len() {
+            return Ok(false);
+        }
+        for (p, q) in x.iter().zip(y.iter()) {
+            if !deep_equal(p, q, depth + 1, seen, structs)? {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+    let pair = match (a, b) {
+        (Value::List(x), Value::List(y)) if !Rc::ptr_eq(x, y) => (Rc::as_ptr(x) as usize, Rc::as_ptr(y) as usize),
+        (Value::Map(x), Value::Map(y)) if !Rc::ptr_eq(x, y) => (Rc::as_ptr(x) as usize, Rc::as_ptr(y) as usize),
+        (Value::Struct(x), _) => {
+            if let Value::Struct(y) = b {
+                if Rc::ptr_eq(x, y) {
+                    return Ok(true);
+                }
+            }
+            return Ok(structs(x, b)?.unwrap_or(false));
+        }
+        _ => return Ok(scalar_equal(a, b)),
+    };
+    if depth >= EQ_TRACK_DEPTH && !seen.get_or_insert_with(Default::default).insert(pair) {
+        return Ok(true);
+    }
+    if !sched::stack_ok() {
+        return Err("== of values nested too deeply for the stack".into());
+    }
+    match (a, b) {
+        (Value::List(x), Value::List(y)) => {
+            if x.borrow().len() != y.borrow().len() {
+                return Ok(false);
+            }
+            // scalars compared in place; a nested list, map or struct is copied
+            // out first and compared without holding a borrow (`equals` may
+            // change the lists)
+            let mut i = 0;
+            loop {
+                let (p, q) = {
+                    let (xb, yb) = (x.borrow(), y.borrow());
+                    if xb.len() != yb.len() {
+                        return Ok(false);
+                    }
+                    while i < xb.len() && !is_container(&xb[i]) && !is_container(&yb[i]) {
+                        if !scalar_equal(&xb[i], &yb[i]) {
+                            return Ok(false);
+                        }
+                        i += 1;
+                    }
+                    if i == xb.len() {
+                        return Ok(true);
+                    }
+                    (xb[i].clone(), yb[i].clone())
+                };
+                if !deep_equal(&p, &q, depth + 1, seen, structs)? {
+                    return Ok(false);
+                }
+                i += 1;
+            }
+        }
+        (Value::Map(x), Value::Map(y)) => {
+            let pairs: Vec<(Value, Value)> = {
+                let (xb, yb) = (x.borrow(), y.borrow());
+                if xb.len() != yb.len() {
+                    return Ok(false);
+                }
+                let mut pairs = Vec::with_capacity(xb.len());
+                for (k, v) in xb.iter() {
+                    match yb.get(k) {
+                        Some(w) => pairs.push((v.clone(), w.clone())),
+                        None => return Ok(false),
+                    }
+                }
+                pairs
+            };
+            for (p, q) in pairs.iter() {
+                if !deep_equal(p, q, depth + 1, seen, structs)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[inline]
+fn is_container(v: &Value) -> bool {
+    matches!(v, Value::List(_) | Value::Map(_) | Value::Struct(_) | Value::Tuple(_))
+}
+
+/// `==` of everything but the contents of lists and maps.
+#[inline]
+fn scalar_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Nil, Value::Nil) => true,
         (Value::Bool(x), Value::Bool(y)) => x == y,
@@ -3108,29 +3392,9 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Str(x), Value::Str(y)) => x == y,
         (Value::Duration(x), Value::Duration(y)) => x == y,
         (Value::Range(a1, b1), Value::Range(a2, b2)) => a1 == a2 && b1 == b2,
-        (Value::List(x), Value::List(y)) => {
-            if Rc::ptr_eq(x, y) {
-                return true;
-            }
-            let xb = x.borrow();
-            let yb = y.borrow();
-            xb.len() == yb.len() && xb.iter().zip(yb.iter()).all(|(a, b)| values_equal(a, b))
-        }
-        (Value::Tuple(x), Value::Tuple(y)) => {
-            Rc::ptr_eq(x, y) || (x.len() == y.len() && x.iter().zip(y.iter()).all(|(a, b)| values_equal(a, b)))
-        }
+        (Value::List(x), Value::List(y)) => Rc::ptr_eq(x, y),
         (Value::Buffer(x), Value::Buffer(y)) => Rc::ptr_eq(x, y) || *x.borrow() == *y.borrow(),
-        (Value::Map(x), Value::Map(y)) => {
-            if Rc::ptr_eq(x, y) {
-                return true;
-            }
-            let xb = x.borrow();
-            let yb = y.borrow();
-            xb.len() == yb.len()
-                && xb
-                    .iter()
-                    .all(|(k, v)| yb.get(k).map_or(false, |other| values_equal(v, other)))
-        }
+        (Value::Map(x), Value::Map(y)) => Rc::ptr_eq(x, y),
         (Value::Struct(x), Value::Struct(y)) => Rc::ptr_eq(x, y),
         (Value::Error(x), Value::Error(y)) => Rc::ptr_eq(x, y),
         (Value::Chan(x), Value::Chan(y)) => Rc::ptr_eq(x, y),
@@ -3148,6 +3412,26 @@ struct LoopScope {
     block: Option<Rc<RefCell<Environment>>>,
 }
 
+impl Drop for LoopScope {
+    fn drop(&mut self) {
+        if let Some(b) = &self.block {
+            Environment::break_cycles(b, 1);
+        }
+    }
+}
+
+/// Ends a block scope on every way out of the block (see
+/// [`Environment::break_cycles`]).
+struct ScopeEnd<'a>(&'a Rc<RefCell<Environment>>);
+
+impl Drop for ScopeEnd<'_> {
+    fn drop(&mut self) {
+        if Rc::strong_count(self.0) > 1 {
+            Environment::break_cycles(self.0, 1);
+        }
+    }
+}
+
 impl LoopScope {
     /// Did something keep the previous iteration's scopes (a closure or a
     /// task that captured the loop variable or a local of the body)? Then the
@@ -3155,6 +3439,12 @@ impl LoopScope {
     /// by the loop itself and, as their parent, by the reused body block — so
     /// it is free when its count is exactly that.
     fn captured(&self, iter_env: &Rc<RefCell<Environment>>) -> bool {
+        // a closure the body stored in its own scope only holds that scope
+        if let Some(b) = &self.block {
+            if Rc::strong_count(b) > 1 {
+                Environment::break_cycles(b, 1);
+            }
+        }
         let expected = match &self.block {
             Some(b) if Rc::strong_count(b) > 1 => return true,
             Some(_) => 2,
@@ -3167,7 +3457,7 @@ impl LoopScope {
     /// nothing else holds it, else replaced (a closure or task captured the
     /// previous iteration's bindings). Returns true when it was replaced.
     fn recycle(slot: &mut Rc<RefCell<Environment>>, parent: &Rc<RefCell<Environment>>) -> bool {
-        if Rc::strong_count(slot) == 1 {
+        if Rc::strong_count(slot) == 1 || Environment::break_cycles(slot, 1) {
             slot.borrow_mut().reset();
             false
         } else {

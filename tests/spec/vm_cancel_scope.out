@@ -1,0 +1,7 @@
+cancel b true
+1 error: <vm>: runtime error: script execution cancelled
+ok
+cancel y true
+1 error: <vm>: runtime error: script execution cancelled
+3
+10

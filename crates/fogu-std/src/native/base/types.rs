@@ -250,39 +250,74 @@ fn new_map(m: HashMap<Str, Value>) -> Value {
 // ---------------------------------------------------------------------
 
 fn deep_equal(a: &Value, b: &Value) -> bool {
+    deep_equal_in(a, b, &mut ahash::AHashSet::default())
+}
+
+/// `seen`: the pairs of containers being compared; one met again (a cyclic
+/// value) is taken as equal, as Python does.
+fn deep_equal_in(a: &Value, b: &Value, seen: &mut ahash::AHashSet<(usize, usize)>) -> bool {
+    if let (Some(x), Some(y)) = (a.container_addr(), b.container_addr()) {
+        if x == y {
+            return true;
+        }
+        if !seen.insert((x, y)) {
+            return true;
+        }
+    }
     match (a, b) {
         (Value::List(x), Value::List(y)) => {
             let (x, y) = (x.borrow(), y.borrow());
-            x.len() == y.len() && x.iter().zip(y.iter()).all(|(a, b)| deep_equal(a, b))
+            x.len() == y.len() && x.iter().zip(y.iter()).all(|(a, b)| deep_equal_in(a, b, seen))
         }
         (Value::Map(x), Value::Map(y)) => {
             let (x, y) = (x.borrow(), y.borrow());
-            x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| deep_equal(v, w)))
+            x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| deep_equal_in(v, w, seen)))
         }
         (Value::Struct(x), Value::Struct(y)) => {
-            if Rc::ptr_eq(x, y) {
-                return true;
-            }
             let (x, y) = (x.borrow(), y.borrow());
             x.type_name == y.type_name
                 && x.values.len() == y.values.len()
-                && x.fields().all(|(k, v)| y.field(k).is_some_and(|w| deep_equal(v, w)))
+                && x.fields().all(|(k, v)| y.field(k).is_some_and(|w| deep_equal_in(v, w, seen)))
         }
         _ => crate::runtime::interpreter::values_equal(a, b),
     }
 }
 
 fn deep_clone(v: &Value) -> Value {
+    deep_clone_in(v, &mut ahash::AHashMap::default())
+}
+
+/// `done`: the copy of each container already copied, so a value that
+/// contains itself is copied once and its copy contains the copy.
+fn deep_clone_in(v: &Value, done: &mut ahash::AHashMap<usize, Value>) -> Value {
+    if let Some(addr) = v.container_addr() {
+        if let Some(copy) = done.get(&addr) {
+            return copy.clone();
+        }
+    }
     match v {
-        Value::List(l) => list(l.borrow().iter().map(deep_clone).collect()),
-        Value::Map(m) => Value::Map(Rc::new(RefCell::new(m.borrow().iter().map(|(k, v)| (k.clone(), deep_clone(v))).collect()))),
+        Value::List(l) => {
+            let copy = Rc::new(RefCell::new(Vec::new()));
+            done.insert(Rc::as_ptr(l) as usize, Value::List(Rc::clone(&copy)));
+            let items: Vec<Value> = l.borrow().iter().map(|x| deep_clone_in(x, done)).collect();
+            *copy.borrow_mut() = items;
+            Value::List(copy)
+        }
+        Value::Map(m) => {
+            let copy = Rc::new(RefCell::new(Default::default()));
+            done.insert(Rc::as_ptr(m) as usize, Value::Map(Rc::clone(&copy)));
+            let entries: Vec<(Str, Value)> = m.borrow().iter().map(|(k, x)| (k.clone(), deep_clone_in(x, done))).collect();
+            copy.borrow_mut().extend(entries);
+            Value::Map(copy)
+        }
         Value::Buffer(b) => Value::buffer(b.borrow().clone()),
         Value::Struct(s) => {
-            let s = s.borrow();
-            Value::Struct(Rc::new(RefCell::new(StructInstance {
-                layout: Rc::clone(&s.layout),
-                values: s.values.iter().map(deep_clone).collect(),
-            })))
+            let layout = Rc::clone(&s.borrow().layout);
+            let copy = Rc::new(RefCell::new(StructInstance { layout, values: Vec::new() }));
+            done.insert(Rc::as_ptr(s) as usize, Value::Struct(Rc::clone(&copy)));
+            let values: Vec<Value> = s.borrow().values.iter().map(|x| deep_clone_in(x, done)).collect();
+            copy.borrow_mut().values = values;
+            Value::Struct(copy)
         }
         other => other.clone(),
     }

@@ -168,6 +168,12 @@ impl Parser {
         let _ = self.matches(&Token::Semicolon);
     }
 
+    /// Skips empty statements (`;` alone). Always false (for `while` conditions).
+    fn skip_semicolons(&mut self) -> bool {
+        while self.matches(&Token::Semicolon) {}
+        false
+    }
+
     fn expect_block_body(&mut self) -> Result<Block, String> {
         match self.parse_block()? {
             Stmt::Block(b) => Ok(Rc::new(b)),
@@ -179,7 +185,8 @@ impl Parser {
 
     pub fn parse_program(&mut self) -> Result<Vec<Stmt>, String> {
         let mut stmts = Vec::new();
-        while !self.check(&Token::Eof) {
+        // a `;` with nothing before it (after a block: `if c { … }; f()`) is empty
+        while !self.skip_semicolons() && !self.check(&Token::Eof) {
             stmts.push(Stmt::Line(self.line()));
             stmts.push(self.parse_stmt()?);
         }
@@ -672,7 +679,7 @@ impl Parser {
     fn parse_block(&mut self) -> Result<Stmt, String> {
         self.expect(Token::LBrace, "expected '{'")?;
         let mut stmts = Vec::new();
-        while !self.check(&Token::RBrace) && !self.check(&Token::Eof) {
+        while !self.skip_semicolons() && !self.check(&Token::RBrace) && !self.check(&Token::Eof) {
             stmts.push(Stmt::Line(self.line()));
             stmts.push(self.parse_stmt()?);
         }
@@ -1314,6 +1321,11 @@ impl Parser {
 
     fn parse_unary(&mut self) -> Result<Expr, String> {
         if self.matches(&Token::Minus) {
+            // `-9223372036854775808`, the smallest int (see the lexer)
+            if matches!(self.peek(), Token::Int(i64::MIN)) {
+                self.advance();
+                return Ok(Expr::Int(i64::MIN));
+            }
             let right = self.parse_unary()?;
             return Ok(match right {
                 Expr::Int(n) => match n.checked_neg() {
@@ -1443,6 +1455,20 @@ impl Parser {
             Token::Select => "select".into(),
             Token::Chan => "chan".into(),
             Token::Fg => "fg".into(),
+            // any keyword names a field after `.` (JSON keys: `{if: 1}.if`)
+            Token::Let => "let".into(),
+            Token::Const => "const".into(),
+            Token::Fn => "fn".into(),
+            Token::Return => "return".into(),
+            Token::If => "if".into(),
+            Token::Else => "else".into(),
+            Token::While => "while".into(),
+            Token::For => "for".into(),
+            Token::Break => "break".into(),
+            Token::Continue => "continue".into(),
+            Token::True => "true".into(),
+            Token::False => "false".into(),
+            Token::Nil => "nil".into(),
             other => {
                 return self.fail(format!("expected a field name, found {:?}", other));
             }
@@ -1526,6 +1552,7 @@ impl Parser {
 
         let (line, col) = self.here();
         match self.advance() {
+            Token::Int(i64::MIN) => self.fail("integer '9223372036854775808' out of the 64-bit range"),
             Token::Int(n) => Ok(Expr::Int(n)),
             Token::Float(n) => Ok(Expr::Float(n)),
             Token::Str(s) => Ok(Expr::Str(s.into())),

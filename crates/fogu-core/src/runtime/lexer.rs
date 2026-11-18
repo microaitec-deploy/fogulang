@@ -36,7 +36,7 @@ impl Lexer {
         let c = self.peek();
         if let Some(ch) = c {
             self.pos += 1;
-            if ch == '\n' {
+            if is_line_break(ch, self.peek()) {
                 self.line += 1;
                 self.col = 1;
             } else {
@@ -62,8 +62,9 @@ impl Lexer {
                     self.advance();
                 }
                 Some('/') if self.peek_next() == Some('/') => {
+                    // a line comment ends where an editor shows a new line
                     while let Some(c) = self.peek() {
-                        if c == '\n' {
+                        if matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
                             break;
                         }
                         self.advance();
@@ -455,6 +456,9 @@ impl Lexer {
         } else {
             match s.parse::<i64>() {
                 Ok(n) => Ok(Token::Int(n)),
+                // 2^63 only fits negated (`-9223372036854775808`): the parser
+                // accepts this token after a unary minus and nowhere else
+                Err(_) if s == "9223372036854775808" => Ok(Token::Int(i64::MIN)),
                 Err(_) => self.err(format!("integer '{}' out of the 64-bit range", s)),
             }
         }
@@ -668,5 +672,16 @@ impl Lexer {
             "select" => Token::Select,
             _ => Token::Ident(s),
         }
+    }
+}
+
+/// Does `c` (followed by `next`) end a line? `\n`, a `\r` alone (the `\r` of
+/// `\r\n` does not count twice) and the Unicode line and paragraph
+/// separators, all of which editors show as a new line (spec §4.2).
+fn is_line_break(c: char, next: Option<char>) -> bool {
+    match c {
+        '\n' | '\u{2028}' | '\u{2029}' => true,
+        '\r' => next != Some('\n'),
+        _ => false,
     }
 }

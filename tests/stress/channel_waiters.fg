@@ -1,0 +1,47 @@
+// Many tasks blocked on channels at the same time: a send, a receive or a
+// select only wakes the tasks it can unblock, so the total cost stays linear
+// (20 000 blocked senders used to take minutes).
+import time from "fogu:time"
+const N = 20000
+const t0 = time.monotonic()
+
+// N senders blocked on an unbuffered channel, one receiver
+const unbuf = chan()
+for i in 0..N { fg fn(n) { unbuf <- n }(i) }
+let sum = 0
+for i in 0..N { sum += <-unbuf }
+print("senders", sum)
+
+// N receivers blocked, one sender
+const jobs = chan(4)
+const done = chan(N)
+for i in 0..N { fg fn() { done <- <-jobs }() }
+for i in 0..N { jobs <- i }
+let got = 0
+for i in 0..N { got += <-done }
+print("receivers", got)
+
+// N tasks in a select over two channels, woken by close
+const a = chan()
+const quit = chan()
+const out = chan(N)
+for i in 0..N {
+    fg fn() {
+        select {
+            case v = <-a: out <- 1
+            case q = <-quit: out <- 2
+        }
+    }()
+}
+close(quit)
+let twos = 0
+for i in 0..N { twos += <-out }
+print("select", twos)
+
+// N tasks sleeping, woken in the order of their deadlines
+const order = chan(10)
+for d in [30, 10, 20, 0, 5] { fg fn(d) { time.delay(d * 1ms); order <- d }(d) }
+const r = []
+for i in 0..5 { r.push(<-order) }
+print("order", r)
+print("fast", time.monotonic() - t0 < 20.0)

@@ -1,0 +1,4 @@
+error: <vm>:1: runtime error: bytes: cannot allocate 4611686018427387904 bytes (out of memory)
+error: <vm>:1: runtime error: repeat: cannot allocate 9223372036854775806 bytes (out of memory)
+error: <vm>:1: runtime error: bytes: the size must be >= 0, got -1
+6 16  5

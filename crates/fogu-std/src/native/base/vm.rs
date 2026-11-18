@@ -258,7 +258,7 @@ impl FoguObject for ContextValue {
     }
 }
 
-fn run_in_context(interp: &Interpreter, program: &[Stmt], ctx: &NativeObjectRef, o: &Opts) -> Result<Value, String> {
+fn run_in_context(interp: &Interpreter, program: &[Stmt], ctx: &NativeObjectRef, o: &Opts, cancelled: &Cell<bool>) -> Result<Value, String> {
     let (env, sandbox, lock) = {
         let inner = ctx.inner();
         let b = inner.borrow();
@@ -267,6 +267,11 @@ fn run_in_context(interp: &Interpreter, program: &[Stmt], ctx: &NativeObjectRef,
     };
     // concurrent runs on one context wait their turn
     lock.acquire()?;
+    // a `cancel()` that came while it waited: the run never starts
+    if cancelled.get() {
+        lock.release();
+        return Err(io_err!("{}: runtime error: script execution cancelled", o.filename));
+    }
     let c = ContextValue { env, sandbox, lock };
     c.pull();
     c.env.borrow_mut().set_module(&o.filename);
@@ -417,20 +422,26 @@ fn spawn(interp: &Interpreter, program: Rc<Vec<Stmt>>, target: Target, o: Opts) 
     let st = Rc::clone(&state);
     let filename = o.filename.clone();
     interp.spawn_task(Box::new(move |it| {
-        st.task.set(Some(sched::task_id()));
+        let me = sched::task_id();
+        st.task.set(Some(me));
+        let cancelled = || Err(io_err!("{}: runtime error: script execution cancelled", o.filename));
         let r = (|| {
             if let Some(permits) = &o.semaphore {
-                let p = Rc::clone(permits);
-                sched::wait_until(move || p.get() > 0)?;
+                let (p, c) = (Rc::clone(permits), Rc::clone(&st));
+                sched::wait_until(move || p.get() > 0 || c.cancelled.get())?;
+                // cancelled while it waited for its turn: the permit stays free
+                if st.cancelled.get() {
+                    return cancelled();
+                }
                 permits.set(permits.get() - 1);
             }
             // cancelled before it started
             if st.cancelled.get() {
-                return Err(io_err!("{}: runtime error: script execution cancelled", o.filename));
+                return cancelled();
             }
             let r = match &target {
                 Target::New(sandbox) => run_in_new_context(it, &program, sandbox.clone(), &o),
-                Target::Context(ctx) => run_in_context(it, &program, ctx, &o),
+                Target::Context(ctx) => run_in_context(it, &program, ctx, &o, &st.cancelled),
             };
             if let Some(permits) = &o.semaphore {
                 permits.set(permits.get() + 1);
@@ -439,6 +450,8 @@ fn spawn(interp: &Interpreter, program: Rc<Vec<Stmt>>, target: Target, o: Opts) 
             r
         })();
         st.task.set(None);
+        // a cancellation is this run's only: nothing of it outlives the task
+        it.set_deadline(me, None);
         *st.result.borrow_mut() = Some(r);
         sched::note_progress();
         Ok(())
@@ -523,7 +536,7 @@ fn module_call(name: &str, args: &[Value], interp: &Interpreter) -> Result<Value
             let code = str_arg(args, 0, &what)?;
             let ctx = context_arg(args.get(1), &what)?;
             let o = opts(args.get(2), &what)?;
-            run_in_context(interp, &parse(&code, &o.filename)?, &ctx, &o)
+            run_in_context(interp, &parse(&code, &o.filename)?, &ctx, &o, &Cell::new(false))
         }
         // runInThisContext(code, options?)
         "runInThisContext" => {
@@ -585,6 +598,9 @@ fn module_call(name: &str, args: &[Value], interp: &Interpreter) -> Result<Value
                 Some(other) => return Err(format!("{}: params must be a list, got '{}'", what, other.type_name())),
             };
             let o = opts(args.get(2), &what)?;
+            // a syntax error is reported against the body alone (its own lines
+            // and columns, "end of input"), not against the wrapper below
+            parse(&code, &o.filename)?;
             // the body starts on the first line, so the lines of errors match
             let src = format!("(fn({}) {{{}\n}})", params.join(", "), code);
             let program = parse(&src, &o.filename)?;
@@ -594,7 +610,7 @@ fn module_call(name: &str, args: &[Value], interp: &Interpreter) -> Result<Value
             };
             match ctx {
                 Some(Value::Nil) | None => run_in_new_context(interp, &program, None, &o),
-                Some(c) => run_in_context(interp, &program, &context_arg(Some(&c), &what)?, &o),
+                Some(c) => run_in_context(interp, &program, &context_arg(Some(&c), &what)?, &o, &Cell::new(false)),
             }
         }
         other => Err(format!("vm.{} is not a function", other)),
@@ -627,7 +643,7 @@ fn object_call(receiver: &NativeObjectRef, method: &str, args: &[Value], interp:
         if method == "spawn" {
             return spawn(interp, program, Target::Context(receiver.clone()), o);
         }
-        return run_in_context(interp, &program, receiver, &o);
+        return run_in_context(interp, &program, receiver, &o, &Cell::new(false));
     }
     let (program, filename) = {
         let inner = receiver.inner();
@@ -645,7 +661,7 @@ fn object_call(receiver: &NativeObjectRef, method: &str, args: &[Value], interp:
     match method {
         "runInContext" => {
             let ctx = context_arg(args.first(), method)?;
-            run_in_context(interp, &program, &ctx, &with_file(args.get(1))?)
+            run_in_context(interp, &program, &ctx, &with_file(args.get(1))?, &Cell::new(false))
         }
         "runInNewContext" => {
             let sandbox = sandbox_arg(args.first(), method)?;

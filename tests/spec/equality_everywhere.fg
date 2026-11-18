@@ -1,0 +1,19 @@
+// contains / index_of use the same equality as ==; equals(other) of a struct
+// decides at any depth, only against a struct of its own type; sort orders
+// durations and puts NaN last.
+print({a: 1} == {a: 1}, [{a: 1}].contains({a: 1}), [{a: 1}].index_of({a: 1}))
+print([1s].contains(1s), [bytes("x")].contains(bytes("x")))
+const e = error("x")
+print([e].contains(e), [e].contains(error("x")))
+struct P {
+    x = 0
+    equals(o) { return this.x == o.x }
+}
+const a = new P()
+const b = new P()
+print(a == b, [a] == [b], {k: a} == {k: b}, [a].contains(b), [b].index_of(a))
+print(a == nil, nil == a, a == 1, a != nil)
+struct Q { x = 0 }
+print(a == new Q())
+print([2s, 1s, 3ms].sort())
+print([3, 0.0 / 0.0, 1, 2].sort())

@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use ahash::AHashMap as HashMap;
 use std::rc::Rc;
 
-use crate::runtime::value::{ModuleValue, Str, Value};
+use crate::runtime::value::{ModuleValue, Str, Value, WalkPath};
 
 use crate::native::math::nfn;
 
@@ -11,7 +11,12 @@ pub fn build() -> ModuleValue {
 
     exports.insert(
         "stringify".into(),
-        nfn("stringify", 1, |args| Ok(Value::Str(stringify(&args[0]).into()))),
+        nfn("stringify", 1, |args| {
+            let mut out = String::with_capacity(64);
+            write_value(&args[0], &mut out, &mut WalkPath::default(), None)
+                .map_err(|_| io_err!("json.stringify: the value contains itself (a cycle) or is nested too deeply"))?;
+            Ok(Value::Str(out.into()))
+        }),
     );
 
     exports.insert(
@@ -31,7 +36,8 @@ pub fn build() -> ModuleValue {
 // ---------- Public API for other native modules ----------
 
 /// Serializes a `Value` to JSON. Never fails — unsupported types fall back
-/// to their string representation.
+/// to their string representation, and a value met again inside itself (a
+/// cycle) is written `null`.
 pub fn stringify_value(v: &Value) -> String {
     stringify(v)
 }
@@ -45,12 +51,13 @@ pub fn parse_value(s: &str) -> Result<Value, String> {
 
 fn stringify(v: &Value) -> String {
     let mut out = String::with_capacity(64);
-    write_value(v, &mut out);
+    let _ = write_value(v, &mut out, &mut WalkPath::default(), Some("null"));
     out
 }
 
 /// Writes `v` as JSON into one buffer (map keys sorted: deterministic output).
-fn write_value(v: &Value, out: &mut String) {
+/// A list or map met again inside itself is written `on_cycle`, or is an error.
+fn write_value(v: &Value, out: &mut String, path: &mut WalkPath, on_cycle: Option<&str>) -> Result<(), ()> {
     use std::fmt::Write;
     match v {
         Value::Nil => out.push_str("null"),
@@ -60,21 +67,24 @@ fn write_value(v: &Value, out: &mut String) {
         }
         // JSON has no NaN or infinity
         Value::Float(n) if !n.is_finite() => out.push_str("null"),
-        // `{:?}` keeps the float a float (`1.0`, `1e20`): `{}` wrote `1` and 21 digits for
-        // 1e20, which came back as an int (or failed to parse)
-        Value::Float(n) => {
-            let _ = write!(out, "{:?}", n);
-        }
+        // the text `print` gives (`value::display_float`): a whole float keeps its `.0`, so it
+        // comes back a float; the exponent form starts where print's does (>= 1e21, < 1e-6)
+        Value::Float(n) => out.push_str(&crate::runtime::value::display_float(*n)),
         Value::Str(s) => write_str(s, out),
         Value::List(l) => {
+            if !crate::runtime::sched::stack_ok() || !path.enter(Rc::as_ptr(l) as usize) {
+                out.push_str(on_cycle.ok_or(())?);
+                return Ok(());
+            }
             out.push('[');
             for (i, item) in l.borrow().iter().enumerate() {
                 if i > 0 {
                     out.push(',');
                 }
-                write_value(item, out);
+                write_value(item, out, path, on_cycle)?;
             }
             out.push(']');
+            path.leave();
         }
         // JSON has no tuples: an array
         Value::Tuple(t) => {
@@ -83,7 +93,7 @@ fn write_value(v: &Value, out: &mut String) {
                 if i > 0 {
                     out.push(',');
                 }
-                write_value(item, out);
+                write_value(item, out, path, on_cycle)?;
             }
             out.push(']');
         }
@@ -98,6 +108,10 @@ fn write_value(v: &Value, out: &mut String) {
             out.push(']');
         }
         Value::Map(m) => {
+            if !crate::runtime::sched::stack_ok() || !path.enter(Rc::as_ptr(m) as usize) {
+                out.push_str(on_cycle.ok_or(())?);
+                return Ok(());
+            }
             let b = m.borrow();
             let mut entries: Vec<(&Str, &Value)> = b.iter().collect();
             entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
@@ -108,9 +122,10 @@ fn write_value(v: &Value, out: &mut String) {
                 }
                 write_str(k, out);
                 out.push(':');
-                write_value(v, out);
+                write_value(v, out, path, on_cycle)?;
             }
             out.push('}');
+            path.leave();
         }
         other => {
             out.push_str("\"<");
@@ -118,6 +133,7 @@ fn write_value(v: &Value, out: &mut String) {
             out.push_str(">\"");
         }
     }
+    Ok(())
 }
 
 /// A JSON string literal: `"`, `\` and control characters are escaped.
