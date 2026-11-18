@@ -135,6 +135,12 @@ fn classify(msg: &str, kind: Option<&str>) -> (Option<&'static str>, Option<&'st
         ("arguments, got", "E0209", Some("check the number of arguments the function takes")),
         ("operator not applicable", "E0210", Some("convert one side first, e.g. str(n) or int(s)")),
         ("operator '-' not applicable", "E0210", None),
+        ("operator '~' not applicable", "E0210", None),
+        ("operator '!' not applicable", "E0210", None),
+        ("negative shift count", "E0211", Some("shift by 0 or more bits")),
+        ("negative integer exponent", "E0211", Some("an int raised to a negative power is a fraction: use a float base")),
+        ("cannot convert the float to int", "E0211", Some("check math.isNaN(x) / math.isFinite(x) first")),
+        ("does not exist on", "E0212", Some("declare the field in the struct (fields cannot be added to an instance)")),
         ("cannot compare", "E0210", Some("only numbers, strings and durations can be ordered")),
         ("deadlock", "E0300", Some("some channel never receives or sends; use close(), a buffer, or select with default/timeout")),
     ];

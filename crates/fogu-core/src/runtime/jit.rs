@@ -59,11 +59,19 @@ pub struct JitConfig {
 impl JitConfig {
     pub fn from_env() -> Self {
         let get = |k: &str| std::env::var(k).ok();
+        // a value that is not a number is said, not silently replaced by the default
+        let num = |k: &str, default: u32| match get(k) {
+            Some(v) => v.trim().parse().unwrap_or_else(|_| {
+                eprintln!("{}: '{}' is not a number; using {}", k, v, default);
+                default
+            }),
+            None => default,
+        };
         JitConfig {
             enabled: get("FOGU_JIT").map_or(true, |v| v != "0"),
             debug: get("FOGU_JIT_DEBUG").and_then(|v| v.parse().ok()).unwrap_or(0),
-            call_threshold: get("FOGU_JIT_CALLS").and_then(|v| v.parse().ok()).unwrap_or(2),
-            loop_threshold: get("FOGU_JIT_LOOPS").and_then(|v| v.parse().ok()).unwrap_or(200),
+            call_threshold: num("FOGU_JIT_CALLS", 2),
+            loop_threshold: num("FOGU_JIT_LOOPS", 200),
         }
     }
 }
@@ -4447,6 +4455,9 @@ impl Jit {
     }
 
     pub fn report(&self) -> String {
+        if !self.cfg.enabled {
+            return "[jit] disabled (--no-jit / FOGU_JIT=0)".into();
+        }
         let Some(i) = &self.inner else {
             return "[jit] no compilation was needed".into();
         };

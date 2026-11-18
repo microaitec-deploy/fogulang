@@ -598,6 +598,9 @@ fn module_call(name: &str, args: &[Value], interp: &Interpreter) -> Result<Value
                 Some(other) => return Err(format!("{}: params must be a list, got '{}'", what, other.type_name())),
             };
             let o = opts(args.get(2), &what)?;
+            // a syntax error is reported against the body alone (its own lines
+            // and columns, "end of input"), not against the wrapper below
+            parse(&code, &o.filename)?;
             // the body starts on the first line, so the lines of errors match
             let src = format!("(fn({}) {{{}\n}})", params.join(", "), code);
             let program = parse(&src, &o.filename)?;
