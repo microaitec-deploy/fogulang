@@ -128,13 +128,32 @@ pub fn thread_poller<T: Send + 'static>(
 
 /// A `serde_json` value as a Fogu value (objects keep their key order).
 pub fn json_to_value(j: &serde_json::Value) -> Value {
-    crate::native::json::parse_value(&j.to_string()).unwrap_or(Value::Nil)
+    // converted directly: a round trip through JSON text turned the whole value into nil when
+    // a number did not fit in an int (a u64) or the nesting was deep
+    use serde_json::Value as J;
+    match j {
+        J::Null => Value::Nil,
+        J::Bool(b) => Value::Bool(*b),
+        J::Number(n) => match n.as_i64() {
+            Some(i) => Value::Int(i),
+            // beyond the int range (or a fraction): a float, like JSON.parse in JavaScript
+            None => Value::Float(n.as_f64().unwrap_or(f64::NAN)),
+        },
+        J::String(s) => Value::str(s.as_str()),
+        J::Array(a) => list(a.iter().map(json_to_value).collect()),
+        J::Object(o) => {
+            let m: HashMap<Str, Value> = o.iter().map(|(k, v)| (Str::from(k.as_str()), json_to_value(v))).collect();
+            Value::Map(Rc::new(RefCell::new(m)))
+        }
+    }
 }
 
 /// Sleeps without blocking the other `fg` tasks: they run while this one
 /// (or the main program) waits.
 pub fn sleep_coop(d: std::time::Duration) -> Result<(), String> {
-    let deadline = std::time::Instant::now() + d;
+    let deadline = std::time::Instant::now()
+        .checked_add(d)
+        .ok_or_else(|| format!("sleep: a duration of {} s is too large", d.as_secs()))?;
     crate::runtime::sched::add_timer(deadline);
     crate::runtime::sched::wait_until(|| {
         let done = std::time::Instant::now() >= deadline;
@@ -158,7 +177,7 @@ pub fn bytes_of(v: &Value, what: &str) -> Result<Vec<u8>, String> {
                 _ => Err(format!("{}: byte lists must hold ints 0..255", what)),
             })
             .collect(),
-        other => Err(format!("{}: expected str or a list of bytes, got '{}'", what, other.type_name())),
+        other => Err(format!("{}: expected str, buffer or a list of bytes, got '{}'", what, other.type_name())),
     }
 }
 
