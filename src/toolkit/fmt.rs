@@ -75,7 +75,9 @@ fn scan(src: &str) -> Vec<Piece> {
     };
     while i < c.len() {
         let ch = c[i];
-        if ch == '\n' {
+        // a lone CR and U+2028/2029 end a line for the lexer too (CR LF is one break)
+        let lone_cr = ch == '\r' && c.get(i + 1) != Some(&'\n');
+        if ch == '\n' || lone_cr || ch == '\u{2028}' || ch == '\u{2029}' {
             push(&mut out, Kind::Newline, "\n".into(), &mut space, &mut gap);
             i += 1;
             continue;
@@ -90,7 +92,7 @@ fn scan(src: &str) -> Vec<Piece> {
         }
         let start = i;
         if ch == '/' && c.get(i + 1) == Some(&'/') {
-            while i < c.len() && c[i] != '\n' {
+            while i < c.len() && !matches!(c[i], '\n' | '\r' | '\u{2028}' | '\u{2029}') {
                 i += 1;
             }
             let text: String = c[start..i].iter().collect();
@@ -570,5 +572,12 @@ mod tests {
         let src = "const s = \"a  ,b\"   // keep  this\nconst t = `x ${ a+b } y`\n/* block\n   comment */\n";
         assert_eq!(f(src), "const s = \"a  ,b\"   // keep  this\nconst t = `x ${ a+b } y`\n/* block\n   comment */\n");
         assert_eq!(f(&f(src)), f(src));
+    }
+
+    #[test]
+    fn lone_cr_and_unicode_separators_end_lines() {
+        // the lexer ends lines there too: the formatter must agree with it
+        assert_eq!(f("let   x = 1\rprint( x )\r"), "let x = 1\nprint(x)\n");
+        assert_eq!(f("let x = 1 // c\rprint(x)\u{2028}print(x)\u{2029}"), "let x = 1 // c\nprint(x)\nprint(x)\n");
     }
 }

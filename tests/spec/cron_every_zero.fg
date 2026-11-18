@@ -1,0 +1,3 @@
+// cron.every needs an interval of at least 1ms
+import cron from "fogu:cron"
+cron.every(0ms, fn() {})

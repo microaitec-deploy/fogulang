@@ -1,0 +1,4 @@
+nil error: time: 2026-03-29 01:30:00 does not exist in Europe/Lisbon (skipped by a clock change)
+nil error: time: 2026-03-29 01:30:00 does not exist in Europe/Lisbon (skipped by a clock change)
+2018-11-04T01:00:00.000-02:00 nil
+2026-03-29T03:00:00.000+01:00 nil

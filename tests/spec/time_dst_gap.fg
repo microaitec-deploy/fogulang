@@ -1,0 +1,15 @@
+// A local time skipped by a clock change: an explicit time is an error value,
+// a skipped midnight is the start of that day (its first instant).
+import time from "fogu:time"
+
+const [d, e] = time.Date({ year: 2026, month: 3, day: 29, hour: 1, minute: 30, zone: "Europe/Lisbon" })
+print(d, e)
+
+const [p, e2] = time.parse("2026-03-29 01:30", nil, "Europe/Lisbon")
+print(p, e2)
+
+const [m, e3] = time.Date({ year: 2018, month: 11, day: 4, zone: "America/Sao_Paulo" })
+print(m.iso(), e3)
+
+const [n, e4] = time.Date({ year: 2026, month: 3, day: 29, hour: 3, zone: "Europe/Lisbon" })
+print(n.iso(), e4)

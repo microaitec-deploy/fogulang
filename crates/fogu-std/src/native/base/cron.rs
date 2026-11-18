@@ -164,10 +164,7 @@ pub fn build() -> ModuleValue {
                 let _ = &job;
                 executed += 1;
                 // Reschedule.
-                let next = match &job.kind {
-                    JobKind::Every { interval_ms } => now.saturating_add(*interval_ms),
-                    JobKind::Schedule { fields } => next_run_after(fields, now).unwrap_or(i64::MAX),
-                };
+                let next = next_after(&job, now);
                 JOBS.with(|jobs| {
                     jobs.borrow_mut().push(Job {
                         kind: clone_kind(&job.kind),
@@ -226,10 +223,7 @@ pub fn take_ready_jobs() -> Vec<Value> {
         for job in v.drain(..) {
             if job.next_run_ms <= now {
                 ready_funcs.push(job.func.clone());
-                let next = match &job.kind {
-                    JobKind::Every { interval_ms } => now.saturating_add(*interval_ms),
-                    JobKind::Schedule { fields } => next_run_after(fields, now).unwrap_or(i64::MAX),
-                };
+                let next = next_after(&job, now);
                 keep.push(Job {
                     kind: job.kind,
                     func: job.func,
@@ -261,17 +255,38 @@ fn now_ms() -> i64 {
 /// Parses a duration: accepts `Value::Duration`, `Value::Int` (ms) or a
 /// `Value::str` such as "2s", "500ms", "5m", "1h".
 fn as_ms(v: &Value) -> Result<i64, String> {
-    match v {
-        Value::Int(n) if *n > 0 => Ok(*n),
-        Value::Duration(ns) if *ns >= 1_000_000 => Ok(*ns / 1_000_000),
-        Value::Str(s) => match parse_duration(s)? {
-            n if n >= 1 => Ok(n),
-            _ => Err(format!("expected a duration of at least 1ms, got \"{}\"", s)),
-        },
-        other => Err(format!(
-            "expected a duration (2s, int ms or a str like \"2s\"; minimum 1ms), got '{}'",
-            other.type_name()
-        )),
+    let ms = match v {
+        Value::Int(n) => *n,
+        Value::Duration(ns) => *ns / 1_000_000,
+        Value::Str(s) => parse_duration(s)?,
+        other => {
+            return Err(format!(
+                "expected a duration (2s, int ms or a str like \"2s\"; minimum 1ms), got '{}'",
+                other.type_name()
+            ))
+        }
+    };
+    if ms < 1 {
+        return Err(format!("the interval must be at least 1ms, got {}", v.to_display_string()));
+    }
+    Ok(ms)
+}
+
+/// When a job that just ran runs next. An `every` job keeps its cadence (the
+/// next run is counted from the previous one, not from when `tick()` came),
+/// skipping the runs it missed.
+fn next_after(job: &Job, now: i64) -> i64 {
+    match &job.kind {
+        JobKind::Every { interval_ms } => {
+            let iv = *interval_ms;
+            let mut next = job.next_run_ms.saturating_add(iv);
+            if next <= now {
+                next = next.saturating_add(((now - next) / iv).saturating_add(1).saturating_mul(iv));
+            }
+            next
+        }
+        // an expression that matched once matches again within years
+        JobKind::Schedule { fields } => next_run_after(fields, now).unwrap_or(i64::MAX),
     }
 }
 

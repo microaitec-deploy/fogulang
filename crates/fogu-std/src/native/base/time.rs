@@ -356,7 +356,10 @@ fn new_date(a: &[Value]) -> Result<Value, String> {
             // millis < 1000: chrono reads 1000..1999 as a leap second
             let t = (|| NaiveTime::from_hms_milli_opt(u(h)?, u(mi)?, u(s)?, u(ms).filter(|m| *m < 1000)?))()
                 .ok_or_else(|| io_err!("time.Date: invalid time {}:{}:{}.{}", h, mi, s, ms))?;
-            match first_instant(zone, date.and_time(t)) {
+            // midnight skipped by a clock change is the start of that day (as in `parse` of a
+            // date); any other local time that does not exist is an error, as in 0.8.0
+            let local = if t == NaiveTime::MIN { first_instant(zone, date.and_time(t)) } else { from_local(zone, date.and_time(t)) };
+            match local {
                 Ok(d) => d,
                 Err(e) => return Err(e),
             }
