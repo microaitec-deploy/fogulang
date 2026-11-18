@@ -631,11 +631,11 @@ pub fn display_float(n: f64) -> String {
 }
 
 /// Very large and very small floats are written with an exponent (`1e300`,
-/// `5e-324`), as JavaScript does (`>= 1e21`, `< 1e-7`), instead of hundreds
+/// `5e-324`), as JavaScript does (`>= 1e21`, `< 1e-6`), instead of hundreds
 /// of digits. Shared by `print`/`str` and `json.stringify`.
 pub fn exponent_form(n: f64) -> bool {
     let a = n.abs();
-    n.is_finite() && a != 0.0 && !(1e-7..1e21).contains(&a)
+    n.is_finite() && a != 0.0 && !(1e-6..1e21).contains(&a)
 }
 
 #[cfg(test)]

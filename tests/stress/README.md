@@ -13,6 +13,8 @@ bytecode VM):
 | `structs_many` | one million struct instances created, linked and dropped |
 | `errors_storm` | half a million errors propagated with `?` through three calls |
 | `arithmetic_limits` | integer overflow in a function every engine has compiled |
+| `channel_waiters` | 20 000 tasks blocked on one channel at once (senders, receivers, `select`): wake-ups stay linear |
+| `closures_local` | 200 000 calls of a handler with local helpers and closures kept in its scope: memory stays flat |
 
 ```bash
 target/release/fogu tests/stress/run.fg          # all of them
