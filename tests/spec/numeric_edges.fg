@@ -1,0 +1,49 @@
+// Numeric edges, the same on the interpreter, the JIT and the VM: the int range of
+// a float, rounding halves, the text of floats, and JSON keeping each number's type.
+import json from "fogu:json"
+import math from "fogu:math"
+import time from "fogu:time"
+
+fn toInt(x) { return int(x) }
+// -2^63 is an int; the largest float below 2^63 too
+print(toInt(-9223372036854775808.0), toInt(9223372036854774784.0), toInt(-1.9), toInt(1.9))
+
+// halves round away from zero, exactly (0.49999999999999994 is just below 0.5)
+fn r(x) { return math.round(x) }
+print(r(0.49999999999999994), r(0.5), r(-0.5), r(1.5), r(-1.5), r(2.5), r(-2.5), r(-0.49999999999999994))
+
+// the text of floats: decimal below 1e21 and down to 1e-6, an exponent outside
+const xs = [1.0, 42.0, -0.5, 1e20, 1e21, -1e21, 0.000001, 0.0000001, 1e300, 5e-324, 0.1 + 0.2]
+print(xs)
+const text = json.stringify(xs)
+print(text)
+
+// JSON keeps the type of every number, not only its value
+const back = json.parse(text)
+let same = true
+for i, x in xs {
+    if typeof(back[i]) != typeof(x) || back[i] != x { same = false }
+}
+print(same, typeof(json.parse("42.0")), typeof(json.parse("42")), typeof(json.parse("1e2")))
+const mixed = { i: 7, f: 7.0, big: 9223372036854775807, beyond: json.parse("9223372036854775808") }
+const m2 = json.parse(json.stringify(mixed))
+print(typeof(m2.i), typeof(m2.f), typeof(m2.big), typeof(m2.beyond), m2.big == 9223372036854775807)
+
+// a tuple holding a cyclic list prints and fails to convert like the list itself
+fn withCycle() {
+    const l = [1]
+    l.push(l)
+    return l, nil
+}
+print(withCycle())
+print(typeof(json.stringify(withCycle())))
+
+// sleep: zero lets the others run once; tasks wake in the order of their deadlines
+const order = []
+const done = chan(3)
+fg fn() { time.delay(30ms); order.push("30ms"); done <- true }()
+fg fn() { time.delay(10ms); order.push("10ms"); done <- true }()
+fg fn() { order.push("0ms"); done <- true }()
+time.delay(0ms)
+for i in 0..3 { <-done }
+print(order)

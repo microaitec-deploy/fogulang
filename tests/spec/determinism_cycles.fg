@@ -1,0 +1,55 @@
+// Determinism and exact output (acceptance tests of the 0.8 consolidation): Mutex and Semaphore serve waiters in the order
+// they arrived; cyclic values and extreme floats print in a fixed form.
+import sync from "fogu:sync"
+import json from "fogu:json"
+import time from "fogu:time"
+
+// --- Mutex: 6 tasks queue on a held lock; they get it in arrival order
+const mu = sync.Mutex()
+const order = []
+const done = chan(6)
+mu.lock()
+for i in 0..6 {
+    fg fn() {
+        mu.lock()
+        order.push(i)
+        time.delay(1ms)
+        mu.unlock()
+        done <- true
+    }()
+    time.delay(1ms)
+}
+mu.unlock()
+for i in 0..6 { <-done }
+print("mutex", order)
+
+// --- Semaphore with one permit: same guarantee, and no task starves
+const sem = sync.Semaphore(1)
+const seen = []
+const fin = chan(5)
+sem.acquire()
+for i in 0..5 {
+    fg fn() {
+        sem.acquire()
+        seen.push(i)
+        sem.release()
+        fin <- true
+    }()
+    time.delay(1ms)
+}
+sem.release()
+for i in 0..5 { <-fin }
+print("semaphore", seen, sem.available)
+
+// --- cyclic values print, compare and fail to convert in a fixed way
+const a = [1, 2]
+a.push(a)
+const m = { name: "m" }
+m.self = m
+print(a, m)
+print(a == a, len(a))
+const [s, err] = json.stringify(m)
+print(s, typeof(err))
+
+// --- floats: fixed textual form
+print(1e21, 1e-7, 123456789.0, 0.1 + 0.2, 2.0, -0.0)

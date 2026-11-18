@@ -1,0 +1,151 @@
+// Closures must keep what they captured for as long as they can be reached,
+// whatever path they escape by (acceptance tests for the closure-cycle fix, P01).
+import sync from "fogu:sync"
+
+// 1. returned
+fn createCounter() {
+    let count = 0
+    return fn() {
+        count += 1
+        return count
+    }
+}
+const counter = createCounter()
+print(counter(), counter(), counter())
+
+// 2. a local helper that is both kept in its scope and returned
+fn makeHelper() {
+    let n = 10
+    fn inc() {
+        n += 1
+        return n
+    }
+    inc()
+    return inc
+}
+const h = makeHelper()
+print(h(), h())
+
+// 3. stored in a global structure, the function itself returns nothing
+const registry = []
+const handlers = {}
+fn register(name) {
+    let calls = 0
+    fn handle() {
+        calls += 1
+        return `${name}:${calls}`
+    }
+    registry.push(handle)
+    handlers[name] = handle
+}
+register("a")
+register("b")
+print(registry[0](), registry[0](), registry[1](), handlers.a(), handlers.b())
+
+// 4. closures that capture other closures, and mutually recursive local functions
+fn makePair() {
+    let log = []
+    fn isEven(n) {
+        if n == 0 { return true }
+        return isOdd(n - 1)
+    }
+    fn isOdd(n) {
+        if n == 0 { return false }
+        return isEven(n - 1)
+    }
+    const both = fn(n) {
+        log.push(n)
+        return [isEven(n), isOdd(n), len(log)]
+    }
+    return both
+}
+const pair = makePair()
+print(pair(10), pair(7))
+
+// 5. a map of functions that refer to each other and to shared state
+fn makeAccount() {
+    let balance = 0
+    const acc = {}
+    acc.deposit = fn(x) {
+        balance += x
+        return acc.get()
+    }
+    acc.get = fn() { return balance }
+    return acc
+}
+const acc = makeAccount()
+acc.deposit(5)
+print(acc.deposit(7), acc.get())
+
+// 6. a struct holding a closure over the creating scope
+struct Box {
+    f = nil
+    new(f) { this.f = f }
+}
+fn makeBox() {
+    let secret = "kept"
+    const b = new Box(fn() { return secret })
+    return b
+}
+const box = makeBox()
+print(box.f())
+
+// 7. closures created in a loop keep their own iteration
+const fns = []
+for i in 0..3 {
+    let doubled = i * 2
+    fns.push(fn() { return doubled })
+}
+print(fns[0](), fns[1](), fns[2]())
+
+// 8. shared between fg tasks, and captured by a task that outlives its creator
+const shared = createCounter()
+const done = chan(4)
+fg fn() { done <- shared() }()
+fg fn() { done <- shared() }()
+fn startLater(out) {
+    let local = "still here"
+    fg fn() {
+        time_wait()
+        out <- local
+    }()
+}
+fn time_wait() {
+    const t = chan(1)
+    fg fn() { t <- 1 }()
+    <-t
+}
+startLater(done)
+const got = [<-done, <-done, <-done]
+print(got.sort((a, b) => str(a) < str(b)))
+print(shared())
+
+// 9. escaping through a channel
+fn sendClosure(c) {
+    let word = "via channel"
+    c <- fn() { return word }
+}
+const cc = chan(1)
+sendClosure(cc)
+const viaChan = <-cc
+print(viaChan())
+
+// 10. a bound method kept after its object's creator returned
+struct Counter2 {
+    n = 0
+    fn inc() {
+        this.n += 1
+        return this.n
+    }
+}
+fn makeInc() {
+    const c = new Counter2()
+    return c.inc
+}
+const inc2 = makeInc()
+print(inc2(), inc2())
+
+// 11. called from a worker thread: the closure's source crosses, not its state
+const w = sync.Worker((x) => x * 3)?
+print(w.call(14)?)
+w.close()

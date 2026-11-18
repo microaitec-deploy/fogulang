@@ -1,0 +1,4 @@
+// 2^63 has no int value: an error, never a saturated int (all engines).
+fn toInt(x) { return int(x) }
+print(toInt(-9223372036854775808.0))
+print(toInt(9223372036854775808.0))
