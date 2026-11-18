@@ -1,0 +1,42 @@
+// Inputs that used to panic or misbehave in the standard library: each is an error or a
+// correct value now (bugs.md round 2 M47, M48, M57, M60, M72, B13–B18)
+import image from "fogu:image"
+import time from "fogu:time"
+import cli from "fogu:cli"
+import password from "fogu:password"
+import types from "fogu:types"
+import math from "fogu:math"
+import shell from "fogu:shell"
+
+// a colour with non-ASCII characters (sliced by bytes: panic)
+print(image.color("#aéa"))
+print(image.color("rgb(nan, 0, 0)"))
+print(image.color("#ff8000"))
+
+// rotate by a non-finite angle
+print(image.new(4, 4).rotate(45).width > 4)
+
+// time.sleep with NaN, infinity or a duration beyond the clock
+print(shell.run("sleep 1e300").code, shell.run("sleep nan").code)
+
+// cli.parse: numeric choices, negative numbers, a positional after a flag
+print(cli.parse({ name: "t", args: [{ name: "n", type: "int", choices: [1, 2, 3] }] }, ["--n", "2"], { exit: false }))
+print(cli.parse({ name: "t", args: [{ name: "x", type: "float", choices: [0.5, 1.5] }] }, ["--x", "1.5"], { exit: false }))
+print(cli.parse({ name: "t", args: [{ name: "n", type: "int", choices: [1, 2, 3] }] }, ["--n", "7"], { exit: false }) != nil)
+print(cli.parse({ name: "t", args: [{ name: "port", type: "int" }] }, ["--port", "-1"], { exit: false }))
+print(cli.parse({ name: "t", args: [{ name: "force", type: "bool" }, { name: "file", positional: true }] }, ["x.txt"], { exit: false }))
+const bad = cli.parse({ name: "t", args: [{ name: "port", type: "int" }] }, ["--port", "x"], { exit: false })
+print(str(bad).starts_with("error: error:"))
+
+// argon2 / pbkdf2 hashes with absurd parameters: an error, not an abort or a hang
+print(password.verify("x", "$argon2id$v=19$m=4294967295,t=1,p=1$c2FsdHNhbHQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"))
+print(password.verify("x", "$argon2id$v=19$m=65536,t=4294967295,p=1$c2FsdHNhbHQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"))
+print(password.verify("x", "$pbkdf2-sha256$i=4294967295,l=32$c2FsdHNhbHQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"))
+
+// types.toInt: out of the int range is not convertible (never a saturated MAX_INT)
+print(types.toInt("9223372036854775808"), types.toInt("99999999999999999999"), types.toInt("-0x10"), types.toInt("-0x8000000000000000"))
+
+// math: exact rounding, negative digits
+print(math.round(0.49999999999999994), math.round(-0.49999999999999994), math.round(2.5), math.round(-2.5))
+print(math.round(1234.5, -2), math.round(1.005, 2))
+print(math.floor(-1.5), math.ceil(1e15), math.trunc(-9.9))

@@ -62,7 +62,7 @@ const url = s.toDataUrl()
 print(url.slice(0, 22), image.decode(url)?.width)
 print(image.decode(s.encode("bmp"))?.height, image.decode(s.toBase64("webp"))?.width)
 const [o, oe] = image.open("missing.tmp.png")
-print(oe)
+print(oe.message.starts_with("image.open: missing.tmp.png: "))
 const [f, fe] = s.encode("xyz")
 print(fe)
 
