@@ -1,0 +1,76 @@
+// `return a, b` is a tuple (spec §8.4), not a list: `const [v, err] = f()` and
+// `?` split tuples and errors only, never a list that a function returned.
+import json from "fogu:json"
+import sync from "fogu:sync"
+
+fn divide(a: int, b: int): (int, error) {
+    if b == 0 { return 0, error("division by zero") }
+    return a / b, nil
+}
+const [q, e] = divide(7, 2)
+print(q, e)
+const [q2, e2] = divide(1, 0)
+print(q2, e2.message)
+print(divide(7, 2), typeof(divide(7, 2)))
+
+// a list returned by a function is one value
+fn rows(n) {
+    const out = []
+    for i in 0..n { out.push({ id: i }) }
+    return out
+}
+const [r0, err0] = rows(0)
+const [r3, err3] = rows(3)
+print(r0, err0, len(r3), err3)
+const [parsed, perr] = json.parse("[1, 2]")
+print(parsed, perr)
+const [bad, berr] = json.parse("[1,")
+print(bad, typeof(berr))
+const [one, none] = 5
+print(one, none)
+
+// a list written in the declaration itself is split
+const [a, b, c] = [1, 2]
+print(a, b, c)
+
+// `?` never takes a list for a pair
+fn first(s) {
+    const v = json.parse(s)?
+    return v, nil
+}
+print(first("[5, null]"))
+print(first("{")[1] != nil)
+
+// three values: `?` returns as many values as the declared tuple has
+fn three(ok: bool): (int, str, error) {
+    if !ok { return 0, "", error("no") }
+    return 1, "one", nil
+}
+fn use3(ok: bool): (int, str, error) {
+    const [n, s] = three(ok)?
+    return n + 1, s, nil
+}
+print(use3(true))
+print(use3(false))
+// a function declared to return only an error gets the error itself
+fn check(ok: bool): error {
+    three(ok)?
+    return nil
+}
+print(check(true), check(false))
+
+// what a tuple supports: len, index, for, ==, json; it cannot be changed
+const t = divide(9, 3)
+print(len(t), t[0], t[-1], t == divide(9, 3), t == [3, nil])
+for i, x in t { print(i, x) }
+for x in t { print(x) }
+print(json.stringify(t))
+const t2: tuple = t
+print(t2)
+
+// a tuple a worker returns is still a tuple for the caller
+fn pair(n) { return n * 2, nil }
+const w = sync.Worker(pair)?
+const [w1, we] = w.call(21)
+print(w1, we)
+w.close()

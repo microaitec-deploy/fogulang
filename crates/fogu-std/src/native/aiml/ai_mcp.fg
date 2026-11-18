@@ -11,7 +11,7 @@ const SUPPORTED = ["2025-06-18", "2025-03-26", "2024-11-05"]
 
 // `return v, error(...)` → the error; anything else as it is
 const unpair = fn(r) {
-    if typeof(r) == "list" && r.len() == 2 && typeof(r[1]) == "error" { return r[1] }
+    if typeof(r) == "tuple" && len(r) == 2 && typeof(r[1]) == "error" { return r[1] }
     return r
 }
 

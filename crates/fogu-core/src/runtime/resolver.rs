@@ -86,6 +86,8 @@ pub enum Ty {
     Nil,
     Duration,
     List,
+    /// `return a, b` (spec §8.4)
+    Tuple,
     Map,
     Range,
     Chan,
@@ -104,6 +106,7 @@ impl Ty {
             Ty::Nil => "nil",
             Ty::Duration => "duration",
             Ty::List => "list",
+            Ty::Tuple => "tuple",
             Ty::Map => "map",
             Ty::Range => "range",
             Ty::Chan => "chan",
@@ -125,7 +128,8 @@ impl Ty {
                 "str" | "string" | "char" => Ty::Str,
                 "bool" => Ty::Bool,
                 "duration" => Ty::Duration,
-                "list" | "tuple" => Ty::List,
+                "list" => Ty::List,
+                "tuple" => Ty::Tuple,
                 "map" => Ty::Map,
                 "range" => Ty::Range,
                 "chan" => Ty::Chan,
@@ -166,7 +170,8 @@ impl Ty {
                     "bool" => self == Ty::Bool,
                     "nil" | "void" => self == Ty::Nil,
                     "duration" => self == Ty::Duration,
-                    "list" | "tuple" => self == Ty::List,
+                    "list" => self == Ty::List,
+                    "tuple" => self == Ty::Tuple,
                     "map" => self == Ty::Map,
                     "range" => self == Ty::Range,
                     "chan" => self == Ty::Chan,
@@ -197,9 +202,9 @@ impl Ty {
                 }
                 if unknown { None } else { Some(false) }
             }
-            // a tuple is a list of the right length (not known here)
+            // `return a, b`: the length and the values are not known here
             TypeExpr::Tuple(_) => {
-                if self == Ty::List {
+                if self == Ty::Tuple {
                     None
                 } else {
                     Some(false)
@@ -555,7 +560,7 @@ fn walk_expr(e: &Expr, out: &mut HashSet<String>) {
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Nil | Expr::Duration(_) => {}
         Expr::Ident(_) => {}
         Expr::DynImport(x) | Expr::OptChain(x) => walk_expr(x, out),
-        Expr::List(v) | Expr::Template(v) => v.iter().for_each(|x| walk_expr(x, out)),
+        Expr::List(v) | Expr::Tuple(v) | Expr::Template(v) => v.iter().for_each(|x| walk_expr(x, out)),
         Expr::Map(v) => v.iter().for_each(|(_, x)| walk_expr(x, out)),
         Expr::Unary { right, .. } => walk_expr(right, out),
         Expr::Binary { left, right, .. } | Expr::Logical { left, right, .. } => {
@@ -981,7 +986,14 @@ impl Resolver<'_> {
             Stmt::Line(n) => self.line = *n,
             Stmt::Let { name, init, ty, .. } => self.let_decl(name, init, ty, true)?,
             Stmt::LetList { names, init, .. } => {
-                let r = self.expr(init);
+                let r = self.expr_ty(init);
+                // a list that is not written here is one value (`interpreter::destructure`)
+                if matches!(r, Ok(Ty::List)) && !matches!(init, Expr::List(_)) && names.len() > 1 {
+                    self.warnings.push(format!(
+                        "line {}: destructuring a list binds the whole list to '{}' and nil to the rest (only a tuple, `return a, b`, or a list written here is split)",
+                        self.line, names[0]
+                    ));
+                }
                 for n in names.iter().filter(|n| *n != "_") {
                     self.declare_local(n);
                 }
@@ -1191,6 +1203,10 @@ impl Resolver<'_> {
             Expr::List(v) => {
                 v.iter().try_for_each(|x| self.expr(x))?;
                 Ty::List
+            }
+            Expr::Tuple(v) => {
+                v.iter().try_for_each(|x| self.expr(x))?;
+                Ty::Tuple
             }
             Expr::Template(v) => {
                 v.iter().try_for_each(|x| self.expr(x))?;
@@ -1468,6 +1484,15 @@ mod tests {
                 "line 9: unreachable code after 'return'",
                 "line 1: unused import 'json'",
             ]
+        );
+    }
+
+    #[test]
+    fn warns_about_destructuring_a_list_value() {
+        let r = run("const xs = [1, 2]\nconst [a, b] = xs\nconst [c, d] = [3, 4]\nfn f() { return 1, nil }\nconst [e, g] = f()\nprint(a, b, c, d, e, g)");
+        assert_eq!(
+            r.warnings,
+            vec!["line 2: destructuring a list binds the whole list to 'a' and nil to the rest (only a tuple, `return a, b`, or a list written here is split)"]
         );
     }
 

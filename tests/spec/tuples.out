@@ -1,0 +1,21 @@
+3 nil
+0 division by zero
+[3, nil] tuple
+[] nil 3 nil
+[1, 2] nil
+nil error
+5 nil
+1 2 nil
+[[5, nil], nil]
+true
+[2, one, nil]
+[nil, nil, error: no]
+nil error: no
+2 3 nil true false
+0 3
+1 nil
+3
+nil
+[3,null]
+[3, nil]
+42 nil

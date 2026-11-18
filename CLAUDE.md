@@ -157,7 +157,11 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
 - Declarations use `Interpreter::declare` (error if the name already exists in
   the same scope); `Environment::define` is for internal bindings (params,
   loops, imports).
-- Errors are values: `return value, error(msg)`, `const [x, err] = f()`, `expr?`.
+- Errors are values: `return value, error(msg)`, `const [x, err] = f()`, `expr?`. `return a, b` builds a
+  `Value::Tuple` (not a list): `[v, err]` splits only tuples, errors and list literals written in the
+  declaration (`interpreter::destructure`), and `?` reacts only to errors and tuples ending in one
+  (`propagate`, `propagated_return`); see `docs/architecture/tuples.md`. A native that must return several
+  values returns `Value::tuple(...)`, never a list.
   In native functions, **operational** errors (IO, network, SQL, JSON) use
   `io_err!(...)` (becomes an `error` value); programming errors (wrong argument
   type) use `format!` and stop the program.

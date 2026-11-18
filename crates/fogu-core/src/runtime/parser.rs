@@ -657,13 +657,13 @@ impl Parser {
             return Ok(Stmt::Return(None));
         }
         let mut expr = self.parse_expr()?;
-        // `return a, b` returns a tuple (list of 2+ elements).
+        // `return a, b` returns a tuple (spec §8.4), not a list
         if self.check(&Token::Comma) {
             let mut items = vec![expr];
             while self.matches(&Token::Comma) {
                 items.push(self.parse_expr()?);
             }
-            expr = Expr::List(items);
+            expr = Expr::Tuple(items);
         }
         self.consume_semicolon();
         Ok(Stmt::Return(Some(expr)))

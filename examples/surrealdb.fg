@@ -13,9 +13,9 @@ db.query("REMOVE TABLE IF EXISTS person")?
 db.create("person:ana", { name: "Ana", age: 30 })?
 db.insert("person", [{ id: "bia", name: "Bia", age: 17 }, { id: "caio", name: "Caio", age: 41 }])?
 
-// one result per statement; $vars are bound safely
-const [adults, total] = db.query("SELECT name FROM person WHERE age >= $min ORDER BY name; RETURN count(SELECT * FROM person)", { min: 18 })?
-print(adults, total)                    // [{name: Ana}, {name: Caio}] 3
+// a list with one result per statement; $vars are bound safely
+const results = db.query("SELECT name FROM person WHERE age >= $min ORDER BY name; RETURN count(SELECT * FROM person)", { min: 18 })?
+print(results[0], results[1])           // [{name: Ana}, {name: Caio}] 3
 
 db.merge("person:ana", { city: "Luanda" })?
 db.relate("person:ana", "knows", "person:caio", { since: 2020 })?

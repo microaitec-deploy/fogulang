@@ -21,6 +21,10 @@ pub enum Value {
     Duration(i64),
     Range(i64, i64),
     List(Rc<RefCell<Vec<Value>>>),
+    /// The values of `return a, b` (spec §8.4): immutable, and distinct from a
+    /// list, so that `const [v, err] = f()` and `?` never take a list the
+    /// function returned for one of these. See `docs/architecture/tuples.md`.
+    Tuple(Rc<[Value]>),
     /// Mutable byte sequence (`bytes(...)`, network/file data).
     Buffer(Rc<RefCell<Vec<u8>>>),
     Map(Rc<RefCell<HashMap<Str, Value>>>),
@@ -282,6 +286,7 @@ impl Value {
             Value::Duration(_) => "duration",
             Value::Range(_, _) => "range",
             Value::List(_) => "list",
+            Value::Tuple(_) => "tuple",
             Value::Buffer(_) => "buffer",
             Value::Map(_) => "map",
             Value::Module(_) => "module",
@@ -294,6 +299,29 @@ impl Value {
             Value::Interface(_) => "interface",
             Value::Fn(_) | Value::NativeFn(_) => "fn",
             Value::Error(_) => "error",
+        }
+    }
+
+    /// A tuple of these values (`return a, b`).
+    pub fn tuple(items: Vec<Value>) -> Value {
+        Value::Tuple(Rc::from(items))
+    }
+
+    /// What a Fogu function returned, read as `value, error` — the rule of `?`
+    /// for native code that calls handlers (servers, workers, tests):
+    /// `Err` for an `error` or a tuple ending in one; for a tuple ending in `nil`,
+    /// its other values (one value, or a tuple of them); any other value as it is
+    /// (a list is never a pair).
+    pub fn into_result(self) -> Result<Value, Rc<ErrorValue>> {
+        match self {
+            Value::Error(e) => Err(e),
+            Value::Tuple(t) => match t.last() {
+                Some(Value::Error(e)) => Err(Rc::clone(e)),
+                Some(Value::Nil) if t.len() == 2 => Ok(t[0].clone()),
+                Some(Value::Nil) if t.len() > 2 => Ok(Value::tuple(t[..t.len() - 1].to_vec())),
+                _ => Ok(Value::Tuple(t)),
+            },
+            v => Ok(v),
         }
     }
 
@@ -317,6 +345,11 @@ impl Value {
                     .iter()
                     .map(|v| v.to_display_string())
                     .collect();
+                format!("[{}]", items.join(", "))
+            }
+            // printed as a list: `print(divide(7, 2))` shows `[3, nil]`, as before
+            Value::Tuple(t) => {
+                let items: Vec<String> = t.iter().map(|v| v.to_display_string()).collect();
                 format!("[{}]", items.join(", "))
             }
             Value::Map(m) => {

@@ -39,6 +39,11 @@
 //! condition (`FoguObject::wait_for`) and only then calls the method. Waiting
 //! forever is reported as a deadlock.
 
+/// Prefix of a worker's answer that holds a tuple (`return a, b`) as a JSON array:
+/// JSON cannot tell a tuple from a list, and `const [v, err] = w.call(…)` must
+/// see the tuple the worker returned.
+const TUPLE_MARK: &str = "\u{1}tuple:";
+
 use std::cell::Cell;
 use ahash::AHashMap as HashMap;
 use std::rc::Rc;
@@ -645,6 +650,12 @@ mod worker {
                         };
                         match interp.call_value(f, args, Rc::clone(&globals)) {
                             Ok(Value::Error(e)) => Err(e.message.clone()),
+                            // `return a, b`: marked, so the caller gets a tuple back
+                            Ok(Value::Tuple(t)) => Ok(format!(
+                                "{}{}",
+                                super::TUPLE_MARK,
+                                crate::native::json::stringify_value(&crate::native::util::list(t.to_vec()))
+                            )),
                             Ok(v) => Ok(crate::native::json::stringify_value(&v)),
                             Err(e) => Err(plain(e)),
                         }
@@ -728,7 +739,13 @@ mod worker {
                 Ok(Box::new(move || {
                     let out = slot.lock().unwrap_or_else(|p| p.into_inner()).take()?;
                     Some(match out {
-                        Ok(json) => crate::native::json::parse_value(&json),
+                        Ok(json) => match json.strip_prefix(super::TUPLE_MARK) {
+                            Some(items) => match crate::native::json::parse_value(items) {
+                                Ok(Value::List(l)) => Ok(Value::tuple(l.borrow().clone())),
+                                other => other,
+                            },
+                            None => crate::native::json::parse_value(&json),
+                        },
                         Err(e) => Err(io_err!("Worker.call {}: {}", name, e)),
                     })
                 }) as Poller)

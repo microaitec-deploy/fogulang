@@ -87,6 +87,8 @@ pub enum Expr {
     Ident(Name),
 
     List(Vec<Expr>),
+    /// `return a, b`: the values a function returns together (a tuple, spec §8.4).
+    Tuple(Vec<Expr>),
     Map(Vec<(Str, Expr)>),
 
     Unary {

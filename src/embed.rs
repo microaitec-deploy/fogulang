@@ -66,12 +66,15 @@ fn result_of(r: Result<Value, String>) -> Result<String, String> {
         Err(e) => Err(plain(e)),
         Ok(Value::Error(e)) => Err(e.message.clone()),
         Ok(v) => {
-            // `return value, error(...)`: the error of the pair is the host's error
-            if let Value::List(l) = &v {
-                let l = l.borrow();
-                if let (2, Some(Value::Error(e))) = (l.len(), l.get(1)) {
-                    return Err(e.message.clone());
-                }
+            // `return value, err`: an error is the host's error; with `nil` the
+            // host gets the value (several values: an array of them)
+            if let Value::Tuple(t) = &v {
+                return match t.last() {
+                    Some(Value::Error(e)) => Err(e.message.clone()),
+                    Some(Value::Nil) if t.len() == 2 => Ok(json(&t[0])),
+                    Some(Value::Nil) => Ok(json(&Value::tuple(t[..t.len() - 1].to_vec()))),
+                    _ => Ok(json(&v)),
+                };
             }
             Ok(json(&v))
         }

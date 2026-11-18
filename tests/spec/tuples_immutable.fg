@@ -1,0 +1,5 @@
+// A tuple cannot be changed.
+fn pair() { return 1, 2 }
+const t = pair()
+print("before")
+t[0] = 5

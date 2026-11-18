@@ -80,6 +80,8 @@ pub enum Op {
 
     /// `R[A] = [R[B] .. R[B+C]]` (the registers are emptied)
     NewList(Reg, Reg, u16),
+    /// `R[A]` = the tuple of `R[B] .. R[B+C]` (`return a, b`)
+    NewTuple(Reg, Reg, u16),
     /// `R[A] = { keys[C][i]: R[B+i] }`
     NewMap(Reg, Reg, u16),
     /// `R[A]` = the text of `R[B] .. R[B+C]`
@@ -105,8 +107,9 @@ pub enum Op {
     RetNil,
     /// `R[A] = R[A]?`: the value, or the function returns the error.
     Try(Reg),
-    /// `const [a, b] = R[A]`: `C` registers from `R[B]`.
-    Destructure(Reg, Reg, u16),
+    /// `const [a, b] = R[A]`: `C` registers from `R[B]`; the flag: the value
+    /// is a list written in the declaration (`interpreter::destructure`).
+    Destructure(Reg, Reg, u16, bool),
     /// A parameter's annotation (`types[B]`).
     CheckParam(Reg, u16),
     /// `let x: T = R[A]` (`types[B]`).

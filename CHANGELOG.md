@@ -37,6 +37,20 @@ be incompatible changes (spec §75).
 
 ### Changed
 
+- **Breaking — `return a, b` returns a tuple, and `[v, err]` / `?` no longer read lists as pairs**
+  (`docs/architecture/tuples.md`). A function that succeeded and returned a list was taken for a
+  value/error pair: `const [rows, err] = db.query(…)` with two rows gave the first row and the
+  second row as the "error", `json.parse("[1, 2]")` gave `1` and `2`, `json.parse("[5, null]")?`
+  gave `5`, and `?` ignored the error of a function returning three values. Now `return a, b`
+  builds a `tuple` (a value of its own: prints like a list, `typeof` is `"tuple"`, immutable);
+  `const [a, b] = …` splits a tuple, gives `nil, err` for an `error`, splits a list written in the
+  declaration itself, and takes **any other value — a list included — as one result**; `?` reacts
+  only to an `error` or a tuple ending in one, of any length, and returns as many values as the
+  declared return type. What breaks: `const [a, b] = xs` where `xs` is a list from elsewhere now
+  gives `a = xs`, `b = nil`; index the list or return a tuple. `fogu check` warns about it (W0005).
+  Tuples from `sync.Worker` functions stay tuples; through the C API a tuple ending in an error is
+  the call's error and one ending in `nil` gives its value.
+
 - **The C API reports the error of a `value, error` pair**: a function that ends with
   `return nil, error("msg")` now gives the host `{"ok":false,"error":"msg"}` instead of
   `{"ok":true,"value":[null,"<error>"]}`.

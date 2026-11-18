@@ -131,8 +131,14 @@ if err != nil {
 }
 ```
 
-- `?` returns the error to the caller. At the **top level** an error reaching `?`
-  stops the program with that message, which is fine for scripts. Use
+- `return a, b` returns a **tuple** (prints like a list, `typeof` is `"tuple"`).
+  `const [v, err] = f()` splits a tuple; an `error` gives `nil, err`; **any other
+  value is one result** — a list returned by `db.query` or `json.parse` gives
+  `[theList, nil]`, never its items. Only a list written in the declaration itself
+  is split: `const [a, b] = [1, 2]`. To take items of a list, index it (`xs[0]`).
+- `?` returns the error to the caller: it reacts to an `error` or a tuple whose
+  last value is an `error`, never to a list. At the **top level** an error reaching
+  `?` stops the program with that message, which is fine for scripts. Use
   `const [v, err] = …` where the program must continue.
 - Native functions return `error` **values** for operational failures (missing
   file, refused connection, bad SQL, invalid JSON) but **stop the program** on

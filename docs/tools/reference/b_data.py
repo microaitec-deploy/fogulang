@@ -184,7 +184,7 @@ print(err.message)
                     ("markdown.headings(text)", "list", "<code>{ level, text, id }</code> for every heading; <code>id</code> is a unique GitHub-style slug."),
                     ("markdown.toc(text, { minLevel = 1, maxLevel = 6 })", "str", "A table of contents: a nested Markdown list of links to the headings."),
                     ("markdown.slug(text)", "str", "GitHub-style anchor: <code>\"Hello, World!\"</code> → <code>hello-world</code>."),
-                    ("markdown.frontmatter(text)", "list · error", "<code>[meta, body]</code>; <code>meta</code> is <code>{}</code> without front matter. Invalid YAML/TOML is an error value."),
+                    ("markdown.frontmatter(text)", "tuple · error", "<code>[meta, body]</code>; <code>meta</code> is <code>{}</code> without front matter. Invalid YAML/TOML is an error value."),
                 ],
                 "example": r'''
 import markdown from "fogu:markdown"
@@ -519,8 +519,8 @@ import surrealdb from "fogu:surrealdb"
 const db = surrealdb.connect("ws://127.0.0.1:8000", { namespace: "shop", database: "main", user: "root", pass: "root", define: true })?
 db.create("person:ana", { name: "Ana", age: 30 })?
 db.insert("person", [{ id: "bia", name: "Bia", age: 17 }, { id: "caio", name: "Caio", age: 41 }])?
-const [adults, total] = db.query("SELECT name FROM person WHERE age >= $min ORDER BY name; RETURN count(SELECT * FROM person)", { min: 18 })?
-print(adults, total)
+const results = db.query("SELECT name FROM person WHERE age >= $min ORDER BY name; RETURN count(SELECT * FROM person)", { min: 18 })?
+print(results[0], results[1])
 const live = db.live("person")?
 db.merge("person:bia", { age: 18 })?
 const ev = live.next(2s)?

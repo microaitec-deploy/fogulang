@@ -856,13 +856,7 @@ impl Interpreter {
     #[inline(never)]
     fn exec_let_list(&self, names: &[String], mutable: &bool, init: &Expr, env: Rc<RefCell<Environment>>) -> Result<Flow, String> {
         let v = self.eval(init, env.clone())?;
-        let items: Vec<Value> = match &v {
-            Value::List(l) => l.borrow().clone(),
-            // `const [v, err] = f()` also works with functions that
-            // return a single value or an `error` (e.g. native functions).
-            Value::Error(_) => vec![Value::Nil, v.clone()],
-            other => vec![other.clone(), Value::Nil],
-        };
+        let items = destructure(&v, matches!(init, Expr::List(_)), names.len());
         for (i, n) in names.iter().enumerate() {
             if n == "_" {
                 continue;
@@ -1133,6 +1127,15 @@ impl Interpreter {
                 Ok(Flow::Normal)
             }
 
+            Value::Tuple(t) => {
+                for item in t.iter().cloned() {
+                    if let Some(f) = run_body!(item) {
+                        return Ok(f);
+                    }
+                }
+                Ok(Flow::Normal)
+            }
+
             Value::Buffer(b) => {
                 let snapshot: Vec<u8> = b.borrow().clone();
                 for byte in snapshot {
@@ -1232,6 +1235,7 @@ impl Interpreter {
                 .enumerate()
                 .map(|(i, v)| (Value::Int(i as i64), v.clone()))
                 .collect(),
+            Value::Tuple(t) => t.iter().enumerate().map(|(i, v)| (Value::Int(i as i64), v.clone())).collect(),
             Value::Buffer(b) => b
                 .borrow()
                 .iter()
@@ -1471,6 +1475,13 @@ impl Interpreter {
             Expr::OptChain(inner) => self.eval_opt_chain(inner, env),
             Expr::Ident(name) => env.borrow().get_sym(name.sym).ok_or_else(|| undefined(name)),
             Expr::List(elems) => self.eval_list(elems, env),
+            Expr::Tuple(elems) => {
+                let mut out = Vec::with_capacity(elems.len());
+                for e in elems {
+                    out.push(self.eval(e, env.clone())?);
+                }
+                Ok(Value::tuple(out))
+            }
             Expr::Map(entries) => self.eval_map(entries, env),
             Expr::Assign { target, op, value } => self.eval_assign(target, *op, value, env),
             Expr::Unary { op, right } => self.eval_unary(op, right, env),
@@ -2251,13 +2262,12 @@ impl Interpreter {
                     // `?`: the function returns the saved (nil, error) pair —
                     // or just the error when its declared return type is not
                     // a tuple (`fn main(): error`), keeping the return type.
-                    let pair = self.pending.borrow_mut().take().unwrap_or(Value::Nil);
-                    out = Ok(match (body.first(), &pair) {
-                        (Some(Stmt::ReturnType(t)), Value::List(l)) if !matches!(t, TypeExpr::Tuple(_)) => {
-                            l.borrow().get(1).cloned().unwrap_or(Value::Nil)
-                        }
-                        _ => pair,
-                    });
+                    let err = self.pending.borrow_mut().take().unwrap_or(Value::Nil);
+                    let ret = match body.first() {
+                        Some(Stmt::ReturnType(t)) => Some(t),
+                        _ => None,
+                    };
+                    out = Ok(propagated_return(ret, err));
                     break;
                 }
                 Err(e) => return Err(e),
@@ -2317,8 +2327,7 @@ impl Interpreter {
                 false
             }
             TypeExpr::Tuple(ts) => match v {
-                Value::List(l) => {
-                    let items = l.borrow().clone();
+                Value::Tuple(items) => {
                     if items.len() != ts.len() {
                         return Ok(false);
                     }
@@ -2362,7 +2371,8 @@ impl Interpreter {
             "bool" => matches!(v, Value::Bool(_)),
             "nil" | "void" => matches!(v, Value::Nil),
             "duration" => matches!(v, Value::Duration(_)),
-            "list" | "tuple" => matches!(v, Value::List(_)),
+            "list" => matches!(v, Value::List(_)),
+            "tuple" => matches!(v, Value::Tuple(_)),
             "buffer" => matches!(v, Value::Buffer(_)),
             "map" => matches!(v, Value::Map(_)),
             "range" => matches!(v, Value::Range(..)),
@@ -2391,20 +2401,20 @@ impl Interpreter {
     }
 
     /// Semantics of `expr?` (spec §30).
+    ///
+    /// Only an `error` or a tuple (`return a, b`) whose last value is an
+    /// `error` stops the function. A tuple whose last value is `nil` gives its
+    /// other values (one value, or a tuple of them); any other value — a list
+    /// included — is the result as it is.
     fn propagate(&self, v: Value) -> Result<Value, String> {
         let (value, err) = match &v {
             Value::Error(_) => (None, Some(v.clone())),
-            Value::List(l) => {
-                let b = l.borrow();
-                if b.len() == 2 && matches!(b[1], Value::Error(_) | Value::Nil) {
-                    match &b[1] {
-                        Value::Error(_) => (None, Some(b[1].clone())),
-                        _ => (Some(b[0].clone()), None),
-                    }
-                } else {
-                    (Some(v.clone()), None)
-                }
-            }
+            Value::Tuple(t) => match t.last() {
+                Some(e @ Value::Error(_)) => (None, Some(e.clone())),
+                Some(Value::Nil) if t.len() == 2 => (Some(t[0].clone()), None),
+                Some(Value::Nil) if t.len() > 2 => (Some(Value::tuple(t[..t.len() - 1].to_vec())), None),
+                _ => (Some(v.clone()), None),
+            },
             _ => (Some(v.clone()), None),
         };
         if let Some(Value::Error(e)) = err {
@@ -2415,8 +2425,8 @@ impl Interpreter {
                 cause: e.cause.clone(),
                 trace,
             }));
-            *self.pending.borrow_mut() =
-                Some(Value::List(Rc::new(RefCell::new(vec![Value::Nil, ne]))));
+            // the error alone: the function shapes what it returns (`propagated_return`)
+            *self.pending.borrow_mut() = Some(ne);
             return Err(PROPAGATE.into());
         }
         Ok(value.unwrap_or(Value::Nil))
@@ -2841,6 +2851,10 @@ fn eval_index(target: Value, index: Value) -> Result<Value, String> {
             let idx = norm_index(i, v.len())?;
             Ok(v[idx].clone())
         }
+        (Value::Tuple(t), Value::Int(i)) => {
+            let idx = norm_index(i, t.len())?;
+            Ok(t[idx].clone())
+        }
         (Value::Map(m), Value::Str(k)) => Ok(m.borrow().get(k.as_str()).cloned().unwrap_or(Value::Nil)),
         (Value::Module(m), Value::Str(k)) => {
             Ok(m.exports.borrow().get(k.as_str()).cloned().unwrap_or(Value::Nil))
@@ -3045,6 +3059,43 @@ fn compare_values(l: Value, op: BinaryOp, r: Value) -> Result<Value, String> {
     }))
 }
 
+/// The values `const [a, b, …] = v` binds (`n` names; spec §8.4, §30).
+///
+/// - a tuple (`return a, b`): its values, in order;
+/// - a list written in the declaration itself (`const [a, b] = [1, 2]`): its items;
+/// - an `error`: `nil`, then the error (`const [v, err] = f()` of a function
+///   that failed);
+/// - any other value — a list included — is one result: the value, then `nil`.
+///   A function that returns a list returns one value, so
+///   `const [rows, err] = db.query(…)` gives the whole list and `nil`.
+///
+/// Missing values are `nil`.
+pub(crate) fn destructure(v: &Value, literal: bool, n: usize) -> Vec<Value> {
+    let mut items: Vec<Value> = match v {
+        Value::Tuple(t) => t.to_vec(),
+        Value::List(l) if literal => l.borrow().clone(),
+        Value::Error(_) => vec![Value::Nil, v.clone()],
+        other => vec![other.clone()],
+    };
+    items.resize(n.max(items.len()), Value::Nil);
+    items
+}
+
+/// What a function returns when `?` meets `err` in it: the tuple `(nil, …, err)`
+/// shaped like its declared return type (`(T1, T2, error)` gives three values),
+/// or the error alone when the declared type is not a tuple (`fn main(): error`).
+pub(crate) fn propagated_return(ret: Option<&TypeExpr>, err: Value) -> Value {
+    match ret {
+        Some(TypeExpr::Tuple(ts)) if ts.len() >= 2 => {
+            let mut items = vec![Value::Nil; ts.len() - 1];
+            items.push(err);
+            Value::tuple(items)
+        }
+        Some(_) => err,
+        None => Value::tuple(vec![Value::Nil, err]),
+    }
+}
+
 /// `==` semantics (structural for lists and maps, identity for the rest).
 pub fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
@@ -3064,6 +3115,9 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
             let xb = x.borrow();
             let yb = y.borrow();
             xb.len() == yb.len() && xb.iter().zip(yb.iter()).all(|(a, b)| values_equal(a, b))
+        }
+        (Value::Tuple(x), Value::Tuple(y)) => {
+            Rc::ptr_eq(x, y) || (x.len() == y.len() && x.iter().zip(y.iter()).all(|(a, b)| values_equal(a, b)))
         }
         (Value::Buffer(x), Value::Buffer(y)) => Rc::ptr_eq(x, y) || *x.borrow() == *y.borrow(),
         (Value::Map(x), Value::Map(y)) => {

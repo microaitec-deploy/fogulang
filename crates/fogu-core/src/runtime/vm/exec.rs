@@ -14,13 +14,13 @@ use std::rc::Rc;
 
 use ahash::AHashMap as HashMap;
 
-use super::super::super::ast::{BinaryOp, TypeExpr};
+use super::super::super::ast::BinaryOp;
 use super::super::super::environment::Environment;
 use super::super::super::ops;
 use super::super::super::value::{ChanValue, FnValue, Str, Value};
 use super::super::{
-    assign_index, chan_recv, check_arity, compare_values, describe_for, eval_binary, eval_index, norm_index, undefined, values_equal, Interpreter,
-    RecvError, PROPAGATE,
+    assign_index, chan_recv, check_arity, compare_values, describe_for, destructure, eval_binary, eval_index, norm_index, propagated_return,
+    undefined, values_equal, Interpreter, RecvError, PROPAGATE,
 };
 use super::{Cache, Op, Proto, Reg};
 use crate::native::NativeObjectRef;
@@ -170,14 +170,11 @@ fn code_err(c: i64) -> String {
     ops::code_message(c).to_string()
 }
 
-/// The value a function returns when `?` meets an error: the saved
-/// (nil, error) pair — or just the error when its declared return type is not a tuple.
+/// The value a function returns when `?` meets an error (as the interpreter:
+/// `interpreter::propagated_return`).
 fn propagated(it: &Interpreter, p: &Proto) -> Value {
-    let pair = it.pending.borrow_mut().take().unwrap_or(Value::Nil);
-    match (&p.ret_type, &pair) {
-        (Some(t), Value::List(l)) if !matches!(t, TypeExpr::Tuple(_)) => l.borrow().get(1).cloned().unwrap_or(Value::Nil),
-        _ => pair,
-    }
+    let err = it.pending.borrow_mut().take().unwrap_or(Value::Nil);
+    propagated_return(p.ret_type.as_ref(), err)
 }
 
 fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, String> {
@@ -427,6 +424,10 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
                 let items = take_args!(b, n);
                 r!(a) = Value::List(Rc::new(RefCell::new(items)));
             }
+            Op::NewTuple(a, b, n) => {
+                let items = take_args!(b, n);
+                r!(a) = Value::tuple(items);
+            }
             Op::NewMap(a, b, k) => {
                 let keys = &cur.proto.keys[k as usize];
                 let mut map = HashMap::with_capacity(keys.len());
@@ -662,29 +663,10 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
                     Err(e) => return Err(e),
                 }
             }
-            Op::Destructure(a, b, n) => {
-                let v = r!(a).clone();
-                match &v {
-                    Value::List(l) => {
-                        let l = l.borrow();
-                        for i in 0..n as usize {
-                            r!(b as usize + i) = l.get(i).cloned().unwrap_or(Value::Nil);
-                        }
-                    }
-                    // `const [v, err] = f()` also works with a single value or an `error`
-                    other => {
-                        let (first, second) = match other {
-                            Value::Error(_) => (Value::Nil, v.clone()),
-                            _ => (v.clone(), Value::Nil),
-                        };
-                        for i in 0..n as usize {
-                            r!(b as usize + i) = match i {
-                                0 => first.clone(),
-                                1 => second.clone(),
-                                _ => Value::Nil,
-                            };
-                        }
-                    }
+            Op::Destructure(a, b, n, literal) => {
+                let items = destructure(&r!(a), literal, n as usize);
+                for (i, v) in items.into_iter().take(n as usize).enumerate() {
+                    r!(b as usize + i) = v;
                 }
             }
             Op::CheckParam(a, t) => {
@@ -703,6 +685,7 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
                     Value::Range(lo, hi) => Iter::Range(lo, hi),
                     // a snapshot: the body may modify the list
                     Value::List(l) => Iter::Items(l.borrow().clone().into_iter()),
+                    Value::Tuple(t) => Iter::Items(t.to_vec().into_iter()),
                     Value::Buffer(b) => Iter::Bytes(b.borrow().clone().into_iter()),
                     Value::Chan(ch) => Iter::Chan(ch),
                     Value::Str(s) => Iter::Items(s.chars().map(|c| Value::Str(c.into())).collect::<Vec<_>>().into_iter()),
@@ -726,6 +709,7 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
                         keys.into_iter().map(|k| (Value::Str(k.clone().into()), m[k].clone())).collect()
                     }
                     Value::List(l) => l.borrow().iter().enumerate().map(|(i, v)| (Value::Int(i as i64), v.clone())).collect(),
+                    Value::Tuple(t) => t.iter().enumerate().map(|(i, v)| (Value::Int(i as i64), v.clone())).collect(),
                     Value::Buffer(b) => b.borrow().iter().enumerate().map(|(i, x)| (Value::Int(i as i64), Value::Int(*x as i64))).collect(),
                     Value::Str(s) => s.chars().enumerate().map(|(i, c)| (Value::Int(i as i64), Value::Str(c.to_string().into()))).collect(),
                     other => {

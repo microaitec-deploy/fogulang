@@ -138,7 +138,7 @@ fn has_assign(e: &Expr) -> bool {
     match e {
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Nil | Expr::Ident(_) | Expr::Duration(_) => false,
         Expr::Assign { .. } => true,
-        Expr::List(v) | Expr::Template(v) => v.iter().any(has_assign),
+        Expr::List(v) | Expr::Tuple(v) | Expr::Template(v) => v.iter().any(has_assign),
         Expr::Map(v) => v.iter().any(|(_, e)| has_assign(e)),
         Expr::Unary { right, .. } => has_assign(right),
         Expr::Binary { left, right, .. } | Expr::Logical { left, right, .. } => has_assign(left) || has_assign(right),
@@ -284,7 +284,7 @@ impl Compiler {
                 }
                 let mark = self.next;
                 let v = self.expr(init, None)?;
-                self.emit(Op::Destructure(v, base, names.len() as u16));
+                self.emit(Op::Destructure(v, base, names.len() as u16, matches!(init, Expr::List(_))));
                 self.next = mark;
                 for (i, n) in names.iter().enumerate() {
                     if n != "_" {
@@ -516,6 +516,16 @@ impl Compiler {
                     self.fresh(e)?;
                 }
                 self.emit(Op::NewList(a, start, idx(elems.len(), "list items")?));
+                self.next = start;
+                Ok(a)
+            }
+            Expr::Tuple(elems) => {
+                let a = self.dst(dst)?;
+                let start = self.next;
+                for e in elems {
+                    self.fresh(e)?;
+                }
+                self.emit(Op::NewTuple(a, start, idx(elems.len(), "returned values")?));
                 self.next = start;
                 Ok(a)
             }

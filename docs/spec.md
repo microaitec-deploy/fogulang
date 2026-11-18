@@ -424,6 +424,21 @@ const [result, err] = divide(10, 2)
 
 Tuples are immutable and may hold different types.
 
+A tuple is a value of its own, not a list (`typeof` gives `"tuple"`). It prints
+as a list (`[3, nil]`), converts to a JSON array, and supports `len`, indexing,
+`for x in`, `for i, x in` and `==`. Destructuring follows the type:
+
+| `const [a, b] = …` | `a`, `b` |
+| --- | --- |
+| a tuple | its values |
+| an `error` | `nil`, the error |
+| a list written in the declaration (`[1, 2]`) | its items |
+| any other value — a list returned by a function included | the value, `nil` |
+
+So `const [rows, err] = db.query(…)` always gives the whole list of rows. Missing
+values are `nil`. The annotations `tuple` and `(T1, T2, …)` match a tuple; `list`
+matches a list.
+
 ---
 
 ## 9. Dynamic typing and annotations
@@ -1042,6 +1057,13 @@ if err != nil {
 ```
 
 keeping the function's return type.
+
+`?` stops the function only for an `error` or a tuple whose last value is an
+`error`; a tuple whose last value is `nil` gives its other values (one value, or a
+tuple of them), and any other value — a list included — is the result as it is.
+The function returns a tuple of `nil`s ending with the error, as long as its
+declared return type (`(T1, T2, error)` → three values), the error alone when the
+declared type is not a tuple, and `(nil, error)` without a declaration.
 
 ---
 

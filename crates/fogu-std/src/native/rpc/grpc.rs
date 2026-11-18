@@ -678,12 +678,8 @@ fn run_handler(it: &Interpreter, env: Rc<RefCell<Environment>>, f: Value, m: Met
     };
     let out = match r {
         Err(e) => Err(status_of(&e)),
-        Ok(Value::Error(e)) => Err(status_of(&e.message)),
-        Ok(Value::List(l)) if l.borrow().len() == 2 && matches!(l.borrow()[1], Value::Error(_)) => {
-            let Value::Error(e) = &l.borrow()[1] else { unreachable!() };
-            Err(status_of(&e.message))
-        }
-        Ok(v) => Ok(v),
+        // `return reply, nil` / `return nil, error(...)`
+        Ok(v) => v.into_result().map_err(|e| status_of(&e.message)),
     };
     match out {
         Err(s) => fail(s),

@@ -116,6 +116,7 @@ impl NativeContext {
         self.define_global("len", 1, |args| match &args[0] {
             Value::Str(s) => Ok(Value::Int(s.char_len() as i64)),
             Value::List(l) => Ok(Value::Int(l.borrow().len() as i64)),
+            Value::Tuple(t) => Ok(Value::Int(t.len() as i64)),
             Value::Buffer(b) => Ok(Value::Int(b.borrow().len() as i64)),
             Value::Map(m) => Ok(Value::Int(m.borrow().len() as i64)),
             Value::Chan(c) => Ok(Value::Int(c.queue.borrow().len() as i64)),

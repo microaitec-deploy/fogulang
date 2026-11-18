@@ -187,12 +187,7 @@ fn call(it: &Interpreter, env: &Rc<RefCell<Environment>>, f: &Value, args: Vec<V
     let r = it.call_value(f.clone(), args, Rc::clone(env));
     let err = match &r {
         Err(e) => Some(e.strip_prefix(crate::runtime::value::ERR_VALUE_PREFIX).unwrap_or(e).to_string()),
-        Ok(Value::Error(e)) => Some(e.message.clone()),
-        Ok(Value::List(l)) if l.borrow().len() == 2 && matches!(l.borrow()[1], Value::Error(_)) => {
-            let Value::Error(e) = &l.borrow()[1] else { unreachable!() };
-            Some(e.message.clone())
-        }
-        _ => None,
+        Ok(v) => v.clone().into_result().err().map(|e| e.message.clone()),
     };
     match err {
         Some(e) => {

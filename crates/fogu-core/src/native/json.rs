@@ -74,6 +74,17 @@ fn write_value(v: &Value, out: &mut String) {
             }
             out.push(']');
         }
+        // JSON has no tuples: an array
+        Value::Tuple(t) => {
+            out.push('[');
+            for (i, item) in t.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_value(item, out);
+            }
+            out.push(']');
+        }
         Value::Buffer(b) => {
             out.push('[');
             for (i, x) in b.borrow().iter().enumerate() {

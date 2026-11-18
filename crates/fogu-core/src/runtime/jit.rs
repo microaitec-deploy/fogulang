@@ -1723,7 +1723,7 @@ fn collect_names(out: &mut HashSet<String>, s: &Stmt) {
             Expr::Ident(n) => {
                 out.insert(n.text.clone());
             }
-            Expr::List(v) => v.iter().for_each(|x| ex(out, x)),
+            Expr::List(v) | Expr::Tuple(v) => v.iter().for_each(|x| ex(out, x)),
             Expr::Map(v) => v.iter().for_each(|(_, x)| ex(out, x)),
             Expr::Unary { right, .. } => ex(out, right),
             Expr::Binary { left, right, .. } | Expr::Logical { left, right, .. } => {
@@ -3988,6 +3988,7 @@ fn expr_name(e: &Expr) -> &'static str {
         Expr::Nil => "nil",
         Expr::Ident(_) => "ident",
         Expr::List(_) => "list",
+        Expr::Tuple(_) => "tuple",
         Expr::Map(_) => "map",
         Expr::Unary { .. } => "unary",
         Expr::Binary { .. } => "binary",

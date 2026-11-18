@@ -180,15 +180,11 @@ pub fn run_test_file(path: &Path, filter: Option<&str>) -> Result<Vec<TestOutcom
         sched::shutdown();
         let status = match r {
             Err(e) => TestStatus::Failed(located(&interp, &filename, e)),
-            Ok(value::Value::Error(e)) => TestStatus::Failed(format!("returned an error: {}", e.message)),
-            Ok(value::Value::List(l)) if matches!(l.borrow().last(), Some(value::Value::Error(_))) => {
-                let msg = match l.borrow().last() {
-                    Some(value::Value::Error(e)) => e.message.clone(),
-                    _ => String::new(),
-                };
-                TestStatus::Failed(format!("returned an error: {}", msg))
-            }
-            Ok(_) => TestStatus::Passed,
+            // an error, or a tuple ending in one (`return nil, error(...)`)
+            Ok(v) => match v.into_result() {
+                Err(e) => TestStatus::Failed(format!("returned an error: {}", e.message)),
+                Ok(_) => TestStatus::Passed,
+            },
         };
         out.push(TestOutcome { name: t.name, status, millis: started.elapsed().as_millis() });
     }

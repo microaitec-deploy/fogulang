@@ -92,12 +92,12 @@ pub fn build() -> ModuleValue {
         max_args(a, 1, "markdown.slug")?;
         Ok(Value::str(slug(&str_arg(a, 0, "markdown.slug")?)))
     }));
-    // frontmatter(text) → [meta, body]; meta is {} when there is no front matter
+    // frontmatter(text) → (meta, body), a tuple; meta is {} when there is no front matter
     e.insert("frontmatter".into(), nfn_var("frontmatter", 1, |a| {
         max_args(a, 1, "markdown.frontmatter")?;
         let text = str_arg(a, 0, "markdown.frontmatter")?;
         let Some(fm) = split_frontmatter(&text) else {
-            return Ok(list(vec![map(vec![]), Value::str(text)]));
+            return Ok(Value::tuple(vec![map(vec![]), Value::str(text)]));
         };
         let parsed = if fm.toml {
             crate::native::formats::toml_parse(fm.meta)
@@ -106,7 +106,7 @@ pub fn build() -> ModuleValue {
         };
         let meta = parsed.map_err(|e| io_err!("markdown.frontmatter: {}", e.strip_prefix(ERR_VALUE_PREFIX).unwrap_or(&e)))?;
         let meta = if matches!(meta, Value::Nil) { map(vec![]) } else { meta };
-        Ok(list(vec![meta, Value::str(fm.body)]))
+        Ok(Value::tuple(vec![meta, Value::str(fm.body)]))
     }));
     ModuleValue {
         name: "fogu:markdown".into(),

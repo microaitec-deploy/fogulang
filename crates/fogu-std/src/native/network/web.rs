@@ -785,13 +785,10 @@ pub fn dispatch(
                 if let Value::List(l) = &tc_req {
                     cargs.extend(l.borrow().iter().cloned());
                 }
-                match run(func, cargs) {
-                    Ok(Value::Error(e)) => json_response(200, &map(vec![("error", Value::Str(e.message.clone().into()))])),
-                    // `return value, error(...)`
-                    Ok(Value::List(l)) if l.borrow().len() == 2 && matches!(l.borrow()[1], Value::Error(_)) => {
-                        json_response(200, &map(vec![("error", Value::Str(err_message(&l.borrow()[1]).into()))]))
-                    }
-                    Ok(v) => json_response(200, &map(vec![("ok", v)])),
+                // `return value, nil` answers the value; an error (alone or ending a tuple) answers it
+                match run(func, cargs).map(Value::into_result) {
+                    Ok(Err(e)) => json_response(200, &map(vec![("error", Value::Str(e.message.clone().into()))])),
+                    Ok(Ok(v)) => json_response(200, &map(vec![("ok", v)])),
                     Err(e) => {
                         eprintln!("[web] procedure {}: {}", name, err_message(&e));
                         json_response(500, &map(vec![("error", Value::Str(err_message(&e).into()))]))
@@ -860,16 +857,14 @@ pub fn dispatch(
     Ok(response)
 }
 
-/// `[value, error]` (a function that did `return value, error(...)`) → the error.
-/// (`[value, nil]` stays a list: it may be a real two-item answer.)
+/// What a handler returned, read as `value, error` (`Value::into_result`): the
+/// error of a tuple that ends in one, the value of `return value, nil`. A list is
+/// never a pair: it is the answer.
 fn unpair(v: Value) -> Value {
-    if let Value::List(l) = &v {
-        let l = l.borrow();
-        if l.len() == 2 && matches!(l[1], Value::Error(_)) {
-            return l[1].clone();
-        }
+    match v.into_result() {
+        Ok(v) => v,
+        Err(e) => Value::Error(e),
     }
-    v
 }
 
 /// A `{ method, path, query, headers, body }` map → a `Request` object.

@@ -133,8 +133,8 @@ lib.fogu_free_string(p)
   `fogu_on_host` for `Fogu.host.emit`).
 - An error is `{"ok":false,"error":"message"}`: a runtime error, an `error`
   value returned by the function, or the error of a `return value, error(...)`
-  pair. A function that returns `value, nil` gives the host the pair
-  `[value, null]`.
+  tuple. A function that returns `value, nil` gives the host `value`; one that
+  returns more values with `nil` last gives an array of the others.
 - The runtime lives on its own thread: globals, `fg` tasks and servers the
   program started stay alive between calls, until `fogu_free`. Calls on one
   runtime are serialized.
