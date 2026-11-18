@@ -290,6 +290,9 @@ mod slab {
 struct Ctx {
     yielder: *const Yielder<(), ()>,
     stack_limit: usize,
+    /// [`task_id`]: unique for the whole run (a yielder's address is not: a
+    /// pooled stack gives the next task the same one).
+    id: usize,
 }
 
 thread_local! {
@@ -308,7 +311,13 @@ thread_local! {
     static OPENED: RefCell<Vec<Gate>> = const { RefCell::new(Vec::new()) };
     /// Gates that are opened on this thread, and announced with [`gate_opened`].
     static LOCAL_GATES: RefCell<rustc_hash::FxHashSet<usize>> = RefCell::new(rustc_hash::FxHashSet::default());
-    static CTX: Cell<Ctx> = const { Cell::new(Ctx { yielder: std::ptr::null(), stack_limit: 0 }) };
+    static CTX: Cell<Ctx> = const { Cell::new(Ctx { yielder: std::ptr::null(), stack_limit: 0, id: 0 }) };
+    /// The id of the next task (0 is the main program).
+    static NEXT_TASK_ID: Cell<usize> = const { Cell::new(1) };
+    /// Gates to open at a deadline (sleeping tasks, `timeout` channels), by
+    /// deadline and then by arrival.
+    static GATE_TIMERS: RefCell<std::collections::BTreeMap<(Instant, u64), Gate>> = const { RefCell::new(std::collections::BTreeMap::new()) };
+    static GATE_SEQ: Cell<u64> = const { Cell::new(0) };
     static PROGRESS: Cell<u64> = const { Cell::new(0) };
     /// Pending deadlines of `timeout(d)` channels.
     /// Pending deadlines, ordered and without duplicates: waiters re-add theirs
@@ -591,9 +600,11 @@ fn capture() -> Option<Restore> {
     hook.map(|f| f())
 }
 
-/// An id of the running task (0 for the main program), unique while it runs.
+/// The id of the running task (0 for the main program): never given to
+/// another task of the same run, so state keyed by it (a `fogu:vm`
+/// cancellation, a lock's owner) cannot reach a later task.
 pub fn task_id() -> usize {
-    CTX.with(|c| c.get().yielder as usize)
+    CTX.with(|c| c.get().id)
 }
 
 /// Is the current code running inside an `fg` task?
@@ -681,11 +692,13 @@ fn progress() -> u64 {
 /// Creates a task and runs it right away until it blocks/finishes.
 pub fn spawn(f: Box<dyn FnOnce() -> Result<(), String>>) -> Result<(), String> {
     let stack = take_stack()?;
+    let id = NEXT_TASK_ID.with(|n| n.replace(n.get() + 1));
     let mut task: Task = Coroutine::with_stack(stack, move |yielder, ()| {
         let limit = sp().saturating_sub(TASK_STACK - STACK_MARGIN);
         let mine = Ctx {
             yielder: yielder as *const _,
             stack_limit: limit,
+            id,
         };
         CTX.with(|c| c.set(mine));
         f()
@@ -858,4 +871,56 @@ pub fn shutdown() {
 #[allow(dead_code)]
 pub fn pending_tasks() -> usize {
     QUEUE.with(|q| q.borrow().len()) + PARKED.with(|p| p.borrow().len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_ids_are_never_reused() {
+        // a finished task's stack goes back to the pool and the next task
+        // gets it: its id must still be new (state keyed by it, such as a
+        // `fogu:vm` cancellation, must not reach the next task)
+        let ids = Rc::new(RefCell::new(Vec::new()));
+        for _ in 0..3 {
+            let ids = Rc::clone(&ids);
+            spawn(Box::new(move || {
+                ids.borrow_mut().push(task_id());
+                Ok(())
+            }))
+            .unwrap();
+        }
+        let ids = ids.borrow();
+        assert_eq!(ids.len(), 3);
+        assert!(ids.iter().all(|&i| i != 0));
+        assert!(ids[0] != ids[1] && ids[1] != ids[2] && ids[0] != ids[2]);
+    }
+
+    #[test]
+    fn a_parked_task_wakes_when_its_gate_opens() {
+        let woke = Rc::new(Cell::new(false));
+        let gate = Rc::new(RefCell::new(None::<Gate>));
+        {
+            let (woke, gate) = (Rc::clone(&woke), Rc::clone(&gate));
+            spawn(Box::new(move || {
+                let g = new_local_gate();
+                *gate.borrow_mut() = Some(Gate::clone(&g));
+                wait_until_on(Some(&g), || g.load(Ordering::Acquire))?;
+                woke.set(true);
+                Ok(())
+            }))
+            .unwrap();
+        }
+        assert!(!woke.get());
+        // parked: a pass does not resume it
+        run_pass();
+        assert!(!woke.get());
+        let g = gate.borrow_mut().take().unwrap();
+        assert!(open_gate(&g));
+        assert!(!open_gate(&g));
+        let w = Rc::clone(&woke);
+        wait_until(move || w.get()).unwrap();
+        assert!(woke.get());
+    }
 }

@@ -1,0 +1,32 @@
+// vm cancel() stops only the run it cancels: a run cancelled while it waits
+// for its context (or for a semaphore permit) never starts, gives its permit
+// back, and leaves nothing behind for later fg tasks.
+import vm from "fogu:vm"
+import sync from "fogu:sync"
+const ctx = vm.createContext({})
+const a = ctx.spawn("Fogu.sleep(30ms)\n1")
+const b = ctx.spawn("2")
+Fogu.sleep(5ms)
+print("cancel b", b.cancel())
+print(a.wait()?, b.wait())
+const done = chan(2)
+fg fn() {
+    for k in 0..10 { Fogu.sleep(1ms) }
+    done <- "ok"
+}()
+print(<-done)
+
+const sem = sync.Semaphore(1)
+const x = vm.spawn("Fogu.sleep(20ms)\n1", nil, { semaphore: sem })
+const y = vm.spawn("2", nil, { semaphore: sem })
+Fogu.sleep(5ms)
+print("cancel y", y.cancel())
+print(x.wait()?, y.wait())
+const z = vm.spawn("3", nil, { semaphore: sem })
+print(z.wait()?)
+const many = chan(20)
+for i in 0..10 { fg fn() { Fogu.sleep(1ms)
+    many <- 1 }() }
+let n = 0
+for i in 0..10 { n += <-many }
+print(n)
