@@ -258,7 +258,7 @@ fn pow(a: &[Value]) -> R {
 fn to_int(a: &[Value], name: &str, f: fn(f64) -> f64) -> R {
     match &a[0] {
         Value::Int(n) => Ok(Value::Int(*n)),
-        Value::Float(n) => Ok(Value::Int(f(*n) as i64)),
+        Value::Float(n) => crate::runtime::ops::float_to_int(f(*n)).map(Value::Int),
         other => Err(format!("'{}' not applicable to '{}'", name, other.type_name())),
     }
 }
@@ -278,7 +278,7 @@ fn trunc(a: &[Value]) -> R {
 /// round(x) → int (halves away from zero); round(x, digits) → float.
 fn round(a: &[Value]) -> R {
     match a {
-        [x] => to_int(a, "round", f64::round).map_err(|_| format!("'round' not applicable to '{}'", x.type_name())),
+        [_] => to_int(a, "round", f64::round),
         [x, Value::Int(d)] => match x {
             Value::Int(n) if *d >= 0 => Ok(Value::Int(*n)),
             _ => {

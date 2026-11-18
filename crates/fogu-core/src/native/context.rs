@@ -152,7 +152,7 @@ impl NativeContext {
 
         self.define_global("int", 1, |args| match &args[0] {
             Value::Int(n) => Ok(Value::Int(*n)),
-            Value::Float(f) => Ok(Value::Int(*f as i64)),
+            Value::Float(f) => crate::runtime::ops::float_to_int(f.trunc()).map(Value::Int),
             Value::Str(s) => s
                 .parse::<i64>()
                 .map(Value::Int)

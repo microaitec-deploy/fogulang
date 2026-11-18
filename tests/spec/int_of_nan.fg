@@ -1,0 +1,9 @@
+// int() of NaN, an infinity or a float beyond the int range is an error
+// (as int("abc") is), in the interpreter and in compiled code.
+import math from "fogu:math"
+print(int(2.9), int(-2.9), int(-9.2e18), math.floor(2.5), math.round(-2.5))
+fn conv(x) { return int(x) }
+let s = 0
+for i in 0..300 { s += conv(i * 1.5) }
+print(s)
+print(conv(1e300))

@@ -2252,6 +2252,18 @@ impl<'a, 'f> Gen<'a, 'f> {
         self.b.ins().isub(a, qd)
     }
 
+    /// `ops::float_to_int` of a float (truncated toward zero): NaN, ±inf and
+    /// values outside the int range stop with its error.
+    fn float_to_int(&mut self, v: ir::Value) -> ir::Value {
+        let lo = self.b.ins().f64const(-9_223_372_036_854_775_808.0);
+        let hi = self.b.ins().f64const(9_223_372_036_854_775_808.0);
+        let below = self.b.ins().fcmp(FloatCC::UnorderedOrLessThan, v, lo);
+        let above = self.b.ins().fcmp(FloatCC::UnorderedOrGreaterThanOrEqual, v, hi);
+        let bad = self.b.ins().bor(below, above);
+        self.trap_if(bad, ops::CODE_FLOAT_INT);
+        self.b.ins().fcvt_to_sint_sat(types::I64, v)
+    }
+
     fn trap_if(&mut self, cond: ir::Value, code: i64) {
         let eb = self.err_block(code);
         let cont = self.b.create_block();
@@ -3663,7 +3675,7 @@ impl<'a, 'f> Gen<'a, 'f> {
                 if matches!(c, Callee::ToInt) {
                     match t {
                         Ty::Int => Ok((v, Ty::Int)),
-                        Ty::Float => Ok((self.b.ins().fcvt_to_sint_sat(types::I64, v), Ty::Int)),
+                        Ty::Float => Ok((self.float_to_int(v), Ty::Int)),
                         Ty::Bool => Ok((self.b.ins().uextend(types::I64, v), Ty::Int)),
                         Ty::Unit => bail("int(nil)"),
                         Ty::List | Ty::Map | Ty::Str => bail("int() of a value the JIT does not compile"),
@@ -3878,7 +3890,7 @@ impl<'a, 'f> Gen<'a, 'f> {
                             // halves away from zero, like f64::round (`nearest` rounds to even)
                             _ => self.call_f64(m_round as extern "C" fn(f64) -> f64 as usize, &[a]),
                         };
-                        Ok((self.b.ins().fcvt_to_sint_sat(types::I64, r), Ty::Int))
+                        Ok((self.float_to_int(r), Ty::Int))
                     }
                     _ => bail("floor/ceil/trunc/round require a number"),
                 }

@@ -8,6 +8,8 @@ pub const ERR_NEG_POW: &str = "negative integer exponent in '**' (use float)";
 pub const ERR_STACK: &str = "stack overflow (recursion too deep)";
 pub const ERR_MATCH: &str = "non-exhaustive match: no arm matched";
 pub const ERR_SHIFT: &str = "negative shift count";
+/// `int(x)` / `math.round(x)`… of a float with no int value.
+pub const ERR_FLOAT_INT: &str = "cannot convert the float to int: it is NaN, infinite or out of the int range";
 /// Native code was stopped by the deadline of its `fogu:vm` run (the
 /// interpreter turns it into the timeout error of that run).
 pub const ERR_CANCEL: &str = "script execution timed out";
@@ -19,6 +21,7 @@ pub const CODE_NEG_POW: i64 = 3;
 pub const CODE_STACK: i64 = 4;
 pub const CODE_MATCH: i64 = 5;
 pub const CODE_SHIFT: i64 = 6;
+pub const CODE_FLOAT_INT: i64 = 7;
 
 pub fn code_message(code: i64) -> &'static str {
     match code {
@@ -28,6 +31,7 @@ pub fn code_message(code: i64) -> &'static str {
         CODE_STACK => ERR_STACK,
         CODE_MATCH => ERR_MATCH,
         CODE_SHIFT => ERR_SHIFT,
+        CODE_FLOAT_INT => ERR_FLOAT_INT,
         c if c >= CODE_CUSTOM => CUSTOM.with(|m| m.borrow().get((c - CODE_CUSTOM) as usize).copied()).unwrap_or("unknown error in native code"),
         _ => "unknown error in native code",
     }
@@ -65,6 +69,16 @@ pub fn int_shr(a: i64, n: i64) -> Result<i64, i64> {
     match n {
         0.. => Ok(a >> n.min(63)),
         _ => Err(CODE_SHIFT),
+    }
+}
+
+/// The int of a float already rounded to a whole number (`int`, `math.floor`…):
+/// NaN, ±inf and values outside `[-2^63, 2^63)` have none.
+pub fn float_to_int(f: f64) -> Result<i64, String> {
+    if f >= -9_223_372_036_854_775_808.0 && f < 9_223_372_036_854_775_808.0 {
+        Ok(f as i64)
+    } else {
+        Err(ERR_FLOAT_INT.into())
     }
 }
 
