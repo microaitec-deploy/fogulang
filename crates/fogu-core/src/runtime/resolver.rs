@@ -1367,7 +1367,11 @@ impl Resolver<'_> {
     /// A call: the arguments of a known function are checked against its
     /// signature (the same errors the interpreter raises when calling it).
     fn call(&mut self, callee: &Expr, args: &[Expr]) -> Result<Ty, String> {
-        self.expr(callee)?;
+        let callee_ty = self.expr_ty(callee)?;
+        // `5()`, `const x = "a"; x()`: what the interpreter reports when it runs
+        if !matches!(callee_ty, Ty::Any | Ty::Num | Ty::Fn) {
+            self.report(format!("value of type '{}' is not callable", callee_ty.name()));
+        }
         let mut arg_tys = Vec::with_capacity(args.len());
         for a in args {
             arg_tys.push(self.expr_ty(a)?);

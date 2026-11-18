@@ -215,7 +215,7 @@ fn check_reports_redeclarations_and_assignments_to_constants() {
     let d = TempDir::new("check-decl");
     d.write(
         "main.fg",
-        "fn never() {\n    let a = 1\n    let a = 2\n    const c = 1\n    c = 2\n    return a\n}\nfor i in 0..2 { i = 5 }\nlet ok = 1\nok = 2\nfn p(x) { x = 3\n    return x }\nprint(\"loaded\", ok)\n",
+        "fn never() {\n    let a = 1\n    let a = 2\n    const c = 1\n    c = 2\n    return a\n}\nfor i in 0..2 { i = 5 }\nlet ok = 1\nok = 2\nfn p(x) { x = 3\n    return x }\nfn q() {\n    const z = 5\n    return z()\n}\nprint(\"loaded\", ok)\n",
     );
     let o = fogu(d.path(), &["check", "main.fg"]);
     let out = text(&o);
@@ -223,6 +223,7 @@ fn check_reports_redeclarations_and_assignments_to_constants() {
     assert!(out.contains("'a' is already declared in this scope"), "{}", out);
     assert!(out.contains("cannot assign to 'c' because it is a const binding"), "{}", out);
     assert!(out.contains("cannot assign to 'i' because it is a const binding"), "{}", out);
+    assert!(out.contains("value of type 'int' is not callable"), "{}", out);
     assert!(!out.contains("'ok'") && !out.contains("'x'"), "{}", out);
 }
 
