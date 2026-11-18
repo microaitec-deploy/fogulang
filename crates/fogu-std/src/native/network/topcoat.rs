@@ -426,6 +426,15 @@ fn sub_map(t: &Rc<RefCell<HashMap<Str, Value>>>, k: &str) -> Rc<RefCell<HashMap<
 
 const RESERVED: [&str; 10] = ["call", "navigate", "toast", "ask", "copy", "toggleTheme", "tc", "e", "event", "window"];
 
+/// ECMAScript reserved words (and the strict-mode ones): the runtime declares
+/// each signal as a JavaScript `const`, so none of them can be a signal's name.
+const JS_RESERVED: [&str; 46] = [
+    "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "enum",
+    "export", "extends", "false", "finally", "for", "function", "if", "import", "in", "instanceof", "new", "null",
+    "return", "super", "switch", "this", "throw", "true", "try", "typeof", "var", "void", "while", "with", "yield",
+    "let", "static", "await", "implements", "interface", "package", "private", "protected", "public",
+];
+
 /// `signal(ctx, name, initial)`: the value the browser sent back (a rerun, a
 /// shard request) or `initial`.
 fn signal(args: &[Value]) -> Result<Value, String> {
@@ -434,7 +443,7 @@ fn signal(args: &[Value]) -> Result<Value, String> {
     let name = str_arg(args, 1, "tc.signal")?;
     let ident = name.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
-    if !ident || RESERVED.contains(&name.as_str()) {
+    if !ident || RESERVED.contains(&name.as_str()) || JS_RESERVED.contains(&name.as_str()) {
         return Err(format!("tc.signal: '{}' is not a valid signal name (a JavaScript identifier)", name));
     }
     let t = ctx_state(ctx).ok_or("tc.signal: the first argument must be the request ctx")?;
