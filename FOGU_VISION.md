@@ -138,6 +138,23 @@ architectural change requires.
 - Before a release: the full test suite, the benchmarks against the previous
   release and Go, and the published binaries measured — not a local build.
 
+## Where Fogu stands: reliability before reach
+
+The vision stays broad — one language from automation to devices. The current
+phase is not to make Fogu look bigger but to make it more reliable: to show that
+what it already does, it does correctly, for a long time and on machines other
+than its author's. 0.8.1 is that kind of release: the fixes of two rounds of
+external tests, the three engines held to one conformance suite, memory and
+determinism under test, no new direction.
+
+Fogu keeps three claims apart: *indicative of* production (the architecture, the
+tests and the results point to viability), *ready for* production (it meets
+criteria defined for a stated context) and *recommended for* production (enough
+evidence from real use). Today it is **pre-production, with positive
+indicators**: controlled trials are justified, production services are not yet.
+What exists, what is missing and what would change this is kept in
+`docs/production-readiness.md`, and changes only with evidence.
+
 ## Public message
 
 > **Fogu — One language. From automation to devices.**
