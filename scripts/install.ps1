@@ -12,13 +12,15 @@
 # Use `iex (irm URL)`, not `irm URL | iex`: inside `powershell -c "..."` a pipe
 # hands the script to iex line by line, which breaks multi-line statements.
 #
-# The executable comes from the Fogu download server (server/ in this project):
-# $FOGU_SERVER/download/<version>/fogu.exe. The server writes its own address
-# in place of @FOGU_SERVER@ when it sends this script.
+# The executable comes from the GitHub release of the version
+# (https://github.com/$FOGU_REPO/releases); when that download fails, from the
+# Fogu download server (server/ in this project): $FOGU_SERVER/download/<version>/fogu.exe.
+# The server writes its own address in place of @FOGU_SERVER@ when it sends this script.
 #
-# Environment: FOGU_SERVER (the download server), FOGU_VERSION (default: latest),
-# FOGU_BASE_URL (the folder fogu.exe is downloaded from), FOGU_DOWNLOAD_URL
-# (a full URL of fogu.exe), FOGU_INSTALL (= -Dir).
+# Environment: FOGU_VERSION (default: latest), FOGU_REPO (the GitHub repository),
+# FOGU_SERVER (the download server), FOGU_BASE_URL (the one folder fogu.exe is
+# downloaded from: no GitHub, no fallback), FOGU_DOWNLOAD_URL (a full URL of
+# fogu.exe), FOGU_INSTALL (= -Dir).
 param(
     [string]$Dir = "",
     [string]$From = "",
@@ -30,8 +32,10 @@ $ErrorActionPreference = "Stop"
 $server = if ($env:FOGU_SERVER) { $env:FOGU_SERVER } else { "@FOGU_SERVER@" }
 # run from a checkout (not sent by a server): the official server
 if ($server.StartsWith("@")) { $server = "https://fogulang.microaitec.com" }
-$version = if ($env:FOGU_VERSION) { $env:FOGU_VERSION } else { "latest" }
-$base = if ($env:FOGU_BASE_URL) { $env:FOGU_BASE_URL } else { "$server/download/$version" }
+$version = if ($env:FOGU_VERSION) { $env:FOGU_VERSION.TrimStart("v") } else { "latest" }
+$repo = if ($env:FOGU_REPO) { $env:FOGU_REPO } else { "microaitec-deploy/fogulang" }
+$githubUrl = if ($version -eq "latest") { "https://github.com/$repo/releases/latest/download" } else { "https://github.com/$repo/releases/download/v$version" }
+$siteUrl = "$server/download/$version"
 if (-not $Dir) {
     if ($env:FOGU_INSTALL) { $Dir = $env:FOGU_INSTALL }
     elseif ($System) { $Dir = Join-Path $env:ProgramFiles "Fogu" }
@@ -81,11 +85,18 @@ try {
     } else {
         # 32-bit Windows gets the x86 build (no JIT: the interpreter only)
         $file = if ([Environment]::Is64BitOperatingSystem) { "fogu.exe" } else { "fogu-windows-x86.exe" }
-        $url = if ($env:FOGU_DOWNLOAD_URL) { $env:FOGU_DOWNLOAD_URL } else { "$base/$file" }
-        Write-Host "downloading $url"
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $ProgressPreference = "SilentlyContinue"
-        Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+        if ($env:FOGU_DOWNLOAD_URL) { $urls = @($env:FOGU_DOWNLOAD_URL) }
+        elseif ($env:FOGU_BASE_URL) { $urls = @("$($env:FOGU_BASE_URL)/$file") }
+        else { $urls = @("$githubUrl/$file", "$siteUrl/$file") }
+        $done = $false
+        foreach ($url in $urls) {
+            Write-Host "downloading $url"
+            try { Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing; $done = $true; break }
+            catch { Write-Host "  failed: $($_.Exception.Message)" }
+        }
+        if (-not $done) { throw "download failed: $($urls -join ', ')" }
     }
     $version = & $tmp --version 2>$null
     if ($LASTEXITCODE -ne 0) { throw "the downloaded file does not run on this machine" }

@@ -10,19 +10,29 @@
 #   sh scripts/install.sh --dir /opt/fogu/bin    # another folder
 #   sh scripts/install.sh --uninstall
 #
-# The executables come from the Fogu download server (server/ in this project):
-# $FOGU_SERVER/download/<version>/<file>. The server writes its own address in
-# place of @FOGU_SERVER@ when it sends this script.
+# The executables come from the GitHub release of the version
+# (https://github.com/$FOGU_REPO/releases); when that download fails, from the
+# Fogu download server (server/ in this project): $FOGU_SERVER/download/<version>/<file>.
+# The server writes its own address in place of @FOGU_SERVER@ when it sends this script.
 #
-# Environment: FOGU_SERVER (the download server), FOGU_VERSION (default: latest),
-# FOGU_BASE_URL (the folder the executables are downloaded from), FOGU_DOWNLOAD_URL
-# (a full URL of the executable), FOGU_INSTALL (= --dir).
+# Environment: FOGU_VERSION (default: latest), FOGU_REPO (the GitHub repository),
+# FOGU_SERVER (the download server), FOGU_BASE_URL (the one folder the executables
+# are downloaded from: no GitHub, no fallback), FOGU_DOWNLOAD_URL (a full URL of the
+# executable), FOGU_INSTALL (= --dir).
 set -eu
 
 SERVER="${FOGU_SERVER:-@FOGU_SERVER@}"
 # run from a checkout (not sent by a server): the official server
 case "$SERVER" in @*@) SERVER="https://fogulang.microaitec.com" ;; esac
-BASE_URL="${FOGU_BASE_URL:-$SERVER/download/${FOGU_VERSION:-latest}}"
+REPO="${FOGU_REPO:-microaitec-deploy/fogulang}"
+VERSION="${FOGU_VERSION:-latest}"
+VERSION="${VERSION#v}"
+if [ "$VERSION" = latest ]; then
+    GITHUB_URL="https://github.com/$REPO/releases/latest/download"
+else
+    GITHUB_URL="https://github.com/$REPO/releases/download/v$VERSION"
+fi
+SITE_URL="$SERVER/download/$VERSION"
 DIR="${FOGU_INSTALL:-$HOME/.fogu/bin}"
 FROM=""
 SYSTEM=0
@@ -102,14 +112,23 @@ if [ -n "$FROM" ]; then
     cp "$FROM" "$tmp"
     say "copying $FROM"
 else
-    url="${FOGU_DOWNLOAD_URL:-$BASE_URL/$name}"
-    say "downloading $url"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fSL --progress-bar "$url" -o "$tmp" || die "download failed (no executable for $os $arch at $url?)"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q --show-progress -O "$tmp" "$url" || die "download failed (no executable for $os $arch at $url?)"
-    else
-        die "curl or wget is needed"
+    fetch() { # fetch <url>: into $tmp; false when the download fails
+        say "downloading $1"
+        if command -v curl >/dev/null 2>&1; then
+            curl -fSL --progress-bar "$1" -o "$tmp"
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q --show-progress -O "$tmp" "$1"
+        else
+            die "curl or wget is needed"
+        fi
+    }
+    if [ -n "${FOGU_DOWNLOAD_URL:-}" ]; then
+        fetch "$FOGU_DOWNLOAD_URL" || die "download failed: $FOGU_DOWNLOAD_URL"
+    elif [ -n "${FOGU_BASE_URL:-}" ]; then
+        fetch "$FOGU_BASE_URL/$name" || die "download failed (no executable for $os $arch at $FOGU_BASE_URL/$name?)"
+    elif ! fetch "$GITHUB_URL/$name"; then
+        say "not on GitHub; trying the download server"
+        fetch "$SITE_URL/$name" || die "download failed (no executable for $os $arch: $GITHUB_URL/$name, $SITE_URL/$name)"
     fi
 fi
 chmod +x "$tmp"
