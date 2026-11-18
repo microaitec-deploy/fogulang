@@ -1322,7 +1322,7 @@ impl Parser {
     fn parse_unary(&mut self) -> Result<Expr, String> {
         if self.matches(&Token::Minus) {
             // `-9223372036854775808`, the smallest int (see the lexer)
-            if self.check(&Token::Int(i64::MIN)) {
+            if matches!(self.peek(), Token::Int(i64::MIN)) {
                 self.advance();
                 return Ok(Expr::Int(i64::MIN));
             }
