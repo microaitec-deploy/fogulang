@@ -1623,10 +1623,9 @@ impl Interpreter {
     fn eval_binary_expr(&self, left: &Expr, op: &BinaryOp, right: &Expr, env: Rc<RefCell<Environment>>) -> Result<Value, String> {
         let l = self.eval(left, env.clone())?;
         let r = self.eval(right, env.clone())?;
-        if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
-            if let Some(eq) = self.struct_equals(&l, &r, env)? {
-                return Ok(Value::Bool(eq == (*op == BinaryOp::Eq)));
-            }
+        if matches!(op, BinaryOp::Eq | BinaryOp::Ne) && matches!(l, Value::Struct(_) | Value::List(_) | Value::Map(_)) {
+            let eq = self.equal(&l, &r, &env)?;
+            return Ok(Value::Bool(eq == (*op == BinaryOp::Eq)));
         }
         eval_binary(l, *op, r)
     }
@@ -1766,22 +1765,44 @@ impl Interpreter {
         self.call_value(callee_val, arg_vals, env)
     }
 
-    /// `a == b` between structs uses the `equals(other)` method of the left
-    /// side, if it exists (spec §12). `None` = normal equality.
-    fn struct_equals(
+    /// `s.equals(other)` when `other` is a struct of the same type and the
+    /// type has the method (never with `nil` or a value of another type, so
+    /// `a == b` and `b == a` agree). `None`: identity decides.
+    fn call_equals(
         &self,
-        l: &Value,
-        r: &Value,
-        env: Rc<RefCell<Environment>>,
+        s: &Rc<RefCell<StructInstance>>,
+        other: &Value,
+        env: &Rc<RefCell<Environment>>,
     ) -> Result<Option<bool>, String> {
-        let Value::Struct(s) = l else {
+        let Value::Struct(o) = other else {
             return Ok(None);
         };
-        if !s.borrow().methods.contains_key("equals") {
-            return Ok(None);
+        {
+            let (sb, ob) = (s.borrow(), o.borrow());
+            if !sb.methods.contains_key("equals") || !Rc::ptr_eq(&sb.layout, &ob.layout) && sb.type_name != ob.type_name {
+                return Ok(None);
+            }
         }
         let m = Value::struct_bound(Rc::clone(s), "equals");
-        Ok(Some(self.call_value(m, vec![r.clone()], env)?.is_truthy()))
+        match self.call_value(m, vec![other.clone()], Rc::clone(env))? {
+            Value::Bool(b) => Ok(Some(b)),
+            v => Err(format!(
+                "'{}.equals' must return a bool, got '{}'",
+                s.borrow().type_name,
+                v.type_name()
+            )),
+        }
+    }
+
+    /// `l == r` (spec §12): structural for lists and maps, and a struct with an
+    /// `equals(other)` method decides against another of its type, at any depth.
+    pub fn equal(&self, l: &Value, r: &Value, env: &Rc<RefCell<Environment>>) -> Result<bool, String> {
+        match (l, r) {
+            (Value::Struct(_), _) | (Value::List(_), Value::List(_)) | (Value::Map(_), Value::Map(_)) => {
+                deep_equal(l, r, 0, &mut None, &mut |s, o| self.call_equals(s, o, env))
+            }
+            _ => Ok(scalar_equal(l, r)),
+        }
     }
 
     /// `recv.field(args)`: built-in list/map/str methods (`xs.push(1)`)
@@ -3045,8 +3066,109 @@ fn compare_values(l: Value, op: BinaryOp, r: Value) -> Result<Value, String> {
     }))
 }
 
+/// Does `m.name(...)` call the function stored under the key `name`? Only when
+/// that key holds a function: a map used as a namespace (`api.get(id)`). Any
+/// other value leaves the built-in method in charge, so data cannot hide it
+/// (`json.parse("{\"has\": 1}").has("x")` is still the method).
+pub fn map_key_is_method(m: &RefCell<HashMap<Str, Value>>, name: &str) -> bool {
+    matches!(
+        m.borrow().get(name),
+        Some(Value::Fn(_) | Value::NativeFn(_) | Value::BoundMethod(_) | Value::StructBoundMethod(_))
+    )
+}
+
 /// `==` semantics (structural for lists and maps, identity for the rest).
+/// Structs compare by identity here; [`Interpreter::equal`] also asks their
+/// `equals(other)` method.
 pub fn values_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::List(_), Value::List(_)) | (Value::Map(_), Value::Map(_)) => {
+            deep_equal(a, b, 0, &mut None, &mut |_, _| Ok(None)).unwrap_or(false)
+        }
+        _ => scalar_equal(a, b),
+    }
+}
+
+/// Pairs of containers already being compared, once the comparison is deep
+/// (a cyclic value): meeting a pair again assumes it equal, as Python does.
+type SeenPairs = Option<rustc_hash::FxHashSet<(usize, usize)>>;
+
+/// Below this depth no pair is recorded: shallow values pay nothing for the
+/// cycle check.
+const EQ_TRACK_DEPTH: u32 = 64;
+
+/// Structural equality of lists and maps (any depth, cycles included);
+/// `structs` decides a pair of distinct structs (`None`: they differ).
+fn deep_equal<F>(a: &Value, b: &Value, depth: u32, seen: &mut SeenPairs, structs: &mut F) -> Result<bool, String>
+where
+    F: FnMut(&Rc<RefCell<StructInstance>>, &Value) -> Result<Option<bool>, String>,
+{
+    let pair = match (a, b) {
+        (Value::List(x), Value::List(y)) if !Rc::ptr_eq(x, y) => (Rc::as_ptr(x) as usize, Rc::as_ptr(y) as usize),
+        (Value::Map(x), Value::Map(y)) if !Rc::ptr_eq(x, y) => (Rc::as_ptr(x) as usize, Rc::as_ptr(y) as usize),
+        (Value::Struct(x), _) => {
+            if let Value::Struct(y) = b {
+                if Rc::ptr_eq(x, y) {
+                    return Ok(true);
+                }
+            }
+            return Ok(structs(x, b)?.unwrap_or(false));
+        }
+        _ => return Ok(scalar_equal(a, b)),
+    };
+    if depth >= EQ_TRACK_DEPTH && !seen.get_or_insert_with(Default::default).insert(pair) {
+        return Ok(true);
+    }
+    if !sched::stack_ok() {
+        return Err("== of values nested too deeply for the stack".into());
+    }
+    match (a, b) {
+        (Value::List(x), Value::List(y)) => {
+            if x.borrow().len() != y.borrow().len() {
+                return Ok(false);
+            }
+            // item by item, without holding a borrow: `equals` may change the lists
+            let mut i = 0;
+            loop {
+                let (p, q) = match (x.borrow().get(i), y.borrow().get(i)) {
+                    (Some(p), Some(q)) => (p.clone(), q.clone()),
+                    (None, None) => return Ok(true),
+                    _ => return Ok(false),
+                };
+                if !deep_equal(&p, &q, depth + 1, seen, structs)? {
+                    return Ok(false);
+                }
+                i += 1;
+            }
+        }
+        (Value::Map(x), Value::Map(y)) => {
+            let pairs: Vec<(Value, Value)> = {
+                let (xb, yb) = (x.borrow(), y.borrow());
+                if xb.len() != yb.len() {
+                    return Ok(false);
+                }
+                let mut pairs = Vec::with_capacity(xb.len());
+                for (k, v) in xb.iter() {
+                    match yb.get(k) {
+                        Some(w) => pairs.push((v.clone(), w.clone())),
+                        None => return Ok(false),
+                    }
+                }
+                pairs
+            };
+            for (p, q) in pairs.iter() {
+                if !deep_equal(p, q, depth + 1, seen, structs)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// `==` of everything but the contents of lists and maps.
+fn scalar_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Nil, Value::Nil) => true,
         (Value::Bool(x), Value::Bool(y)) => x == y,
@@ -3057,26 +3179,9 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Str(x), Value::Str(y)) => x == y,
         (Value::Duration(x), Value::Duration(y)) => x == y,
         (Value::Range(a1, b1), Value::Range(a2, b2)) => a1 == a2 && b1 == b2,
-        (Value::List(x), Value::List(y)) => {
-            if Rc::ptr_eq(x, y) {
-                return true;
-            }
-            let xb = x.borrow();
-            let yb = y.borrow();
-            xb.len() == yb.len() && xb.iter().zip(yb.iter()).all(|(a, b)| values_equal(a, b))
-        }
+        (Value::List(x), Value::List(y)) => Rc::ptr_eq(x, y),
         (Value::Buffer(x), Value::Buffer(y)) => Rc::ptr_eq(x, y) || *x.borrow() == *y.borrow(),
-        (Value::Map(x), Value::Map(y)) => {
-            if Rc::ptr_eq(x, y) {
-                return true;
-            }
-            let xb = x.borrow();
-            let yb = y.borrow();
-            xb.len() == yb.len()
-                && xb
-                    .iter()
-                    .all(|(k, v)| yb.get(k).map_or(false, |other| values_equal(v, other)))
-        }
+        (Value::Map(x), Value::Map(y)) => Rc::ptr_eq(x, y),
         (Value::Struct(x), Value::Struct(y)) => Rc::ptr_eq(x, y),
         (Value::Error(x), Value::Error(y)) => Rc::ptr_eq(x, y),
         (Value::Chan(x), Value::Chan(y)) => Rc::ptr_eq(x, y),

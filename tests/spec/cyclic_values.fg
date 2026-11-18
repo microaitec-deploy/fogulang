@@ -1,0 +1,46 @@
+// Lists, maps and structs that contain themselves print, compare and copy
+// without running out of stack (a cycle prints as [...], {...} or T{...}).
+import types from "fogu:types"
+import json from "fogu:json"
+
+const m = {}
+m.self = m
+print(m)
+const l = [1]
+l.push(l)
+print(l, str(l), `${l}`)
+struct Node {
+    name = "a"
+    next = nil
+}
+const a = new Node()
+a.next = a
+print(a)
+// a value shared twice is not a cycle
+const s = [1]
+print([s, s], {x: s, y: s})
+
+const x = [1]
+x.push(x)
+const y = [1]
+y.push(y)
+print(x == y, x == x, x != y)
+const p = {k: 1}
+p.me = p
+const q = {k: 1}
+q.me = q
+const r = {k: 2}
+r.me = r
+print(p == q, p == r)
+
+print(types.equal(x, y), types.equal(p, r))
+const c = types.clone(p)
+c.k = 5
+print(c, p.k, c.me.k)
+
+// deep but not cyclic: still compared and printed in full
+let deep = []
+for i in 0..10000 { deep = [deep] }
+let deep2 = []
+for i in 0..10000 { deep2 = [deep2] }
+print(deep == deep2, len(str(deep)))

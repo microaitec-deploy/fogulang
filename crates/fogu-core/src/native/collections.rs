@@ -37,22 +37,22 @@ fn need(args: &[Value], n: usize, name: &str) -> Result<(), String> {
     }
 }
 
-fn eq(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Nil, Value::Nil) => true,
-        (Value::Bool(x), Value::Bool(y)) => x == y,
-        (Value::Int(x), Value::Int(y)) => x == y,
-        (Value::Float(x), Value::Float(y)) => x == y,
-        (Value::Int(x), Value::Float(y)) | (Value::Float(y), Value::Int(x)) => (*x as f64) == *y,
-        (Value::Str(x), Value::Str(y)) => x == y,
-        (Value::List(x), Value::List(y)) => {
-            Rc::ptr_eq(x, y) || {
-                let (x, y) = (x.borrow(), y.borrow());
-                x.len() == y.len() && x.iter().zip(y.iter()).all(|(a, b)| eq(a, b))
+/// The position of the first item `== x` (the same equality as the operator,
+/// `equals(other)` of structs included).
+fn position(it: Option<&Interpreter>, l: &RefCell<Vec<Value>>, x: &Value) -> Result<Option<usize>, String> {
+    use crate::runtime::interpreter::values_equal;
+    match (it, x) {
+        // a struct's `equals` may run any code: compare against a copy of the items
+        (Some(it), Value::Struct(_) | Value::List(_) | Value::Map(_)) => {
+            let items = l.borrow().clone();
+            for (i, v) in items.iter().enumerate() {
+                if it.equal(x, v, it.globals_ref())? {
+                    return Ok(Some(i));
+                }
             }
+            Ok(None)
         }
-        (Value::Map(x), Value::Map(y)) => Rc::ptr_eq(x, y),
-        _ => false,
+        _ => Ok(l.borrow().iter().position(|v| values_equal(x, v))),
     }
 }
 
@@ -66,8 +66,16 @@ fn natural(a: &Value, b: &Value) -> Result<Ordering, String> {
                 Value::Float(f) => *f,
                 _ => 0.0,
             };
-            Ok(f(a).partial_cmp(&f(b)).unwrap_or(Ordering::Equal))
+            let (x, y) = (f(a), f(b));
+            // NaN after every number: still a total order
+            Ok(match (x.is_nan(), y.is_nan()) {
+                (true, true) => Ordering::Equal,
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                _ => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+            })
         }
+        (Value::Duration(x), Value::Duration(y)) => Ok(x.cmp(y)),
         _ => Err(format!(
             "sort: cannot compare '{}' with '{}'",
             a.type_name(),
@@ -160,13 +168,11 @@ fn list_method(
             "last" => l.borrow().last().cloned().unwrap_or(Value::Nil),
             "contains" => {
                 need(args, 1, name)?;
-                Value::Bool(l.borrow().iter().any(|v| eq(v, &args[0])))
+                Value::Bool(position(it, l, &args[0])?.is_some())
             }
             "index_of" => {
                 need(args, 1, name)?;
-                Value::Int(
-                    l.borrow().iter().position(|v| eq(v, &args[0])).map(|i| i as i64).unwrap_or(-1),
-                )
+                Value::Int(position(it, l, &args[0])?.map(|i| i as i64).unwrap_or(-1))
             }
             "join" => {
                 let sep = match args.first() {

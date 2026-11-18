@@ -1,0 +1,6 @@
+// json.stringify of a value that contains itself stops with a clear error.
+import json from "fogu:json"
+const m = {a: 1}
+m.self = m
+print(json.stringify({a: [1, 2]}))
+print(json.stringify(m))

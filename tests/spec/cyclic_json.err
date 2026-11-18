@@ -1,0 +1,1 @@
+json.stringify: the value contains itself (a cycle)

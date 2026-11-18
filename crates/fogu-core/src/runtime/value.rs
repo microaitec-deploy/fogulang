@@ -302,60 +302,187 @@ impl Value {
     }
 
     pub fn to_display_string(&self) -> String {
+        if let Value::Str(s) = self {
+            return s.to_string();
+        }
+        let mut out = String::new();
+        self.write_display(&mut out, &mut WalkPath::default());
+        out
+    }
+
+    /// Writes the display form of `self` into `out` (one buffer for the whole
+    /// value: linear in its size). A list, map or struct met again inside
+    /// itself is written `[...]`, `{...}` or `T{...}` (a cycle).
+    pub fn write_display(&self, out: &mut String, path: &mut WalkPath) {
+        use std::fmt::Write;
         match self {
-            Value::Nil => "nil".into(),
-            Value::Bool(b) => b.to_string(),
-            Value::Int(n) => n.to_string(),
-            Value::Float(n) => display_float(*n),
-            Value::Str(s) => s.to_string(),
-            Value::Duration(ns) => display_duration(*ns),
-            Value::Range(a, b) => format!("{}..{}", a, b),
-            Value::Buffer(b) => display_buffer(&b.borrow()),
+            Value::Nil => out.push_str("nil"),
+            Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            Value::Int(n) => {
+                let _ = write!(out, "{}", n);
+            }
+            Value::Float(n) => out.push_str(&display_float(*n)),
+            Value::Str(s) => out.push_str(s),
+            Value::Duration(ns) => out.push_str(&display_duration(*ns)),
+            Value::Range(a, b) => {
+                let _ = write!(out, "{}..{}", a, b);
+            }
+            Value::Buffer(b) => out.push_str(&display_buffer(&b.borrow())),
             Value::List(l) => {
-                let items: Vec<String> = l
-                    .borrow()
-                    .iter()
-                    .map(|v| v.to_display_string())
-                    .collect();
-                format!("[{}]", items.join(", "))
+                let p = Rc::as_ptr(l) as usize;
+                // a cycle, or nesting deeper than the stack of this task allows
+                if !super::sched::stack_ok() || !path.enter(p) {
+                    out.push_str("[...]");
+                    return;
+                }
+                out.push('[');
+                for (i, v) in l.borrow().iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    v.write_display(out, path);
+                }
+                out.push(']');
+                path.leave();
             }
             Value::Map(m) => {
+                let p = Rc::as_ptr(m) as usize;
+                if !super::sched::stack_ok() || !path.enter(p) {
+                    out.push_str("{...}");
+                    return;
+                }
                 let b = m.borrow();
                 let mut keys: Vec<&Str> = b.keys().collect();
                 keys.sort();
-                let items: Vec<String> = keys
-                    .into_iter()
-                    .map(|k| format!("{}: {}", k, b[k].to_display_string()))
-                    .collect();
-                format!("{{{}}}", items.join(", "))
+                out.push('{');
+                for (i, k) in keys.into_iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push_str(k);
+                    out.push_str(": ");
+                    b[k].write_display(out, path);
+                }
+                out.push('}');
+                path.leave();
             }
-            Value::Module(m) => format!("<module {}>", m.name),
+            Value::Module(m) => {
+                let _ = write!(out, "<module {}>", m.name);
+            }
             // a native object may describe itself with a `__display__` field
             Value::Object(o) => match o.get("__display__") {
-                Some(Value::Str(s)) => s.into_string(),
-                _ => format!("<native object {}>", o.name()),
+                Some(Value::Str(s)) => out.push_str(&s),
+                _ => {
+                    let _ = write!(out, "<native object {}>", o.name());
+                }
             },
             Value::BoundMethod(b) => {
-                format!("<bound {}::{}>", b.receiver.name(), b.method)
+                let _ = write!(out, "<bound {}::{}>", b.receiver.name(), b.method);
             }
             Value::StructBoundMethod(b) => {
-                format!("<bound {}::{}>", b.receiver.borrow().type_name, b.method)
+                let _ = write!(out, "<bound {}::{}>", b.receiver.borrow().type_name, b.method);
             }
-            Value::Chan(c) => format!("<chan {} buffer={}>", c.name, c.buffer),
+            Value::Chan(c) => {
+                if c.name == "chan" {
+                    let _ = write!(out, "<chan buffer={}>", c.buffer);
+                } else {
+                    let _ = write!(out, "<chan {} buffer={}>", c.name, c.buffer);
+                }
+            }
             Value::Struct(s) => {
                 let b = s.borrow();
-                let mut fields: Vec<String> = b
-                    .fields()
-                    .map(|(k, v)| format!("{}: {}", k, v.to_display_string()))
-                    .collect();
-                fields.sort();
-                format!("{}{{{}}}", b.type_name, fields.join(", "))
+                let p = Rc::as_ptr(s) as usize;
+                if !super::sched::stack_ok() || !path.enter(p) {
+                    let _ = write!(out, "{}{{...}}", b.type_name);
+                    return;
+                }
+                // ordered as the text `name: value` sorts (what it always was)
+                let mut fields: Vec<(&String, &Value)> = b.fields().collect();
+                fields.sort_by(|x, y| x.0.bytes().chain(Some(b':')).cmp(y.0.bytes().chain(Some(b':'))));
+                out.push_str(&b.type_name);
+                out.push('{');
+                for (i, (k, v)) in fields.into_iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push_str(k);
+                    out.push_str(": ");
+                    v.write_display(out, path);
+                }
+                out.push('}');
+                path.leave();
             }
-            Value::StructType(d) => format!("<struct {}>", d.decl.name),
-            Value::Interface(i) => format!("<interface {}>", i.name),
-            Value::Fn(f) => format!("<fn {}>", f.name),
-            Value::NativeFn(f) => format!("<native fn {}>", f.name),
-            Value::Error(e) => format!("error: {}", e.message),
+            Value::StructType(d) => {
+                let _ = write!(out, "<struct {}>", d.decl.name);
+            }
+            Value::Interface(i) => {
+                let _ = write!(out, "<interface {}>", i.name);
+            }
+            Value::Fn(f) => {
+                let _ = write!(out, "<fn {}>", f.name);
+            }
+            Value::NativeFn(f) => {
+                let _ = write!(out, "<native fn {}>", f.name);
+            }
+            Value::Error(e) => {
+                out.push_str("error: ");
+                out.push_str(&e.message);
+            }
+        }
+    }
+
+    /// The address of a list, map or struct (what [`WalkPath`] tracks).
+    pub fn container_addr(&self) -> Option<usize> {
+        match self {
+            Value::List(l) => Some(Rc::as_ptr(l) as usize),
+            Value::Map(m) => Some(Rc::as_ptr(m) as usize),
+            Value::Struct(s) => Some(Rc::as_ptr(s) as usize),
+            _ => None,
+        }
+    }
+}
+
+/// The lists, maps and structs on the current path of a recursive walk over a
+/// value (display, equality, copies, serialization): meeting one again means
+/// the value contains itself. A short path is a vector; a deep one (a very
+/// nested value) also gets a set, so the check stays O(1).
+#[derive(Default)]
+pub struct WalkPath {
+    stack: Vec<usize>,
+    set: Option<rustc_hash::FxHashSet<usize>>,
+}
+
+impl WalkPath {
+    const SMALL: usize = 32;
+
+    /// Enters the container at `addr`; false (and nothing entered) when it is
+    /// already on the path: a cycle.
+    pub fn enter(&mut self, addr: usize) -> bool {
+        match &mut self.set {
+            Some(s) => {
+                if !s.insert(addr) {
+                    return false;
+                }
+            }
+            None => {
+                if self.stack.contains(&addr) {
+                    return false;
+                }
+            }
+        }
+        self.stack.push(addr);
+        if self.set.is_none() && self.stack.len() > Self::SMALL {
+            self.set = Some(self.stack.iter().copied().collect());
+        }
+        true
+    }
+
+    /// Leaves the container entered last.
+    pub fn leave(&mut self) {
+        if let Some(a) = self.stack.pop() {
+            if let Some(s) = &mut self.set {
+                s.remove(&a);
+            }
         }
     }
 }
@@ -404,11 +531,21 @@ pub fn display_buffer(b: &[u8]) -> String {
 }
 
 pub fn display_float(n: f64) -> String {
-    if n.is_finite() && n.fract() == 0.0 {
+    if exponent_form(n) {
+        format!("{:e}", n)
+    } else if n.is_finite() && n.fract() == 0.0 {
         format!("{:.1}", n)
     } else {
         n.to_string()
     }
+}
+
+/// Very large and very small floats are written with an exponent (`1e300`,
+/// `5e-324`), as JavaScript does (`>= 1e21`, `< 1e-7`), instead of hundreds
+/// of digits. Shared by `print`/`str` and `json.stringify`.
+pub fn exponent_form(n: f64) -> bool {
+    let a = n.abs();
+    n.is_finite() && a != 0.0 && !(1e-7..1e21).contains(&a)
 }
 
 #[cfg(test)]

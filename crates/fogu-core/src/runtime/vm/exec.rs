@@ -230,11 +230,8 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
         ($a:expr, $b:expr, $c:expr, $want:expr) => {{
             let eq = match (&r!($b), &r!($c)) {
                 (Value::Int(x), Value::Int(y)) => x == y,
-                // a struct with `equals(other)` decides
-                (l @ Value::Struct(_), r) => match it.struct_equals(l, r, Rc::clone(env!()))? {
-                    Some(eq) => eq,
-                    None => values_equal(l, r),
-                },
+                // a struct with `equals(other)` decides, also inside lists and maps
+                (l @ (Value::Struct(_) | Value::List(_) | Value::Map(_)), r) => it.equal(l, r, env!())?,
                 (l, r) => values_equal(l, r),
             };
             r!($a) = Value::Bool(eq == $want);
