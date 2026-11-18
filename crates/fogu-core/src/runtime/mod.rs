@@ -176,9 +176,16 @@ pub fn run_test_file(path: &Path, filter: Option<&str>) -> Result<Vec<TestOutcom
             continue;
         }
         let started = std::time::Instant::now();
+        sched::collect_task_errors(true);
+        sched::take_task_errors();
         let r = interp.call_value(t.func, Vec::new(), Rc::clone(interp.globals_ref()));
         sched::shutdown();
+        let task_errors = sched::take_task_errors();
         let status = match r {
+            // an error in an `fg` task the test started fails the test too
+            Ok(_) if !task_errors.is_empty() => {
+                TestStatus::Failed(task_errors.iter().map(|e| format!("error in task (fg): {}", e)).collect::<Vec<_>>().join("; "))
+            }
             Err(e) => TestStatus::Failed(located(&interp, &filename, e)),
             Ok(value::Value::Error(e)) => TestStatus::Failed(format!("returned an error: {}", e.message)),
             Ok(value::Value::List(l)) if matches!(l.borrow().last(), Some(value::Value::Error(_))) => {

@@ -75,7 +75,7 @@ pub fn build() -> ModuleValue {
                 Value::Int(n) => *n,
                 _ => 0,
             };
-            crate::native::exit(code as i32);
+            crate::native::exit_program(code as i32)
         }),
     );
 

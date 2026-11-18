@@ -199,6 +199,23 @@ pub fn cleanup() {
 /// Windows service runner reports SERVICE_STOPPED from here.
 static EXIT_HOOK: std::sync::OnceLock<fn(i32)> = std::sync::OnceLock::new();
 
+/// Set by `fogu test`: `exit` called by the program stops it with an error instead of ending
+/// the process, so the test fails and the other tests and files still run (an `exit(0)` in a
+/// test made the whole run succeed and skipped the rest).
+static TEST_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_test_mode(on: bool) {
+    TEST_MODE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// `exit`, `process.exit`, `Fogu.exit`: ends the process, or in `fogu test` is an error.
+pub fn exit_program(code: i32) -> Result<fogu_core::runtime::value::Value, String> {
+    if TEST_MODE.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err(format!("exit({}) called during a test (a test cannot end the process)", code));
+    }
+    exit(code)
+}
+
 /// Installs the exit hook (once; later calls are ignored).
 pub fn on_exit(hook: fn(i32)) {
     let _ = EXIT_HOOK.set(hook);
