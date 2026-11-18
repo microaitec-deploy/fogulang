@@ -168,6 +168,12 @@ impl Parser {
         let _ = self.matches(&Token::Semicolon);
     }
 
+    /// Skips empty statements (`;` alone). Always false (for `while` conditions).
+    fn skip_semicolons(&mut self) -> bool {
+        while self.matches(&Token::Semicolon) {}
+        false
+    }
+
     fn expect_block_body(&mut self) -> Result<Block, String> {
         match self.parse_block()? {
             Stmt::Block(b) => Ok(Rc::new(b)),
@@ -179,7 +185,8 @@ impl Parser {
 
     pub fn parse_program(&mut self) -> Result<Vec<Stmt>, String> {
         let mut stmts = Vec::new();
-        while !self.check(&Token::Eof) {
+        // a `;` with nothing before it (after a block: `if c { … }; f()`) is empty
+        while !self.skip_semicolons() && !self.check(&Token::Eof) {
             stmts.push(Stmt::Line(self.line()));
             stmts.push(self.parse_stmt()?);
         }
@@ -672,7 +679,7 @@ impl Parser {
     fn parse_block(&mut self) -> Result<Stmt, String> {
         self.expect(Token::LBrace, "expected '{'")?;
         let mut stmts = Vec::new();
-        while !self.check(&Token::RBrace) && !self.check(&Token::Eof) {
+        while !self.skip_semicolons() && !self.check(&Token::RBrace) && !self.check(&Token::Eof) {
             stmts.push(Stmt::Line(self.line()));
             stmts.push(self.parse_stmt()?);
         }
