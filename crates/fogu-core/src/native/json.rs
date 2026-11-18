@@ -399,7 +399,7 @@ mod tests {
         assert_eq!(stringify(&Value::Float(f64::INFINITY)), "null");
         assert!(parse("[1,").is_err());
         assert_eq!(parse("\"abc").unwrap_err(), "unterminated JSON string");
-        assert_eq!(parse("{\"é\": x}").unwrap_err(), "invalid JSON at position 6: Some('x')");
+        assert_eq!(parse("{\"é\": x}").unwrap_err(), "invalid JSON at position 6: 'x'");
         assert_eq!(parse("  [1] x").unwrap_err(), "extra content after JSON at position 6");
     }
 }
