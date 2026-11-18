@@ -1867,7 +1867,7 @@ impl Interpreter {
     ) -> Result<Value, String> {
         let is_builtin_recv = match &recv {
             Value::List(_) | Value::Str(_) | Value::Buffer(_) => true,
-            Value::Map(m) => !m.borrow().contains_key(field),
+            Value::Map(m) => !map_key_is_method(m, field),
             _ => false,
         };
         let mut arg_vals = Vec::with_capacity(args.len());
@@ -1878,6 +1878,11 @@ impl Interpreter {
         if is_builtin_recv {
             if let Some(r) = crate::native::collections::call_method(self, &recv, field, &arg_vals) {
                 return r;
+            }
+            // a key holding something else (`{keys: 5}.keys2()`): calling it says what it is
+            if matches!(&recv, Value::Map(m) if m.borrow().contains_key(field)) {
+                let callee_val = self.eval_access(recv, field)?;
+                return self.call_value(callee_val, arg_vals, env);
             }
             return Err(format!(
                 "'{}' has no method '{}'",

@@ -438,8 +438,13 @@ extern "C" fn h_list_len(list: i64) -> i64 {
     let l = unsafe { &*(list as *const RefCell<Vec<Value>>) };
     l.borrow().len() as i64
 }
-extern "C" fn h_map_len(map: i64) -> i64 {
+extern "C" fn h_map_len(ctx: *mut JitCtx, map: i64) -> i64 {
     let m = unsafe { &*(map as *const RefCell<HashMap<Str, Value>>) };
+    // a function stored under "len" is what `m.len()` calls: the interpreter does it
+    if super::interpreter::map_key_is_method(m, "len") {
+        deopt(ctx);
+        return 0;
+    }
     m.borrow().len() as i64
 }
 /// Element `idx` of the snapshot `items` (a `*const Value` array), typed.
@@ -807,7 +812,8 @@ impl Helper {
             Helper::VMapSet => (vec![I64, I64, I64, I64], None),
             Helper::SbStr => (vec![I64, I64], None),
             Helper::PrintSv => (vec![I64], None),
-            Helper::StrLen | Helper::ListLen | Helper::MapLen => (vec![I64], Some(I64)),
+            Helper::StrLen | Helper::ListLen => (vec![I64], Some(I64)),
+            Helper::MapLen => (vec![I64, I64], Some(I64)),
             Helper::ElemI64 | Helper::ElemBool | Helper::ElemStr => (vec![I64, I64, I64], Some(I64)),
             Helper::ElemF64 => (vec![I64, I64, I64], Some(F64)),
             Helper::ListGetI64 | Helper::ListGetBool | Helper::MapGetI64 | Helper::MapGetBool => (vec![I64, I64, I64], Some(I64)),
@@ -3226,6 +3232,13 @@ impl<'a, 'f> Gen<'a, 'f> {
         };
         let v = self.b.use_var(l.var);
         let fr = self.helper(h);
+        if h == Helper::MapLen {
+            self.guard_ok()?;
+            let call = self.b.ins().call(fr, &[self.ctx_ptr, v]);
+            let n = self.b.inst_results(call)[0];
+            self.guard_branch();
+            return Ok((n, Ty::Int));
+        }
         let call = self.b.ins().call(fr, &[v]);
         Ok((self.b.inst_results(call)[0], Ty::Int))
     }
