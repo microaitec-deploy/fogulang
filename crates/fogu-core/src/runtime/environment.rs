@@ -109,6 +109,9 @@ impl Environment {
     /// and it stayed small: its bindings are dropped, its storage is kept, so
     /// the next call allocates nothing.
     pub fn release(env: Rc<RefCell<Self>>) {
+        if Rc::strong_count(&env) != 1 && !Self::break_cycles(&env, 1) {
+            return;
+        }
         if Rc::strong_count(&env) != 1 || Rc::weak_count(&env) != 0 {
             return;
         }
@@ -128,6 +131,56 @@ impl Environment {
                 p.push(env);
             }
         });
+    }
+
+    /// The end of a scope that something besides its `holders` still holds.
+    /// A function value keeps the scope it was created in (`FnValue::closure`);
+    /// when that function is stored in the scope itself (`const g = (x) => …`,
+    /// a nested `fn`, a struct or map of the scope holding a closure), scope and
+    /// function hold each other and reference counting never frees them — a
+    /// handler with a local helper leaked its whole scope on every call.
+    ///
+    /// If every reference to the scope other than its `holders` comes from such
+    /// a function, held only by the scope (directly or through lists, maps and
+    /// structs held only by it), nothing outside can reach the scope or those
+    /// functions: they are garbage. The bindings are then dropped, which breaks
+    /// the cycle, and true is returned. Otherwise (the function escaped, a task
+    /// or a child scope still uses the scope…) nothing changes.
+    pub fn break_cycles(env: &Rc<RefCell<Self>>, holders: usize) -> bool {
+        let count = Rc::strong_count(env);
+        if count <= holders || Rc::weak_count(env) != 0 {
+            return false;
+        }
+        let me = Rc::as_ptr(env);
+        let inside = {
+            let Ok(e) = env.try_borrow() else { return false };
+            if e.stable || e.module.is_some() {
+                return false;
+            }
+            // a bounded look: a big structure is not worth it here
+            let mut budget = 256usize;
+            let mut n = 0usize;
+            let found = if e.is_small {
+                e.small.iter().try_for_each(|(_, v, _)| refs_to(v, me, &mut budget).map(|k| n += k))
+            } else {
+                e.values.values().try_for_each(|(v, _)| refs_to(v, me, &mut budget).map(|k| n += k))
+            };
+            if found.is_none() {
+                return false;
+            }
+            n
+        };
+        if inside == 0 || count != holders + inside {
+            return false;
+        }
+        // taken out first: the drops run without the scope borrowed
+        let (small, values) = {
+            let Ok(mut e) = env.try_borrow_mut() else { return false };
+            (std::mem::take(&mut e.small), std::mem::take(&mut e.values))
+        };
+        drop(small);
+        drop(values);
+        true
     }
 
     pub fn set_module(&mut self, name: &str) {
@@ -386,6 +439,42 @@ impl Environment {
         }
         Err(format!("variable '{}' is not defined", symbol::name(s)))
     }
+}
+
+/// How many references to the scope at `env` the value holds through function
+/// values that nothing else holds (the value itself, or inside lists, maps and
+/// structs that nothing else holds); `None` when `budget` values were not
+/// enough to tell (see [`Environment::break_cycles`]).
+fn refs_to(v: &Value, env: *const RefCell<Environment>, budget: &mut usize) -> Option<usize> {
+    if *budget == 0 {
+        return None;
+    }
+    *budget -= 1;
+    let mut n = 0;
+    match v {
+        Value::Fn(f) if Rc::strong_count(f) == 1 && Rc::weak_count(f) == 0 => {
+            if f.closure.as_ref().is_some_and(|c| Rc::as_ptr(c) == env) {
+                n = 1;
+            }
+        }
+        Value::List(l) if Rc::strong_count(l) == 1 && Rc::weak_count(l) == 0 => {
+            for x in l.try_borrow().ok()?.iter() {
+                n += refs_to(x, env, budget)?;
+            }
+        }
+        Value::Map(m) if Rc::strong_count(m) == 1 && Rc::weak_count(m) == 0 => {
+            for x in m.try_borrow().ok()?.values() {
+                n += refs_to(x, env, budget)?;
+            }
+        }
+        Value::Struct(s) if Rc::strong_count(s) == 1 && Rc::weak_count(s) == 0 => {
+            for x in s.try_borrow().ok()?.values.iter() {
+                n += refs_to(x, env, budget)?;
+            }
+        }
+        _ => {}
+    }
+    Some(n)
 }
 
 #[cfg(test)]

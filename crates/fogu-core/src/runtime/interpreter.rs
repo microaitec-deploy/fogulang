@@ -911,6 +911,7 @@ impl Interpreter {
             return self.exec_block(stmts, env);
         }
         let block_env = Environment::with_parent(env);
+        let _end = ScopeEnd(&block_env);
         for s in stmts {
             match self.exec(s, block_env.clone())? {
                 Flow::Normal => {}
@@ -3305,6 +3306,26 @@ struct LoopScope {
     block: Option<Rc<RefCell<Environment>>>,
 }
 
+impl Drop for LoopScope {
+    fn drop(&mut self) {
+        if let Some(b) = &self.block {
+            Environment::break_cycles(b, 1);
+        }
+    }
+}
+
+/// Ends a block scope on every way out of the block (see
+/// [`Environment::break_cycles`]).
+struct ScopeEnd<'a>(&'a Rc<RefCell<Environment>>);
+
+impl Drop for ScopeEnd<'_> {
+    fn drop(&mut self) {
+        if Rc::strong_count(self.0) > 1 {
+            Environment::break_cycles(self.0, 1);
+        }
+    }
+}
+
 impl LoopScope {
     /// Did something keep the previous iteration's scopes (a closure or a
     /// task that captured the loop variable or a local of the body)? Then the
@@ -3312,6 +3333,12 @@ impl LoopScope {
     /// by the loop itself and, as their parent, by the reused body block — so
     /// it is free when its count is exactly that.
     fn captured(&self, iter_env: &Rc<RefCell<Environment>>) -> bool {
+        // a closure the body stored in its own scope only holds that scope
+        if let Some(b) = &self.block {
+            if Rc::strong_count(b) > 1 {
+                Environment::break_cycles(b, 1);
+            }
+        }
         let expected = match &self.block {
             Some(b) if Rc::strong_count(b) > 1 => return true,
             Some(_) => 2,
@@ -3324,7 +3351,7 @@ impl LoopScope {
     /// nothing else holds it, else replaced (a closure or task captured the
     /// previous iteration's bindings). Returns true when it was replaced.
     fn recycle(slot: &mut Rc<RefCell<Environment>>, parent: &Rc<RefCell<Environment>>) -> bool {
-        if Rc::strong_count(slot) == 1 {
+        if Rc::strong_count(slot) == 1 || Environment::break_cycles(slot, 1) {
             slot.borrow_mut().reset();
             false
         } else {
