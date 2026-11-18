@@ -1,5 +1,6 @@
 // fogu:sql — in-memory database and transactions on a single connection
 import sql from "fogu:sql"
+import time from "fogu:time"
 
 const db = sql.open("sqlite::memory:")?
 db.exec("CREATE TABLE t (id INTEGER)")
@@ -14,4 +15,20 @@ db.run("INSERT INTO t VALUES (?)", [2])
 db.commit()
 print("after commit:", len(db.query("SELECT * FROM t")), db.one("SELECT * FROM t").id)
 print(db.one("SELECT * FROM t WHERE id = ?", [9]))
+
+// a transaction belongs to the task that began it: another task's statement
+// waits for its end instead of being written (and rolled back) inside it
+db.exec("CREATE TABLE k (v INT)")
+const done = chan(1)
+db.begin()?
+db.run("INSERT INTO k (v) VALUES (-2)")?
+fg fn() {
+    print("task result", db.run("INSERT INTO k (v) VALUES (-1)"))
+    done <- true
+}()
+time.delay(50ms)
+print("rolling back")
+db.rollback()?
+<-done
+print("rows", db.query("SELECT v FROM k")?)
 db.close()

@@ -148,8 +148,14 @@ fn write_str(s: &str, out: &mut String) {
     out.push('"');
 }
 
+/// How deep arrays and objects may nest. Parsing recurses once per level, so
+/// without a limit a small hostile text (`[[[[…`, 400 KB) overflows the stack
+/// of the task parsing it and kills the process; past this depth the text is
+/// an error. (Go stops at 10000, serde_json at 128.)
+pub const MAX_DEPTH: usize = 512;
+
 fn parse(s: &str) -> Result<Value, String> {
-    let mut p = JsonParser { s, b: s.as_bytes(), pos: 0 };
+    let mut p = JsonParser { s, b: s.as_bytes(), pos: 0, depth: 0 };
     let v = p.parse_value()?;
     p.skip_ws();
     if p.pos != p.b.len() {
@@ -163,6 +169,8 @@ struct JsonParser<'a> {
     s: &'a str,
     b: &'a [u8],
     pos: usize,
+    /// arrays and objects open around the current position
+    depth: usize,
 }
 
 impl JsonParser<'_> {
@@ -193,8 +201,15 @@ impl JsonParser<'_> {
             Some(b't') => self.expect_lit("true").map(|_| Value::Bool(true)),
             Some(b'f') => self.expect_lit("false").map(|_| Value::Bool(false)),
             Some(b'"') => self.parse_string().map(Value::str),
-            Some(b'[') => self.parse_array(),
-            Some(b'{') => self.parse_object(),
+            Some(b'[' | b'{') => {
+                if self.depth >= MAX_DEPTH {
+                    return Err(format!("JSON nested too deeply at position {} (the limit is {} levels)", self.char_pos(), MAX_DEPTH));
+                }
+                self.depth += 1;
+                let v = if self.peek() == Some(b'[') { self.parse_array() } else { self.parse_object() };
+                self.depth -= 1;
+                v
+            }
             Some(c) if c == b'-' || c.is_ascii_digit() => self.parse_number(),
             _ => Err(format!("invalid JSON at position {}: {:?}", self.char_pos(), self.peek_char())),
         }
@@ -385,5 +400,10 @@ mod tests {
         assert_eq!(parse("\"abc").unwrap_err(), "unterminated JSON string");
         assert_eq!(parse("{\"é\": x}").unwrap_err(), "invalid JSON at position 6: Some('x')");
         assert_eq!(parse("  [1] x").unwrap_err(), "extra content after JSON at position 6");
+        // nesting: up to MAX_DEPTH levels, an error (not a stack overflow) beyond
+        let deep = |n: usize| format!("{}{}", "[".repeat(n), "]".repeat(n));
+        assert!(parse(&deep(MAX_DEPTH)).is_ok());
+        assert!(parse(&deep(MAX_DEPTH + 1)).unwrap_err().contains("nested too deeply"));
+        assert!(parse(&"{\"a\":".repeat(200_000)).unwrap_err().contains("nested too deeply"));
     }
 }

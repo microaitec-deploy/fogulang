@@ -116,11 +116,28 @@ pub fn close_all() {
 
 // ---------- values, keys, timestamps ----------
 
-fn encode(v: &Value) -> String {
-    stringify_value(v)
+/// Values are stored as JSON, except a buffer (its bytes) and a duration
+/// (its nanoseconds), marked by a leading NUL byte (JSON never starts with
+/// one) so they read back as the same type.
+fn encode(v: &Value) -> Vec<u8> {
+    match v {
+        Value::Buffer(b) => {
+            let mut out = b"\0buf:".to_vec();
+            out.extend_from_slice(&b.borrow());
+            out
+        }
+        Value::Duration(ns) => format!("\0dur:{}", ns).into_bytes(),
+        _ => stringify_value(v).into_bytes(),
+    }
 }
 
 fn decode(b: &[u8]) -> Value {
+    if let Some(bytes) = b.strip_prefix(b"\0buf:") {
+        return Value::buffer(bytes.to_vec());
+    }
+    if let Some(ns) = b.strip_prefix(b"\0dur:").and_then(|n| std::str::from_utf8(n).ok()).and_then(|n| n.parse().ok()) {
+        return Value::Duration(ns);
+    }
     let s = String::from_utf8_lossy(b);
     parse_value(&s).unwrap_or_else(|_| Value::Str(s.into_owned().into()))
 }
@@ -319,9 +336,9 @@ fn write(tx: &mut Transaction, method: &str, args: &[Value], versions: bool) -> 
                         return Err(format!("{}: {{ at }} needs a store opened with {{ versions: true }}", what));
                     }
                     let ns = (ms_arg(at, &what)?.max(0) as u64).saturating_mul(1_000_000);
-                    tx.set_at(k.as_bytes(), v.as_bytes(), ns).map_err(|e| skv_err(&what, e))
+                    tx.set_at(k.as_bytes(), &v, ns).map_err(|e| skv_err(&what, e))
                 }
-                None => tx.set(k.as_bytes(), v.as_bytes()).map_err(|e| skv_err(&what, e)),
+                None => tx.set(k.as_bytes(), &v).map_err(|e| skv_err(&what, e)),
             }
         }
         // delete keeps the history of a versioned store (a tombstone); purge erases every version
@@ -460,7 +477,7 @@ impl FoguObject for Store {
                 let mut tx = self.begin()?;
                 if let Some(Value::Map(m)) = o.get("set") {
                     for (k, v) in m.borrow().iter() {
-                        tx.set(k.as_bytes(), encode(v).as_bytes()).map_err(|e| skv_err(&what, e))?;
+                        tx.set(k.as_bytes(), &encode(v)).map_err(|e| skv_err(&what, e))?;
                     }
                 }
                 match o.get("delete") {

@@ -316,15 +316,20 @@ impl FoguObject for ConnValue {
             // close(code = 1000, reason = "")
             "close" => {
                 max_args(args, 2, "close")?;
+                // RFC 6455 §7.4: 1005, 1006 and 1015 are never sent, 1004 and
+                // 1016..2999 are reserved; the reason fits in 123 bytes
                 let code = match args.first() {
-                    Some(Value::Int(c)) if (1000..5000).contains(c) => *c as u16,
+                    Some(Value::Int(c)) if matches!(*c, 1000..=1003 | 1007..=1014 | 3000..=4999) => *c as u16,
                     None | Some(Value::Nil) => 1000,
-                    Some(other) => return Err(format!("close: code must be 1000..4999, got {}", other.to_display_string())),
+                    Some(other) => return Err(format!("close: code must be 1000-1003, 1007-1014 or 3000-4999, got {}", other.to_display_string())),
                 };
                 let reason = match args.get(1) {
                     Some(Value::Str(r)) => r.to_string(),
                     _ => String::new(),
                 };
+                if reason.len() > 123 {
+                    return Err(format!("close: the reason must fit in 123 bytes, got {}", reason.len()));
+                }
                 let _ = self.tx.send(Out::Close(code, reason));
                 Ok(Value::Nil)
             }
@@ -390,7 +395,7 @@ impl FoguObject for MsgValue {
 
     fn call(&mut self, method: &str, _args: &[Value]) -> Result<Value, String> {
         match method {
-            "json" => parse_value(&String::from_utf8_lossy(&self.data)),
+            "json" => parse_value(&String::from_utf8_lossy(&self.data)).map_err(|e| io_err!("json: {}", e)),
             other => Err(format!("method '{}' does not exist on WebSocketMessage (json)", other)),
         }
     }
@@ -499,9 +504,17 @@ fn listen(args: &[Value]) -> Result<Value, String> {
             tokio::spawn(async move {
                 let mut path = String::new();
                 let mut headers = Vec::new();
-                let cb = |req: &tokio_tungstenite::tungstenite::handshake::server::Request, resp| {
+                let cb = |req: &tokio_tungstenite::tungstenite::handshake::server::Request, mut resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
                     path = req.uri().to_string();
                     headers = req.headers().iter().map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string())).collect();
+                    // the client offered subprotocols: answer with the first one
+                    // (as app.ws does without a list); a client that asked for one
+                    // fails the handshake when the answer names none
+                    if let Some(first) = first_protocol(&headers) {
+                        if let Ok(v) = first.parse() {
+                            resp.headers_mut().insert("sec-websocket-protocol", v);
+                        }
+                    }
                     Ok(resp)
                 };
                 let hs = tokio_tungstenite::accept_hdr_async_with_config(tcp, cb, Some(config()));
@@ -553,7 +566,7 @@ impl FoguObject for ServerValue {
             let mut a = accepted.lock().unwrap_or_else(|e| e.into_inner());
             if let Some((ws, path, headers)) = a.queue.pop_front() {
                 let url = format!("{}{}", base, path);
-                let protocol = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("sec-websocket-protocol")).map(|(_, v)| v.clone());
+                let protocol = first_protocol(&headers);
                 return Some(Ok(conn_value(ws, url, path, headers, protocol)));
             }
             a.error.as_ref().map(|e| Err(io_err!("websocket: {}", e)))
@@ -564,3 +577,11 @@ impl FoguObject for ServerValue {
         vec!["accept"]
     }
 }
+/// The subprotocol a server accepts: the first one the client offered.
+fn first_protocol(headers: &[(String, String)]) -> Option<String> {
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("sec-websocket-protocol"))
+        .and_then(|(_, v)| v.split(',').map(str::trim).find(|p| !p.is_empty()).map(str::to_string))
+}
+

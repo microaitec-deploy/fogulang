@@ -24,6 +24,18 @@ print(room.call("add", { a: 1, b: 2 })?)
 const sub = room.sub("news")?
 room.pub("news", { id: 1 })?
 print(sub.next(1s))
+// each subscription gets the publications its pattern matches, once each
+const orders = room.sub("orders.*")?
+const all = room.sub("orders.**")?
+const exact = room.sub("orders.created")?
+room.pub("orders.created", { id: 2 })?
+room.pub("orders.paid.late", { id: 3 })?
+time.delay(200ms)
+print(orders.pending, all.pending, exact.pending, sub.pending)
+// a key's TTL may be a duration, and incr keeps it
+c.kv.set("ttl", 5, 2s)?
+c.kv.incr("ttl")?
+print(b.keys({ prefix: "ttl" })[0].ttl > 0)
 room.join("ana")?
 const inbox = room.onMessage()
 room.send("hello")?

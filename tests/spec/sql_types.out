@@ -1,0 +1,7 @@
+true 2024-01-01 2024-01-01 10:00:00 <buffer 3 bytes: 00 01 ff> 7 1.5
+false nil nil nil nil nil
+[{hx: 0001FF, len: 3, ty: blob}]
+buffer 2 <buffer 2 bytes: 00 ff>
+[{v: [1,"a"]}, {v: {"k":true}}]
+[{c: true}]
+[{c: hello}]

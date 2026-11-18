@@ -79,6 +79,32 @@ fn b64_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// A part of a compact token: base64url without padding (RFC 7515), in its
+/// one canonical spelling — no `=`, no `+`/`/`, no unused bits set — so a
+/// token has exactly one accepted form.
+fn b64url_part(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 4 == 1 || s.bytes().any(|c| !(c.is_ascii_alphanumeric() || c == b'-' || c == b'_')) {
+        return None;
+    }
+    let out = b64_decode(s)?;
+    // the bits of the last character beyond the last byte must be zero
+    let unused = (s.len() * 6) % 8;
+    if unused > 0 {
+        let last = *s.as_bytes().last()?;
+        let v = match last {
+            b'A'..=b'Z' => last - b'A',
+            b'a'..=b'z' => last - b'a' + 26,
+            b'0'..=b'9' => last - b'0' + 52,
+            b'-' => 62,
+            _ => 63,
+        };
+        if v & ((1u8 << unused) - 1) != 0 {
+            return None;
+        }
+    }
+    Some(out)
+}
+
 // ---------------------------------------------------------------------
 // HMAC
 // ---------------------------------------------------------------------
@@ -237,13 +263,14 @@ struct Parts {
 
 fn split(token: &str) -> Result<Parts, String> {
     let bad = || io_err!("jwt: malformed token");
-    let mut it = token.trim().split('.');
+    // no trimming: a token with spaces around it is not a token
+    let mut it = token.split('.');
     let (h, p, s) = match (it.next(), it.next(), it.next(), it.next()) {
         (Some(h), Some(p), Some(s), None) => (h, p, s),
         _ => return Err(bad()),
     };
     let json = |part: &str| -> Result<Value, String> {
-        let bytes = b64_decode(part).ok_or_else(bad)?;
+        let bytes = b64url_part(part).ok_or_else(bad)?;
         let text = String::from_utf8(bytes).map_err(|_| bad())?;
         match parse_value(&text) {
             Ok(v @ Value::Map(_)) => Ok(v),
@@ -254,7 +281,7 @@ fn split(token: &str) -> Result<Parts, String> {
         header: json(h)?,
         payload: json(p)?,
         signing_input: format!("{}.{}", h, p),
-        signature: b64_decode(s).ok_or_else(bad)?,
+        signature: b64url_part(s).ok_or_else(bad)?,
     })
 }
 

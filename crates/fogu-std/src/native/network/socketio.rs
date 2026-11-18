@@ -273,8 +273,13 @@ fn server(args: &[Value], interp: &Interpreter, env: &Rc<RefCell<Environment>>) 
     if let Some(v) = o.get("ackTimeout") {
         b = b.ack_timeout(duration_arg(v, "ackTimeout")?);
     }
-    if let Some(Value::Int(n)) = o.get("maxPayload") {
-        b = b.max_payload(*n as u64);
+    // one limit for both transports: polling payloads and WebSocket messages
+    match o.get("maxPayload") {
+        None | Some(Value::Nil) => {}
+        Some(Value::Int(n)) if *n > 0 => {
+            b = b.max_payload(*n as u64).ws_max_message_size(*n as usize).ws_max_frame_size(*n as usize);
+        }
+        Some(other) => return Err(format!("socketio.server: maxPayload must be a number of bytes > 0, got {}", other.to_display_string())),
     }
     let (svc, io) = b.build_svc();
     let st = Rc::new(ServerState {
@@ -340,6 +345,11 @@ fn dispatch_job(st: &Rc<ServerState>, it: &Interpreter, env: &Rc<RefCell<Environ
             }
         }
         SJob::Event { sid, event, args, ack, .. } => {
+            // reserved names: only the server raises them (a client sending
+            // "disconnect" must not run the cleanup of a live socket)
+            if matches!(event.as_str(), "connect" | "connect_error" | "disconnect" | "disconnecting") {
+                return;
+            }
             let Some(sock) = st.sockets.borrow().get(&sid).cloned() else { return };
             let hs = {
                 let inner = sock.inner();
@@ -381,6 +391,9 @@ impl FoguObject for Ack {
     }
 
     fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
+        // socketioxide spawns tokio tasks (acks, disconnects, broadcasts): it
+        // must run inside the shared runtime's context, or it panics
+        let _rt = crate::native::rt::tokio().enter();
         match method {
             "send" => {
                 let data = args_of(args);
@@ -428,11 +441,29 @@ impl Broadcast {
         };
         let op = if self.rooms.is_empty() { op } else { op.to(self.rooms.clone()) };
         let op = if self.except.is_empty() { op } else { op.except(self.except.clone()) };
-        crate::native::rt::tokio().spawn(async move {
+        // one queue drained by one task: broadcasts leave in the order they
+        // were made (a task per emit let them overtake each other)
+        broadcast_queue().send(Box::pin(async move {
             let _ = op.emit(&event, &data).await;
-        });
+        })).map_err(|_| io_err!("socketio: the server is closed"))?;
         Ok(())
     }
+}
+
+type Job = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+/// The process-wide queue of broadcast emits, run one after another.
+fn broadcast_queue() -> &'static tokio::sync::mpsc::UnboundedSender<Job> {
+    static Q: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<Job>> = std::sync::OnceLock::new();
+    Q.get_or_init(|| {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Job>();
+        crate::native::rt::tokio().spawn(async move {
+            while let Some(job) = rx.recv().await {
+                job.await;
+            }
+        });
+        tx
+    })
 }
 
 impl FoguObject for Broadcast {
@@ -441,6 +472,9 @@ impl FoguObject for Broadcast {
     }
 
     fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
+        // socketioxide spawns tokio tasks (acks, disconnects, broadcasts): it
+        // must run inside the shared runtime's context, or it panics
+        let _rt = crate::native::rt::tokio().enter();
         match method {
             "to" | "in" => {
                 let mut b = self.clone_self();
@@ -573,8 +607,8 @@ impl FoguObject for SioServer {
                     return Err("listen: already listening".into());
                 }
                 let addr = match args.first() {
-                    Some(Value::Int(p)) => format!("0.0.0.0:{}", p),
-                    Some(Value::Str(s)) if s.starts_with(':') => format!("0.0.0.0{}", s),
+                    Some(Value::Int(p)) => format!("127.0.0.1:{}", p), // like app.listen: the network only when asked ("0.0.0.0:port")
+                    Some(Value::Str(s)) if s.starts_with(':') => format!("127.0.0.1{}", s),
                     Some(Value::Str(s)) => s.to_string(),
                     _ => return Err("listen(port | \"host:port\")".into()),
                 };
@@ -635,6 +669,9 @@ impl FoguObject for SioNamespace {
     }
 
     fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
+        // socketioxide spawns tokio tasks (acks, disconnects, broadcasts): it
+        // must run inside the shared runtime's context, or it panics
+        let _rt = crate::native::rt::tokio().enter();
         self.st.open_ns(&self.ns);
         let b = Broadcast { io: self.st.io.clone(), origin: Origin::Io(self.ns.clone()), rooms: vec![], except: vec![] };
         match method {
@@ -699,6 +736,9 @@ impl FoguObject for SioSocket {
     }
 
     fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
+        // socketioxide spawns tokio tasks (acks, disconnects, broadcasts): it
+        // must run inside the shared runtime's context, or it panics
+        let _rt = crate::native::rt::tokio().enter();
         match method {
             // on(event, fn(...args, ack?)) · on("disconnect", fn(reason))
             "on" => {
@@ -739,6 +779,9 @@ impl FoguObject for SioSocket {
     }
 
     fn start_async(&mut self, method: &str, args: &[Value]) -> Option<Result<Poller, String>> {
+        // socketioxide spawns tokio tasks (acks, disconnects, broadcasts): it
+        // must run inside the shared runtime's context, or it panics
+        let _rt = crate::native::rt::tokio().enter();
         if method != "emitWithAck" {
             return None;
         }
@@ -1042,8 +1085,10 @@ fn connect(args: &[Value], interp: &Interpreter, env: &Rc<RefCell<Environment>>)
         Some(t) => duration_arg(t, "socketio.connect timeout")?,
         None => Duration::from_secs(10),
     };
+    // the url's query goes with the handshake (`socket.handshake.query`), as the JavaScript client does
+    let url_query = rest.split_once('?').map(|(_, q)| q).filter(|q| !q.is_empty()).map(|q| format!("&{}", q)).unwrap_or_default();
     let dial = Dial {
-        ws_url: format!("{}://{}{}/?EIO=4&transport=websocket", scheme, hostport, path.trim_end_matches('/')),
+        ws_url: format!("{}://{}{}/?EIO=4&transport=websocket{}", scheme, hostport, path.trim_end_matches('/'), url_query),
         headers,
         nsp: nsp.clone(),
         auth: o.get("auth").map(to_json).unwrap_or(serde_json::Value::Null),

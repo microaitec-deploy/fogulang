@@ -121,7 +121,8 @@ async fn http_post(h: Arc<Http>, msg: Json, timeout: Duration) -> Result<Json, S
     if let Some(s) = lock(&h.session).clone() {
         req = req.header("mcp-session-id", s);
     }
-    let res = req.send().await.map_err(|e| format!("{} ({})", e, h.url))?;
+    // a timeout says so, in the same words as the stdio transport
+    let res = req.send().await.map_err(|e| if e.is_timeout() { format!("no answer after {:?}", timeout) } else { crate::native::util::error_chain(&e) })?;
     if let Some(s) = res.headers().get("mcp-session-id").and_then(|v| v.to_str().ok()) {
         *lock(&h.session) = Some(s.to_string());
     }
@@ -163,6 +164,35 @@ struct Conn {
     next: AtomicU64,
     timeout: Duration,
     closed: AtomicBool,
+}
+
+/// A list request that follows `nextCursor` (at most 100 pages); the poller
+/// yields `{ <key>: [the items of every page] }`.
+fn paged(conn: Arc<Conn>, method: &'static str, key: &'static str) -> Result<Box<dyn FnMut() -> Option<Result<Json, String>>>, String> {
+    let mut items: Vec<Json> = Vec::new();
+    let mut pages = 0;
+    let mut cur = conn.request(method, json!({}))?;
+    Ok(Box::new(move || loop {
+        let j = match cur()? {
+            Ok(j) => j,
+            Err(e) => return Some(Err(e)),
+        };
+        if let Some(a) = j[key].as_array() {
+            items.extend(a.iter().cloned());
+        }
+        pages += 1;
+        match j.get("nextCursor").and_then(Json::as_str) {
+            Some(c) if pages < 100 => match conn.request(method, json!({ "cursor": c })) {
+                Ok(next) => cur = next,
+                Err(e) => return Some(Err(e)),
+            },
+            _ => {
+                let mut out = serde_json::Map::new();
+                out.insert(key.to_string(), Json::Array(std::mem::take(&mut items)));
+                return Some(Ok(Json::Object(out)));
+            }
+        }
+    }))
 }
 
 impl Conn {
@@ -252,12 +282,25 @@ impl Drop for Conn {
 
 /// `mcpClient({ command, args, env, cwd, stderr } | { url, headers }, { timeout = 30s })`
 pub fn connect(args: &[Value]) -> Result<Value, String> {
-    max_args(args, 1, "ai.mcpClient")?;
-    let o: HashMap<Str, Value> = match args.first() {
+    max_args(args, 2, "ai.mcpClient")?;
+    let mut o: HashMap<Str, Value> = match args.first() {
         Some(Value::Map(m)) => m.borrow().clone(),
         Some(Value::Str(u)) => HashMap::from([("url".into(), Value::Str(u.clone()))]),
         _ => return Err("ai.mcpClient expects { command, args } (stdio) or { url } (HTTP)".into()),
     };
+    // the documented second argument: `{ timeout }`
+    match args.get(1) {
+        None | Some(Value::Nil) => {}
+        Some(Value::Map(m)) => {
+            for (k, v) in m.borrow().iter() {
+                if k.as_str() != "timeout" {
+                    return Err(format!("ai.mcpClient: unknown option '{}' (timeout)", k));
+                }
+                o.insert(k.clone(), v.clone());
+            }
+        }
+        Some(other) => return Err(format!("ai.mcpClient: options must be a map {{ timeout }}, got '{}'", other.type_name())),
+    }
     let s = |k: &str| o.get(k).filter(|v| !matches!(v, Value::Nil)).map(|v| v.to_display_string());
     let timeout = match o.get("timeout") {
         None | Some(Value::Nil) => Duration::from_secs(30),
@@ -398,8 +441,10 @@ impl FoguObject for McpClient {
                 return Err(io_err!("{}: the client is closed", what));
             }
             let req = |m: &str, p: Json| conn.request(m, p).map_err(|e| io_err!("{}: {}", what, e));
+            // the lists follow `nextCursor`: every page, not just the first
+            let all = |m: &'static str, key: &'static str| paged(Arc::clone(&conn), m, key).map_err(|e| io_err!("{}: {}", what, e));
             Ok(match method {
-                "listTools" => finish(req("tools/list", json!({}))?, what, |j| Ok(json_to_value(&j["tools"]))),
+                "listTools" => finish(all("tools/list", "tools")?, what, |j| Ok(json_to_value(&j["tools"]))),
                 // callTool(name, arguments) → the structured result or the text; isError → an error value
                 "callTool" => {
                     max_args(args, 2, &what)?;
@@ -407,7 +452,7 @@ impl FoguObject for McpClient {
                     let arguments = args.get(1).map(to_json).filter(|j| !j.is_null()).unwrap_or(json!({}));
                     finish(req("tools/call", json!({ "name": name, "arguments": arguments }))?, what, tool_value)
                 }
-                "listResources" => finish(req("resources/list", json!({}))?, what, |j| Ok(json_to_value(&j["resources"]))),
+                "listResources" => finish(all("resources/list", "resources")?, what, |j| Ok(json_to_value(&j["resources"]))),
                 "readResource" => {
                     max_args(args, 1, &what)?;
                     let uri = str_arg(args, 0, &what)?;
@@ -415,7 +460,7 @@ impl FoguObject for McpClient {
                         j["contents"].as_array().map(|c| c.iter().filter_map(|x| x.get("text").and_then(Json::as_str)).collect::<Vec<_>>().join("\n")).unwrap_or_default().into(),
                     )))
                 }
-                "listPrompts" => finish(req("prompts/list", json!({}))?, what, |j| Ok(json_to_value(&j["prompts"]))),
+                "listPrompts" => finish(all("prompts/list", "prompts")?, what, |j| Ok(json_to_value(&j["prompts"]))),
                 // getPrompt(name, arguments) → { description, messages: [{ role, text }] }
                 "getPrompt" => {
                     max_args(args, 2, &what)?;
@@ -440,7 +485,7 @@ impl FoguObject for McpClient {
                 // tools() → ai.tool values for ai.agent: each one calls the server
                 "tools" => {
                     let conn2 = Arc::clone(&conn);
-                    let mut p = req("tools/list", json!({}))?;
+                    let mut p = all("tools/list", "tools")?;
                     Box::new(move || {
                         let r = p()?;
                         Some(r.map_err(|e| io_err!("mcp.tools: {}", e)).map(|j| {

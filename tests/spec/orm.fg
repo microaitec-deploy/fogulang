@@ -65,4 +65,18 @@ print(err)
 const [_, dup] = db.profile.create({ data: { authorId: ana.id } })
 print(dup != nil)
 print(db.query("SELECT COUNT(*) AS n FROM \"Profile\"")?)
+
+// a transaction belongs to the task that began it: another task's write
+// waits for the rollback instead of being rolled back with it
+const tdone = chan(1)
+db.begin()?
+db.author.create({ data: { name: "in tx" } })?
+fg fn() {
+    db.author.create({ data: { name: "other task" } })?
+    tdone <- true
+}()
+Fogu.sleep(50ms)
+db.rollback()?
+<-tdone
+print(db.author.findMany({ where: { name: { in: ["in tx", "other task"] } } })?.map((a) => a.name))
 db.disconnect()

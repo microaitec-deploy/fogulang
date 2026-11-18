@@ -1,5 +1,8 @@
 Fogu 3 3.5 true [1, two, 3]
 true false nil
 [active, list, name, pi, version] 5
+true false
 4 nil
+<buffer 3 bytes: 00 01 ff> 1500ms duration
+true q"t [1, 2]
 persisted: Fogu

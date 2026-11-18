@@ -316,7 +316,15 @@ impl Inner {
                         c.outbox.pop_front();
                         wrote = true;
                     }
-                    _ => break,
+                    // no room yet: retried after the peer acknowledges data
+                    Ok(false) => break,
+                    // this message cannot be sent: drop it (and say why)
+                    // instead of blocking every message behind it
+                    Err(e) => {
+                        c.outbox.pop_front();
+                        self.error.get_or_insert(format!("channel '{}': {}", c.label, e));
+                        wrote = true;
+                    }
                 }
             }
         }
@@ -1222,6 +1230,11 @@ impl FoguObject for ChannelValue {
                     Some(other) => (false, crate::native::json::stringify_value(other).into_bytes()),
                     None => return Err("send(data) expects 1 argument".into()),
                 };
+                // the send buffer holds at most MAX_MESSAGE bytes: a larger
+                // message could never be written (and would block the channel)
+                if data.len() > MAX_MESSAGE {
+                    return Err(io_err!("webrtc: a message of {} bytes is larger than the maximum of {} bytes (split it)", data.len(), MAX_MESSAGE));
+                }
                 self.core.with(|g| {
                     if g.chans[key].closed {
                         return Err(io_err!("webrtc: the channel '{}' is closed", g.chans[key].label));
@@ -1323,6 +1336,10 @@ impl FoguObject for ChannelValue {
         vec!["send", "recv", "tryRecv", "wait", "on", "close"]
     }
 }
+
+/// The largest data channel message: str0m's SCTP send buffer
+/// (`DEFAULT_MAX_BUFFERED_AMOUNT`, 128 KiB) must hold a message whole.
+const MAX_MESSAGE: usize = 128 * 1024;
 
 #[cfg(test)]
 mod tests {

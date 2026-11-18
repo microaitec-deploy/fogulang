@@ -317,9 +317,7 @@ fn send(p: Plan) -> Result<Got, String> {
     // a custom CA or `insecure`: a client of its own (the shared ones trust the system roots)
     let custom = if p.ca.is_some() || p.insecure {
         let mut b = reqwest::blocking::Client::builder().timeout(None).danger_accept_invalid_certs(p.insecure);
-        if !p.redirects {
-            b = b.redirect(reqwest::redirect::Policy::none());
-        }
+        b = b.redirect(if p.redirects { crate::native::util::redirect_policy() } else { reqwest::redirect::Policy::none() });
         if let Some(pem) = &p.ca {
             b = b.add_root_certificate(reqwest::Certificate::from_pem(pem).map_err(|e| io_err!("{}: ca: {}", what, e))?);
         }
@@ -475,7 +473,7 @@ impl FoguObject for ClientResponse {
 
     fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
         match method {
-            "json" => crate::native::json::parse_value(&String::from_utf8_lossy(&self.body)),
+            "json" => crate::native::json::parse_value(&String::from_utf8_lossy(&self.body)).map_err(|e| io_err!("json: {}", e)),
             "bytes" => Ok(crate::native::util::bytes_value(self.body.as_ref().clone())),
             // header(name) → all its values joined by ", " (nil when missing)
             "header" => {

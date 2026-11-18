@@ -452,10 +452,15 @@ fn dispatch(shared: &Mutex<Shared>, writer: &Writer, opcode: u8, id: u64, payloa
         }
         OP_PUBLISH if !pending => {
             let data: Json = serde_json::from_slice(payload).unwrap_or(Json::Null);
-            // routed by its topic when the server says it, else to every subscription
+            // the server sends a publication once per connection: it goes to
+            // every subscription whose pattern matches its topic, once each
+            // (a server that does not name the topic: every subscription)
             let topic = data.get("topic").and_then(|t| t.as_str()).map(String::from);
-            let known = topic.as_ref().is_some_and(|t| s.regs.values().any(|r| r.kind == Kind::Subscription && &r.key == t));
-            s.push(Kind::Subscription, topic.as_deref().filter(|_| known), &data);
+            for r in s.regs.values_mut() {
+                if r.kind == Kind::Subscription && topic.as_deref().is_none_or(|t| crate::native::broker::matches_pattern(&r.key, t)) {
+                    r.queue.push_back(Item::Msg(data.clone()));
+                }
+            }
             return;
         }
         // always a call to one of our actions (answers to our calls are RES/ERROR)
@@ -745,7 +750,9 @@ impl FoguObject for Kv {
                     let p = match opt_arg(args, 2) {
                         None => json!({ "key": key, "value": arg_json(args, 1) }),
                         Some(Value::Int(t)) if *t >= 0 => json!({ "key": key, "value": arg_json(args, 1), "ttl": t }),
-                        Some(other) => return Err(format!("{}: ttl must be an int >= 0, got {}", what, other.to_display_string())),
+                        // a duration: whole seconds, rounded up (the protocol counts seconds)
+                        Some(Value::Duration(ns)) if *ns >= 0 => json!({ "key": key, "value": arg_json(args, 1), "ttl": (*ns as u64).div_ceil(1_000_000_000) }),
+                        Some(other) => return Err(format!("{}: ttl must be a duration or an int of seconds >= 0, got {}", what, other.to_display_string())),
                     };
                     request(conn, OP_SET, Some(p), to, |_, _| Ok(Value::Bool(true)))?
                 }

@@ -1,0 +1,29 @@
+// fogu:sql (SQLite): every column type reads back, a buffer is stored as a
+// BLOB (never as its printed form), lists and maps as JSON text, and a
+// changed schema is seen by the same statement text (round 1 #3 #4 #10)
+import sql from "fogu:sql"
+
+const db = sql.open("sqlite::memory:")?
+db.exec("CREATE TABLE z (c BOOLEAN, d DATE, t DATETIME, b BLOB, n NUMERIC, r REAL)")?
+db.run("INSERT INTO z VALUES (?, ?, ?, ?, ?, ?)", [true, "2024-01-01", "2024-01-01 10:00:00", bytes([0, 1, 255]), 7, 1.5])?
+db.run("INSERT INTO z VALUES (0, NULL, NULL, NULL, NULL, NULL)")?
+for row in db.query("SELECT * FROM z")? {
+    print(row.c, row.d, row.t, row.b, row.n, row.r)
+}
+print(db.query("SELECT typeof(b) AS ty, length(b) AS len, hex(b) AS hx FROM z LIMIT 1")?)
+const blob = db.one("SELECT x'00ff' AS bl")?.bl
+print(typeof(blob), len(blob), blob)
+
+// lists and maps are written as JSON
+db.exec("CREATE TABLE j (v TEXT)")?
+db.run("INSERT INTO j VALUES (?), (?)", [[1, "a"], { k: true }])?
+print(db.query("SELECT v FROM j")?)
+
+// the same SQL text after the table changed: no stale column types
+db.exec("CREATE TABLE s (c BOOLEAN)")?
+db.run("INSERT INTO s VALUES (1)")?
+print(db.query("SELECT c FROM s")?)
+db.exec("DROP TABLE s; CREATE TABLE s (c TEXT)")?
+db.run("INSERT INTO s VALUES ('hello')")?
+print(db.query("SELECT c FROM s")?)
+db.close()

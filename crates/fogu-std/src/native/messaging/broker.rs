@@ -163,8 +163,8 @@ fn err_frame(id: u64, status: u8, msg: &str) -> Frame {
     Frame::new(OP_ERROR, id, p)
 }
 
-/// Dot-segmented wildcards: `*` one segment (or everything alone), `**` the rest.
-fn matches_pattern(pattern: &str, value: &str) -> bool {
+/// Segmented wildcards: `*` one segment (or everything alone), `**` the rest.
+pub(crate) fn matches_pattern(pattern: &str, value: &str) -> bool {
     if pattern == "*" || pattern == "**" {
         return true;
     }
@@ -177,8 +177,9 @@ fn matches_pattern(pattern: &str, value: &str) -> bool {
             (Some(a), Some(b)) => a == b && walk(&p[1..], &v[1..]),
         }
     }
-    let p: Vec<&str> = pattern.split('.').collect();
-    let v: Vec<&str> = value.split('.').collect();
+    // segments are separated by `.`, `/` (channel/name) and `:` (user:1)
+    let p: Vec<&str> = pattern.split(['.', '/', ':']).collect();
+    let v: Vec<&str> = value.split(['.', '/', ':']).collect();
     walk(&p, &v)
 }
 
@@ -386,15 +387,16 @@ impl Store {
     fn incr(&self, key: &str, delta: i64) -> Result<i64, String> {
         // under one lock: atomic on this node
         let mut kv = self.kv.lock().unwrap_or_else(|e| e.into_inner());
-        let cur = match kv.get(key) {
-            Some((_, Some(exp))) if now_secs() > *exp => 0,
-            Some((v, _)) => v.as_i64().ok_or("value is not an integer")?,
-            None => 0,
+        // a live key keeps its expiry (as Redis' INCR does)
+        let (cur, exp) = match kv.get(key) {
+            Some((_, Some(exp))) if now_secs() > *exp => (0, None),
+            Some((v, exp)) => (v.as_i64().ok_or("value is not an integer")?, *exp),
+            None => (0, None),
         };
         let new = cur.checked_add(delta).ok_or("integer overflow")?;
-        kv.insert(key.to_string(), (json!(new), None));
+        kv.insert(key.to_string(), (json!(new), exp));
         // still under the lock: the order on disk is the order in memory
-        self.persist(T_KV, key, Some(&json!({ "data": new, "expires_at": null }).to_string()));
+        self.persist(T_KV, key, Some(&json!({ "data": new, "expires_at": exp }).to_string()));
         drop(kv);
         Ok(new)
     }
@@ -452,14 +454,15 @@ type Tx = UnboundedSender<Frame>;
 #[derive(Clone)]
 enum Role {
     Root,
-    Key { channels: Vec<String>, kv: Vec<String>, topics: Vec<String>, rpc: Vec<String> },
+    /// `id`: the key's id, checked on every frame (a revoked key stops working at once)
+    Key { id: String, channels: Vec<String>, kv: Vec<String>, topics: Vec<String>, rpc: Vec<String> },
 }
 
 impl Role {
     fn can(&self, what: &str, name: &str) -> bool {
         match self {
             Role::Root => true,
-            Role::Key { channels, kv, topics, rpc } => has_access(
+            Role::Key { channels, kv, topics, rpc, .. } => has_access(
                 match what {
                     "channel" => channels,
                     "kv" => kv,
@@ -476,7 +479,8 @@ enum Ev {
     Join { channel: String, cid: String, alias: String, tx: Tx },
     Leave { channel: String, cid: String },
     /// `sender` is None for messages from another node
-    ChannelMsg { channel: String, sender: Option<String>, env: Bytes },
+    /// `ack`: where to answer the sender (sent, or not a member)
+    ChannelMsg { channel: String, sender: Option<String>, env: Bytes, ack: Option<(Tx, u64)> },
     ChannelList { tx: Tx, id: u64 },
     Members { channel: String, tx: Tx, id: u64 },
     Subscribe { topic: String, cid: String, tx: Tx },
@@ -529,6 +533,9 @@ async fn broker_loop(core: Arc<Core>, mut rx: UnboundedReceiver<Ev>) {
     let mut channels: HashMap<String, Vec<(String, String, Tx)>> = HashMap::new();
     let mut topics: HashMap<String, Vec<(String, Tx)>> = HashMap::new();
     let mut actions: HashMap<String, (String, Tx)> = HashMap::new();
+    // registrations a newer `act` of the same method replaced: one of them
+    // takes over when the active one leaves, so no service is lost
+    let mut standby: HashMap<String, Vec<(String, Tx)>> = HashMap::new();
     let mut remote_actions: HashMap<String, String> = HashMap::new();
     let mut links: HashMap<String, (u64, Tx)> = HashMap::new();
     let mut pending: HashMap<u64, Pending> = HashMap::new();
@@ -566,15 +573,21 @@ async fn broker_loop(core: Arc<Core>, mut rx: UnboundedReceiver<Ev>) {
                     }
                 }
             }
-            Ev::ChannelMsg { channel, sender, env } => {
+            Ev::ChannelMsg { channel, sender, env, ack } => {
                 core.messages.fetch_add(1, Ordering::Relaxed);
                 let members = channels.get(&channel);
-                // a client must be a member to talk in a channel
+                // a client must be a member to talk in a channel (and is told when not)
                 if let Some(s) = &sender {
                     if !members.is_some_and(|m| m.iter().any(|(id, _, _)| id == s)) {
+                        if let Some((tx, id)) = ack {
+                            let _ = tx.send(err_frame(id, ST_FORBIDDEN, &format!("not a member of channel '{}'", channel)));
+                        }
                         continue;
                     }
                     to_peers(&links, Frame::new(OP_PEER_CHANNEL, 0, env.clone()));
+                }
+                if let Some((tx, id)) = ack {
+                    let _ = tx.send(ok_frame(id, OP_CHANNEL_MSG, json!({ "result": { "channel": channel, "status": "sent" } })));
                 }
                 for (_, _, tx) in members.into_iter().flatten() {
                     let _ = tx.send(Frame::new(OP_CHANNEL_MSG, 0, env.clone()));
@@ -597,10 +610,15 @@ async fn broker_loop(core: Arc<Core>, mut rx: UnboundedReceiver<Ev>) {
             }
             Ev::Publish { topic, env, local_only } => {
                 core.publications.fetch_add(1, Ordering::Relaxed);
+                // once per connection, however many of its subscriptions
+                // match: the client hands it to each matching subscription
+                let mut sent: std::collections::HashSet<&str> = std::collections::HashSet::new();
                 for (pattern, subs) in &topics {
                     if matches_pattern(pattern, &topic) || matches_pattern(&topic, pattern) {
-                        for (_, tx) in subs {
-                            let _ = tx.send(Frame::new(OP_PUBLISH, 0, env.clone()));
+                        for (cid, tx) in subs {
+                            if sent.insert(cid.as_str()) {
+                                let _ = tx.send(Frame::new(OP_PUBLISH, 0, env.clone()));
+                            }
                         }
                     }
                 }
@@ -609,7 +627,11 @@ async fn broker_loop(core: Arc<Core>, mut rx: UnboundedReceiver<Ev>) {
                 }
             }
             Ev::Act { method, cid, tx } => {
-                actions.insert(method, (cid, tx));
+                if let Some(old) = actions.insert(method.clone(), (cid.clone(), tx)) {
+                    if old.0 != cid {
+                        standby.entry(method).or_default().push(old);
+                    }
+                }
                 let txs: Vec<&Tx> = links.values().map(|(_, t)| t).collect();
                 announce(&actions, &txs, &core.node);
             }
@@ -652,7 +674,21 @@ async fn broker_loop(core: Arc<Core>, mut rx: UnboundedReceiver<Ev>) {
                 }
                 topics.retain(|_, l| !l.is_empty());
                 let before = actions.len();
-                actions.retain(|_, (id, _)| *id != cid);
+                for l in standby.values_mut() {
+                    l.retain(|(id, _)| *id != cid);
+                }
+                let gone: Vec<String> = actions.iter().filter(|(_, (id, _))| *id == cid).map(|(m, _)| m.clone()).collect();
+                for m in &gone {
+                    match standby.get_mut(m).and_then(|l| l.pop()) {
+                        Some(next) => {
+                            actions.insert(m.clone(), next);
+                        }
+                        None => {
+                            actions.remove(m);
+                        }
+                    }
+                }
+                standby.retain(|_, l| !l.is_empty());
                 if actions.len() != before {
                     let txs: Vec<&Tx> = links.values().map(|(_, t)| t).collect();
                     announce(&actions, &txs, &core.node);
@@ -839,7 +875,8 @@ where
                 let _ = tx.send(ok_frame(f.id, OP_AUTH, json!({ "result": { "role": "root" } })));
             } else if let Some(k) = core.store.key_by_token(&token) {
                 let list = |n: &str| k["perms"][n].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
-                role = Some(Role::Key { channels: list("channels"), kv: list("kv"), topics: list("topics"), rpc: list("rpc") });
+                let id = k["id"].as_str().unwrap_or_default().to_string();
+                role = Some(Role::Key { id, channels: list("channels"), kv: list("kv"), topics: list("topics"), rpc: list("rpc") });
                 let _ = tx.send(ok_frame(f.id, OP_AUTH, json!({ "result": { "role": "api_key" } })));
             } else {
                 let _ = tx.send(err_frame(f.id, ST_UNAUTHORIZED, "invalid token"));
@@ -850,6 +887,13 @@ where
             let _ = tx.send(err_frame(f.id, ST_UNAUTHORIZED, "not authenticated"));
             continue;
         };
+        // revoking a key closes the connections opened with it
+        if let Role::Key { id, .. } = r {
+            if !core.store.keys.lock().unwrap_or_else(|e| e.into_inner()).contains_key(id) {
+                let _ = tx.send(err_frame(f.id, ST_UNAUTHORIZED, "the API key was revoked"));
+                break;
+            }
+        }
         if let Err(e) = handle(&core, r, &cid, &alias, &tx, f.clone()) {
             let _ = tx.send(err_frame(f.id, ST_INVALID, &e));
         }
@@ -923,8 +967,8 @@ fn handle(core: &Arc<Core>, role: &Role, cid: &str, alias: &str, tx: &Tx, f: Fra
                 }
                 OP_CHANNEL_MSG => {
                     let env = json!({ "channel": channel, "sender_id": cid, "alias": alias, "data": p["data"], "node": core.node });
-                    ev(Ev::ChannelMsg { channel: channel.clone(), sender: Some(cid.into()), env: env.to_string().into() });
-                    send(ok_frame(f.id, OP_CHANNEL_MSG, json!({ "result": { "channel": channel, "status": "sent" } })));
+                    // answered by the event loop, which knows the members
+                    ev(Ev::ChannelMsg { channel: channel.clone(), sender: Some(cid.into()), env: env.to_string().into(), ack: Some((tx.clone(), f.id)) });
                 }
                 _ => ev(Ev::Members { channel, tx: tx.clone(), id: f.id }),
             }

@@ -42,8 +42,8 @@ app.get("/", fn(ctx) {
 const call = app.handler()
 const page = call({ method: "GET", path: "/" }).body
 print(page.contains("data-tc-text=\"cart.get()\""), page.contains("<tc-shard data-name=\"results\""))
-const swap = json.parse(call({ method: "POST", path: "/_tc/s/results", body: "{\"props\":{\"query\":\"mo\"}}" }).body)
+const swap = json.parse(call({ method: "POST", path: "/_tc/s/results", headers: { "x-topcoat": "shard" }, body: "{\"props\":{\"query\":\"mo\"}}" }).body)
 print(swap.t, swap.html.contains("Mouse"), swap.html.contains("Monitor"), swap.html.contains("Mug"))
-print(call({ method: "POST", path: "/_tc/p/checkout", body: "[2]" }).body)
-print(call({ method: "POST", path: "/_tc/p/checkout", body: "[0]" }).body)
+print(call({ method: "POST", path: "/_tc/p/checkout", headers: { "x-topcoat": "procedure" }, body: "[2]" }).body)
+print(call({ method: "POST", path: "/_tc/p/checkout", headers: { "x-topcoat": "procedure" }, body: "[0]" }).body)
 // app.listen(3000) and Fogu.signal.wait() to open it in a browser

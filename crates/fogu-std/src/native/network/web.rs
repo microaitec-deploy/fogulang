@@ -118,8 +118,14 @@ pub fn build() -> ModuleValue {
             let mut headers = HashMap::new();
             if let Some(Value::Map(o)) = args.get(1) {
                 let o = o.borrow();
-                if let Some(Value::Str(name)) = o.get("download") {
-                    headers.insert("content-disposition".to_string(), format!("attachment; filename=\"{}\"", name.replace('"', "")));
+                // download: "name" or true (the file's own name)
+                let name = match o.get("download") {
+                    Some(Value::Str(name)) => Some(name.to_string()),
+                    Some(Value::Bool(true)) => std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()),
+                    _ => None,
+                };
+                if let Some(name) = name {
+                    headers.insert("content-disposition".to_string(), content_disposition(&name));
                 }
                 if let Some(Value::Str(ct)) = o.get("contentType") {
                     headers.insert("content-type".to_string(), ct.to_string());
@@ -170,6 +176,24 @@ pub fn build() -> ModuleValue {
     }
 }
 
+/// `attachment; filename="…"` with an ASCII fallback, plus RFC 6266's
+/// `filename*=UTF-8''…` when the name is not plain ASCII.
+fn content_disposition(name: &str) -> String {
+    let ascii: String = name.chars().map(|c| if c.is_ascii() && !c.is_ascii_control() && c != '"' && c != '\\' { c } else { '_' }).collect();
+    if ascii == name {
+        return format!("attachment; filename=\"{}\"", name);
+    }
+    let mut enc = String::new();
+    for b in name.bytes() {
+        if b.is_ascii_alphanumeric() || b"!#$&+-.^_`|~".contains(&b) {
+            enc.push(b as char);
+        } else {
+            enc.push_str(&format!("%{:02X}", b));
+        }
+    }
+    format!("attachment; filename=\"{}\"; filename*=UTF-8''{}", ascii, enc)
+}
+
 // ================= SEGMENTS =================
 
 #[derive(Clone)]
@@ -180,6 +204,9 @@ enum Segment {
 }
 
 fn parse_path(path: &str) -> Vec<Segment> {
+    // routes are compared with canonical (decoded) request paths: `/caf%C3%A9`
+    // and `/café` name the same route
+    let path = fogu_http::canonical_path(path).unwrap_or_else(|_| path.to_string());
     path.trim_matches('/')
         .split('/')
         .filter(|s| !s.is_empty())
@@ -211,7 +238,9 @@ fn match_segments(pattern: &[Segment], path: &[&str]) -> Option<HashMap<Str, Val
                 if pi >= path.len() {
                     return None;
                 }
-                params.insert(name.as_str().into(), Value::Str(url_decode(path[pi]).into()));
+                // the path is already decoded (`http::canonical_path`): decoding
+                // again would turn `%252F` into a `/`
+                params.insert(name.as_str().into(), Value::Str(path[pi].into()));
                 pi += 1;
             }
         }
@@ -222,13 +251,7 @@ fn match_segments(pattern: &[Segment], path: &[&str]) -> Option<HashMap<Str, Val
     Some(params)
 }
 
-/// `/admin` matches `/admin` and `/admin/...`, not `/administrator`.
-fn under_prefix(prefix: &str, path: &str) -> bool {
-    let prefix = prefix.trim_end_matches('/');
-    prefix.is_empty()
-        || path == prefix
-        || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'))
-}
+use fogu_http::under_prefix;
 
 pub(crate) use crate::native::util::url_decode;
 
@@ -261,6 +284,8 @@ struct AppState {
     on_error: Vec<Value>,
     store: Rc<RefCell<HashMap<Str, Value>>>,
     statics: Vec<fogu_http::StaticMount>,
+    /// the middleware prefixes, shared with the server thread (static files)
+    guards: fogu_http::Guards,
     ws_routes: Vec<WsRoute>,
     /// fogu:topcoat shards (`POST /_tc/s/<name>`) and procedures (`POST /_tc/p/<name>`).
     shards: HashMap<String, Value>,
@@ -374,6 +399,12 @@ impl FoguObject for AppValue {
                     _ => return Err("use expects (fn) or (prefix, fn)".into()),
                 };
                 let f = fn_arg(f, "use")?;
+                // the logger only observes: it does not keep static files from the fast path
+                let guards = !matches!(&f, Value::Object(o) if o.inner().borrow().methods().contains(&"after"));
+                if guards {
+                    let g = self.state.borrow().guards.clone();
+                    g.write().unwrap_or_else(|e| e.into_inner()).push(prefix.clone());
+                }
                 self.state.borrow_mut().middlewares.push((prefix, f));
                 Ok(self.same())
             }
@@ -404,26 +435,36 @@ impl FoguObject for AppValue {
 
             // listen(8080 | "ip:port", { host = "127.0.0.1", maxBody = 10mb, quiet, tls: { cert, key } })
             "listen" => {
-                let mut opts = fogu_http::ServerOptions { statics: self.state.borrow().statics.clone(), ..Default::default() };
+                let mut opts = fogu_http::ServerOptions {
+                    statics: self.state.borrow().statics.clone(),
+                    guards: self.state.borrow().guards.clone(),
+                    ..Default::default()
+                };
                 match args.get(1) {
                     None | Some(Value::Nil) => {}
                     Some(Value::Map(o)) => {
                         let o = o.borrow();
-                        if let Some(Value::Str(h)) = o.get("host") {
-                            opts.host = h.to_string();
-                        }
-                        match o.get("maxBody") {
-                            Some(Value::Int(n)) if *n > 0 => opts.max_body = *n as usize,
-                            None | Some(Value::Nil) => {}
-                            Some(other) => return Err(format!("listen: maxBody must be a number of bytes, got {}", other.to_display_string())),
-                        }
-                        opts.quiet = o.get("quiet").is_some_and(|v| v.is_truthy());
-                        if let Some(io) = o.get("socketio") {
-                            opts.socketio = Some(crate::native::socketio::web_mount(io)?);
-                        }
-                        // HTTPS: { tls: { cert, key } } (fogu:tls; tls.selfSigned for development)
-                        if let Some(t) = o.get("tls").filter(|t| !matches!(t, Value::Nil)) {
-                            opts.tls = Some(crate::native::tls::server_config(t, "listen", &["http/1.1"])?);
+                        // a misspelt option is an error, not a silent default
+                        let mut keys: Vec<&Str> = o.keys().collect();
+                        keys.sort();
+                        for k in keys {
+                            let v = &o[k];
+                            if matches!(v, Value::Nil) {
+                                continue;
+                            }
+                            match k.as_str() {
+                                "host" => match v {
+                                    Value::Str(h) => opts.host = h.to_string(),
+                                    other => return Err(format!("listen: host must be a str, got '{}'", other.type_name())),
+                                },
+                                "socketio" => opts.socketio = Some(crate::native::socketio::web_mount(v)?),
+                                // HTTPS: { tls: { cert, key } } (fogu:tls; tls.selfSigned for development)
+                                _ => {
+                                    if !opts.set(k, v, "listen")? {
+                                        return Err(format!("listen: unknown option '{}' (host socketio {})", k, fogu_http::SERVER_OPTIONS));
+                                    }
+                                }
+                            }
                         }
                     }
                     Some(other) => return Err(format!("listen: options must be a map, got '{}'", other.type_name())),
@@ -577,7 +618,10 @@ pub fn dispatch(
 ) -> Result<Value, String> {
     // `app.handler()` takes a plain map: make it the same Request object a real
     // HTTP request is, so ctx.req.json()/form()/bytes() behave alike in tests
-    let as_request = test_request(req);
+    let as_request = match test_request(req) {
+        Ok(r) => r,
+        Err(why) => return Ok(text_response(400, &format!("bad request: {}", why))),
+    };
     let req = as_request.as_ref().unwrap_or(req);
     let id: u64 = name.rsplit('#').next().and_then(|s| s.parse().ok()).unwrap_or(0);
     let state = APPS
@@ -585,11 +629,12 @@ pub fn dispatch(
         .ok_or("web: this app has no handler (call app.handler() or app.listen())")?;
 
     let mut method = req_str(req, "method").unwrap_or_else(|| "GET".into()).to_uppercase();
-    let full_path = req_str(req, "path").unwrap_or_else(|| "/".into());
-    let (path, mut query) = match full_path.split_once('?') {
-        Some((p, q)) => (p.to_string(), Some(q.to_string())),
-        None => (full_path.clone(), None),
-    };
+    // canonical already (`http::canonical_path`, by the server or `test_request`):
+    // the router and every middleware see this same path; a decoded `?` is
+    // part of it, the query is a field of its own
+    let path = req_str(req, "path").unwrap_or_else(|| "/".into());
+    let mut query: Option<String> = None;
+    let full_path = path.clone();
     // fogu:topcoat's browser runtime and stylesheet
     if let Some(r) = topcoat_asset(&method, &path) {
         return Ok(r);
@@ -603,6 +648,10 @@ pub fn dispatch(
     };
     let segments: Vec<&str> = path.trim_matches('/').split('/').filter(|s| !s.is_empty()).collect();
     let upgrade = matches!(req_field(req, "upgrade"), Some(Value::Bool(true)));
+    // a static file under a middleware's prefix: only the middlewares run,
+    // then the server thread serves the file (`StaticPass`)
+    let static_guard = matches!(req, Value::Object(o) if o.name() == "Request"
+        && o.inner().borrow().as_any().downcast_ref::<fogu_http::RequestValue>().is_some_and(|r| r.static_guard));
 
     // fogu:topcoat: a page rerun (POST of the signals, rendered as a GET),
     // a shard or a procedure
@@ -622,9 +671,17 @@ pub fn dispatch(
         ("POST", ["_tc", "p", name]) => Some(TcCall::Procedure(name.to_string(), state.borrow().procedures.get(*name).cloned())),
         _ => None,
     };
+    // CSRF: shards, procedures and reruns change or reveal state with the
+    // browser's cookies. The runtime always sends `x-topcoat`, which an HTML
+    // form cannot send and a cross-site `fetch` can only send after a CORS
+    // preflight; a request a browser marks as coming from another site is refused.
+    if (special.is_some() || rerun) && (tc_mode.is_empty() || !same_site(&headers)) {
+        eprintln!("[web] {} {}: refused (cross-site or without x-topcoat)", method, path);
+        return Ok(json_response(403, &map(vec![("error", Value::Str("forbidden".into()))])));
+    }
 
     // the route, its middlewares and the matching global middlewares
-    let (route, global, after, on_error, store, ws_route) = {
+    let (route, global, after, on_error, store, ws_route, preflight) = {
         let st = state.borrow();
         let ws_route = if upgrade {
             st.ws_routes.iter().find_map(|r| {
@@ -643,14 +700,30 @@ pub fn dispatch(
             match_segments(&r.segments, &segments).map(|p| (r.handler.clone(), r.middlewares.clone(), p))
             })
         };
+        // a CORS preflight (OPTIONS + Access-Control-Request-Method) for a
+        // route of another method runs that route's middlewares, so a
+        // `web.cors()` given to the route itself can answer it
+        let preflight: Vec<Value> = match (&route, method.as_str(), headers.get("access-control-request-method")) {
+            (None, "OPTIONS", Some(wanted)) => {
+                let wanted = wanted.to_display_string().to_uppercase();
+                st.routes
+                    .iter()
+                    .filter(|r| r.method == "*" || r.method == wanted)
+                    .find(|r| match_segments(&r.segments, &segments).is_some())
+                    .map(|r| r.middlewares.clone())
+                    .unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
         let global: Vec<Value> = st
             .middlewares
             .iter()
             .filter(|(prefix, _)| under_prefix(prefix, &path))
             .map(|(_, f)| f.clone())
             .collect();
-        (route, global, st.after.clone(), st.on_error.clone(), Rc::clone(&st.store), ws_route)
+        (route, global, st.after.clone(), st.on_error.clone(), Rc::clone(&st.store), ws_route, preflight)
     };
+    let route = if static_guard { None } else { route };
 
     let set = map(vec![("status", Value::Nil), ("headers", map(vec![]))]);
     let ctx = map(vec![
@@ -686,7 +759,7 @@ pub fn dispatch(
     // middlewares → handler
     let mut ran: Vec<Value> = Vec::new();
     let mut outcome: Result<Option<Value>, Value> = Ok(None);
-    let route_mws = route.as_ref().map(|r| r.1.clone()).unwrap_or_default();
+    let route_mws = route.as_ref().map(|r| r.1.clone()).unwrap_or(preflight);
     for mw in global.iter().chain(route_mws.iter()) {
         ran.push(mw.clone());
         match run(mw, vec![ctx.clone()]) {
@@ -776,9 +849,15 @@ pub fn dispatch(
                     Err(e) => {
                         let msg = e.strip_prefix(ERR_VALUE_PREFIX).unwrap_or(&e).to_string();
                         eprintln!("[web] shard {}: {}", path, msg);
-                        ndjson(200, error_frame(500, &msg))
+                        ndjson(200, error_frame(500, "internal error"))
                     }
                 }
+            }
+            // the arguments are a JSON list (what the browser runtime sends);
+            // anything else is refused before the function runs
+            TcCall::Procedure(name, Some(_)) if !matches!(tc_req, Value::List(_)) => {
+                let _ = name;
+                json_response(400, &map(vec![("error", Value::Str("invalid procedure arguments (expected a JSON list)".into()))]))
             }
             TcCall::Procedure(name, Some(func)) => {
                 let mut cargs = vec![ctx.clone()];
@@ -791,13 +870,16 @@ pub fn dispatch(
                     Ok(Ok(v)) => json_response(200, &map(vec![("ok", v)])),
                     Err(e) => {
                         eprintln!("[web] procedure {}: {}", name, err_message(&e));
-                        json_response(500, &map(vec![("error", Value::Str(err_message(&e).into()))]))
+                        json_response(500, &map(vec![("error", Value::Str("internal error".into()))]))
                     }
                 }
             }
         }));
     }
 
+    if static_guard && matches!(outcome, Ok(None)) {
+        outcome = Ok(Some(NativeObjectRef::new(StaticPass { headers: HashMap::new() }).to_value()));
+    }
     if let Ok(None) = outcome {
         outcome = match &route {
             Some((handler, _, _)) => match run(handler, vec![ctx.clone()]) {
@@ -826,8 +908,10 @@ pub fn dispatch(
             }
             handled.unwrap_or_else(|| {
                 let msg = err_message(&err);
+                // the detail is for the log only: it may hold internal paths,
+                // queries or secrets (`app.onError` decides what a client sees)
                 eprintln!("[web] {} {}: {}", method, path, msg);
-                text_response(500, &format!("internal error: {}", msg))
+                text_response(500, "internal error")
             })
         }
     };
@@ -857,6 +941,25 @@ pub fn dispatch(
     Ok(response)
 }
 
+/// Not a request a browser sent from another site: `Sec-Fetch-Site` is not
+/// `cross-site`, and an `Origin` (when there is one) names this host.
+/// Clients that are not browsers send neither and pass.
+fn same_site(headers: &HashMap<Str, Value>) -> bool {
+    let h = |k: &str| headers.get(k).map(|v| v.to_display_string());
+    // modern browsers say it themselves (and it survives a proxy that rewrites Host)
+    if let Some(site) = h("sec-fetch-site") {
+        return !site.eq_ignore_ascii_case("cross-site");
+    }
+    match h("origin") {
+        None => true,
+        Some(origin) => {
+            // `scheme://host[:port]` against the Host header
+            let host = origin.split_once("://").map(|(_, rest)| rest).unwrap_or("");
+            h("host").is_some_and(|own| !own.is_empty() && own.eq_ignore_ascii_case(host))
+        }
+    }
+}
+
 /// What a handler returned, read as `value, error` (`Value::into_result`): the
 /// error of a tuple that ends in one, the value of `return value, nil`. A list is
 /// never a pair: it is the answer.
@@ -867,9 +970,10 @@ fn unpair(v: Value) -> Value {
     }
 }
 
-/// A `{ method, path, query, headers, body }` map → a `Request` object.
-fn test_request(req: &Value) -> Option<Value> {
-    let Value::Map(m) = req else { return None };
+/// A `{ method, path, query, headers, body }` map → a `Request` object, its
+/// path made canonical as the server does (`Err` when it is invalid: 400).
+fn test_request(req: &Value) -> Result<Option<Value>, &'static str> {
+    let Value::Map(m) = req else { return Ok(None) };
     let m = m.borrow();
     let text = |k: &str| m.get(k).filter(|v| !matches!(v, Value::Nil)).map(|v| v.to_display_string());
     let full = text("path").unwrap_or_else(|| "/".into());
@@ -877,6 +981,7 @@ fn test_request(req: &Value) -> Option<Value> {
         Some((p, q)) => (p.to_string(), Some(q.to_string())),
         None => (full, None),
     };
+    let path = fogu_http::canonical_path(&path)?;
     if let Some(q) = text("query") {
         query = Some(q);
     }
@@ -889,9 +994,10 @@ fn test_request(req: &Value) -> Option<Value> {
         // a map is sent as JSON, a list of bytes as bytes, anything else as text
         Some(v @ Value::Map(_)) => crate::native::json::stringify_value(v).into_bytes(),
         Some(v @ Value::List(_)) => crate::native::util::bytes_of(v, "handler body").unwrap_or_else(|_| crate::native::json::stringify_value(v).into_bytes()),
+        Some(v @ Value::Buffer(_)) => crate::native::util::bytes_of(v, "handler body").unwrap_or_default(),
         Some(v) => v.to_display_string().into_bytes(),
     };
-    Some(
+    Ok(Some(
         NativeObjectRef::new(fogu_http::RequestValue {
             method: text("method").unwrap_or_else(|| "GET".into()).to_uppercase(),
             path,
@@ -900,9 +1006,10 @@ fn test_request(req: &Value) -> Option<Value> {
             body,
             upgrade: matches!(m.get("upgrade"), Some(Value::Bool(true))),
             remote: text("remote").unwrap_or_else(|| "127.0.0.1:0".into()),
+            static_guard: false,
         })
         .to_value(),
-    )
+    ))
 }
 
 /// A fogu:topcoat request to a server function.
@@ -1034,7 +1141,7 @@ fn content_type_of(s: &str) -> &'static str {
 /// Any handler result → `Response` (`ctx.set.status` applies to plain values).
 fn normalize_response(v: Value, set: &Value) -> Value {
     if let Value::Object(o) = &v {
-        if matches!(o.name().as_str(), "Response" | "SseStream" | "WsAccept") {
+        if matches!(o.name().as_str(), "Response" | "SseStream" | "WsAccept" | "StaticPass") {
             return v;
         }
     }
@@ -1061,7 +1168,7 @@ fn apply_set(resp: Value, set: &Value) -> Value {
     };
     let Value::Object(o) = &resp else { return resp };
     // web responses, streams and accepts are changed in place
-    if matches!(o.name().as_str(), "Response" | "SseStream" | "WsAccept") {
+    if matches!(o.name().as_str(), "Response" | "SseStream" | "WsAccept" | "StaticPass") {
         let inner = o.inner();
         let mut b = inner.borrow_mut();
         let any = b.as_any_mut();
@@ -1069,6 +1176,8 @@ fn apply_set(resp: Value, set: &Value) -> Value {
             Some(&mut r.headers)
         } else if let Some(s) = any.downcast_mut::<SseValue>() {
             Some(&mut s.headers)
+        } else if let Some(p) = any.downcast_mut::<StaticPass>() {
+            Some(&mut p.headers)
         } else {
             any.downcast_mut::<WsAccept>().map(|w| &mut w.headers)
         };
@@ -1174,9 +1283,17 @@ impl FoguObject for Cors {
         }
         let ctx = args.first().cloned().unwrap_or(Value::Nil);
         // with a list of origins, echo the request origin when allowed
+        let req_origin = || match field_of(&field_of(&ctx, "headers"), "origin") {
+            Value::Nil => String::new(),
+            v => v.to_display_string(),
+        };
         let origin = if self.origin.contains(',') {
-            let req_origin = field_of(&field_of(&ctx, "headers"), "origin").to_display_string();
+            let req_origin = req_origin();
             if self.origin.split(',').any(|o| o.trim() == req_origin) { req_origin } else { String::new() }
+        } else if self.origin == "*" && self.credentials {
+            // browsers refuse `*` together with credentials: the request's
+            // origin is echoed instead (and `Vary: Origin` set below)
+            req_origin()
         } else {
             self.origin.clone()
         };
@@ -1273,7 +1390,7 @@ pub struct ResponseValue {
 /// The payload of special responses for the server thread (see `http::send_response`).
 pub fn take_special(o: &NativeObjectRef) -> Option<fogu_http::PlainResponse> {
     // only these types can be downcast (others do not implement `as_any`)
-    if !matches!(o.name().as_str(), "Response" | "SseStream" | "WsAccept") {
+    if !matches!(o.name().as_str(), "Response" | "SseStream" | "WsAccept" | "StaticPass") {
         return None;
     }
     let inner = o.inner();
@@ -1281,15 +1398,18 @@ pub fn take_special(o: &NativeObjectRef) -> Option<fogu_http::PlainResponse> {
     let any = b.as_any_mut();
     if let Some(r) = any.downcast_mut::<ResponseValue>() {
         let file = r.file.clone()?;
-        return Some(fogu_http::PlainResponse { status: r.status, headers: r.headers.clone(), body: Vec::new(), file: Some(file), stream: None, upgrade: None });
+        return Some(fogu_http::PlainResponse { status: r.status, headers: r.headers.clone(), body: Vec::new(), file: Some(file), stream: None, upgrade: None, serve_static: false });
     }
     if let Some(s) = any.downcast_mut::<SseValue>() {
         let rx = s.rx.take()?;
-        return Some(fogu_http::PlainResponse { status: 200, headers: s.headers.clone(), body: Vec::new(), file: None, stream: Some(rx), upgrade: None });
+        return Some(fogu_http::PlainResponse { status: 200, headers: s.headers.clone(), body: Vec::new(), file: None, stream: Some(rx), upgrade: None, serve_static: false });
+    }
+    if let Some(p) = any.downcast_mut::<StaticPass>() {
+        return Some(fogu_http::PlainResponse { status: 200, headers: p.headers.clone(), body: Vec::new(), file: None, stream: None, upgrade: None, serve_static: true });
     }
     if let Some(w) = any.downcast_mut::<WsAccept>() {
         let tx = w.tx.take()?;
-        return Some(fogu_http::PlainResponse { status: 101, headers: w.headers.clone(), body: Vec::new(), file: None, stream: None, upgrade: Some(tx) });
+        return Some(fogu_http::PlainResponse { status: 101, headers: w.headers.clone(), body: Vec::new(), file: None, stream: None, upgrade: Some(tx), serve_static: false });
     }
     None
 }
@@ -1378,6 +1498,33 @@ impl FoguObject for SseValue {
     }
 }
 
+/// "Serve the static file": the middlewares let a guarded static file through (internal).
+pub struct StaticPass {
+    headers: HashMap<String, String>,
+}
+
+impl FoguObject for StaticPass {
+    fn name(&self) -> &str {
+        "StaticPass"
+    }
+
+    fn get(&self, field: &str) -> Option<Value> {
+        match field {
+            "status" => Some(Value::Int(200)),
+            "headers" => Some(map(self.headers.iter().map(|(k, v)| (k.as_str(), Value::Str(v.clone().into()))).collect())),
+            _ => None,
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
 /// The 101 answer of a WebSocket route (internal).
 pub struct WsAccept {
     tx: Option<std_mpsc::Sender<crate::native::websocket::WsIo>>,
@@ -1428,7 +1575,7 @@ impl FoguObject for ResponseValue {
 
     fn call(&mut self, method: &str, _args: &[Value]) -> Result<Value, String> {
         match method {
-            "json" => crate::native::json::parse_value(&self.body),
+            "json" => crate::native::json::parse_value(&self.body).map_err(|e| io_err!("json: {}", e)),
             other => Err(format!("method '{}' does not exist on Response", other)),
         }
     }

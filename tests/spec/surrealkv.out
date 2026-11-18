@@ -17,3 +17,4 @@ true
 [a, b, c, price, user:1] 10
 true
 s3cr3t
+buffer <buffer 2 bytes: 00 ff> duration 5s <buffer 1 byte: 07>

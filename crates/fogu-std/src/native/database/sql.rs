@@ -1,4 +1,6 @@
-//! `fogu:sql` module — multi-database SQL with SQLx (`Any` driver).
+//! `fogu:sql` module — multi-database SQL with SQLx: the native SQLite
+//! driver for `sqlite:` URLs (every column type, BLOBs), the `Any` driver
+//! for PostgreSQL and MySQL.
 //!
 //! Supported URLs:
 //!   - "sqlite://file.db"                       → SQLite (created if missing)
@@ -18,14 +20,17 @@
 //! db.close()
 //! ```
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use ahash::AHashMap as HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use sqlx::any::{AnyPoolOptions, AnyRow};
-use sqlx::{AnyPool, Column, Row, TypeInfo, ValueRef};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
+use sqlx::{AnyPool, Column, Row, SqlitePool, TypeInfo, ValueRef};
+
+use crate::runtime::sched;
 
 use crate::runtime::value::{ModuleValue, Value};
 
@@ -64,20 +69,48 @@ pub fn build() -> ModuleValue {
     }
 }
 
+/// A connection pool: SQLite through its own driver (the `Any` driver cannot
+/// read BOOLEAN, DATE, DATETIME nor BLOB columns), the others through `Any`.
+#[derive(Clone)]
+pub(crate) enum Pool {
+    Sqlite(SqlitePool),
+    Any(AnyPool),
+}
+
+impl Pool {
+    async fn close(&self) {
+        match self {
+            Pool::Sqlite(p) => p.close().await,
+            Pool::Any(p) => p.close().await,
+        }
+    }
+}
+
 /// Opens a single persistent connection (see below) on the shared runtime.
 /// Returns the pool and the effective URL.
-pub(crate) fn connect(url: &str) -> Result<(AnyPool, String), String> {
+pub(crate) fn connect(url: &str) -> Result<(Pool, String), String> {
     sqlx::any::install_default_drivers();
-    let mut url = url.to_string();
-    // SQLite: append `?mode=rwc` (read-write-create) so that the file is
-    // created if it does not exist (sqlite::memory: does not need it).
-    if url.starts_with("sqlite:") && !url.contains("mode=") && !url.contains("memory") {
-        url.push_str(if url.contains('?') { "&mode=rwc" } else { "?mode=rwc" });
-    }
+    let url = url.to_string();
     // A single persistent connection: with several pooled connections
     // `begin()` and the following statements could run on different
     // connections (breaking transactions), and each `sqlite::memory:`
     // connection would see its own empty database.
+    if url.starts_with("sqlite:") {
+        use std::str::FromStr;
+        // the file is created if it does not exist
+        let opts = SqliteConnectOptions::from_str(&url).map_err(|e| format!("{} at '{}'", e, url))?.create_if_missing(true);
+        let pool = rt::block_on(async move {
+            SqlitePoolOptions::new()
+                .max_connections(1)
+                .min_connections(1)
+                .idle_timeout(None)
+                .max_lifetime(None)
+                .connect_with(opts)
+                .await
+        })?
+        .map_err(|e| format!("{} at '{}'", e, url))?;
+        return Ok((Pool::Sqlite(pool), url));
+    }
     let u = url.clone();
     let pool = rt::block_on(async move {
         AnyPoolOptions::new()
@@ -89,7 +122,7 @@ pub(crate) fn connect(url: &str) -> Result<(AnyPool, String), String> {
             .await
     })?
     .map_err(|e| format!("{} at '{}'", e, url))?;
-    Ok((pool, url))
+    Ok((Pool::Any(pool), url))
 }
 
 /// A parameter that can travel to the runtime's threads.
@@ -100,6 +133,8 @@ enum Param {
     Int(i64),
     Float(f64),
     Str(String),
+    /// a `buffer`: stored as a BLOB, never as its printed form
+    Bytes(Vec<u8>),
 }
 
 fn to_params(values: &[Value]) -> Vec<Param> {
@@ -111,10 +146,25 @@ fn to_params(values: &[Value]) -> Vec<Param> {
             Value::Int(n) => Param::Int(*n),
             Value::Float(f) => Param::Float(*f),
             Value::Str(s) => Param::Str(s.to_string()),
+            Value::Buffer(_) => Param::Bytes(crate::native::util::bytes_of(v, "sql").unwrap_or_default()),
+            // lists and maps as JSON text (not the way `print` shows them)
+            Value::List(_) | Value::Map(_) => Param::Str(crate::native::json::stringify_value(v)),
             other => Param::Str(other.to_display_string()),
         })
         .collect()
 }
+
+/// A column value read on the runtime's threads (a row is `Send`, a `Value` is not).
+enum Cell2 {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Text(String),
+    Blob(Vec<u8>),
+}
+
+type PlainRow = Vec<(String, Cell2)>;
 
 #[derive(Clone, Copy)]
 enum Op {
@@ -128,39 +178,83 @@ enum Op {
 
 enum Out {
     Done(u64, Option<i64>),
-    Rows(Vec<AnyRow>),
-    Row(Option<AnyRow>),
+    Rows(Vec<PlainRow>),
+    Row(Option<PlainRow>),
 }
 
-async fn run_op(pool: AnyPool, op: Op, sql: String, params: Vec<Param>) -> Result<Out, sqlx::Error> {
-    if let Op::Raw = op {
-        let r = sqlx::raw_sql(&sql).execute(&pool).await?;
-        return Ok(Out::Done(r.rows_affected(), r.last_insert_id()));
-    }
-    let mut q = sqlx::query(&sql);
-    for p in &params {
-        q = match p {
-            Param::Null => q.bind(Option::<i64>::None),
-            Param::Bool(b) => q.bind(*b),
-            Param::Int(n) => q.bind(*n),
-            Param::Float(f) => q.bind(*f),
-            Param::Str(s) => q.bind(s.clone()),
-        };
-    }
-    Ok(match op {
-        Op::Query => Out::Rows(q.fetch_all(&pool).await?),
-        Op::One => Out::Row(q.fetch_optional(&pool).await?),
-        _ => {
-            let r = q.execute(&pool).await?;
-            Out::Done(r.rows_affected(), r.last_insert_id())
-        }
+/// Statements that change the schema: the cached prepared statements (and
+/// the column types they remember) are dropped after them.
+fn is_ddl(sql: &str) -> bool {
+    sql.split(';').any(|st| {
+        let w = st.split_whitespace().next().unwrap_or("");
+        ["CREATE", "DROP", "ALTER"].iter().any(|k| w.eq_ignore_ascii_case(k))
     })
+}
+
+macro_rules! bind_all {
+    ($q:expr, $params:expr) => {{
+        let mut q = $q;
+        for p in $params {
+            q = match p {
+                Param::Null => q.bind(Option::<i64>::None),
+                Param::Bool(b) => q.bind(*b),
+                Param::Int(n) => q.bind(*n),
+                Param::Float(f) => q.bind(*f),
+                Param::Str(s) => q.bind(s.clone()),
+                Param::Bytes(b) => q.bind(b.clone()),
+            };
+        }
+        q
+    }};
+}
+
+async fn run_op(pool: Pool, op: Op, sql: String, params: Vec<Param>) -> Result<Out, sqlx::Error> {
+    match pool {
+        Pool::Sqlite(pool) => {
+            let out = if let Op::Raw = op {
+                let r = sqlx::raw_sql(&sql).execute(&pool).await?;
+                Out::Done(r.rows_affected(), Some(r.last_insert_rowid()))
+            } else {
+                let q = bind_all!(sqlx::query(&sql), &params);
+                match op {
+                    Op::Query => Out::Rows(q.fetch_all(&pool).await?.iter().map(sqlite_row).collect()),
+                    Op::One => Out::Row(q.fetch_optional(&pool).await?.as_ref().map(sqlite_row)),
+                    _ => {
+                        let r = q.execute(&pool).await?;
+                        Out::Done(r.rows_affected(), Some(r.last_insert_rowid()))
+                    }
+                }
+            };
+            if matches!(op, Op::Raw | Op::Execute) && is_ddl(&sql) {
+                if let Ok(mut c) = pool.acquire().await {
+                    use sqlx::Connection;
+                    let _ = c.clear_cached_statements().await;
+                }
+            }
+            Ok(out)
+        }
+        Pool::Any(pool) => {
+            if let Op::Raw = op {
+                let r = sqlx::raw_sql(&sql).execute(&pool).await?;
+                return Ok(Out::Done(r.rows_affected(), r.last_insert_id()));
+            }
+            let q = bind_all!(sqlx::query(&sql), &params);
+            Ok(match op {
+                Op::Query => Out::Rows(q.fetch_all(&pool).await?.iter().map(any_row).collect::<Result<_, _>>()?),
+                Op::One => Out::Row(q.fetch_optional(&pool).await?.as_ref().map(any_row).transpose()?),
+                _ => {
+                    let r = q.execute(&pool).await?;
+                    Out::Done(r.rows_affected(), r.last_insert_id())
+                }
+            })
+        }
+    }
 }
 
 /// A connection used by other native modules (fogu:orm). Synchronous: the
 /// ORM calls it from inside its own methods.
 pub(crate) struct SqlConn {
-    pool: Option<AnyPool>,
+    pool: Option<Pool>,
 }
 
 impl SqlConn {
@@ -185,7 +279,7 @@ impl SqlConn {
     /// Runs a query; returns the rows as maps.
     pub(crate) fn query(&self, sql: &str, params: &[Value]) -> Result<Vec<Value>, String> {
         match self.run(Op::Query, sql, params)? {
-            Out::Rows(rows) => rows.into_iter().map(row_to_map).collect(),
+            Out::Rows(rows) => Ok(rows.into_iter().map(row_to_map).collect()),
             _ => Ok(Vec::new()),
         }
     }
@@ -200,22 +294,26 @@ impl SqlConn {
 // ---------- SQL object ----------
 
 pub struct SqlValue {
-    pool: Option<AnyPool>,
+    pool: Option<Pool>,
     url: String,
-    /// Between `begin()` and `commit()`/`rollback()` statements run without
-    /// yielding, so another task cannot slip into the transaction.
+    /// Between `begin()` and `commit()`/`rollback()` the owner's statements
+    /// run without yielding.
     in_tx: bool,
+    /// The task that opened the transaction (`sched::task_id`). A transaction
+    /// belongs to it: the statements of other tasks wait (cooperatively) for
+    /// its `commit()` / `rollback()` instead of running inside it.
+    tx_owner: Rc<Cell<Option<usize>>>,
     /// Statements running on the runtime; `begin()` waits for them, so none
     /// of them ends up inside the transaction.
     in_flight: Arc<AtomicUsize>,
 }
 
 impl SqlValue {
-    pub fn new(pool: AnyPool, url: String) -> Self {
-        Self { pool: Some(pool), url, in_tx: false, in_flight: Arc::new(AtomicUsize::new(0)) }
+    pub(crate) fn new(pool: Pool, url: String) -> Self {
+        Self { pool: Some(pool), url, in_tx: false, tx_owner: Rc::new(Cell::new(None)), in_flight: Arc::new(AtomicUsize::new(0)) }
     }
 
-    fn pool(&self) -> Result<AnyPool, String> {
+    fn pool(&self) -> Result<Pool, String> {
         self.pool.clone().ok_or_else(|| "sql: database is closed".to_string())
     }
 
@@ -248,10 +346,10 @@ fn finish(method: &str, r: Result<Out, sqlx::Error>) -> Result<Value, String> {
         Out::Done(n, _) if method != "exec" => Ok(Value::Int(n as i64)),
         Out::Done(..) => Ok(Value::Nil),
         Out::Rows(rows) => {
-            let rows = rows.into_iter().map(row_to_map).collect::<Result<Vec<_>, _>>()?;
+            let rows = rows.into_iter().map(row_to_map).collect::<Vec<_>>();
             Ok(Value::List(Rc::new(RefCell::new(rows))))
         }
-        Out::Row(row) => Ok(row.map(row_to_map).transpose()?.unwrap_or(Value::Nil)),
+        Out::Row(row) => Ok(row.map(row_to_map).unwrap_or(Value::Nil)),
     }
 }
 
@@ -294,13 +392,23 @@ impl FoguObject for SqlValue {
         Some(Ok(Box::new(move || pending.try_take().map(|r| finish(&method, r)))))
     }
 
-    /// Statements of other tasks finish before a transaction starts.
+    /// Statements of other tasks finish before a transaction starts, and
+    /// wait while another task's transaction is open.
     fn wait_for(&self, method: &str) -> Option<Box<dyn Fn() -> bool>> {
-        if method != "begin" {
+        if !matches!(method, "run" | "execute" | "query" | "one" | "exec" | "begin" | "commit" | "rollback") {
             return None;
         }
+        let owner = Rc::clone(&self.tx_owner);
+        let free = move || owner.get().is_none_or(|o| o == sched::task_id());
+        if method != "begin" {
+            // the common case (no transaction) costs one load
+            if self.tx_owner.get().is_none() {
+                return None;
+            }
+            return Some(Box::new(free));
+        }
         let in_flight = Arc::clone(&self.in_flight);
-        Some(Box::new(move || in_flight.load(Ordering::SeqCst) == 0))
+        Some(Box::new(move || free() && in_flight.load(Ordering::SeqCst) == 0))
     }
 
     fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
@@ -316,6 +424,7 @@ impl FoguObject for SqlValue {
                     .block_on(run_op(pool, Op::Execute, sql, Vec::new()))
                     .map_err(|e| io_err!("sql.{}: {}", method, e))?;
                 self.in_tx = method == "begin";
+                self.tx_owner.set(self.in_tx.then(sched::task_id));
                 Ok(Value::Nil)
             }
             "close" => {
@@ -323,6 +432,7 @@ impl FoguObject for SqlValue {
                     rt::tokio().block_on(pool.close());
                 }
                 self.in_tx = false;
+                self.tx_owner.set(None);
                 Ok(Value::Nil)
             }
             other => Err(format!("method '{}' does not exist on Sql", other)),
@@ -370,63 +480,86 @@ fn params_arg(v: Option<&Value>) -> Result<Vec<Value>, String> {
     }
 }
 
-fn row_to_map(row: AnyRow) -> Result<Value, String> {
+fn row_to_map(row: PlainRow) -> Value {
     let mut map = HashMap::new();
-    for (i, col) in row.columns().iter().enumerate() {
-        let v = value_ref_to_value(&row, i)?;
-        map.insert(col.name().into(), v);
+    for (name, cell) in row {
+        let v = match cell {
+            Cell2::Null => Value::Nil,
+            Cell2::Bool(b) => Value::Bool(b),
+            Cell2::Int(n) => Value::Int(n),
+            Cell2::Float(f) => Value::Float(f),
+            Cell2::Text(t) => Value::str(t),
+            Cell2::Blob(b) => Value::buffer(b),
+        };
+        map.insert(name.into(), v);
     }
-    Ok(Value::Map(Rc::new(RefCell::new(map))))
+    Value::Map(Rc::new(RefCell::new(map)))
 }
 
-fn value_ref_to_value(row: &AnyRow, i: usize) -> Result<Value, String> {
-    let vr = row
-        .try_get_raw(i)
-        .map_err(|e| io_err!("sql: column {}: {}", i, e))?;
+/// A SQLite row: each value is read by what it really holds (SQLite's
+/// storage class: INTEGER, REAL, TEXT, BLOB), not by the declared type of its
+/// column, which SQLite does not enforce. An integer in a BOOLEAN / BOOL
+/// column is a `bool`; DATE / DATETIME values are the text (or number) stored.
+fn sqlite_row(row: &SqliteRow) -> PlainRow {
+    row.columns()
+        .iter()
+        .enumerate()
+        .map(|(i, col)| {
+            let storage = match row.try_get_raw(i) {
+                Ok(v) if !v.is_null() => Some(v.type_info().name().to_string()),
+                _ => None,
+            };
+            let cell = match storage.as_deref() {
+                None | Some("NULL") => Cell2::Null,
+                Some("INTEGER" | "BOOLEAN" | "NUMERIC") => {
+                    let n = row.try_get_unchecked::<i64, _>(i).unwrap_or(0);
+                    let decl = col.type_info().name().to_ascii_uppercase();
+                    if decl == "BOOLEAN" || decl == "BOOL" {
+                        Cell2::Bool(n != 0)
+                    } else {
+                        Cell2::Int(n)
+                    }
+                }
+                Some("REAL") => Cell2::Float(row.try_get_unchecked::<f64, _>(i).unwrap_or(0.0)),
+                Some("BLOB") => Cell2::Blob(row.try_get_unchecked::<Vec<u8>, _>(i).unwrap_or_default()),
+                Some(_) => match row.try_get_unchecked::<String, _>(i) {
+                    Ok(t) => Cell2::Text(t),
+                    Err(_) => Cell2::Blob(row.try_get_unchecked::<Vec<u8>, _>(i).unwrap_or_default()),
+                },
+            };
+            (col.name().to_string(), cell)
+        })
+        .collect()
+}
 
-    if vr.is_null() {
-        return Ok(Value::Nil);
+/// A PostgreSQL / MySQL row through the `Any` driver.
+fn any_row(row: &AnyRow) -> Result<PlainRow, sqlx::Error> {
+    let mut out = Vec::with_capacity(row.columns().len());
+    for (i, col) in row.columns().iter().enumerate() {
+        out.push((col.name().to_string(), any_value(row, i)?));
     }
+    Ok(out)
+}
 
-    // `type_info()` returns a `Cow` owned by the temporary `vr`.
-    // We bind it to an intermediate variable before calling `.name()`.
-    let type_info = vr.type_info();
-    let type_name = type_info.name();
-
-    match type_name {
-        "BOOL" | "BOOLEAN" => row
-            .try_get::<bool, _>(i)
-            .map(Value::Bool)
-            .map_err(|e| io_err!("sql: bool: {}", e)),
-        "INT2" | "SMALLINT" | "TINYINT" => row
-            .try_get::<i16, _>(i)
-            .map(|n| Value::Int(n as i64))
-            .map_err(|e| io_err!("sql: int2: {}", e)),
-        "INT4" | "INTEGER" | "INT" | "MEDIUMINT" => row
-            .try_get::<i32, _>(i)
-            .map(|n| Value::Int(n as i64))
-            .map_err(|e| io_err!("sql: int4: {}", e)),
-        "INT8" | "BIGINT" => row
-            .try_get::<i64, _>(i)
-            .map(Value::Int)
-            .map_err(|e| io_err!("sql: int8: {}", e)),
-        "FLOAT4" | "REAL" => row
-            .try_get::<f32, _>(i)
-            .map(|n| Value::Float(n as f64))
-            .map_err(|e| io_err!("sql: float4: {}", e)),
-        "FLOAT8" | "DOUBLE" | "DOUBLE PRECISION" => row
-            .try_get::<f64, _>(i)
-            .map(Value::Float)
-            .map_err(|e| io_err!("sql: float8: {}", e)),
-        "TEXT" | "VARCHAR" | "CHAR" | "BPCHAR" | "NAME" | "CLOB" => row
-            .try_get::<String, _>(i)
-            .map(Value::str)
-            .map_err(|e| io_err!("sql: text: {}", e)),
-        _ => row.try_get::<String, _>(i).map(Value::str).map_err(|e| {
-            io_err!(
-                "sql: unsupported type '{}' (column {}): {}",
-                type_name, i, e
-            )
-        }),
-    }
+fn any_value(row: &AnyRow, i: usize) -> Result<Cell2, sqlx::Error> {
+    let type_name = {
+        let vr = row.try_get_raw(i)?;
+        if vr.is_null() {
+            return Ok(Cell2::Null);
+        }
+        vr.type_info().name().to_string()
+    };
+    Ok(match type_name.as_str() {
+        "BOOL" | "BOOLEAN" => Cell2::Bool(row.try_get::<bool, _>(i)?),
+        "INT2" | "SMALLINT" | "TINYINT" => Cell2::Int(row.try_get::<i16, _>(i)? as i64),
+        "INT4" | "INTEGER" | "INT" | "MEDIUMINT" => Cell2::Int(row.try_get::<i32, _>(i)? as i64),
+        "INT8" | "BIGINT" => Cell2::Int(row.try_get::<i64, _>(i)?),
+        "FLOAT4" | "REAL" => Cell2::Float(row.try_get::<f32, _>(i)? as f64),
+        "FLOAT8" | "DOUBLE" | "DOUBLE PRECISION" => Cell2::Float(row.try_get::<f64, _>(i)?),
+        "BLOB" | "BYTEA" | "VARBINARY" | "BINARY" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" => Cell2::Blob(row.try_get::<Vec<u8>, _>(i)?),
+        _ => match row.try_get::<String, _>(i) {
+            Ok(t) => Cell2::Text(t),
+            Err(_) => Cell2::Blob(row.try_get::<Vec<u8>, _>(i)?),
+        },
+    })
 }

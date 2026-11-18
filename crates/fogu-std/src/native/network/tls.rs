@@ -80,7 +80,7 @@ fn native_roots() -> Arc<rustls::RootCertStore> {
 }
 
 /// PEM data: the text itself (it contains `-----BEGIN`), a buffer, or the path of a file.
-fn pem_arg(v: &Value, what: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn pem_arg(v: &Value, what: &str) -> Result<Vec<u8>, String> {
     match v {
         Value::Str(s) if s.contains("-----BEGIN") => Ok(s.as_bytes().to_vec()),
         Value::Str(s) => std::fs::read(s.as_str()).map_err(|e| io_err!("{}: {}: {}", what, s.as_str(), e)),
@@ -247,6 +247,11 @@ fn server_config_timeout(v: Option<&Value>, what: &str, default_alpn: &[&str]) -
         .with_safe_default_protocol_versions()
         .map_err(|e| io_err!("{}: {}", what, e))?;
     let builder = match o.get("ca") {
+        // client certificates are checked against `ca`: asking for them
+        // without one would accept every client while promising mTLS
+        None | Some(Value::Nil) if o.get("clientAuth").is_some_and(|v| !matches!(v, Value::Nil)) => {
+            return Err(format!("{}: clientAuth needs a ca (the certificate authority client certificates must come from)", what));
+        }
         None | Some(Value::Nil) => builder.with_no_client_auth(),
         Some(ca) => {
             let roots = roots_of(&pem_arg(ca, &format!("{} ca", what))?, &format!("{} ca", what))?;

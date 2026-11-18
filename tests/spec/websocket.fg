@@ -62,3 +62,18 @@ fg fn() {
 <-done
 <-done
 print(order)
+
+// invalid JSON from a client is an error value, not the end of the program
+const s2 = websocket.listen(0)?
+const c2 = websocket.connect(s2.url)?
+const peer = s2.accept(2s)?
+c2.send("not json")
+const bad = peer.next(2s)?.json()
+print(typeof(bad))
+c2.close()
+
+// websocket.listen answers with the first subprotocol the client offered
+const s3 = websocket.listen(0)?
+const c3 = websocket.connect(s3.url, { protocols: ["chat", "v2"] })?
+print(c3.protocol, s3.accept(2s)?.protocol)
+c3.close()

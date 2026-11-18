@@ -49,6 +49,9 @@ pub struct PlainRequest {
     /// `Upgrade: websocket`
     pub upgrade: bool,
     pub remote: String,
+    /// a static file a middleware guards: the program runs the middlewares
+    /// and answers `serve_static` when they let it through
+    pub static_guard: bool,
 }
 
 /// HTTP response without `Value` — every field is `Send`.
@@ -62,13 +65,16 @@ pub struct PlainResponse {
     pub stream: Option<tokio::sync::mpsc::UnboundedReceiver<Bytes>>,
     /// accept a WebSocket upgrade: the plain socket goes through this channel
     pub upgrade: Option<std_mpsc::Sender<crate::native::websocket::WsIo>>,
+    /// the middlewares let a guarded static file through: the server thread
+    /// serves it (with these headers added)
+    pub serve_static: bool,
 }
 
 impl PlainResponse {
     pub fn text(status: i64, body: &str) -> Self {
         let mut headers = HashMap::new();
         headers.insert("content-type".into(), "text/plain; charset=utf-8".into());
-        Self { status, headers, body: body.as_bytes().to_vec(), file: None, stream: None, upgrade: None }
+        Self { status, headers, body: body.as_bytes().to_vec(), file: None, stream: None, upgrade: None, serve_static: false }
     }
 }
 
@@ -86,12 +92,36 @@ pub struct StaticMount {
     pub dotfiles: bool,
 }
 
+/// The path prefixes of an app's middlewares ("" for a global one), shared
+/// with the server thread: a static file under one of them is not served
+/// before the middlewares said so (`app.use("/private", auth)` protects
+/// `app.static("/private", dir)` too).
+pub type Guards = std::sync::Arc<std::sync::RwLock<Vec<String>>>;
+
+/// `/admin` covers `/admin` and `/admin/...`, not `/administrator`; "" covers everything.
+pub fn under_prefix(prefix: &str, path: &str) -> bool {
+    let prefix = prefix.trim_end_matches('/');
+    prefix.is_empty() || path == prefix || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'))
+}
+
 /// Server settings decided before `listen`.
 #[derive(Clone, Debug)]
 pub struct ServerOptions {
     pub host: String,
+    /// `maxBody`: the largest request body (413 beyond it)
     pub max_body: usize,
+    /// `maxHeaderBytes`: the request line and headers together (431 beyond it)
+    pub max_header: usize,
+    /// `headerTimeout`: a client must send a request's headers within this
+    /// (also how long an idle keep-alive connection stays open)
+    pub header_timeout: Duration,
+    /// `readTimeout`: then its whole body within this (408 beyond it)
+    pub read_timeout: Duration,
+    /// `handlerTimeout`: the program must answer within this (504); `None` = no limit
+    pub handler_timeout: Option<Duration>,
     pub statics: Vec<StaticMount>,
+    /// the app's middleware prefixes (see [`Guards`])
+    pub guards: Guards,
     pub quiet: bool,
     /// Socket.IO served on the same port (`app.listen(port, { socketio: io })`)
     pub socketio: Option<crate::native::socketio::WebMount>,
@@ -101,7 +131,54 @@ pub struct ServerOptions {
 
 impl Default for ServerOptions {
     fn default() -> Self {
-        ServerOptions { host: "127.0.0.1".into(), max_body: 10 * 1024 * 1024, statics: Vec::new(), quiet: false, socketio: None, tls: None }
+        ServerOptions {
+            host: "127.0.0.1".into(),
+            max_body: 10 * 1024 * 1024,
+            max_header: 64 * 1024,
+            header_timeout: Duration::from_secs(30),
+            read_timeout: Duration::from_secs(60),
+            handler_timeout: Some(Duration::from_secs(60)),
+            statics: Vec::new(),
+            guards: Guards::default(),
+            quiet: false,
+            socketio: None,
+            tls: None,
+        }
+    }
+}
+
+/// The options `http.serve` and `app.listen` share.
+pub const SERVER_OPTIONS: &str = "tls quiet maxBody maxHeaderBytes headerTimeout readTimeout handlerTimeout";
+
+impl ServerOptions {
+    /// Reads one of [`SERVER_OPTIONS`]; false for a key it does not know.
+    pub fn set(&mut self, key: &str, v: &Value, what: &str) -> Result<bool, String> {
+        let bytes = |v: &Value, min: i64| match v {
+            Value::Int(n) if *n >= min => Ok(*n as usize),
+            other => Err(format!("{}: {} must be a number of bytes >= {}, got {}", what, key, min, other.to_display_string())),
+        };
+        match key {
+            "maxBody" => self.max_body = bytes(v, 1)?,
+            // hyper refuses a read buffer under 8 KB
+            "maxHeaderBytes" => self.max_header = bytes(v, 8192)?,
+            "headerTimeout" | "readTimeout" | "handlerTimeout" => {
+                let d = crate::native::util::duration_arg(v, &format!("{}: {}", what, key))?;
+                match key {
+                    "headerTimeout" if !d.is_zero() => self.header_timeout = d,
+                    "readTimeout" if !d.is_zero() => self.read_timeout = d,
+                    "handlerTimeout" => self.handler_timeout = (!d.is_zero()).then_some(d),
+                    _ => return Err(format!("{}: {} must be more than 0", what, key)),
+                }
+            }
+            "quiet" => self.quiet = v.is_truthy(),
+            "tls" => {
+                if !matches!(v, Value::Nil) {
+                    self.tls = Some(crate::native::tls::server_config(v, what, &["http/1.1"])?);
+                }
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
     }
 }
 
@@ -110,6 +187,8 @@ pub type Reply = tokio::sync::oneshot::Sender<PlainResponse>;
 
 /// Message from the server thread to the main thread.
 struct ServerToMain {
+    /// which server (each `http.serve` / `app.listen` has its own handler)
+    server: u64,
     req: PlainRequest,
     reply: Reply,
 }
@@ -141,9 +220,14 @@ pub fn requests_waiting() -> bool {
 // ================= MAIN THREAD GLOBAL STATE =================
 
 thread_local! {
-    static SERVER_HANDLER: RefCell<Option<Value>> = const { RefCell::new(None) };
+    /// The handler of every server this thread started, by server id: a
+    /// second `http.serve` / `app.listen` adds one, it never replaces the first.
+    static SERVER_HANDLERS: RefCell<HashMap<u64, Value>> = RefCell::new(HashMap::new());
+    static NEXT_SERVER: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+    /// One queue for all the servers of this thread: each message names its server.
+    static SERVER_TX: RefCell<Option<std_mpsc::Sender<ServerToMain>>> = const { RefCell::new(None) };
     static SERVER_RX: RefCell<Option<std_mpsc::Receiver<ServerToMain>>> = const { RefCell::new(None) };
-    static PENDING: RefCell<VecDeque<(PlainRequest, Reply)>> =
+    static PENDING: RefCell<VecDeque<(u64, PlainRequest, Reply)>> =
         const { RefCell::new(VecDeque::new()) };
 }
 
@@ -155,26 +239,27 @@ pub fn has_pending_request() -> bool {
     SERVER_RX.with(|r| {
         if let Some(rx) = r.borrow().as_ref() {
             while let Ok(msg) = rx.try_recv() {
-                PENDING.with(|q| q.borrow_mut().push_back((msg.req, msg.reply)));
+                PENDING.with(|q| q.borrow_mut().push_back((msg.server, msg.req, msg.reply)));
             }
         }
     });
     PENDING.with(|q| !q.borrow().is_empty())
 }
 
-/// Returns the next pending request, already as a `Value::Object(Request)`.
-pub fn take_pending_request() -> Option<(Value, Reply)> {
+/// Returns the next pending request (its server and the request, already as
+/// a `Value::Object(Request)`).
+pub fn take_pending_request() -> Option<(u64, Value, Reply)> {
     WAITING.swap(false, std::sync::atomic::Ordering::SeqCst);
     SERVER_RX.with(|r| {
         let guard = r.borrow();
         if let Some(rx) = guard.as_ref() {
             while let Ok(msg) = rx.try_recv() {
-                PENDING.with(|q| q.borrow_mut().push_back((msg.req, msg.reply)));
+                PENDING.with(|q| q.borrow_mut().push_back((msg.server, msg.req, msg.reply)));
             }
         }
     });
     PENDING.with(|q| {
-        let (plain, tx) = q.borrow_mut().pop_front()?;
+        let (server, plain, tx) = q.borrow_mut().pop_front()?;
         let value = NativeObjectRef::new(RequestValue {
             method: plain.method,
             path: plain.path,
@@ -183,9 +268,10 @@ pub fn take_pending_request() -> Option<(Value, Reply)> {
             body: plain.body,
             upgrade: plain.upgrade,
             remote: plain.remote,
+            static_guard: plain.static_guard,
         })
         .to_value();
-        Some((value, tx))
+        Some((server, value, tx))
     })
 }
 
@@ -232,9 +318,9 @@ fn socket_addr(host: &str, port: u16) -> Result<SocketAddr, String> {
         .ok_or_else(|| format!("serve: invalid host '{}'", host))
 }
 
-/// Registered handler (Fogu function).
-pub fn current_handler() -> Option<Value> {
-    SERVER_HANDLER.with(|h| h.borrow().clone())
+/// The handler (Fogu function) of a server.
+pub fn handler_of(server: u64) -> Option<Value> {
+    SERVER_HANDLERS.with(|h| h.borrow().get(&server).cloned())
 }
 
 /// Converts a response `Value` into a `PlainResponse` and sends it.
@@ -264,7 +350,7 @@ pub fn send_response(resp: Value, tx: Reply) {
                     .collect(),
                 _ => HashMap::new(),
             };
-            PlainResponse { status, headers, body, file: None, stream: None, upgrade: None }
+            PlainResponse { status, headers, body, file: None, stream: None, upgrade: None, serve_static: false }
         }
         _ => PlainResponse::text(500, "invalid response"),
     };
@@ -382,19 +468,16 @@ pub fn build() -> ModuleValue {
                 None | Some(Value::Nil) => {}
                 Some(Value::Map(o)) => {
                     let o = o.borrow();
-                    for k in o.keys() {
-                        if !matches!(k.as_str(), "tls" | "quiet" | "maxBody") {
-                            return Err(format!("serve: unknown option '{}' (tls quiet maxBody)", k));
+                    let mut keys: Vec<&Str> = o.keys().collect();
+                    keys.sort();
+                    for k in keys {
+                        let v = &o[k];
+                        if matches!(v, Value::Nil) {
+                            continue;
                         }
-                    }
-                    match o.get("maxBody") {
-                        Some(Value::Int(n)) if *n > 0 => opts.max_body = *n as usize,
-                        None | Some(Value::Nil) => {}
-                        Some(other) => return Err(format!("serve: maxBody must be a number of bytes, got {}", other.to_display_string())),
-                    }
-                    opts.quiet = o.get("quiet").is_some_and(|v| v.is_truthy());
-                    if let Some(t) = o.get("tls").filter(|t| !matches!(t, Value::Nil)) {
-                        opts.tls = Some(crate::native::tls::server_config(t, "serve", &["http/1.1"])?);
+                        if !opts.set(k, v, "serve")? {
+                            return Err(format!("serve: unknown option '{}' ({})", k, SERVER_OPTIONS));
+                        }
                     }
                 }
                 Some(other) => return Err(format!("serve: options must be a map, got '{}'", other.type_name())),
@@ -412,7 +495,7 @@ pub fn build() -> ModuleValue {
 
 /// Is an HTTP server running in this program (its requests are served by calls)?
 pub fn serving() -> bool {
-    SERVER_HANDLER.with(|h| h.borrow().is_some())
+    SERVER_HANDLERS.with(|h| !h.borrow().is_empty())
 }
 
 // ================= SERVER =================
@@ -429,9 +512,18 @@ fn start_server(port: u16, handler: Value, opts: ServerOptions) -> Result<Value,
     let std_listener = std::net::TcpListener::bind(addr).map_err(|e| io_err!("http: cannot listen on {}: {}", addr, e))?;
     std_listener.set_nonblocking(true).map_err(|e| io_err!("http: {}", e))?;
 
-    SERVER_HANDLER.with(|h| *h.borrow_mut() = Some(handler));
-    let (tx_to_main, rx_from_server) = std_mpsc::channel::<ServerToMain>();
-    SERVER_RX.with(|r| *r.borrow_mut() = Some(rx_from_server));
+    let server = NEXT_SERVER.with(|n| n.replace(n.get() + 1));
+    SERVER_HANDLERS.with(|h| h.borrow_mut().insert(server, handler));
+    // the first server creates this thread's queue; the next ones share it
+    let tx_to_main = SERVER_TX.with(|t| {
+        t.borrow_mut()
+            .get_or_insert_with(|| {
+                let (tx, rx) = std_mpsc::channel::<ServerToMain>();
+                SERVER_RX.with(|r| *r.borrow_mut() = Some(rx));
+                tx
+            })
+            .clone()
+    });
     HAS_SERVER.with(|h| h.set(true));
     // the interpreter's next call notices the flag and starts the pump task
     WAITING.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -463,15 +555,21 @@ fn start_server(port: u16, handler: Value, opts: ServerOptions) -> Result<Value,
                 let opts = std::sync::Arc::clone(&opts);
                 let tls = tls.clone();
                 tokio::spawn(async move {
-                    let service = service_fn(move |req| handle_request(req, tx.clone(), std::sync::Arc::clone(&opts), remote));
+                    // slow clients (slowloris) cannot hold a connection: the
+                    // headers of each request must arrive within headerTimeout
+                    // (which also closes idle keep-alive connections), and
+                    // they are limited to maxHeaderBytes (431)
+                    let mut builder = http1::Builder::new();
+                    builder.timer(hyper_util::rt::TokioTimer::new()).header_read_timeout(opts.header_timeout).max_buf_size(opts.max_header);
+                    let service = service_fn(move |req| handle_request(req, server, tx.clone(), std::sync::Arc::clone(&opts), remote));
                     match tls {
                         // HTTPS: the handshake first (a client that stalls is dropped after 10s)
                         Some(acceptor) => {
                             let Ok(Ok(s)) = tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)).await else { return };
-                            let _ = http1::Builder::new().serve_connection(TokioIo::new(s), service).with_upgrades().await;
+                            let _ = builder.serve_connection(TokioIo::new(s), service).with_upgrades().await;
                         }
                         None => {
-                            let _ = http1::Builder::new().serve_connection(TokioIo::new(stream), service).with_upgrades().await;
+                            let _ = builder.serve_connection(TokioIo::new(stream), service).with_upgrades().await;
                         }
                     }
                 });
@@ -485,14 +583,100 @@ fn full(b: impl Into<Bytes>) -> Body {
     Full::new(b.into()).boxed()
 }
 
+/// The canonical form of a request path, computed once before anything
+/// (static files, Socket.IO, middlewares, the router, the handler) looks at
+/// it, so they all decide on the same resource:
+///
+/// - percent escapes are decoded exactly once (`%252F` becomes the literal
+///   text `%2F`, never `/`); `+` stays `+` (it means a space only in queries);
+/// - an escaped `/` or `\` (`%2F`, `%5C`, any case), a raw `\`, a NUL or
+///   another control character, an invalid escape and bytes that are not
+///   UTF-8 once decoded make the request invalid (400): a segment can never
+///   smuggle a separator;
+/// - repeated slashes collapse, `.` segments go away and `..` removes the
+///   previous segment (also when written `%2e%2e`); a `..` that would climb
+///   above the root makes the request invalid;
+/// - the result starts with `/` and keeps a trailing `/` if the request had one.
+pub fn canonical_path(raw: &str) -> Result<String, &'static str> {
+    let b = raw.as_bytes();
+    // fast path: nothing to decode or collapse
+    let plain = b.first() == Some(&b'/')
+        && !b.iter().any(|&c| c == b'%' || c == b'\\' || c < 0x20 || c == 0x7f)
+        && !raw.contains("//")
+        && !raw.split('/').any(|s| s == "." || s == "..");
+    if plain {
+        return Ok(raw.to_string());
+    }
+    let mut decoded: Vec<u8> = Vec::with_capacity(b.len() + 1);
+    if b.first() != Some(&b'/') {
+        decoded.push(b'/');
+    }
+    let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'%' {
+            let (Some(h), Some(l)) = (b.get(i + 1).and_then(|&x| hex(x)), b.get(i + 2).and_then(|&x| hex(x))) else {
+                return Err("invalid percent escape in the path");
+            };
+            let v = h * 16 + l;
+            if v == b'/' || v == b'\\' {
+                return Err("encoded '/' or '\\' in the path");
+            }
+            if v < 0x20 || v == 0x7f {
+                return Err("control character in the path");
+            }
+            decoded.push(v);
+            i += 3;
+            continue;
+        }
+        if c == b'\\' {
+            return Err("'\\' in the path");
+        }
+        if c < 0x20 || c == 0x7f {
+            return Err("control character in the path");
+        }
+        decoded.push(c);
+        i += 1;
+    }
+    let text = String::from_utf8(decoded).map_err(|_| "the path is not UTF-8")?;
+    let mut out: Vec<&str> = Vec::new();
+    for seg in text.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                if out.pop().is_none() {
+                    return Err("the path climbs above the root");
+                }
+            }
+            s => out.push(s),
+        }
+    }
+    let mut path = String::with_capacity(text.len());
+    for s in &out {
+        path.push('/');
+        path.push_str(s);
+    }
+    let trailing = text.ends_with('/') || text.ends_with("/.") || text.ends_with("/..");
+    if path.is_empty() || trailing {
+        path.push('/');
+    }
+    Ok(path)
+}
+
 async fn handle_request(
     mut req: HyperRequest<Incoming>,
+    server: u64,
     tx: std_mpsc::Sender<ServerToMain>,
     opts: std::sync::Arc<ServerOptions>,
     remote: SocketAddr,
 ) -> Result<HyperResponse<Body>, Infallible> {
     let method = req.method().to_string();
-    let path = req.uri().path().to_string();
+    // one canonical path for everything below (see `canonical_path`)
+    let path = match canonical_path(req.uri().path()) {
+        Ok(p) => p,
+        Err(why) => return Ok(plain_response(PlainResponse::text(400, &format!("bad request: {}", why))).await),
+    };
     // Socket.IO (polling and the WebSocket upgrade) never reaches the program
     if let Some(sio) = &opts.socketio {
         if path == sio.path || path.starts_with(&format!("{}/", sio.path)) {
@@ -503,21 +687,32 @@ async fn handle_request(
     let headers: HashMap<String, String> = req
         .headers()
         .iter()
-        .filter_map(|(n, v)| v.to_str().ok().map(|v| (n.to_string(), v.to_string())))
+        // values with bytes >= 0x80 are decoded as UTF-8 (lossy), as the client does
+        .map(|(n, v)| (n.to_string(), v.to_str().map(str::to_string).unwrap_or_else(|_| String::from_utf8_lossy(v.as_bytes()).into_owned())))
         .collect();
     let upgrade = headers.get("upgrade").is_some_and(|u| u.eq_ignore_ascii_case("websocket"));
 
-    // static files never reach the program
-    if !upgrade && (method == "GET" || method == "HEAD") {
-        if let Some(r) = serve_static(&opts.statics, &path, &headers, method == "HEAD", false).await {
-            return Ok(r);
+    // static files never reach the program, unless a middleware guards them
+    let mut static_guard = false;
+    if !upgrade && (method == "GET" || method == "HEAD") && !opts.statics.is_empty() {
+        let guarded = {
+            let g = opts.guards.read().unwrap_or_else(|e| e.into_inner());
+            !g.is_empty() && g.iter().any(|p| under_prefix(p, &path))
+        };
+        if !guarded {
+            if let Some(r) = serve_static(&opts.statics, &path, &headers, method == "HEAD", false).await {
+                return Ok(r);
+            }
+        } else {
+            static_guard = opts.statics.iter().any(|m| resolve_static(m, &path).is_some());
         }
     }
 
     let on_upgrade = if upgrade { Some(hyper::upgrade::on(&mut req)) } else { None };
-    let body = match Limited::new(req.into_body(), opts.max_body).collect().await {
-        Ok(c) => c.to_bytes().to_vec(),
-        Err(_) => return Ok(plain_response(PlainResponse::text(413, "request body too large")).await),
+    let body = match tokio::time::timeout(opts.read_timeout, Limited::new(req.into_body(), opts.max_body).collect()).await {
+        Ok(Ok(c)) => c.to_bytes().to_vec(),
+        Ok(Err(_)) => return Ok(plain_response(PlainResponse::text(413, "request body too large")).await),
+        Err(_) => return Ok(plain_response(PlainResponse::text(408, "request timeout")).await),
     };
     let plain = PlainRequest {
         method: method.clone(),
@@ -527,9 +722,10 @@ async fn handle_request(
         body,
         upgrade,
         remote: remote.to_string(),
+        static_guard,
     };
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<PlainResponse>();
-    if tx.send(ServerToMain { req: plain, reply: reply_tx }).is_err() {
+    if tx.send(ServerToMain { server, req: plain, reply: reply_tx }).is_err() {
         return Ok(plain_response(PlainResponse::text(500, "server offline")).await);
     }
     // SeqCst on both sides: the flag is cleared *before* the queue is read, so
@@ -538,11 +734,30 @@ async fn handle_request(
     // a main thread idling in the scheduler (Fogu.signal.wait) serves it now
     crate::runtime::sched::wake();
     // the Fogu handler runs on the main thread; this task just awaits the reply
-    let resp = match tokio::time::timeout(Duration::from_secs(60), reply_rx).await {
+    let answer = async {
+        match opts.handler_timeout {
+            Some(t) => tokio::time::timeout(t, reply_rx).await.map_err(|_| ()),
+            None => Ok(reply_rx.await),
+        }
+    };
+    let resp = match answer.await {
         Ok(Ok(r)) => r,
-        Ok(Err(_)) => PlainResponse::text(500, "the handler did not answer"),
+        Ok(Err(_)) => PlainResponse::text(500, "internal error"),
         Err(_) => PlainResponse::text(504, "timeout"),
     };
+
+    // a guarded static file the middlewares let through
+    if resp.serve_static {
+        if let Some(mut r) = serve_static(&opts.statics, &path, &headers, method == "HEAD", false).await {
+            for (k, v) in &resp.headers {
+                if let (Ok(k), Ok(v)) = (hyper::header::HeaderName::from_bytes(k.as_bytes()), hyper::header::HeaderValue::from_str(v)) {
+                    r.headers_mut().insert(k, v);
+                }
+            }
+            return Ok(r);
+        }
+        return Ok(plain_response(PlainResponse::text(404, "not found")).await);
+    }
 
     // WebSocket: answer 101, then bridge the upgraded connection
     if let (Some(sock_tx), Some(on_upgrade)) = (resp.upgrade.as_ref().cloned(), on_upgrade) {
@@ -650,11 +865,9 @@ pub fn mime_of(p: &Path) -> &'static str {
     }
 }
 
-fn percent_decode(s: &str) -> String {
-    crate::native::web::url_decode(&s.replace('+', "%2B"))
-}
-
-/// A file of a mount for a URL path (never outside the folder).
+/// A file of a mount for a URL path (never outside the folder). `path` is
+/// already canonical (`canonical_path`: decoded once, no `..`): it is not
+/// decoded again.
 fn resolve_static(m: &StaticMount, path: &str) -> Option<PathBuf> {
     let prefix = m.prefix.trim_end_matches('/');
     let rest = if prefix.is_empty() {
@@ -664,9 +877,8 @@ fn resolve_static(m: &StaticMount, path: &str) -> Option<PathBuf> {
     } else {
         path.strip_prefix(prefix).filter(|r| r.starts_with('/'))?
     };
-    let decoded = percent_decode(rest);
     let mut out = m.dir.clone();
-    for part in decoded.split('/') {
+    for part in rest.split('/') {
         match part {
             "" | "." => {}
             ".." => return None,
@@ -678,7 +890,20 @@ fn resolve_static(m: &StaticMount, path: &str) -> Option<PathBuf> {
     if out.is_dir() {
         out.push(&m.index);
     }
-    out.is_file().then_some(out)
+    if !out.is_file() {
+        return None;
+    }
+    // the name asked for is not always the file's real name: a Windows 8.3
+    // short name (`ENV~1` for `.env`) or a symlink can reach a dotfile or
+    // leave the folder, so the check is repeated on the real path
+    if !m.dotfiles {
+        let real = out.canonicalize().ok()?;
+        let inside = real.strip_prefix(&m.dir).ok()?;
+        if inside.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.')) {
+            return None;
+        }
+    }
+    Some(out)
 }
 
 async fn serve_static(mounts: &[StaticMount], path: &str, headers: &HashMap<String, String>, head: bool, spa_only: bool) -> Option<HyperResponse<Body>> {
@@ -775,29 +1000,81 @@ pub fn serve_pending(it: &Interpreter, env: &Rc<RefCell<Environment>>) {
         }
     }
     let text = |code, msg: &str| NativeObjectRef::new(ResponseValue::text(code, msg)).to_value();
-    while let Some((req, tx)) = take_pending_request() {
+    while let Some((server, req, tx)) = take_pending_request() {
         // nobody waits for the answer any more (the client left, or the server
         // already answered 504): running the handler would only add load
         if tx.is_closed() {
             continue;
         }
-        let Some(handler) = current_handler() else {
-            send_response(text(500, "no handler"), tx);
+        let Some(handler) = handler_of(server) else {
+            send_response(text(500, "internal error"), tx);
             continue;
         };
         let env = env.clone();
         let task = it.spawn_task(Box::new(move |it| {
-            let resp = match it.call_value(handler, vec![req], env) {
+            let what = match &req {
+                Value::Object(o) => {
+                    let f = |k| o.get(k).map(|v| v.to_display_string()).unwrap_or_default();
+                    format!("{} {}", f("method"), f("path"))
+                }
+                _ => String::new(),
+            };
+            let resp = match call_contained(it, handler, vec![req], env) {
                 // Handler without an explicit response.
                 Ok(Value::Nil) => text(404, "route not found"),
-                Ok(v) => v,
-                Err(e) => text(500, &e),
+                // `return value, error(...)` or an `error` value: logged, never sent
+                Ok(Value::Error(e)) => {
+                    eprintln!("[http] {}: {}", what, e.message);
+                    text(500, "internal error")
+                }
+                Ok(Value::List(l)) if l.borrow().len() == 2 && matches!(l.borrow()[1], Value::Error(_)) => {
+                    let msg = match &l.borrow()[1] {
+                        Value::Error(e) => e.message.clone(),
+                        _ => String::new(),
+                    };
+                    eprintln!("[http] {}: {}", what, msg);
+                    text(500, "internal error")
+                }
+                // a str is text, other values JSON (as in fogu:web)
+                Ok(Value::Str(s)) => text(200, &s),
+                Ok(v @ Value::Object(_)) => v,
+                Ok(v) => {
+                    let mut r = ResponseValue::text(200, &crate::native::json::stringify_value(&v));
+                    r.headers.insert("content-type".into(), "application/json".into());
+                    NativeObjectRef::new(r).to_value()
+                }
+                // the message (a runtime error, a panic) may hold internal
+                // details: it goes to the log, the client gets a generic 500
+                Err(e) => {
+                    eprintln!("[http] {}: {}", what, e.strip_prefix(crate::runtime::value::ERR_VALUE_PREFIX).unwrap_or(&e));
+                    text(500, "internal error")
+                }
             };
             send_response(resp, tx);
             Ok(())
         }));
         if let Err(e) = task {
             eprintln!("[http] cannot start a handler: {}", e);
+        }
+    }
+}
+
+/// Calls a request handler and contains a Rust panic in it: the panic
+/// becomes `Err` (the request gets a 500) instead of unwinding through the
+/// scheduler and killing the server. This is containment for panics nobody
+/// knows about yet, not the fix of a known one. What a handler shares with
+/// others stays usable: `RefCell` borrows are released while unwinding, and
+/// the scheduler restores the interpreter's position at the next switch.
+pub fn call_contained(it: &Interpreter, f: Value, args: Vec<Value>, env: Rc<RefCell<Environment>>) -> Result<Value, String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| it.call_value(f, args, env))) {
+        Ok(r) => r,
+        Err(p) => {
+            let msg = p
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| p.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown".into());
+            Err(format!("internal panic: {}", msg))
         }
     }
 }
@@ -812,6 +1089,8 @@ pub struct RequestValue {
     pub body: Vec<u8>,
     pub upgrade: bool,
     pub remote: String,
+    /// see [`PlainRequest::static_guard`]
+    pub static_guard: bool,
 }
 
 impl FoguObject for RequestValue {
@@ -847,7 +1126,7 @@ impl FoguObject for RequestValue {
                     other => Err(format!("header expects str, got '{}'", other.type_name())),
                 }
             }
-            "json" => crate::native::json::parse_value(&String::from_utf8_lossy(&self.body)),
+            "json" => crate::native::json::parse_value(&String::from_utf8_lossy(&self.body)).map_err(|e| io_err!("json: {}", e)),
             "bytes" => Ok(crate::native::util::list(self.body.iter().map(|b| Value::Int(*b as i64)).collect())),
             // form() → { field: value | UploadedFile | [..] } for multipart and urlencoded bodies
             "form" => {
@@ -860,6 +1139,10 @@ impl FoguObject for RequestValue {
 
     fn methods(&self) -> Vec<&'static str> {
         vec!["header", "json", "bytes", "form"]
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -882,21 +1165,25 @@ fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 
 /// `name="x"; filename="a.txt"` parameters of a Content-Disposition header.
 fn disposition_param(header: &str, key: &str) -> Option<String> {
-    let lower = header.to_lowercase();
-    let mut idx = 0;
-    while let Some(pos) = lower[idx..].find(&format!("{}=", key)) {
-        let start = idx + pos;
+    // compared byte by byte, ignoring ASCII case only: lowercasing the whole
+    // header changes the length of some characters (`İ`), and the indices
+    // found in the lowercase copy would not be valid in the original
+    let (h, k) = (header.as_bytes(), key.as_bytes());
+    let n = k.len() + 1;
+    let mut start = 0;
+    while start + n <= h.len() {
+        let hit = h[start..start + k.len()].eq_ignore_ascii_case(k) && h[start + k.len()] == b'=';
         // must be a whole parameter name
-        let before = lower[..start].chars().last();
-        if before.is_none_or(|c| c == ';' || c == ' ') {
-            let v = &header[start + key.len() + 1..];
+        if hit && (start == 0 || matches!(h[start - 1], b';' | b' ' | b'\t')) {
+            // `key=` is ASCII, so `start + n` is a char boundary
+            let v = &header[start + n..];
             return Some(if let Some(rest) = v.strip_prefix('"') {
                 rest.split('"').next().unwrap_or("").to_string()
             } else {
                 v.split(';').next().unwrap_or("").trim().to_string()
             });
         }
-        idx = start + key.len();
+        start += 1;
     }
     None
 }
@@ -996,7 +1283,7 @@ impl FoguObject for UploadedFile {
         match method {
             "text" => Ok(Value::Str(String::from_utf8_lossy(&self.part.data).into_owned().into())),
             "bytes" => Ok(crate::native::util::list(self.part.data.iter().map(|b| Value::Int(*b as i64)).collect())),
-            "json" => crate::native::json::parse_value(&String::from_utf8_lossy(&self.part.data)),
+            "json" => crate::native::json::parse_value(&String::from_utf8_lossy(&self.part.data)).map_err(|e| io_err!("json: {}", e)),
             // save(path): a folder keeps the original (sanitized) file name; returns the path
             "save" => {
                 let target = crate::native::util::str_arg(args, 0, "save")?;
@@ -1064,7 +1351,7 @@ impl FoguObject for ResponseValue {
 
     fn call(&mut self, method: &str, _args: &[Value]) -> Result<Value, String> {
         match method {
-            "json" => crate::native::json::parse_value(&self.body),
+            "json" => crate::native::json::parse_value(&self.body).map_err(|e| io_err!("json: {}", e)),
             other => Err(format!("method '{}' does not exist on Response", other)),
         }
     }
