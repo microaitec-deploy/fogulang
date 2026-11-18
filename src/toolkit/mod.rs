@@ -101,6 +101,15 @@ pub struct RunFlags {
     pub version: bool,
 }
 
+/// The built-in commands (not scripts of fogu.json, not files).
+fn is_command(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "repl" | "init" | "add" | "a" | "remove" | "rm" | "uninstall" | "install" | "i" | "update" | "up" | "upgrade"
+            | "list" | "ls" | "pm" | "check" | "build" | "test" | "fmt" | "disasm" | "play" | "desktop" | "mcu"
+    )
+}
+
 /// Consumes Fogu's options at the start of `args`. Stops at the first
 /// argument that is not an option (file/command).
 fn take_flags(args: &mut Vec<String>, cfg: &mut JitConfig, f: &mut RunFlags) -> Result<(), String> {
@@ -236,6 +245,11 @@ pub fn run() {
         if let Err(e) = take_flags(&mut args, &mut cfg, &mut flags) {
             ui::error(&e);
             process::exit(2);
+        }
+        // `fogu run --help` shows the help instead of running the entry
+        if flags.help {
+            println!("{}", help());
+            return;
         }
         if args.is_empty() && flags.eval.is_none() && flags.print.is_none() {
             // no target: use "entry" from fogu.json
@@ -447,6 +461,13 @@ fn real_main(mut args: Vec<String>, flags: RunFlags) -> i32 {
     let rest = &args[1..];
 
     if !forced_run {
+        // a help flag never creates files or runs code (`init --help` created a project): the
+        // commands without a help of their own show the general one
+        let own_help = matches!(cmd.as_str(), "check" | "fmt" | "desktop" | "mcu");
+        if !own_help && is_command(&cmd) && rest.first().is_some_and(|a| a == "-h" || a == "--help") {
+            println!("{}", help());
+            return 0;
+        }
         match cmd.as_str() {
             "repl" => return start_repl(),
             "help" => {
@@ -483,6 +504,11 @@ fn real_main(mut args: Vec<String>, flags: RunFlags) -> i32 {
         }
         // a project folder: `fogu .` (or `fogu path/to/app`) is `fogu start` there
         if !forced_run && Path::new(&cmd).is_dir() {
+            // the folder itself must be a project: find_root would climb to a parent's fogu.json
+            if !Path::new(&cmd).join("fogu.json").is_file() {
+                ui::error(&format!("'{}' is not a Fogu project (no fogu.json)\n  'fogu init' creates one", cmd));
+                return 1;
+            }
             if let Err(e) = std::env::set_current_dir(&cmd) {
                 ui::error(&format!("cannot enter '{}': {}", cmd, e));
                 return 1;

@@ -41,6 +41,11 @@ fn eval_line(source: &str, interp: &Interpreter) -> Result<Option<Value>, String
     interp.repl_eval(&program)
 }
 
+thread_local! {
+    /// An entry failed (redirected input ends with code 1, like `fogu -e`).
+    static FAILED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 fn handle(src: &str, interp: &mut Interpreter) -> bool {
     match src.trim() {
         ".exit" | ".quit" | "exit" | "quit" => return false,
@@ -58,7 +63,10 @@ fn handle(src: &str, interp: &mut Interpreter) -> bool {
     match eval_line(src, interp) {
         Ok(Some(v)) => println!("{}", show(&v)),
         Ok(None) => {}
-        Err(e) => eprintln!("{} {}", ui::red_err("error:"), e),
+        Err(e) => {
+            FAILED.with(|f| f.set(true));
+            eprintln!("{} {}", ui::red_err("error:"), e)
+        }
     }
     true
 }
@@ -85,8 +93,13 @@ pub fn start() -> i32 {
             }
             buf.clear();
         }
+        // an incomplete entry at the end of the input (an unclosed string or bracket) is an
+        // error, not silently dropped
+        if !buf.trim().is_empty() {
+            handle(&buf, &mut interp);
+        }
         let _ = std::io::stdout().flush();
-        return 0;
+        return i32::from(FAILED.with(|f| f.get()));
     }
 
     println!(

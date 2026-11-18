@@ -385,6 +385,11 @@ fn comments(src: &str) -> Vec<String> {
 /// The formatted text, or why the file was left alone.
 pub fn format_checked(src: &str) -> Result<String, String> {
     let before = shape(src).map_err(|e| format!("syntax error: {}", e))?;
+    // the lexer alone accepted `let a =`: code that does not parse is left as it is
+    {
+        let tokens = crate::runtime::lexer::Lexer::new(src).tokenize().map_err(|e| format!("syntax error: {}", e))?;
+        crate::runtime::parser::Parser::new(tokens).parse_program().map_err(|e| format!("syntax error: {}", e))?;
+    }
     let out = format_source(src);
     let after = shape(&out).map_err(|e| format!("internal error (please report): the formatted text does not parse: {}", e))?;
     if before != after || comments(src) != comments(&out) {
@@ -421,9 +426,31 @@ fn collect(path: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+const HELP: &str = "fogu fmt [--check] [files or folders | -]
+
+Formats .fg files in place (every .fg file under the current folder by default).
+  --check     list the files that need formatting and exit with 1, write nothing
+  -           format stdin to stdout
+  -h, --help  show this help";
+
 pub fn fmt(args: &[String]) -> i32 {
-    let check = args.iter().any(|a| a == "--check");
-    let targets: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    let mut check = false;
+    let mut targets: Vec<&String> = Vec::new();
+    for a in args {
+        match a.as_str() {
+            "-h" | "--help" => {
+                println!("{}", HELP);
+                return 0;
+            }
+            "--check" => check = true,
+            // an unknown option (a typo like --chek) must not rewrite the files
+            s if s.starts_with('-') && s != "-" => {
+                ui::error(&format!("unknown option for 'fogu fmt': {}\n  see 'fogu fmt --help'", s));
+                return 2;
+            }
+            _ => targets.push(a),
+        }
+    }
     if targets.iter().any(|t| t.as_str() == "-") {
         use std::io::Read;
         let mut src = String::new();
@@ -494,14 +521,16 @@ pub fn fmt(args: &[String]) -> i32 {
             }
         }
     }
+    // a file that could not be read or parsed is neither formatted nor "already formatted"
+    let failed_note = if failed > 0 { format!(", {} failed", failed) } else { String::new() };
     if check {
         if changed > 0 {
-            println!("{}", ui::dim(&format!("{} of {} file(s) need formatting", changed, files.len())));
+            println!("{}", ui::dim(&format!("{} of {} file(s) need formatting{}", changed, files.len(), failed_note)));
             return 1;
         }
-        println!("{}", ui::dim(&format!("{} file(s) already formatted", files.len())));
-    } else if changed == 0 && failed == 0 {
-        println!("{}", ui::dim(&format!("{} file(s) already formatted", files.len())));
+        println!("{}", ui::dim(&format!("{} file(s) already formatted{}", files.len() - failed, failed_note)));
+    } else if changed == 0 {
+        println!("{}", ui::dim(&format!("{} file(s) already formatted{}", files.len() - failed, failed_note)));
     }
     i32::from(failed > 0)
 }
