@@ -110,6 +110,31 @@ pub type Gate = std::sync::Arc<std::sync::atomic::AtomicBool>;
 
 pub fn offer_gate(_gate: Gate) {}
 
+/// Nothing parks on WebAssembly: a gate opened here changes nothing.
+pub fn local_gate(_gate: &Gate) {}
+
+pub fn gate_opened(_gate: Gate) {}
+
+pub fn new_local_gate() -> Gate {
+    Gate::default()
+}
+
+pub fn open_gate(gate: &Gate) -> bool {
+    !gate.swap(true, std::sync::atomic::Ordering::AcqRel)
+}
+
+pub fn open_at(deadline: Instant, _gate: &Gate) -> (Instant, u64) {
+    add_timer(deadline);
+    (deadline, 0)
+}
+
+pub fn cancel_open_at(_key: (Instant, u64)) {}
+
+/// Nothing else can run on WebAssembly.
+pub fn yield_now() -> Result<(), String> {
+    Ok(())
+}
+
 pub fn take_offered_gate() -> Option<Gate> {
     None
 }

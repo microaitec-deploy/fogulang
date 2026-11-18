@@ -96,12 +96,20 @@ pub fn duration_arg(v: &Value, what: &str) -> Result<std::time::Duration, String
     match v {
         Value::Duration(ns) if *ns >= 0 => Ok(std::time::Duration::from_nanos(*ns as u64)),
         Value::Int(ms) if *ms >= 0 => Ok(std::time::Duration::from_millis(*ms as u64)),
+        Value::Duration(_) | Value::Int(_) => Err(format!("{}: the duration must be >= 0, got {}", what, v.to_display_string())),
         other => Err(format!(
             "{} expects a duration (e.g. 500ms) or int ms >= 0, got '{}'",
             what,
             other.type_name()
         )),
     }
+}
+
+/// The instant `d` from now; a duration too long for the clock waits "forever"
+/// (a hundred years) instead of overflowing it.
+pub fn deadline_after(d: std::time::Duration) -> std::time::Instant {
+    let now = std::time::Instant::now();
+    now.checked_add(d).unwrap_or_else(|| now + std::time::Duration::from_secs(100 * 365 * 86_400))
 }
 
 /// Paths are shown with forward slashes on every platform.
@@ -134,7 +142,21 @@ pub fn json_to_value(j: &serde_json::Value) -> Value {
 /// Sleeps without blocking the other `fg` tasks: they run while this one
 /// (or the main program) waits.
 pub fn sleep_coop(d: std::time::Duration) -> Result<(), String> {
-    let deadline = std::time::Instant::now() + d;
+    use crate::runtime::sched;
+    // a zero sleep still lets the others run once (`time.delay(0ms)` yields)
+    if d.is_zero() {
+        return sched::yield_now();
+    }
+    let deadline = deadline_after(d);
+    // a task parks behind a gate opened at its deadline: waking costs nothing
+    // before, and tasks wake in the order of their deadlines
+    if !cfg!(target_family = "wasm") && sched::in_task() {
+        let gate = sched::new_local_gate();
+        let key = sched::open_at(deadline, &gate);
+        let r = sched::wait_until_on(Some(&gate), || gate.load(std::sync::atomic::Ordering::Acquire));
+        sched::cancel_open_at(key);
+        return r;
+    }
     crate::runtime::sched::add_timer(deadline);
     crate::runtime::sched::wait_until(|| {
         let done = std::time::Instant::now() >= deadline;

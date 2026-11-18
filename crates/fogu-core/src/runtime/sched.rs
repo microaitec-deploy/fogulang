@@ -71,6 +71,66 @@ pub fn gate_opened(gate: Gate) {
     OPENED.with(|o| o.borrow_mut().push(gate));
 }
 
+/// A new gate that this thread opens (see [`local_gate`]): what a task parks
+/// behind while it waits for a channel, a timer or a lock of this thread.
+pub fn new_local_gate() -> Gate {
+    let g = Gate::default();
+    local_gate(&g);
+    g
+}
+
+/// Opens a [`local_gate`]: its task runs in the next pass. False if it was
+/// already open (its task was woken by something else).
+pub fn open_gate(gate: &Gate) -> bool {
+    if gate.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+    gate_opened(Gate::clone(gate));
+    true
+}
+
+/// Opens `gate` (a [`local_gate`]) when `deadline` passes. The returned key
+/// withdraws it ([`cancel_open_at`]) when the wait ends earlier.
+pub fn open_at(deadline: Instant, gate: &Gate) -> (Instant, u64) {
+    let key = (deadline, GATE_SEQ.with(|s| s.replace(s.get() + 1)));
+    GATE_TIMERS.with(|t| t.borrow_mut().insert(key, Gate::clone(gate)));
+    add_timer(deadline);
+    key
+}
+
+pub fn cancel_open_at(key: (Instant, u64)) {
+    GATE_TIMERS.with(|t| t.borrow_mut().remove(&key));
+}
+
+/// Opens the gates whose deadline passed, earliest first (so the tasks
+/// sleeping on them resume in that order).
+fn open_expired_gates() {
+    let now = Instant::now();
+    loop {
+        let g = GATE_TIMERS.with(|t| {
+            let mut t = t.borrow_mut();
+            match t.first_key_value() {
+                Some((k, _)) if k.0 <= now => t.pop_first().map(|(_, g)| g),
+                _ => None,
+            }
+        });
+        match g {
+            Some(g) => {
+                open_gate(&g);
+            }
+            None => return,
+        }
+    }
+}
+
+/// Lets the other tasks run once (`time.delay(0)`, `Fogu.sleep(0)`): a
+/// task goes to the back of the run queue; the main program runs one pass.
+pub fn yield_now() -> Result<(), String> {
+    note_progress();
+    let mut first = true;
+    wait_until(|| !std::mem::replace(&mut first, false))
+}
+
 /// Puts a task that suspended back where the scheduler finds it: parked
 /// behind its gate when this thread is the one that opens it, queued otherwise.
 fn requeue(task: Task) {
@@ -633,7 +693,8 @@ fn step(task: &mut Task) -> bool {
 
 /// Runs one round over all queued tasks.
 fn run_pass() {
-    // tasks whose socket became ready
+    open_expired_gates();
+    // tasks whose socket (channel, timer…) became ready
     let opened = OPENED.with(|o| std::mem::take(&mut *o.borrow_mut()));
     for g in opened {
         let key = std::sync::Arc::as_ptr(&g) as usize;

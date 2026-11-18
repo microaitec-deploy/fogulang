@@ -126,8 +126,7 @@ impl NativeContext {
         // end; sends start failing.
         self.define_global("close", 1, |args| match &args[0] {
             Value::Chan(c) => {
-                c.closed.set(true);
-                crate::runtime::sched::note_progress();
+                c.close();
                 Ok(Value::Nil)
             }
             other => Err(format!("'close' expects a channel, got '{}'", other.type_name())),
@@ -135,17 +134,8 @@ impl NativeContext {
 
         // timeout(d): channel that receives `nil` after `d` (spec §36).
         self.define_global("timeout", 1, |args| {
-            let ns = match &args[0] {
-                Value::Duration(ns) if *ns >= 0 => *ns as u64,
-                Value::Int(ms) if *ms >= 0 => *ms as u64 * 1_000_000,
-                other => {
-                    return Err(format!(
-                        "timeout expects a duration (e.g. 500ms) or int ms >= 0, got '{}'",
-                        other.type_name()
-                    ))
-                }
-            };
-            let deadline = std::time::Instant::now() + std::time::Duration::from_nanos(ns);
+            let d = crate::native::util::duration_arg(&args[0], "timeout")?;
+            let deadline = crate::native::util::deadline_after(d);
             Ok(Value::Chan(Rc::new(crate::runtime::value::ChanValue::timeout(deadline))))
         });
 

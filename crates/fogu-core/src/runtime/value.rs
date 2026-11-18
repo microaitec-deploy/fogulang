@@ -139,6 +139,58 @@ pub struct ChanValue {
     pub name: String,
     /// `timeout(d)` channels: deadline at which they receive a value.
     pub timer: Cell<Option<Instant>>,
+    /// Tasks parked until a value arrives (or the channel closes).
+    pub recv_waiters: Waiters,
+    /// Tasks parked until there is room for a value (or the channel closes).
+    pub send_waiters: Waiters,
+    /// Senders on an unbuffered channel parked until their value is taken:
+    /// the number of their value (see `sent`) and their gate, in that order.
+    pub taken_waiters: RefCell<VecDeque<(u64, super::sched::Gate)>>,
+}
+
+/// The `fg` tasks parked on one side of a channel, each behind its gate: a
+/// change wakes exactly the tasks it may unblock instead of the scheduler
+/// resuming every waiting task to ask it (see `docs/concurrency.md`).
+#[derive(Default)]
+pub struct Waiters {
+    gates: RefCell<VecDeque<super::sched::Gate>>,
+    /// The length at which already-opened gates (left by a `select` that went
+    /// on through another channel) are dropped.
+    prune_at: Cell<usize>,
+}
+
+impl Waiters {
+    /// Adds the gate of a task about to park here.
+    pub fn add(&self, gate: &super::sched::Gate) {
+        let mut g = self.gates.borrow_mut();
+        if g.len() >= self.prune_at.get().max(16) {
+            g.retain(|x| !x.load(std::sync::atomic::Ordering::Acquire));
+            self.prune_at.set(g.len() * 2);
+        }
+        g.push_back(super::sched::Gate::clone(gate));
+    }
+
+    /// Wakes the first task still parked here.
+    pub fn wake_one(&self) {
+        loop {
+            let Some(g) = self.gates.borrow_mut().pop_front() else { return };
+            if super::sched::open_gate(&g) {
+                return;
+            }
+        }
+    }
+
+    /// Wakes every task parked here.
+    pub fn wake_all(&self) {
+        let gates = std::mem::take(&mut *self.gates.borrow_mut());
+        for g in gates {
+            super::sched::open_gate(&g);
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.gates.borrow().is_empty()
+    }
 }
 
 impl ChanValue {
@@ -170,6 +222,7 @@ impl ChanValue {
                 self.timer.set(None);
                 self.queue.borrow_mut().push_back(Value::Nil);
                 self.sent.set(self.sent.get() + 1);
+                self.recv_waiters.wake_one();
                 super::sched::note_progress();
             }
         }

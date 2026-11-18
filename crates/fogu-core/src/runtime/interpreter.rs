@@ -560,7 +560,7 @@ impl Interpreter {
         let task = sched::task_id();
         let prev_deadline = self.deadline();
         if let Some(d) = timeout {
-            let at = std::time::Instant::now() + d;
+            let at = crate::native::util::deadline_after(d);
             // a nested timeout cannot outlive the outer one
             if prev_deadline.is_none_or(|outer| at < outer.at) {
                 let cancelled = prev_deadline.is_some_and(|p| p.cancelled);
@@ -1362,8 +1362,39 @@ impl Interpreter {
                 return Err("select without cases".into());
             }
 
-            // Block until some case is ready.
-            self.keep_loc(|| sched::wait_until(|| evaluated.iter().any(|r| is_ready(r))))?;
+            // Block until some case is ready: a task parks behind one gate
+            // added to every channel of the select.
+            if !can_park() {
+                self.keep_loc(|| sched::wait_until(|| evaluated.iter().any(|r| is_ready(r))))?;
+                continue;
+            }
+            let gate = sched::new_local_gate();
+            let mut timers = Vec::new();
+            for r in &evaluated {
+                match r {
+                    Ready::Recv(c) => {
+                        c.recv_waiters.add(&gate);
+                        if let Some(d) = c.timer.get() {
+                            timers.push(sched::open_at(d, &gate));
+                        }
+                    }
+                    Ready::Send(c, _) => c.send_waiters.add(&gate),
+                }
+            }
+            let r = self.keep_loc(|| sched::wait_until_on(Some(&gate), || gate.load(std::sync::atomic::Ordering::Acquire)));
+            for k in timers {
+                sched::cancel_open_at(k);
+            }
+            r?;
+            // the wake-up that opened the gate may be for a case this select
+            // will not take: hand it on to the next task waiting on that channel
+            for r in &evaluated {
+                match r {
+                    Ready::Recv(c) if !c.queue.borrow().is_empty() || c.closed.get() => c.recv_waiters.wake_one(),
+                    Ready::Send(c, _) if c.closed.get() || c.queue.borrow().len() < c.capacity() => c.send_waiters.wake_one(),
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -2800,7 +2831,35 @@ fn chan_push(ch: &Rc<ChanValue>, v: Value) -> Result<(), String> {
     }
     ch.queue.borrow_mut().push_back(v);
     ch.sent.set(ch.sent.get() + 1);
+    ch.recv_waiters.wake_one();
     sched::note_progress();
+    Ok(())
+}
+
+/// Can an `fg` task park behind a gate (instead of being resumed by every
+/// pass of the scheduler to check its condition)? Not the main program, which
+/// runs the passes, and not on WebAssembly, where tasks never suspend.
+fn can_park() -> bool {
+    !cfg!(target_family = "wasm") && sched::in_task()
+}
+
+/// Waits until `ready()`. A task parks behind a gate added to `waiters` (and
+/// opened at `timer`, the deadline of a `timeout` channel): only a change of
+/// the channel that may satisfy it wakes it, so many blocked tasks cost nothing.
+fn chan_wait(waiters: &crate::runtime::value::Waiters, timer: Option<std::time::Instant>, mut ready: impl FnMut() -> bool) -> Result<(), String> {
+    if !can_park() {
+        return sched::wait_until(ready);
+    }
+    while !ready() {
+        let gate = sched::new_local_gate();
+        waiters.add(&gate);
+        let key = timer.map(|d| sched::open_at(d, &gate));
+        let r = sched::wait_until_on(Some(&gate), || gate.load(std::sync::atomic::Ordering::Acquire));
+        if let Some(k) = key {
+            sched::cancel_open_at(k);
+        }
+        r?;
+    }
     Ok(())
 }
 
@@ -2810,19 +2869,31 @@ pub fn chan_send(ch: &Rc<ChanValue>, v: Value) -> Result<(), String> {
     if cfg!(target_family = "wasm") {
         return chan_push(ch, v);
     }
-    sched::wait_until(|| ch.closed.get() || ch.queue.borrow().len() < ch.capacity())?;
+    chan_wait(&ch.send_waiters, None, || ch.closed.get() || ch.queue.borrow().len() < ch.capacity())?;
     chan_push(ch, v)?;
+    // room left: the next sender waiting for it may go too
+    if ch.queue.borrow().len() < ch.capacity() {
+        ch.send_waiters.wake_one();
+    }
     if ch.buffer == 0 {
         // Rendezvous: wait for the receiver to take the value.
         let my_seq = ch.sent.get();
-        sched::wait_until(|| ch.recvd.get() >= my_seq || ch.closed.get())?;
+        let taken = || ch.recvd.get() >= my_seq || ch.closed.get();
+        if !can_park() {
+            return sched::wait_until(taken);
+        }
+        while !taken() {
+            let gate = sched::new_local_gate();
+            ch.taken_waiters.borrow_mut().push_back((my_seq, sched::Gate::clone(&gate)));
+            sched::wait_until_on(Some(&gate), || gate.load(std::sync::atomic::Ordering::Acquire))?;
+        }
     }
     Ok(())
 }
 
 /// Blocking (cooperative) receive.
 pub fn chan_recv(ch: &Rc<ChanValue>) -> Result<Value, RecvError> {
-    sched::wait_until(|| {
+    chan_wait(&ch.recv_waiters, ch.timer.get(), || {
         ch.poll_timer();
         !ch.queue.borrow().is_empty() || ch.closed.get()
     })
@@ -2831,10 +2902,19 @@ pub fn chan_recv(ch: &Rc<ChanValue>) -> Result<Value, RecvError> {
     match v {
         Some(v) => {
             ch.recvd.set(ch.recvd.get() + 1);
+            ch.taken();
+            // more to take (or closed): the next receiver may go too
+            if !ch.queue.borrow().is_empty() || ch.closed.get() {
+                ch.recv_waiters.wake_one();
+            }
             sched::note_progress();
             Ok(v)
         }
-        None => Err(RecvError::Closed),
+        None => {
+            // closed and empty: every receiver ends
+            ch.recv_waiters.wake_one();
+            Err(RecvError::Closed)
+        }
     }
 }
 
