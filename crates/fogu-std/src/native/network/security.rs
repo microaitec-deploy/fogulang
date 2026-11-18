@@ -375,7 +375,12 @@ pub(crate) fn self_signed(a: &[Value]) -> Result<Value, String> {
     };
     let o = opts(a.get(1), "security.selfSigned")?;
     let days = int_opt(&o, "days", 365).clamp(1, 36_500);
-    let mut params = rcgen::CertificateParams::new(names.clone()).map_err(|e| format!("security.selfSigned: {}", e))?;
+    // an internationalized name must be given in its ASCII (punycode) form: an error value, the
+    // names often come from configuration
+    if let Some(n) = names.iter().find(|n| !n.is_ascii()) {
+        return Err(io_err!("security.selfSigned: '{}' is not ASCII (give the punycode form, xn--…)", n));
+    }
+    let mut params = rcgen::CertificateParams::new(names.clone()).map_err(|e| io_err!("security.selfSigned: {}", e))?;
     let mut dn = rcgen::DistinguishedName::new();
     dn.push(rcgen::DnType::CommonName, names.first().cloned().unwrap_or_else(|| "localhost".into()));
     params.distinguished_name = dn;
@@ -845,6 +850,10 @@ fn find_secrets(text: &str, file: Option<&str>, out: &mut Vec<Value>) {
     for (lineno, line) in text.lines().enumerate() {
         for (rule, re) in secret_rules() {
             for m in re.find_iter(line) {
+                // an Anthropic key (`sk-ant-…`) also has the shape of an OpenAI one: reported once
+                if *rule == "openai-key" && m.as_str().starts_with("sk-ant-") {
+                    continue;
+                }
                 let mut pairs = vec![
                     ("rule", Value::Str(rule.to_string().into())),
                     ("line", Value::Int(lineno as i64 + 1)),
@@ -900,7 +909,7 @@ fn scan_files(a: &[Value]) -> Result<Value, String> {
         if data.iter().take(8000).any(|b| *b == 0) {
             continue; // binary
         }
-        find_secrets(&String::from_utf8_lossy(&data), Some(&p.to_string_lossy()), &mut out);
+        find_secrets(&String::from_utf8_lossy(&data), Some(&crate::native::util::path_str(&p)), &mut out);
     }
     Ok(list(out))
 }
@@ -915,8 +924,9 @@ fn b64() -> base64::engine::GeneralPurpose {
 
 fn key_bytes<const N: usize>(v: &Value, what: &str) -> Result<[u8; N], String> {
     let s = v.to_display_string();
-    let raw = b64().decode(s.trim()).map_err(|_| format!("{}: the key must be base64", what))?;
-    <[u8; N]>::try_from(raw.as_slice()).map_err(|_| format!("{}: the key must be {} bytes, got {}", what, N, raw.len()))
+    // keys come from outside (a peer's public key): a malformed one is an error value
+    let raw = b64().decode(s.trim()).map_err(|_| io_err!("{}: the key must be base64", what))?;
+    <[u8; N]>::try_from(raw.as_slice()).map_err(|_| io_err!("{}: the key must be {} bytes, got {}", what, N, raw.len()))
 }
 
 /// keypair() → { publicKey, privateKey } (Ed25519, base64)
@@ -1007,17 +1017,27 @@ fn cidr(a: &[Value]) -> Result<Value, String> {
 fn in_cidr(a: &[Value]) -> Result<Value, String> {
     max_args(a, 2, "security.inCidr")?;
     let ip = ip_arg(&a[0], "security.inCidr")?;
+    // `::ffff:10.0.0.1` is 10.0.0.1: it also matches an IPv4 range
+    let mapped = match ip {
+        IpAddr::V6(v) => v.to_ipv4_mapped().map(IpAddr::V4),
+        IpAddr::V4(_) => None,
+    };
     let nets = match &a[1] {
         Value::List(l) => l.borrow().iter().map(|v| net_arg(v, "security.inCidr")).collect::<Result<Vec<_>, _>>()?,
         v => vec![net_arg(v, "security.inCidr")?],
     };
-    Ok(Value::Bool(nets.iter().any(|n| n.contains(&ip))))
+    Ok(Value::Bool(nets.iter().any(|n| n.contains(&ip) || mapped.is_some_and(|m| n.contains(&m)))))
 }
 
 /// isPrivate(ip) → true for private, loopback, link-local, CGNAT and unique-local addresses
 fn is_private(a: &[Value]) -> Result<Value, String> {
     max_args(a, 1, "security.isPrivate")?;
-    Ok(Value::Bool(match ip_arg(&a[0], "security.isPrivate")? {
+    let ip = match ip_arg(&a[0], "security.isPrivate")? {
+        // an IPv4-mapped IPv6 address (`::ffff:127.0.0.1`) connects to the IPv4 one
+        IpAddr::V6(v) => v.to_ipv4_mapped().map_or(IpAddr::V6(v), IpAddr::V4),
+        ip => ip,
+    };
+    Ok(Value::Bool(match ip {
         IpAddr::V4(v) => v.is_private() || v.is_loopback() || v.is_link_local() || v.is_unspecified() || (v.octets()[0] == 100 && (64..128).contains(&v.octets()[1])),
         IpAddr::V6(v) => v.is_loopback() || v.is_unspecified() || (v.segments()[0] & 0xfe00) == 0xfc00 || (v.segments()[0] & 0xffc0) == 0xfe80,
     }))

@@ -231,8 +231,9 @@ pub fn build() -> ModuleValue {
                     let f = File::open(path).map_err(|e| io_err!("zip.tar: {}: {}", path_str(path), e))?;
                     b.append_data(&mut h, name, f).map_err(|e| io_err!("zip.tar: {}", e))?;
                 }
+                // the number of entries written, like zip.zip (not of sources)
+                n += 1;
             }
-            n += 1;
         }
         let w = b.into_inner().map_err(|e| io_err!("zip.tar: {}", e))?;
         drop(w);
@@ -256,9 +257,24 @@ pub fn build() -> ModuleValue {
                 if !safe_link(Path::new(&dest), &rel, &link) {
                     return Err(io_err!("zip.untar: unsafe symlink '{}' -> '{}' (outside the target folder)", path_str(&rel), path_str(&link)));
                 }
+                // like zip.unzip: a link needs a privilege on Windows, so elsewhere than Unix the
+                // entry is a file holding the link target (unpack_in failed on any symlink)
+                #[cfg(not(unix))]
+                {
+                    let target = Path::new(&dest).join(&rel);
+                    if let Some(p) = target.parent() {
+                        std::fs::create_dir_all(p).map_err(|e| io_err!("zip.untar: {}: {}", path_str(p), e))?;
+                    }
+                    std::fs::write(&target, path_str(&link).as_bytes()).map_err(|e| io_err!("zip.untar: {}: {}", path_str(&target), e))?;
+                    continue;
+                }
             }
-            // unpack_in refuses `..` names (a leading `/` is dropped: the entry stays inside)
-            let ok = entry.unpack_in(&dest).map_err(|e| io_err!("zip.untar: {}: {}", path_str(&rel), e))?;
+            // unpack_in refuses `..` names (a leading `/` is dropped: the entry stays inside);
+            // its error says "failed to unpack": the cause is in its source
+            let ok = entry.unpack_in(&dest).map_err(|e| {
+                let cause = std::error::Error::source(&e).map(|c| format!(" ({})", c)).unwrap_or_default();
+                io_err!("zip.untar: {}: {}{}", path_str(&rel), e, cause)
+            })?;
             if !ok {
                 return Err(io_err!("zip.untar: unsafe entry name '{}' (outside the target folder)", path_str(&rel)));
             }
@@ -316,7 +332,12 @@ pub fn build() -> ModuleValue {
         let dest = match opt_arg(a, 1) { Some(Value::Str(d)) => d.clone(), _ => src.strip_suffix(".gz").map(String::from).unwrap_or_else(|| format!("{}.out", src)).into() };
         let r = File::open(&src).map_err(|e| io_err!("zip.gunzipFile: {}: {}", src, e))?;
         let mut w = File::create(&dest).map_err(|e| io_err!("zip.gunzipFile: {}: {}", dest, e))?;
-        std::io::copy(&mut flate2::read::GzDecoder::new(r), &mut w).map_err(|e| io_err!("zip.gunzipFile: {}: {}", src, e))?;
+        if let Err(e) = std::io::copy(&mut flate2::read::GzDecoder::new(r), &mut w) {
+            // no empty or partial file is left behind
+            drop(w);
+            let _ = std::fs::remove_file(&*dest);
+            return Err(io_err!("zip.gunzipFile: {}: {}", src, e));
+        }
         Ok(Value::Str(dest))
     });
     ModuleValue {
@@ -376,7 +397,12 @@ fn file_options<'a>(o: &HashMap<Str, Value>, pw: Option<&'a str>) -> Result<zip:
             Some(other) => return Err(format!("zip: 'level' must be an int in 0..9, got {}", other.to_display_string())),
             None => 6,
         };
-        fo = fo.compression_method(zip::CompressionMethod::Deflated).compression_level(Some(level));
+        // level 0 is no compression (`zip -0`): deflate refuses it
+        fo = if level == 0 {
+            fo.compression_method(zip::CompressionMethod::Stored)
+        } else {
+            fo.compression_method(zip::CompressionMethod::Deflated).compression_level(Some(level))
+        };
     }
     Ok(match pw {
         Some(p) => fo.with_aes_encryption(zip::AesMode::Aes256, p),
@@ -391,7 +417,10 @@ fn put(w: &mut zip::ZipWriter<File>, name: &str, content: &Value, o: &HashMap<St
         return w.add_directory(name.trim_end_matches('/').to_string() + "/", fo).map_err(|e| io_err!("zip: {}", e));
     }
     let data = bytes_of(content, "zip")?;
-    w.start_file(name.to_string(), fo).map_err(|e| io_err!("zip: {}", e))?;
+    w.start_file(name.to_string(), fo).map_err(|e| {
+        // the crate's message shows a Rust Debug value for the name
+        if e.to_string().contains("Duplicate filename") { io_err!("zip: duplicate file name '{}'", name) } else { io_err!("zip: {}", e) }
+    })?;
     w.write_all(&data).map_err(|e| io_err!("zip: {}", e))
 }
 
