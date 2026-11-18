@@ -203,7 +203,44 @@ impl ChanValue {
             recvd: Cell::new(0),
             name: "chan".into(),
             timer: Cell::new(None),
+            recv_waiters: Waiters::default(),
+            send_waiters: Waiters::default(),
+            taken_waiters: RefCell::new(VecDeque::new()),
         }
+    }
+
+    /// `close(ch)`: receives drain the buffer and then end; sends fail. Every
+    /// parked task wakes up to see it.
+    pub fn close(&self) {
+        self.closed.set(true);
+        self.recv_waiters.wake_all();
+        self.send_waiters.wake_all();
+        for (_, g) in std::mem::take(&mut *self.taken_waiters.borrow_mut()) {
+            super::sched::open_gate(&g);
+        }
+        super::sched::note_progress();
+    }
+
+    /// A value was taken: wakes the senders whose value it was (unbuffered)
+    /// and one task waiting for room.
+    pub fn taken(&self) {
+        let recvd = self.recvd.get();
+        loop {
+            let g = {
+                let mut t = self.taken_waiters.borrow_mut();
+                match t.front() {
+                    Some((seq, _)) if *seq <= recvd => t.pop_front().map(|(_, g)| g),
+                    _ => None,
+                }
+            };
+            match g {
+                Some(g) => {
+                    super::sched::open_gate(&g);
+                }
+                None => break,
+            }
+        }
+        self.send_waiters.wake_one();
     }
 
     /// Channel that receives `nil` once the deadline passes (spec §36: `timeout(d)`).
