@@ -87,6 +87,11 @@ impl NativeContext {
             .collect()
     }
 
+    /// Is there a built-in module `fogu:name`? (Without building it.)
+    pub fn has_module(&self, name: &str) -> bool {
+        self.modules.borrow().contains_key(name)
+    }
+
     pub fn get_module(&self, name: &str) -> Option<Rc<ModuleValue>> {
         let build = match self.modules.borrow().get(name)? {
             Slot::Built(m) => return Some(Rc::clone(m)),

@@ -645,7 +645,7 @@ impl Interpreter {
             Stmt::Import { kind, path } => {
                 let from_dir = self.base_dir.borrow().clone();
                 let imported = self.module_cache.resolve(path, &from_dir, self)?;
-                self.module_cache.bind_import(kind, &imported, &env)?;
+                self.module_cache.bind_import(kind, &imported, &env, self.redeclare_ok.get())?;
                 Ok(Flow::Normal)
             }
             Stmt::Export(inner) => {

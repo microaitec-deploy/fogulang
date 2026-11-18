@@ -192,6 +192,67 @@ fn check_reports_missing_imported_files_without_parsing_data() {
 }
 
 #[test]
+fn check_reports_unknown_modules_packages_and_names() {
+    let d = TempDir::new("check-names");
+    d.write("lib.fg", "export fn f() { return 1 }\nexport const K = 2\nfn _hidden() {}\n");
+    d.write(
+        "main.fg",
+        "import x from \"fogu:jsno\"\nimport y from \"no-such-package\"\nimport { f, K, g } from \"./lib.fg\"\nimport { parse, nope } from \"fogu:json\"\nimport { _hidden } from \"./lib.fg\"\nprint(x, y, f, K, g, parse, nope, _hidden)\n",
+    );
+    let o = fogu(d.path(), &["check", "main.fg"]);
+    let out = text(&o);
+    assert!(!o.status.success(), "{}", out);
+    assert!(out.contains("unknown built-in module: 'fogu:jsno'"), "{}", out);
+    assert!(out.contains("cannot find the package 'no-such-package'"), "{}", out);
+    assert!(out.contains("'g' is not exported by './lib.fg'"), "{}", out);
+    assert!(out.contains("'nope' is not exported by 'fogu:json'"), "{}", out);
+    assert!(out.contains("'_hidden' is private"), "{}", out);
+    assert!(!out.contains("'f' is not") && !out.contains("'K' is not") && !out.contains("'parse' is not"), "{}", out);
+}
+
+#[test]
+fn check_reports_redeclarations_and_assignments_to_constants() {
+    let d = TempDir::new("check-decl");
+    d.write(
+        "main.fg",
+        "fn never() {\n    let a = 1\n    let a = 2\n    const c = 1\n    c = 2\n    return a\n}\nfor i in 0..2 { i = 5 }\nlet ok = 1\nok = 2\nfn p(x) { x = 3\n    return x }\nprint(\"loaded\", ok)\n",
+    );
+    let o = fogu(d.path(), &["check", "main.fg"]);
+    let out = text(&o);
+    assert!(!o.status.success(), "{}", out);
+    assert!(out.contains("'a' is already declared in this scope"), "{}", out);
+    assert!(out.contains("cannot assign to 'c' because it is a const binding"), "{}", out);
+    assert!(out.contains("cannot assign to 'i' because it is a const binding"), "{}", out);
+    assert!(!out.contains("'ok'") && !out.contains("'x'"), "{}", out);
+}
+
+#[test]
+fn test_command_fails_a_test_whose_fg_task_failed() {
+    let d = TempDir::new("test-task");
+    d.write(
+        "t.test.fg",
+        r#"import { test, expect } from "fogu:test"
+test("task fails", () => {
+    const done = chan(1)
+    fg fn() {
+        const n = 0
+        done <- 1 / n
+    }()
+    Fogu.sleep(5ms)
+})
+test("fine", () => { expect(1).toBe(1) })
+"#,
+    );
+    let o = fogu(d.path(), &["test"]);
+    let out = text(&o);
+    assert!(!o.status.success(), "{}", out);
+    assert!(out.contains("✗ task fails"), "{}", out);
+    assert!(out.contains("division by zero"), "{}", out);
+    assert!(out.contains("t.test.fg:6"), "{}", out);
+    assert!(out.contains("✓ fine"), "{}", out);
+}
+
+#[test]
 fn fmt_formats_files_and_check_reports_them() {
     let dir = TempDir::new("fmt");
     dir.write("ugly.fg", "fn add(a,b){\nreturn a+b\n}\n\n\n\nprint( add(1,2) )   // three\n");

@@ -281,31 +281,37 @@ impl ModuleCache {
         Ok(exports)
     }
 
+    /// Binds the names an import declares. A name already declared in the
+    /// scope is an error (spec §13.1), unless `replace` (the REPL).
     pub fn bind_import(
         &self,
         kind: &ImportKind,
         imported: &Imported,
         env: &Rc<RefCell<Environment>>,
+        replace: bool,
     ) -> Result<(), String> {
+        let bind = |name: &str, v: Value| {
+            let mut e = env.borrow_mut();
+            if replace {
+                e.define(name, v, false);
+                Ok(())
+            } else {
+                e.declare(name, v, false)
+            }
+        };
         match kind {
-            ImportKind::Named { alias } => {
-                env.borrow_mut().define(alias.clone(), imported.default_value(), false);
-                Ok(())
-            }
-            ImportKind::Namespace { alias } => {
-                env.borrow_mut().define(alias.clone(), imported.namespace(), false);
-                Ok(())
-            }
+            ImportKind::Named { alias } => bind(alias, imported.default_value()),
+            ImportKind::Namespace { alias } => bind(alias, imported.namespace()),
             ImportKind::Members { members } => {
                 for (orig, alias) in members {
                     let v = imported.member(orig)?;
-                    env.borrow_mut().define(alias.clone(), v, false);
+                    bind(alias, v)?;
                 }
                 Ok(())
             }
             ImportKind::Combined { alias, rest } => {
-                env.borrow_mut().define(alias.clone(), imported.default_value(), false);
-                self.bind_import(rest, imported, env)
+                bind(alias, imported.default_value())?;
+                self.bind_import(rest, imported, env, replace)
             }
         }
     }

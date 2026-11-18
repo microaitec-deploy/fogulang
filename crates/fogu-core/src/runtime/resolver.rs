@@ -326,6 +326,9 @@ struct Scope {
     types: HashMap<String, Ty>,
     /// Signatures of the functions declared directly in this scope.
     fns: HashMap<String, Rc<Sig>>,
+    /// Names of this scope that cannot be assigned: `const`, functions,
+    /// structs, interfaces, imports, loop variables, `match` bindings, `this`.
+    immutable: HashSet<String>,
 }
 
 pub struct Resolver<'a> {
@@ -339,6 +342,10 @@ pub struct Resolver<'a> {
     assigned: HashSet<String>,
     errors: Vec<String>,
     warnings: Vec<String>,
+    /// Statements that run in the scope of the enclosing statement, one of
+    /// them per run (the bodies of a `select`'s send and default cases): a
+    /// name declared in two of them is not declared twice.
+    shared: bool,
 }
 
 /// Everything found in a program: errors and warnings, in source order,
@@ -373,6 +380,7 @@ pub fn analyze(program: &[Stmt], builtins: &HashSet<String>) -> Report {
         assigned,
         errors: Vec::new(),
         warnings: Vec::new(),
+        shared: false,
     };
     r.push(program, HashSet::new(), false);
     r.stmts(program);
@@ -408,6 +416,35 @@ fn declared_by(s: &Stmt) -> Vec<String> {
         },
         _ => Vec::new(),
     }
+}
+
+/// The names a list of statements declares that cannot be assigned.
+fn immutables(stmts: &[Stmt]) -> HashSet<String> {
+    fn of(s: &Stmt, out: &mut HashSet<String>) {
+        match s {
+            Stmt::Let { mutable: false, .. }
+            | Stmt::LetList { mutable: false, .. }
+            | Stmt::FnDecl { .. }
+            | Stmt::Struct(_)
+            | Stmt::Interface(_)
+            | Stmt::Import { .. } => out.extend(declared_by(s)),
+            Stmt::Export(e) => match &**e {
+                ExportKind::Fn { .. }
+                | ExportKind::Struct(_)
+                | ExportKind::Interface(_)
+                | ExportKind::Let { mutable: false, .. }
+                | ExportKind::LetList { mutable: false, .. } => out.extend(declared_by(s)),
+                ExportKind::DefaultDecl(d) => of(d, out),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    let mut out = HashSet::new();
+    for s in stmts {
+        of(s, &mut out);
+    }
+    out
 }
 
 /// Signatures of the functions declared once (and never reassigned) in a
@@ -638,7 +675,12 @@ impl Resolver<'_> {
         let mut all = collect(stmts);
         all.extend(declared.iter().cloned());
         let fns = signatures(stmts, &self.assigned);
+        // a function's parameters can be assigned; what any other scope
+        // starts with (loop variables, `match` bindings…) cannot
+        let mut immutable = immutables(stmts);
+        immutable.extend(declared.iter().filter(|n| !fn_boundary || *n == "this").cloned());
         self.scopes.push(Scope {
+            immutable,
             declared,
             all,
             fn_boundary,
@@ -676,8 +718,14 @@ impl Resolver<'_> {
     }
 
     fn declare(&mut self, name: &str) {
+        let line = self.line;
+        let shared = self.shared;
         if let Some(s) = self.scopes.last_mut() {
-            s.declared.insert(name.to_string());
+            // spec §13.1: what the interpreter reports when it runs the line
+            if !s.declared.insert(name.to_string()) && name != "_" && !shared {
+                self.errors.push(format!("line {}: name error: '{}' is already declared in this scope", line, name));
+                return;
+            }
             s.all.insert(name.to_string());
         }
     }
@@ -1094,12 +1142,16 @@ impl Resolver<'_> {
                         SelectCase::Send { chan, value, body } => {
                             self.expr(chan)?;
                             self.expr(value)?;
+                            let shared = std::mem::replace(&mut self.shared, true);
                             self.stmts(body);
+                            self.shared = shared;
                         }
                     }
                 }
                 if let Some(d) = default {
+                    let shared = std::mem::replace(&mut self.shared, true);
                     self.stmts(d);
+                    self.shared = shared;
                 }
             }
             Stmt::MatchStmt { subject, arms } => {
@@ -1263,6 +1315,11 @@ impl Resolver<'_> {
             Expr::Assign { target, value, .. } => {
                 self.expr(value)?;
                 self.expr(target)?;
+                if let Expr::Ident(name) = &**target {
+                    if self.binding(name).is_some_and(|s| s.immutable.contains(name.as_str())) {
+                        return self.fail(format!("cannot assign to '{}' because it is a const binding", name));
+                    }
+                }
                 Ty::Any
             }
             Expr::New { name, args } => {
