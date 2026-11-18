@@ -163,25 +163,7 @@ fn err_frame(id: u64, status: u8, msg: &str) -> Frame {
     Frame::new(OP_ERROR, id, p)
 }
 
-/// Segmented wildcards: `*` one segment (or everything alone), `**` the rest.
-pub(crate) fn matches_pattern(pattern: &str, value: &str) -> bool {
-    if pattern == "*" || pattern == "**" {
-        return true;
-    }
-    fn walk(p: &[&str], v: &[&str]) -> bool {
-        match (p.first(), v.first()) {
-            (None, None) => true,
-            (Some(&"**"), _) => true,
-            (Some(_), None) | (None, Some(_)) => false,
-            (Some(&"*"), Some(_)) => walk(&p[1..], &v[1..]),
-            (Some(a), Some(b)) => a == b && walk(&p[1..], &v[1..]),
-        }
-    }
-    // segments are separated by `.`, `/` (channel/name) and `:` (user:1)
-    let p: Vec<&str> = pattern.split(['.', '/', ':']).collect();
-    let v: Vec<&str> = value.split(['.', '/', ':']).collect();
-    walk(&p, &v)
-}
+pub(crate) use super::fogumq::matches_pattern;
 
 fn has_access(patterns: &[String], value: &str) -> bool {
     patterns.iter().any(|p| matches_pattern(p, value))

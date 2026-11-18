@@ -457,7 +457,7 @@ fn dispatch(shared: &Mutex<Shared>, writer: &Writer, opcode: u8, id: u64, payloa
             // (a server that does not name the topic: every subscription)
             let topic = data.get("topic").and_then(|t| t.as_str()).map(String::from);
             for r in s.regs.values_mut() {
-                if r.kind == Kind::Subscription && topic.as_deref().is_none_or(|t| crate::native::broker::matches_pattern(&r.key, t)) {
+                if r.kind == Kind::Subscription && topic.as_deref().is_none_or(|t| matches_pattern(&r.key, t)) {
                     r.queue.push_back(Item::Msg(data.clone()));
                 }
             }
@@ -1178,6 +1178,26 @@ impl FoguObject for Request {
     fn methods(&self) -> Vec<&'static str> {
         vec!["reply", "fail"]
     }
+}
+
+/// Segmented wildcards: `*` one segment (or everything alone), `**` the rest.
+pub(crate) fn matches_pattern(pattern: &str, value: &str) -> bool {
+    if pattern == "*" || pattern == "**" {
+        return true;
+    }
+    fn walk(p: &[&str], v: &[&str]) -> bool {
+        match (p.first(), v.first()) {
+            (None, None) => true,
+            (Some(&"**"), _) => true,
+            (Some(_), None) | (None, Some(_)) => false,
+            (Some(&"*"), Some(_)) => walk(&p[1..], &v[1..]),
+            (Some(a), Some(b)) => a == b && walk(&p[1..], &v[1..]),
+        }
+    }
+    // segments are separated by `.`, `/` (channel/name) and `:` (user:1)
+    let p: Vec<&str> = pattern.split(['.', '/', ':']).collect();
+    let v: Vec<&str> = value.split(['.', '/', ':']).collect();
+    walk(&p, &v)
 }
 
 #[cfg(test)]
