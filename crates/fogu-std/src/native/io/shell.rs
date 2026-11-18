@@ -689,14 +689,11 @@ fn exec_one(args: &[String], ctx: &mut Ctx, stdin: Vec<u8>, inherit: bool) -> Re
     let Some(program) = find_program_in(name, &ctx.env) else {
         return Ok(Out { code: 127, stdout: Vec::new(), stderr: format!("{}: command not found\n", name).into_bytes() });
     };
-    let ext = program.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    let mut c = if cfg!(windows) && (ext == "cmd" || ext == "bat") {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(&program);
-        c
-    } else {
-        Command::new(&program)
-    };
+    // `.bat` / `.cmd` too: the standard library runs them through cmd.exe
+    // with their arguments escaped for it (or refuses ones it cannot
+    // escape). Building `cmd /C <bat> <args>` here passed `&`, `"` and `%`
+    // to cmd.exe as they are (CVE-2024-24576, "BatBadBut").
+    let mut c = Command::new(&program);
     c.args(&args[1..]).current_dir(&ctx.cwd).env_clear().envs(&ctx.env);
     c.stdin(Stdio::piped());
     if inherit {
