@@ -46,8 +46,9 @@ jobs:
       matrix:
         include:
           - name: linux-x64
-            os: ubuntu-22.04 # glibc 2.35: runs on the distributions of the last years
+            os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            zig: true
             exe: fogu
             lib: libfogu_rt.so
             out_exe: fogu
@@ -56,6 +57,7 @@ jobs:
           - name: linux-arm64
             os: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
+            zig: true
             apt: gcc-aarch64-linux-gnu
             exe: fogu
             lib: libfogu_rt.so
@@ -65,6 +67,7 @@ jobs:
           - name: linux-armv7
             os: ubuntu-22.04
             target: armv7-unknown-linux-gnueabihf
+            zig: true
             apt: gcc-arm-linux-gnueabihf
             exe: fogu
             lib: ""
@@ -125,14 +128,11 @@ jobs:
             sudo apt-get update -q
             sudo apt-get install -y -q ${{ matrix.apt }} qemu-user
           fi
-          if [ "${{ matrix.name }}" = linux-x64 ]; then
-            # OpenSSL linked statically, as in the executables built by server/publish-all.sh
-            sudo apt-get update -q && sudo apt-get install -y -q libssl-dev
-            {
-              echo X86_64_UNKNOWN_LINUX_GNU_OPENSSL_STATIC=1
-              echo X86_64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu
-              echo X86_64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/usr/include
-            } >> "$GITHUB_ENV"
+          if [ "${{ matrix.zig }}" = true ]; then
+            # Linux: linked against glibc 2.17 with zig, OpenSSL compiled in, so the
+            # executable runs on every distribution of the last ten years (built with
+            # the runner's own toolchain it needed glibc 2.35, Ubuntu 22.04 or newer)
+            pip install --quiet ziglang cargo-zigbuild
           fi
           if [ "${{ matrix.name }}" = macos-x64 ]; then
             echo MACOSX_DEPLOYMENT_TARGET=10.15 >> "$GITHUB_ENV"
@@ -141,9 +141,16 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          cargo build --release --locked --target ${{ matrix.target }}
-          if [ -n "${{ matrix.lib }}" ]; then
-            cargo build --release --locked -p fogu-ffi --target ${{ matrix.target }}
+          if [ "${{ matrix.zig }}" = true ]; then
+            cargo zigbuild --release --locked --target ${{ matrix.target }}.2.17 --features vendored-openssl
+            if [ -n "${{ matrix.lib }}" ]; then
+              cargo zigbuild --release --locked -p fogu-ffi --target ${{ matrix.target }}.2.17 --features fogu/vendored-openssl
+            fi
+          else
+            cargo build --release --locked --target ${{ matrix.target }}
+            if [ -n "${{ matrix.lib }}" ]; then
+              cargo build --release --locked -p fogu-ffi --target ${{ matrix.target }}
+            fi
           fi
 
       - name: Collect
@@ -154,6 +161,14 @@ jobs:
           cp "$d/${{ matrix.exe }}" "out/${{ matrix.out_exe }}"
           if [ -n "${{ matrix.lib }}" ]; then cp "$d/${{ matrix.lib }}" "out/${{ matrix.out_lib }}"; fi
           ls -l out
+          if [ "${{ matrix.zig }}" = true ]; then
+            # the newest glibc symbol must be 2.17 or older
+            for f in out/*; do
+              need=$(objdump -T "$f" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)
+              echo "$f needs $need"
+              [ "$(printf '%s\nGLIBC_2.17\n' "$need" | sort -V | tail -n 1)" = GLIBC_2.17 ] || { echo "needs a glibc newer than 2.17"; exit 1; }
+            done
+          fi
 
       - name: Check
         shell: bash
