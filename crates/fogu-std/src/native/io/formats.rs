@@ -22,13 +22,11 @@ use std::cell::RefCell;
 use ahash::AHashMap as HashMap;
 use std::rc::Rc;
 
-use serde_json::Value as J;
-
 use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::json::stringify_value;
-use crate::native::util::{json_to_value, list, map, max_args, nfn_var, str_arg};
+use crate::native::util::{list, map, max_args, nfn_var, str_arg};
 
 fn module(name: &str, fns: Vec<(&str, usize, fn(&[Value]) -> Result<Value, String>)>) -> ModuleValue {
     let mut e: HashMap<String, Value> = HashMap::new();
@@ -41,8 +39,54 @@ fn module(name: &str, fns: Vec<(&str, usize, fn(&[Value]) -> Result<Value, Strin
     }
 }
 
-fn to_json(v: &Value) -> J {
-    serde_json::from_str(&stringify_value(v)).unwrap_or(J::Null)
+/// Map entries in key order (the output is deterministic, like json.stringify).
+fn sorted_entries(m: &HashMap<Str, Value>) -> Vec<(&Str, &Value)> {
+    let mut e: Vec<(&Str, &Value)> = m.iter().collect();
+    e.sort_unstable_by(|a, b| a.0.cmp(b.0));
+    e
+}
+
+/// Fogu → YAML directly: through JSON text, `1.0` became `1`, NaN/inf became null and more than
+/// 128 levels turned the whole value into `null`.
+fn value_to_yaml(v: &Value) -> serde_norway::Value {
+    use serde_norway::Value as Y;
+    match v {
+        Value::Nil => Y::Null,
+        Value::Bool(b) => Y::Bool(*b),
+        Value::Int(n) => Y::Number((*n).into()),
+        Value::Float(f) => Y::Number((*f).into()),
+        Value::Str(s) => Y::String(s.to_string()),
+        Value::List(l) => Y::Sequence(l.borrow().iter().map(value_to_yaml).collect()),
+        Value::Buffer(b) => Y::Sequence(b.borrow().iter().map(|x| Y::Number((*x as i64).into())).collect()),
+        Value::Map(m) => {
+            let m = m.borrow();
+            let mut out = serde_norway::Mapping::new();
+            for (k, v) in sorted_entries(&m) {
+                out.insert(Y::String(k.to_string()), value_to_yaml(v));
+            }
+            Y::Mapping(out)
+        }
+        other => Y::String(other.to_display_string()),
+    }
+}
+
+/// Fogu → TOML directly (`1.0` stays a float, inf/nan are TOML's own). `nil` has no TOML form:
+/// it is left out of tables and arrays, as before.
+fn value_to_toml(v: &Value) -> Option<toml::Value> {
+    Some(match v {
+        Value::Nil => return None,
+        Value::Bool(b) => toml::Value::Boolean(*b),
+        Value::Int(n) => toml::Value::Integer(*n),
+        Value::Float(f) => toml::Value::Float(*f),
+        Value::Str(s) => toml::Value::String(s.to_string()),
+        Value::List(l) => toml::Value::Array(l.borrow().iter().filter_map(value_to_toml).collect()),
+        Value::Buffer(b) => toml::Value::Array(b.borrow().iter().map(|x| toml::Value::Integer(*x as i64)).collect()),
+        Value::Map(m) => {
+            let m = m.borrow();
+            toml::Value::Table(sorted_entries(&m).into_iter().filter_map(|(k, v)| value_to_toml(v).map(|t| (k.to_string(), t))).collect())
+        }
+        other => toml::Value::String(other.to_display_string()),
+    })
 }
 
 fn opts(a: &[Value], i: usize) -> HashMap<Str, Value> {
@@ -177,15 +221,44 @@ fn delimiter(o: &HashMap<Str, Value>, text: Option<&str>) -> Result<u8, String> 
 }
 
 /// `{ header = true, delimiter (guessed), types = true, trim = false }`
+/// Does the text end inside a quoted field? (A `"` that starts a field opens it, `""` inside is
+/// a quote, a `"` elsewhere in an unquoted field is plain text.)
+fn unclosed_quote(b: &[u8], delim: u8) -> bool {
+    let (mut quoted, mut field_start) = (false, true);
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if quoted {
+            if c == b'"' {
+                if b.get(i + 1) == Some(&b'"') {
+                    i += 1;
+                } else {
+                    quoted = false;
+                }
+            }
+        } else if c == b'"' && field_start {
+            quoted = true;
+        }
+        field_start = !quoted && (c == delim || c == b'\n' || c == b'\r');
+        i += 1;
+    }
+    quoted
+}
+
 pub(crate) fn csv_parse(text: &str, o: &HashMap<Str, Value>) -> Result<Value, String> {
     let header = flag(o, "header", true);
     let types = flag(o, "types", true);
     let trim = flag(o, "trim", false);
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let delim = delimiter(o, Some(text))?;
+    // the reader accepts a quoted field that is never closed, swallowing the rest of the text
+    if unclosed_quote(text.as_bytes(), delim) {
+        return Err(io_err!("csv: unclosed quote"));
+    }
     let mut r = csv::ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
-        .delimiter(delimiter(o, Some(text))?)
+        .delimiter(delim)
         .trim(if trim { csv::Trim::All } else { csv::Trim::None })
         .from_reader(text.as_bytes());
     let mut records = r.records();
@@ -193,7 +266,21 @@ pub(crate) fn csv_parse(text: &str, o: &HashMap<Str, Value>) -> Result<Value, St
     let mut out = Vec::new();
     let names: Option<Vec<String>> = if header {
         match records.next() {
-            Some(rec) => Some(rec.map_err(|e| io_err!("csv: {}", e))?.iter().map(|h| h.trim().to_string()).collect()),
+            Some(rec) => {
+                // a repeated header gets a suffix (`a`, `a_2`): one column would hide the other
+                let mut seen: Vec<String> = Vec::new();
+                for h in rec.map_err(|e| io_err!("csv: {}", e))?.iter() {
+                    let h = h.trim().to_string();
+                    let mut name = h.clone();
+                    let mut n = 1;
+                    while seen.contains(&name) {
+                        n += 1;
+                        name = format!("{}_{}", h, n);
+                    }
+                    seen.push(name);
+                }
+                Some(seen)
+            }
             None => return Ok(list(Vec::new())),
         }
     } else {
@@ -203,6 +290,11 @@ pub(crate) fn csv_parse(text: &str, o: &HashMap<Str, Value>) -> Result<Value, St
         let rec = rec.map_err(|e| io_err!("csv: {}", e))?;
         out.push(match &names {
             Some(names) => {
+                // cells beyond the header have no name: an error, not lost data
+                if rec.len() > names.len() {
+                    let line = rec.position().map_or(0, |p| p.line());
+                    return Err(io_err!("csv: line {} has {} fields, the header has {}", line, rec.len(), names.len()));
+                }
                 let mut m: HashMap<Str, Value> = HashMap::new();
                 for (i, name) in names.iter().enumerate() {
                     m.insert(name.as_str().into(), rec.get(i).map_or(Value::Nil, cell));
@@ -256,14 +348,14 @@ pub fn yaml_build() -> ModuleValue {
                 let text = str_arg(a, 0, "yaml.parseAll")?;
                 let mut docs = Vec::new();
                 for d in serde_norway::Deserializer::from_str(&text) {
-                    let v: J = <J as serde::Deserialize>::deserialize(d).map_err(|e| io_err!("yaml: {}", e))?;
-                    docs.push(json_to_value(&v));
+                    let v: serde_norway::Value = serde::Deserialize::deserialize(d).map_err(|e| io_err!("yaml: {}", e))?;
+                    docs.push(yaml_to_value(v)?);
                 }
                 Ok(list(docs))
             }),
             ("stringify", 1, |a| {
                 max_args(a, 1, "yaml.stringify")?;
-                serde_norway::to_string(&to_json(&a[0])).map(Value::str).map_err(|e| io_err!("yaml: {}", e))
+                serde_norway::to_string(&value_to_yaml(&a[0])).map(Value::str).map_err(|e| io_err!("yaml: {}", e))
             }),
             ("read", 1, |a| {
                 max_args(a, 1, "yaml.read")?;
@@ -271,7 +363,7 @@ pub fn yaml_build() -> ModuleValue {
             }),
             ("write", 2, |a| {
                 max_args(a, 2, "yaml.write")?;
-                let text = serde_norway::to_string(&to_json(&a[1])).map_err(|e| io_err!("yaml: {}", e))?;
+                let text = serde_norway::to_string(&value_to_yaml(&a[1])).map_err(|e| io_err!("yaml: {}", e))?;
                 write_text(&str_arg(a, 0, "yaml.write")?, &text, "yaml.write")
             }),
         ],
@@ -279,8 +371,40 @@ pub fn yaml_build() -> ModuleValue {
 }
 
 pub(crate) fn yaml_parse(text: &str) -> Result<Value, String> {
-    let v: J = serde_norway::from_str(text).map_err(|e| io_err!("yaml: {}", e))?;
-    Ok(json_to_value(&v))
+    let v: serde_norway::Value = serde_norway::from_str(text).map_err(|e| io_err!("yaml: {}", e))?;
+    yaml_to_value(v)
+}
+
+/// YAML → Fogu directly: through JSON, `.nan`/`.inf` became nil, a u64 turned the whole
+/// document into nil and deep nesting hit the JSON parser's limit.
+fn yaml_to_value(v: serde_norway::Value) -> Result<Value, String> {
+    use serde_norway::Value as Y;
+    Ok(match v {
+        Y::Null => Value::Nil,
+        Y::Bool(b) => Value::Bool(b),
+        Y::Number(n) => match n.as_i64() {
+            Some(i) => Value::Int(i),
+            None => Value::Float(n.as_f64().unwrap_or(f64::NAN)),
+        },
+        Y::String(s) => Value::str(s),
+        Y::Sequence(s) => list(s.into_iter().map(yaml_to_value).collect::<Result<_, _>>()?),
+        Y::Mapping(m) => {
+            let mut out: HashMap<Str, Value> = HashMap::with_capacity(m.len());
+            for (k, v) in m {
+                let key = match k {
+                    Y::String(s) => s,
+                    Y::Null => "null".into(),
+                    Y::Bool(b) => b.to_string(),
+                    Y::Number(n) => n.to_string(),
+                    _ => return Err(io_err!("yaml: map keys must be scalars")),
+                };
+                out.insert(Str::from(key), yaml_to_value(v)?);
+            }
+            Value::Map(Rc::new(RefCell::new(out)))
+        }
+        // a `!tag` keeps its value
+        Y::Tagged(t) => yaml_to_value(t.value)?,
+    })
 }
 
 // =====================================================================
@@ -312,40 +436,30 @@ pub fn toml_build() -> ModuleValue {
     )
 }
 
-fn toml_to_json(v: toml::Value) -> J {
+pub(crate) fn toml_parse(text: &str) -> Result<Value, String> {
+    let t: toml::Table = text.parse().map_err(|e: toml::de::Error| io_err!("toml: {}", e.to_string().trim()))?;
+    Ok(toml_to_value(toml::Value::Table(t)))
+}
+
+/// TOML → Fogu directly (through JSON, `nan`/`inf` became nil and `1.0` an int).
+fn toml_to_value(v: toml::Value) -> Value {
     match v {
-        toml::Value::String(s) => J::String(s),
-        toml::Value::Integer(n) => J::from(n),
-        toml::Value::Float(f) => serde_json::Number::from_f64(f).map_or(J::Null, J::Number),
-        toml::Value::Boolean(b) => J::Bool(b),
-        toml::Value::Datetime(d) => J::String(d.to_string()),
-        toml::Value::Array(a) => J::Array(a.into_iter().map(toml_to_json).collect()),
-        toml::Value::Table(t) => J::Object(t.into_iter().map(|(k, v)| (k, toml_to_json(v))).collect()),
+        toml::Value::String(s) => Value::str(s),
+        toml::Value::Integer(n) => Value::Int(n),
+        toml::Value::Float(f) => Value::Float(f),
+        toml::Value::Boolean(b) => Value::Bool(b),
+        toml::Value::Datetime(d) => Value::str(d.to_string()),
+        toml::Value::Array(a) => list(a.into_iter().map(toml_to_value).collect()),
+        toml::Value::Table(t) => {
+            let m: HashMap<Str, Value> = t.into_iter().map(|(k, v)| (Str::from(k), toml_to_value(v))).collect();
+            Value::Map(Rc::new(RefCell::new(m)))
+        }
     }
 }
 
-pub(crate) fn toml_parse(text: &str) -> Result<Value, String> {
-    let t: toml::Table = text.parse().map_err(|e: toml::de::Error| io_err!("toml: {}", e.to_string().trim()))?;
-    Ok(json_to_value(&toml_to_json(toml::Value::Table(t))))
-}
-
 /// TOML has no null: nil values are left out.
-fn json_to_toml(v: &J) -> Option<toml::Value> {
-    Some(match v {
-        J::Null => return None,
-        J::Bool(b) => toml::Value::Boolean(*b),
-        J::Number(n) => match n.as_i64() {
-            Some(i) => toml::Value::Integer(i),
-            None => toml::Value::Float(n.as_f64().unwrap_or(0.0)),
-        },
-        J::String(s) => toml::Value::String(s.clone()),
-        J::Array(a) => toml::Value::Array(a.iter().filter_map(json_to_toml).collect()),
-        J::Object(o) => toml::Value::Table(o.iter().filter_map(|(k, v)| json_to_toml(v).map(|t| (k.clone(), t))).collect()),
-    })
-}
-
 fn toml_stringify(v: &Value) -> Result<String, String> {
-    match json_to_toml(&to_json(v)) {
+    match value_to_toml(v) {
         Some(toml::Value::Table(t)) => toml::to_string_pretty(&t).map_err(|e| io_err!("toml: {}", e)),
         _ => Err("toml.stringify: the top level must be a map".into()),
     }
@@ -444,6 +558,10 @@ fn xml_parse(text: &str, o: &HashMap<Str, Value>) -> Result<Value, String> {
         if !matches!(ev, Event::Text(_) | Event::GeneralRef(_)) {
             flush(&mut pending, &mut stack);
         }
+        // a second element at the top level is not XML (it used to replace the first)
+        if matches!(ev, Event::Start(_) | Event::Empty(_)) && stack.is_empty() && root.is_some() {
+            return Err(io_err!("xml: more than one root element (at byte {})", pos));
+        }
         match ev {
             Event::Start(e) => {
                 let name = e.name().as_ref().to_string();
@@ -498,6 +616,14 @@ fn xml_escape(s: &str, attr: bool) -> String {
     out
 }
 
+/// An XML 1.0 name (simplified: a letter, `_` or `:` first, then letters, digits, `-` `.` `_` `:`;
+/// any non-ASCII letter is accepted).
+fn xml_name_ok(n: &str) -> bool {
+    let mut cs = n.chars();
+    cs.next().is_some_and(|c| c.is_alphabetic() || c == '_' || c == ':')
+        && cs.all(|c| c.is_alphanumeric() || matches!(c, '-' | '.' | '_' | ':'))
+}
+
 fn xml_node(v: &Value, pretty: bool, depth: usize, out: &mut String) -> Result<(), String> {
     let pad = if pretty { "  ".repeat(depth) } else { String::new() };
     match v {
@@ -514,12 +640,19 @@ fn xml_node(v: &Value, pretty: bool, depth: usize, out: &mut String) -> Result<(
                 Some(Value::Str(n)) if !n.is_empty() => n.clone(),
                 _ => return Err("xml.stringify: an element needs a 'name'".into()),
             };
+            // `<bad name x y="1"/>` is not XML
+            if !xml_name_ok(&name) {
+                return Err(format!("xml.stringify: '{}' is not a valid element name", name));
+            }
             out.push_str(&format!("{}<{}", pad, name));
             if let Some(Value::Map(attrs)) = m.get("attrs") {
                 let a = attrs.borrow();
                 let mut keys: Vec<&Str> = a.keys().collect();
                 keys.sort();
                 for k in keys {
+                    if !xml_name_ok(k) {
+                        return Err(format!("xml.stringify: '{}' is not a valid attribute name", k));
+                    }
                     out.push_str(&format!(" {}=\"{}\"", k, xml_escape(&a[k].to_display_string(), true)));
                 }
             }
@@ -597,6 +730,13 @@ pub fn excel_build() -> ModuleValue {
 
 /// Excel serial date → ISO text (`2024-03-01` or `2024-03-01T10:30:00`).
 fn excel_date(serial: f64) -> String {
+    // a time without a date (serial in [0, 1)) is `HH:MM:SS`
+    if (0.0..1.0).contains(&serial) {
+        let rem = (serial * 86_400.0).round() as i64;
+        return format!("{:02}:{:02}:{:02}", rem / 3600, rem % 3600 / 60, rem % 60);
+    }
+    // Excel counts a 29 February 1900 that never was (Lotus 1-2-3): serials before 61 are a day early
+    let serial = if serial < 61.0 { serial + 1.0 } else { serial };
     let secs = ((serial - 25_569.0) * 86_400.0).round() as i64;
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
@@ -628,7 +768,8 @@ fn excel_cell(c: &calamine::Data) -> Value {
         Data::DateTime(d) if !format!("{:?}", d).contains("TimeDelta") => Value::Str(excel_date(d.as_f64()).into()),
         Data::DateTime(d) => Value::Float(d.as_f64()),
         Data::DateTimeIso(s) | Data::DurationIso(s) => Value::Str(s.clone().into()),
-        Data::Error(e) => Value::Str(format!("#{:?}", e).into()),
+        // Excel's own text (`#DIV/0!`), not the Rust name of the variant
+        Data::Error(e) => Value::Str(e.to_string().into()),
         Data::Empty => Value::Nil,
     }
 }
@@ -645,10 +786,24 @@ fn excel_read(path: &str, o: &HashMap<Str, Value>) -> Result<Value, String> {
         let mut out = Vec::new();
         let cols: Option<Vec<String>> = if header {
             match rows.next() {
-                Some(r) => Some(r.iter().enumerate().map(|(i, c)| match excel_cell(c) {
-                    Value::Nil => format!("col{}", i + 1),
-                    v => v.to_display_string(),
-                }).collect()),
+                Some(r) => {
+                    // a repeated header gets a suffix (`a`, `a_2`): one column would hide the other
+                    let mut seen: Vec<String> = Vec::new();
+                    for (i, c) in r.iter().enumerate() {
+                        let h = match excel_cell(c) {
+                            Value::Nil => format!("col{}", i + 1),
+                            v => v.to_display_string(),
+                        };
+                        let mut name = h.clone();
+                        let mut n = 1;
+                        while seen.contains(&name) {
+                            n += 1;
+                            name = format!("{}_{}", h, n);
+                        }
+                        seen.push(name);
+                    }
+                    Some(seen)
+                }
                 None => return Ok(list(Vec::new())),
             }
         } else {
@@ -711,7 +866,7 @@ fn excel_write(path: &str, data: &Value, o: &HashMap<Str, Value>) -> Result<Valu
     let bold = Format::new().set_bold();
     for (name, rows) in &sheets {
         let ws = wb.add_worksheet();
-        ws.set_name(name).map_err(xerr)?;
+        ws.set_name(name).map_err(|_| io_err!("excel: '{}' is not a valid sheet name (at most 31 characters, none of [ ] : * ? / \\)", name))?;
         let maps = rows.iter().any(|r| matches!(r, Value::Map(_)));
         let cols = if maps { columns(rows, o) } else { Vec::new() };
         let mut row = 0u32;
@@ -735,11 +890,21 @@ fn excel_write(path: &str, data: &Value, o: &HashMap<Str, Value>) -> Result<Valu
                 let c = c as u16;
                 match v {
                     Value::Nil => {}
+                    // Excel numbers are doubles: an int beyond 2^53 is written as text, not rounded
+                    Value::Int(n) if n.unsigned_abs() > 1 << 53 => {
+                        ws.write_string(row, c, n.to_string()).map_err(xerr)?;
+                    }
                     Value::Int(n) => {
                         ws.write_number(row, c, *n as f64).map_err(xerr)?;
                     }
+                    Value::Float(f) if !f.is_finite() => {
+                        return Err(io_err!("excel.write: {} has no Excel value (row {}, column {})", crate::runtime::value::display_float(*f), row + 1, c + 1));
+                    }
                     Value::Float(f) => {
                         ws.write_number(row, c, *f).map_err(xerr)?;
+                    }
+                    Value::Buffer(_) => {
+                        return Err(io_err!("excel.write: a buffer has no Excel value (row {}, column {})", row + 1, c + 1));
                     }
                     Value::Bool(b) => {
                         ws.write_boolean(row, c, *b).map_err(xerr)?;
