@@ -405,10 +405,12 @@ pub fn parse_fogumq_url(raw: &str) -> Result<Options, String> {
     if raw.is_empty() {
         return Err("empty URL".into());
     }
-    let norm = if raw.starts_with("fogumq:") && !raw.starts_with("fogumq://") {
-        format!("fogumq://{}", &raw["fogumq:".len()..])
+    // `flowmq:` (the protocol's name, used by the docs and the README) is the same scheme
+    let raw_scheme = if raw.starts_with("flowmq:") { format!("fogumq:{}", &raw["flowmq:".len()..]) } else { raw.to_string() };
+    let norm = if raw_scheme.starts_with("fogumq:") && !raw_scheme.starts_with("fogumq://") {
+        format!("fogumq://{}", &raw_scheme["fogumq:".len()..])
     } else {
-        raw.to_string()
+        raw_scheme
     };
     let rest = norm
         .strip_prefix("fogumq://")

@@ -2,6 +2,8 @@ n1 true true
 11 11 false
 3
 {data: {id: 1}, topic: chat/news}
+1 2 1 0
+true
 hello 8
 true
 error: fogumq: server error: no kv access to 'other' (status forbidden)
