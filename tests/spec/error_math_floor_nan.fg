@@ -1,0 +1,10 @@
+// math.floor of NaN has no int value: it stops the program (it returned 0)
+import math from "fogu:math"
+
+fn f(x) {
+    return math.floor(x)
+}
+for i in 0..3 {
+    print(f(1.5 + i))
+}
+print(f(0.0 / 0.0))

@@ -234,7 +234,7 @@ math_fns!(
     m_acos => f64::acos, m_atan => f64::atan, m_sinh => f64::sinh, m_cosh => f64::cosh, m_tanh => f64::tanh,
     m_asinh => f64::asinh, m_acosh => f64::acosh, m_atanh => f64::atanh, m_exp => f64::exp, m_exp2 => f64::exp2,
     m_expm1 => f64::exp_m1, m_ln => f64::ln, m_log2 => f64::log2, m_log10 => f64::log10, m_log1p => f64::ln_1p,
-    m_fract => f64::fract, m_degrees => f64::to_degrees, m_radians => f64::to_radians, m_round => f64::round,
+    m_fract => f64::fract, m_degrees => f64::to_degrees, m_radians => f64::to_radians, m_round => crate::runtime::ops::round_half_away,
 );
 
 extern "C" fn m_pow(x: f64, y: f64) -> f64 {
@@ -3867,6 +3867,11 @@ impl<'a, 'f> Gen<'a, 'f> {
                 }
             }
             "floor" | "ceil" | "trunc" | "round" => {
+                if args.len() != 1 {
+                    // round(x, digits) is a float rounded to digits: not compiled (it used to
+                    // drop the digits and return an int)
+                    return bail("math.round(x, digits)");
+                }
                 let (a, at) = self.expr(&args[0])?;
                 match at {
                     Ty::Int => Ok((a, Ty::Int)),
@@ -3878,6 +3883,13 @@ impl<'a, 'f> Gen<'a, 'f> {
                             // halves away from zero, like f64::round (`nearest` rounds to even)
                             _ => self.call_f64(m_round as extern "C" fn(f64) -> f64 as usize, &[a]),
                         };
+                        // NaN, ±inf and |r| >= 2^63 have no int value: the interpreter's error
+                        // (`ops::float_to_int`), never a saturated int. One compare of |r|
+                        // (unordered covers NaN) keeps the check to fabs + ucomisd + branch.
+                        let a = self.b.ins().fabs(r);
+                        let lim = self.b.ins().f64const(9_223_372_036_854_775_808.0);
+                        let bad = self.b.ins().fcmp(FloatCC::UnorderedOrGreaterThanOrEqual, a, lim);
+                        self.trap_if(bad, ops::CODE_FLOAT_INT);
                         Ok((self.b.ins().fcvt_to_sint_sat(types::I64, r), Ty::Int))
                     }
                     _ => bail("floor/ceil/trunc/round require a number"),
