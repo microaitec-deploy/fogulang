@@ -1,0 +1,85 @@
+// fogu:web / fogu:http: the request path is made canonical once, before static
+// files, middlewares and the router see it, so they all decide on the same
+// resource. Decoded once; an encoded `/` or `\`, a raw `\`, a control
+// character, an invalid escape or a `..` above the root is a 400; repeated
+// slashes collapse and dot segments are resolved.
+import web from "fogu:web"
+import net from "fogu:net"
+import time from "fogu:time"
+import fs from "fogu:fs"
+
+fs.mkdir("www.tmp.d/sub")?
+fs.writeText("www.tmp.d/pub.txt", "public file")?
+fs.writeText("www.tmp.d/.env", "SECRET=1")?
+fs.writeText("secret.tmp.txt", "outside the folder")?
+
+const app = web.app()
+app.use("/api", (ctx) => {
+    if ctx.headers["x-key"] != "ok" { return web.text("denied " + ctx.path, { status: 401 }) }
+})
+app.use("/s", (ctx) => {
+    if ctx.headers["x-key"] != "ok" { return web.text("static denied", { status: 401 }) }
+})
+app.get("/api/me", (ctx) => "me " + ctx.path)
+app.get("/files/:name", (ctx) => "file param [" + ctx.params.name + "]")
+app.get("/p/:x", (ctx) => "p [" + ctx.params.x + "]")
+app.get("/olá", (ctx) => "unicode route")
+app.static("/pub", "www.tmp.d")
+app.static("/s", "www.tmp.d")          // under the "/s" middleware: guarded
+app.listen(18501, { quiet: true })?
+
+// a raw request: the HTTP client would clean the path itself
+fn get(path, extra = "") {
+    const c = net.tcpConnect("127.0.0.1:18501", 2s)?
+    c.write("GET " + path + " HTTP/1.1\r\nHost: x\r\n" + extra + "Connection: close\r\n\r\n")?
+    const text = c.readAll()?.text()
+    c.close()
+    const status = text.split("\r\n")[0].split(" ")[1]
+    const body = text.split("\r\n\r\n")[1]
+    return status + " " + body
+}
+
+let done = false
+fg fn() {
+    for p in [
+        "/api/me",            // the middleware runs
+        "//api/me",           // repeated slashes collapse: it still runs
+        "///api//me",
+        "/./api/me",
+        "/x/../api/me",       // .. resolves inside the path
+        "/%61pi/me",          // decoded once: %61 = a
+        "/API/me",            // case is kept: another path
+        "/files/a%2Fb",       // encoded separators are refused
+        "/files/a%2fb",
+        "/files/..%5Csecret.tmp.txt",
+        "/files/a\\b",        // a raw backslash too
+        "/files/%252F",       // decoded once: the literal text %2F
+        "/files/%2e%2e",      // %2e%2e is .. → /files/.. → / (no route)
+        "/..",                // above the root
+        "/a/../../b",
+        "/%2e%2e/secret.tmp.txt",
+        "/files/%zz",         // invalid escape
+        "/files/%00",         // control character
+        "/p/a+b",             // + is a plus in a path
+        "/ol%C3%A1",          // a route with a non-ASCII segment
+        "/pub/pub.txt",       // static file
+        "/pub//pub.txt",
+        "/pub/sub/../pub.txt",
+        "/pub/.env",          // dotfiles stay hidden
+        "/pub/%2e%65nv",
+        "/pub/../secret.tmp.txt",
+    ] {
+        print(p, "->", get(p)?)
+    }
+    // a static file under a middleware's prefix waits for the middleware (S08)
+    print("guarded static ->", get("/s/pub.txt")?)
+    print("guarded static, allowed ->", get("/s/pub.txt", "x-key: ok\r\n")?)
+    print("guarded static, missing ->", get("/s/nothing.txt", "x-key: ok\r\n")?)
+    // app.handler() applies the same rules
+    const h = app.handler()
+    print(h({ method: "GET", path: "//api/me" }).body)
+    print(h({ method: "GET", path: "/files/a%2Fb" }).status)
+    print(h({ method: "GET", path: "/files/x%20y?q=1" }).body)
+    done = true
+}()
+while !done { time.delay(10ms) }

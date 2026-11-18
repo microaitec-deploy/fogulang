@@ -1,0 +1,32 @@
+/api/me -> 401 denied /api/me
+//api/me -> 401 denied /api/me
+///api//me -> 401 denied /api/me
+/./api/me -> 401 denied /api/me
+/x/../api/me -> 401 denied /api/me
+/%61pi/me -> 401 denied /api/me
+/API/me -> 404 not found
+/files/a%2Fb -> 400 bad request: encoded '/' or '\' in the path
+/files/a%2fb -> 400 bad request: encoded '/' or '\' in the path
+/files/..%5Csecret.tmp.txt -> 400 bad request: encoded '/' or '\' in the path
+/files/a\b -> 400 bad request: '\' in the path
+/files/%252F -> 200 file param [%2F]
+/files/%2e%2e -> 404 not found
+/.. -> 400 bad request: the path climbs above the root
+/a/../../b -> 400 bad request: the path climbs above the root
+/%2e%2e/secret.tmp.txt -> 400 bad request: the path climbs above the root
+/files/%zz -> 400 bad request: invalid percent escape in the path
+/files/%00 -> 400 bad request: control character in the path
+/p/a+b -> 200 p [a+b]
+/ol%C3%A1 -> 200 unicode route
+/pub/pub.txt -> 200 public file
+/pub//pub.txt -> 200 public file
+/pub/sub/../pub.txt -> 200 public file
+/pub/.env -> 404 not found
+/pub/%2e%65nv -> 404 not found
+/pub/../secret.tmp.txt -> 404 not found
+guarded static -> 401 static denied
+guarded static, allowed -> 200 public file
+guarded static, missing -> 404 not found
+denied /api/me
+400
+file param [x y]

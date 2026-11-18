@@ -1,0 +1,75 @@
+// fogu:web: request data cannot crash the server or reach other sites' state
+// (security audit S02 S03 S10 S15 S18, M01 M05, round 1 #15 #16 #17)
+import web from "fogu:web"
+import json from "fogu:json"
+import fs from "fogu:fs"
+
+fs.writeText("report é.tmp.txt", "data")?
+
+const app = web.app()
+app.post("/upload", (ctx) => {
+    const f = ctx.req.form()?
+    return f.keys().sort()
+})
+app.post("/json", (ctx) => {
+    const v = ctx.req.json()
+    if typeof(v) == "error" { return web.text("bad json: " + v.message.split(" at ")[0], { status: 400 }) }
+    return "ok"
+})
+app.get("/panic", (ctx) => { panic("db failed postgres://u:pa55@db/x") })
+app.get("/fail", (ctx) => error("secret detail"))
+app.get("/dl", (ctx) => web.file("report é.tmp.txt", { download: true }))
+app.get("/cors", web.cors({ origin: "http://a.example" }), (ctx) => "c")
+let balance = 100
+app.procedure("withdraw", fn(ctx, amount) {
+    balance -= amount
+    return balance
+})
+const h = app.handler()
+
+// S02: a multipart Content-Disposition whose lowercase form is longer (İ)
+const body = "--B\r\nContent-Disposition: form-data; name=\"İİİİİİİİİİİİİİİİİİİİ\"; x=\"İİİİ\"\r\n\r\nv\r\n--B\r\nContent-Disposition: form-data; NAME=\"plain\"\r\n\r\nw\r\n--B--\r\n"
+let r = h({ method: "POST", path: "/upload", headers: { "content-type": "multipart/form-data; boundary=B" }, body: body })
+print("multipart", r.status, r.body)
+
+// S03: nesting deeper than the limit is an error value, not a stack overflow
+const deep = "[".repeat(200000) + "]".repeat(200000)
+r = h({ method: "POST", path: "/json", body: deep })
+print("deep body", r.status, r.body)
+print("parse 512", typeof(json.parse("[".repeat(512) + "]".repeat(512))))
+print("parse 513", json.parse("[".repeat(513) + "]".repeat(513)))
+const ch = chan(1)
+fg fn() { ch <- json.parse("{\"a\":".repeat(300000)) }()
+print("in a task", typeof(<-ch))
+
+// S18 / #15: the client gets a generic 500 (the detail goes to the log)
+print("panic", h({ method: "GET", path: "/panic" }).status, h({ method: "GET", path: "/panic" }).body)
+print("error", h({ method: "GET", path: "/fail" }).status, h({ method: "GET", path: "/fail" }).body)
+
+// #16: download: true uses the file's name (RFC 6266 for non-ASCII names)
+print("download", h({ method: "GET", path: "/dl" }).headers["content-disposition"])
+
+// #17: a preflight for a route reaches the route's own cors middleware
+r = h({ method: "OPTIONS", path: "/cors", headers: { origin: "http://a.example", "access-control-request-method": "GET" } })
+print("preflight", r.status, r.headers["access-control-allow-origin"])
+
+// S15: credentials with origin "*" echo the request's origin, never "*"
+const app2 = web.app()
+app2.use(web.cors({ credentials: true }))
+app2.get("/", (ctx) => "x")
+r = app2.handler()({ method: "GET", path: "/", headers: { origin: "http://b.example" } })
+print("credentials", r.headers["access-control-allow-origin"], r.headers["access-control-allow-credentials"], r.headers["vary"])
+
+// M01 / S10: procedures need the runtime's x-topcoat header and a same-site origin
+const proc = (headers, body) => {
+    const res = h({ method: "POST", path: "/_tc/p/withdraw", headers: headers, body: body })
+    return `${res.status} ${res.body}`
+}
+print("no header", proc({ "content-type": "text/plain", cookie: "session=alice" }, "[40]"))
+print("cross-site", proc({ "x-topcoat": "procedure", "sec-fetch-site": "cross-site" }, "[40]"))
+print("other origin", proc({ "x-topcoat": "procedure", origin: "https://evil.example", host: "127.0.0.1:3000" }, "[40]"))
+print("same origin", proc({ "x-topcoat": "procedure", origin: "http://127.0.0.1:3000", host: "127.0.0.1:3000" }, "[40]"))
+// M05: arguments that are not a JSON list are refused before the procedure runs
+print("not a list", proc({ "x-topcoat": "procedure" }, "{\"n\":2}"))
+print("bad json", proc({ "x-topcoat": "procedure" }, "[1,"))
+print("balance", balance)

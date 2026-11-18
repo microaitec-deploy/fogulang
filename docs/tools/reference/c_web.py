@@ -27,7 +27,7 @@ SECTIONS = [
             {
                 "h3": "Server",
                 "api": [
-                    ("http.serve(port | \"ip:port\", fn(req), { tls: { cert, key }, quiet, maxBody }?)", "nil", "<code>tls</code> serves HTTPS (see <a class=\"underline\" href=\"#mod-tls\">fogu:tls</a>). Requests are answered as soon as they arrive while the program is alive — waiting in <code>Fogu.signal.wait()</code>, <code>time.delay</code>, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or <code>\"0.0.0.0:8080\"</code>, <code>\"[::1]:8080\"</code>, <code>\":8080\"</code>."),
+                    ("http.serve(port | \"ip:port\", fn(req), { tls: { cert, key }, quiet, maxBody, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout }?)", "nil", "<code>tls</code> serves HTTPS (see <a class=\"underline\" href=\"#mod-tls\">fogu:tls</a>). The handler returns a response (<code>http.text/json/html</code>), a str (text), any other value (JSON), nil (404) or an <code>error</code> (logged; the client gets a 500). Limits (defaults): <code>maxBody</code> (10 MB, 413), <code>maxHeaderBytes</code> (64 KB for the request line and headers, 431), <code>headerTimeout</code> (30s to send the headers; also closes idle keep-alive connections), <code>readTimeout</code> (60s for the body, 408), <code>handlerTimeout</code> (60s for the program's answer, 504; <code>0</code> = none). The request path is made canonical once, before static files, middlewares and routes see it: decoded once (<code>+</code> stays <code>+</code>), repeated slashes collapsed, <code>.</code>/<code>..</code> resolved; an encoded <code>/</code> or <code>\\</code>, a raw <code>\\</code>, a control character or a <code>..</code> above the root is a 400. A Rust panic in a handler answers that request with a 500 and the server goes on. Several servers may run in one program. Requests are answered as soon as they arrive while the program is alive — waiting in <code>Fogu.signal.wait()</code>, <code>time.delay</code>, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or <code>\"0.0.0.0:8080\"</code>, <code>\"[::1]:8080\"</code>, <code>\":8080\"</code>."),
                     ("req.method · req.path · req.query · req.headers · req.body", "", "<code>query</code> is the raw query string."),
                     ("req.header(name) · req.json() · req.form() · req.bytes()", "", "<code>form()</code>: urlencoded and multipart bodies."),
                     ("http.text(body, opts?) · http.json(value, opts?) · http.html(body, opts?)", "Response", "<code>opts: { status, headers }</code>."),
@@ -109,11 +109,11 @@ while !done { Fogu.sleep(10ms) }
                     ("app.get/post/put/patch/delete/head/options/all(path, ...middlewares, handler)", "App", "<code>/users/:id</code> parameters, <code>*</code> wildcard."),
                     ("app.use(fn) · app.use(prefix, fn)", "App", "Middleware for every request, or under a path prefix."),
                     ("app.after((ctx, res) => …)", "App", "After the handler; returning a value replaces the response."),
-                    ("app.onError((ctx, err) => response)", "App", "For runtime errors and returned <code>error</code> values (default: 500)."),
-                    ("app.static(dir) · app.static(prefix, dir, { spa, index, maxAge, dotfiles })", "App", "Files served by the server thread: ETag/304, <code>Cache-Control</code>; <code>spa: true</code> serves <code>index.html</code> for unknown HTML routes (React, Vue, Svelte builds)."),
+                    ("app.onError((ctx, err) => response)", "App", "For runtime errors and returned <code>error</code> values (default: a 500 <code>internal error</code>; the message goes to the log, never to the client)."),
+                    ("app.static(dir) · app.static(prefix, dir, { spa, index, maxAge, dotfiles })", "App", "Files served by the server thread: ETag/304, <code>Cache-Control</code>; a file under the prefix of an <code>app.use</code> middleware is served only after the middlewares let the request through; <code>spa: true</code> serves <code>index.html</code> for unknown HTML routes (React, Vue, Svelte builds)."),
                     ("app.ws(path, ...middlewares, (ws, ctx) => …, { protocols })", "App", "WebSocket routes; the handler runs in its own task with a <a class=\"underline\" href=\"#mod-websocket\">WebSocket</a> on the upgraded HTTP connection."),
                     ("app.set(key, value) · app.store", "App · map", "Shared state (<code>ctx.store</code>)."),
-                    ("app.listen(port | \"ip:port\", { host = \"127.0.0.1\", maxBody = 10 MB, quiet, tls: { cert, key } })", "nil · error", "<code>tls</code> serves HTTPS: PEM text or file paths (<code>tls.selfSigned([\"localhost\"])</code> for development; options as <code>tls.listen</code>). <code>app.listen(\"0.0.0.0:3000\")</code> (or <code>host: \"0.0.0.0\"</code>) accepts other machines; IPv6 as <code>\"[::1]:3000\"</code>. A host in the string wins over <code>host</code>."),
+                    ("app.listen(port | \"ip:port\", { host = \"127.0.0.1\", maxBody = 10 MB, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout, quiet, tls: { cert, key } })", "nil · error", "Limits and the canonical path as in <code>http.serve</code>; an unknown option stops the program. <code>tls</code> serves HTTPS: PEM text or file paths (<code>tls.selfSigned([\"localhost\"])</code> for development; options as <code>tls.listen</code>). <code>app.listen(\"0.0.0.0:3000\")</code> (or <code>host: \"0.0.0.0\"</code>) accepts other machines; IPv6 as <code>\"[::1]:3000\"</code>. A host in the string wins over <code>host</code>."),
                     ("app.handler()", "fn", "Calls the app without a network (tests): <code>h({ method, path, headers, body })</code> → Response."),
                     ("app.routes()", "list", ""),
                 ],
@@ -128,9 +128,9 @@ while !done { Fogu.sleep(10ms) }
                     ("handler result", "", "A str (text or HTML), any value (JSON), a response, or nil (204)."),
                     ("web.json/text/html(body, { status, headers })", "Response", ""),
                     ("web.redirect(url, status = 302)", "Response", ""),
-                    ("web.file(path, { download, contentType, status })", "Response · error", "Sent by the server thread (binary safe)."),
+                    ("web.file(path, { download, contentType, status })", "Response · error", "Sent by the server thread (binary safe). <code>download: true</code> uses the file's name, <code>download: \"name\"</code> another (non-ASCII names as RFC 6266 <code>filename*</code>)."),
                     ("web.sse({ retry, headers })", "SseStream", "Return it from the handler; <code>send(data, { event, id })</code>, <code>comment(text)</code>, <code>close()</code>, field <code>open</code>."),
-                    ("web.cors({ origin, methods, headers, credentials, maxAge })", "middleware", "Answers preflight requests."),
+                    ("web.cors({ origin, methods, headers, credentials, maxAge })", "middleware", "Answers preflight requests, also as a route's own middleware. With <code>credentials: true</code> and <code>origin: \"*\"</code> the request's origin is echoed (browsers refuse <code>*</code> with credentials)."),
                     ("web.logger()", "middleware", "<code>GET /path 200 0.4ms</code>."),
                     ("UploadedFile: filename, contentType, size, text(), bytes(), json(), save(path)", "", "<code>save(\"uploads/\")</code> keeps a sanitized file name."),
                 ],
@@ -268,9 +268,10 @@ app.get("/", fn(ctx) {
 // what the browser does, without a network:
 const call = app.handler()
 print(call({ method: "GET", path: "/" }).body.contains("data-tc-text=\"count.get()\""))
-const swap = json.parse(call({ method: "POST", path: "/_tc/s/results", body: "{\"props\":{\"query\":\"an\"}}" }).body)
+// the runtime sends x-topcoat with every call: requests without it are refused (CSRF)
+const swap = json.parse(call({ method: "POST", path: "/_tc/s/results", headers: { "x-topcoat": "shard" }, body: "{\"props\":{\"query\":\"an\"}}" }).body)
 print(swap.t, swap.html.contains("banana"), swap.html.contains("apple"))
-print(call({ method: "POST", path: "/_tc/p/double", body: "[21]" }).body)
+print(call({ method: "POST", path: "/_tc/p/double", headers: { "x-topcoat": "procedure" }, body: "[21]" }).body)
 // app.listen(3000) and Fogu.signal.wait() to serve it
 ''',
                 "run": True,
@@ -320,7 +321,7 @@ print(e1, e2)
                 "api": [
                     ("socketio.server({ path = \"/socket.io\", pingInterval, pingTimeout, ackTimeout, maxPayload })", "SocketIoServer", ""),
                     ("io.on(\"connection\", fn(socket)) · io.of(\"/ns\").on(\"connection\", fn)", "nil", "Namespaces."),
-                    ("io.listen(port | \"host:port\") · app.listen(port, { socketio: io })", "int · nil", "Standalone, or on a fogu:web app (same port)."),
+                    ("io.listen(port | \"host:port\") · app.listen(port, { socketio: io })", "int · nil", "Standalone, or on a fogu:web app (same port). An int port listens on 127.0.0.1; <code>\"0.0.0.0:port\"</code> for other machines."),
                     ("io.emit(event, ...args) · io.to(room).emit(…) · io.except(room) · io.of(ns).emit(…) · io.close()", "", "Several arguments travel as several arguments."),
                     ("socket.on(event, fn(...args, ack?)) · socket.on(\"disconnect\", fn(reason)) · socket.off(event)", "nil", "<code>ack</code> is passed when the client asked for one: <code>ack(value)</code>."),
                     ("socket.emit(event, ...args) · socket.emitWithAck(event, data, { timeout })", "nil · value", ""),
@@ -379,7 +380,7 @@ io.close()
                     ("grpc.server(schema)", "GrpcServer", ""),
                     ("srv.handle(method, fn(req, call)) · srv.handle({ method: fn }) · srv.service(\"pkg.Service\", { Method: fn })", "nil", "Methods: <code>\"pkg.Service/Method\"</code>, <code>\"pkg.Service.Method\"</code> or a unique <code>\"Method\"</code>. Client streaming: <code>req</code> is a list."),
                     ("call.send(msg) · call.metadata · call.peer · call.method · call.cancelled", "", "<code>send</code> for server streaming (or return a list)."),
-                    ("srv.listen(port | \"host:port\", { cert, key })", "int · error", "The port. <code>cert</code>/<code>key</code>: PEM files for TLS."),
+                    ("srv.listen(port | \"host:port\", { cert, key })", "int · error", "The port (an int port listens on 127.0.0.1; <code>\"0.0.0.0:port\"</code> for other machines). <code>cert</code>/<code>key</code>: PEM files for TLS."),
                     ("srv.serve() · srv.close() · srv.port · srv.address · srv.methods", "", "<code>serve</code> runs until <code>close</code> (start it with <code>fg</code>)."),
                     ("return nil, grpc.status(\"NOT_FOUND\", \"msg\")", "", "Fails the call with that code (any other error is <code>UNKNOWN</code>); <code>grpc.codes</code> lists them."),
                     ("grpc.connect(url, schema, { timeout, metadata, ca, domain })", "GrpcClient", "<code>https://</code> uses TLS (system roots or <code>ca</code>). Connects on the first call."),
@@ -545,7 +546,7 @@ ws.close()
                     ("peer.accept(timeout?)", "DataChannel · nil", "A channel the other side opened (nil on timeout or close)."),
                     ("peer.on(event, fn)", "", "<code>state(s)</code>, <code>connected()</code>, <code>channel(ch)</code>, <code>candidate(c)</code>, <code>close()</code> — each call in its own task."),
                     ("peer.state · peer.connected · peer.closed · peer.candidates · peer.addresses · peer.channels · peer.error · peer.close()", "", "A peer whose connection stays lost for <code>disconnectTimeout</code> closes."),
-                    ("ch.send(str | buffer)", "nil · error", "str → text message, buffer / list of bytes → binary; queued until the channel opens."),
+                    ("ch.send(str | buffer)", "nil · error", "str → text message, buffer / list of bytes → binary; queued until the channel opens. At most 128 KB per message (larger: an error value; split it)."),
                     ("ch.recv(timeout?) · for msg in ch · ch.tryRecv()", "str · buffer · nil", "nil on timeout or when the channel closes (which ends the <code>for</code>)."),
                     ("ch.on(\"open\" | \"message\" | \"close\", fn) · ch.wait(timeout?) · ch.close()", "", "With a <code>message</code> handler, messages go to it instead of <code>recv</code>."),
                     ("ch.label · ch.open · ch.closed · ch.ordered · ch.protocol · ch.pending · ch.buffered", "", ""),

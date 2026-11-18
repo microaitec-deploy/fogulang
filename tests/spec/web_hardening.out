@@ -1,0 +1,17 @@
+multipart 200 ["plain","İİİİİİİİİİİİİİİİİİİİ"]
+deep body 400 bad json: json: JSON nested too deeply
+parse 512 list
+parse 513 error: json.parse: JSON nested too deeply at position 512 (the limit is 512 levels)
+in a task error
+panic 500 internal error
+error 500 internal error
+download attachment; filename="report _.tmp.txt"; filename*=UTF-8''report%20%C3%A9.tmp.txt
+preflight 204 http://a.example
+credentials http://b.example true Origin
+no header 403 {"error":"forbidden"}
+cross-site 403 {"error":"forbidden"}
+other origin 403 {"error":"forbidden"}
+same origin 200 {"ok":60}
+not a list 400 {"error":"invalid procedure arguments (expected a JSON list)"}
+bad json 400 {"error":"invalid procedure arguments (expected a JSON list)"}
+balance 60

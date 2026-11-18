@@ -52,13 +52,13 @@ print(body.contains("{\"clicks\":{\"t\":true,\"v\":0}}"))
 // a shard request: its own signals, frames as JSON lines
 const s = call({ method: "POST", path: "/_tc/s/results", headers: { "x-topcoat": "shard" }, body: json.stringify({ props: { query: "an" }, signals: {} }) })
 print(s.headers["content-type"], json.parse(s.body).t, json.parse(s.body).html)
-const c = call({ method: "POST", path: "/_tc/s/counter", body: json.stringify({ props: {}, signals: { clicks: 4 } }) })
+const c = call({ method: "POST", path: "/_tc/s/counter", headers: { "x-topcoat": "shard" }, body: json.stringify({ props: {}, signals: { clicks: 4 } }) })
 print(json.parse(c.body).html)
-print(call({ method: "POST", path: "/_tc/s/nope", body: "{}" }).status)
+print(call({ method: "POST", path: "/_tc/s/nope", headers: { "x-topcoat": "shard" }, body: "{}" }).status)
 
-// procedures: values and error values
-print(call({ method: "POST", path: "/_tc/p/double", body: "[21]" }).body)
-print(call({ method: "POST", path: "/_tc/p/double", body: "[\"x\"]" }).body)
+// procedures: values and error values (the runtime always sends x-topcoat)
+print(call({ method: "POST", path: "/_tc/p/double", headers: { "x-topcoat": "procedure" }, body: "[21]" }).body)
+print(call({ method: "POST", path: "/_tc/p/double", headers: { "x-topcoat": "procedure" }, body: "[\"x\"]" }).body)
 
 // a rerun posts the signals and gets a snapshot (or a redirect) frame
 const r = call({ method: "POST", path: "/tracked", headers: { "x-topcoat": "rerun" }, body: "{\"signals\":{\"page\":2}}" })

@@ -1,0 +1,12 @@
+http://127.0.0.1:18511/ 200 A
+http://127.0.0.1:18512/ 200 B
+http://127.0.0.1:18513/ 200 C
+/err 500 internal error
+/nil 404 route not found
+/map 200 {"a":1}
+/str 200 plain
+/slow 504 timeout
+utf-8 header HTTP/1.1 200 OK [hdr=José]
+big body HTTP/1.1 413 Payload Too Large [request body too large]
+big header HTTP/1.1 431 Request Header Fields Too Large []
+slow headers true true

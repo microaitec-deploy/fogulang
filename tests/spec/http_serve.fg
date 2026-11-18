@@ -1,0 +1,55 @@
+// fogu:http server: several servers in one program, what a handler may
+// return, UTF-8 request headers and the limits of a request
+// (round 1 #2 #7 #14 #22, security audit S11)
+import http from "fogu:http"
+import web from "fogu:web"
+import net from "fogu:net"
+import time from "fogu:time"
+
+http.serve(18511, (req) => {
+    if req.path == "/err" { return error("boom") }
+    if req.path == "/nil" { return nil }
+    if req.path == "/map" { return { a: 1 } }
+    if req.path == "/str" { return "plain" }
+    if req.path == "/hdr" { return http.text("hdr=" + (req.header("x-name") ?? "none")) }
+    if req.path == "/slow" { time.delay(400ms); return "late" }
+    return http.text("A")
+}, { quiet: true, maxBody: 100, maxHeaderBytes: 8192, headerTimeout: 300ms, handlerTimeout: 200ms })?
+// a second server does not take over the first one
+http.serve(18512, (req) => http.text("B"), { quiet: true })?
+const app = web.app()
+app.get("/", (ctx) => "C")
+app.listen(18513, { quiet: true })?
+
+fn raw(port, text) {
+    const c = net.tcpConnect("127.0.0.1:" + str(port), 2s)?
+    c.setTimeout(3s)
+    c.write(text)?
+    const got = c.readAll()
+    c.close()
+    if typeof(got) == "error" { return "error" }
+    const t = got.text()
+    if t == "" { return "closed" }
+    return t.split("\r\n")[0] + " [" + t.split("\r\n\r\n")[1] + "]"
+}
+
+let done = false
+fg fn() {
+    for u in ["http://127.0.0.1:18511/", "http://127.0.0.1:18512/", "http://127.0.0.1:18513/"] {
+        const r = http.get(u)?
+        print(u, r.status, r.body)
+    }
+    for p in ["/err", "/nil", "/map", "/str", "/slow"] {
+        const r = http.get("http://127.0.0.1:18511" + p)?
+        print(p, r.status, r.body)
+    }
+    print("utf-8 header", raw(18511, "GET /hdr HTTP/1.1\r\nHost: x\r\nx-name: José\r\nConnection: close\r\n\r\n"))
+    print("big body", raw(18511, "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 500\r\nConnection: close\r\n\r\n" + "x".repeat(500)))
+    print("big header", raw(18511, "GET / HTTP/1.1\r\nHost: x\r\nx-big: " + "y".repeat(20000) + "\r\nConnection: close\r\n\r\n"))
+    // a client that never finishes its headers is dropped after headerTimeout
+    const t0 = time.monotonic()
+    const slow = raw(18511, "GET / HTTP/1.1\r\nHost: x\r\n")
+    print("slow headers", slow == "closed" || slow.starts_with("HTTP/1.1 408"), time.monotonic() - t0 < 2.0)
+    done = true
+}()
+while !done { time.delay(10ms) }

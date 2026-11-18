@@ -1,0 +1,5 @@
+// app.listen refuses an option it does not know (a typo) instead of ignoring it
+import web from "fogu:web"
+
+web.app().listen(18514, { quiet: true, maxbody: 10 })
+print("not reached")
