@@ -67,7 +67,8 @@ const createServer = fn(options) {
         if typeof(v) == "error" {
             return { content: [{ type: "text", text: v.message }], isError: true }
         }
-        if typeof(v) == "map" && v.content != nil { return v }      // already MCP content
+        // already an MCP result: `content` is a list of blocks with a `type`
+        if typeof(v) == "map" && typeof(v.content) == "list" && v.content.len() > 0 && v.content.all((b) => typeof(b) == "map" && typeof(b.type) == "str") { return v }
         const result = { content: [{ type: "text", text: asText(v) }], isError: false }
         if typeof(v) == "map" { result.structuredContent = v }
         return result
@@ -156,6 +157,10 @@ const createServer = fn(options) {
             if isNotification { return nil }                     // notifications/initialized, cancelled…
             return fail(msg.id, -32601, "method not found: " + msg.method)
         }
+        if msg.params != nil && typeof(msg.params) != "map" {
+            if isNotification { return nil }
+            return fail(msg.id, -32602, "invalid params: expected an object")
+        }
         const r = unpair(safeCall(m, msg.params ?? {}))
         if isNotification { return nil }
         if typeof(r) == "error" {
@@ -198,6 +203,17 @@ const createServer = fn(options) {
         return nil
     }
 
+    // `scheme://localhost`, `127.0.0.1` or `[::1]`, with or without a port
+    const localOrigin = fn(origin) {
+        for scheme in ["http://", "https://"] {
+            for host in ["localhost", "127.0.0.1", "[::1]"] {
+                const base = scheme + host
+                if origin == base || origin.starts_with(base + ":") { return true }
+            }
+        }
+        return false
+    }
+
     // the Streamable HTTP transport: POST JSON-RPC to `path`, JSON answers
     server.listen = fn(port, listenOptions) {
         const lo = listenOptions ?? {}
@@ -207,8 +223,9 @@ const createServer = fn(options) {
         const app = web.app()
         app.use(fn(ctx) {
             // DNS-rebinding protection: browsers may only call from the allowed origins
+            // the host is compared whole: `http://localhost.evil.example` is not local
             const origin = ctx.headers["origin"]
-            if origin != nil && !origins.contains(origin) && !origin.starts_with("http://localhost") && !origin.starts_with("http://127.0.0.1") {
+            if origin != nil && !origins.contains(origin) && !localOrigin(origin) {
                 return web.json(fail(nil, -32600, "origin not allowed"), { status: 403 })
             }
             if token != nil && ctx.headers["authorization"] != "Bearer " + token {
