@@ -70,7 +70,7 @@ pub fn build() -> ModuleValue {
             Some(Value::Int(n)) => *n as i32,
             Some(other) => return Err(format!("process.exit expects int, got '{}'", other.type_name())),
         };
-        crate::native::exit(code)
+        crate::native::exit_program(code)
     }));
     e.insert("pid".into(), Value::Int(crate::native::util::pid() as i64));
     e.insert("os".into(), Value::Str(std::env::consts::OS.into()));
@@ -111,21 +111,41 @@ pub fn run(a: &[Value]) -> Result<Value, String> {
             return Err(format!("process.run: args must be a list, got '{}'", other.type_name()))
         }
     }
-    let mut input: Option<String> = None;
+    let mut input: Option<Vec<u8>> = None;
     match opt_arg(a, 2) {
         None => {}
         Some(Value::Map(m)) => {
             let m = m.borrow();
-            if let Some(Value::Str(dir)) = m.get("cwd") {
-                c.current_dir(dir);
+            // an unknown option (`timeout`, a typo) stops the program instead of being ignored
+            let mut keys: Vec<&str> = m.keys().map(|k| &**k).collect();
+            keys.sort_unstable();
+            if let Some(k) = keys.into_iter().find(|k| !matches!(*k, "cwd" | "env" | "input")) {
+                return Err(format!("process.run: unknown option '{}' (expected cwd, env, input)", k));
             }
-            if let Some(Value::Map(env)) = m.get("env") {
-                for (k, v) in env.borrow().iter() {
-                    c.env(k, v.to_display_string());
+            match m.get("cwd") {
+                None | Some(Value::Nil) => {}
+                Some(Value::Str(dir)) => {
+                    // checked here: the spawn error would name the program, not the folder
+                    if !std::path::Path::new(&**dir).is_dir() {
+                        return Err(io_err!("process.run: cwd {}: not a directory", dir));
+                    }
+                    c.current_dir(&**dir);
                 }
+                Some(other) => return Err(format!("process.run: 'cwd' must be a str, got '{}'", other.type_name())),
             }
-            if let Some(Value::Str(s)) = m.get("input") {
-                input = Some(s.to_string());
+            match m.get("env") {
+                None | Some(Value::Nil) => {}
+                Some(Value::Map(env)) => {
+                    for (k, v) in env.borrow().iter() {
+                        c.env(&**k, v.to_display_string());
+                    }
+                }
+                Some(other) => return Err(format!("process.run: 'env' must be a map, got '{}'", other.type_name())),
+            }
+            match m.get("input") {
+                None | Some(Value::Nil) => {}
+                // a str as UTF-8, a buffer as its bytes
+                Some(v) => input = Some(crate::native::util::bytes_of(v, "process.run: input")?),
             }
         }
         Some(other) => {
@@ -144,8 +164,8 @@ pub fn run(a: &[Value]) -> Result<Value, String> {
         // stdin is fed from its own thread, so a child that writes a lot
         // before reading everything cannot deadlock us
         let feeder = match (input, child.stdin.take()) {
-            (Some(text), Some(mut stdin)) => Some(std::thread::spawn(move || {
-                let _ = stdin.write_all(text.as_bytes());
+            (Some(data), Some(mut stdin)) => Some(std::thread::spawn(move || {
+                let _ = stdin.write_all(&data);
             })),
             _ => None,
         };
