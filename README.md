@@ -798,31 +798,74 @@ committing).
 
 ## Status and limitations
 
-Implemented: the core language, template strings, durations, `?.`, arrow
-functions, default and variadic parameters, type annotations checked at
-runtime, structural interfaces, generics (erased), errors as values with `?`,
-structs with `embed` and `equals`, exhaustive `match`, `fg`/`chan`/`select`/`timeout`,
-modules with private `_x` names, the standard library above (files, paths,
-processes, sync primitives, tests), the `Fogu` object, JIT, REPL, CLI, `fogu test`,
-git package manager and standalone executables. The detailed status is in
-[CHECKLIST.md](CHECKLIST.md).
+Fogu is a pre-1.0 language: a release may still change behaviour, and the
+[CHANGELOG.md](CHANGELOG.md) says when it does (the next release changes how
+`return a, b` and `[v, err]` work, below). The status of every feature is in
+[CHECKLIST.md](CHECKLIST.md); fixed gaps and what remains are in
+[docs/analysis.md](docs/analysis.md).
 
-Not implemented yet (planned in the [specification](docs/spec.md)):
+**Production readiness: pre-production, with positive indicators.** Fogu is past
+the experimental stage — three engines held to one conformance suite, the memory,
+error and security fixes of two test rounds, stress tests and a measured
+performance discipline — but there is not yet enough evidence to recommend it for
+production: the 72-hour soak test, the performance campaign against the previous
+release and real use with failure recovery are still to come. Controlled trials in
+pre-production environments are justified; production services are not yet. What
+exists, what is missing and what would change this:
+[docs/production-readiness.md](docs/production-readiness.md).
 
-- permissions (`--allow-net`, `--allow-fs`, …);
-- `fogu audit`, `fogu publish`, `fogu build --target wasm`;
-- the bytecode VM as the default engine (today it is opt-in: `--engine=vm`); consumer groups in `fogu:kafka`;
-- a central package registry and signatures.
+**Implemented:** the core language (template strings, durations, `?.` and `??`,
+arrow functions, default and variadic parameters, sized numbers and `char`, bit
+operators), errors as values with tuples (`return a, b`), `[v, err]` and `?`, type
+annotations checked at run time, structs with `embed` and `equals`, structural
+interfaces, generics (erased), exhaustive `match`, `fg`/`chan`/`select`/`timeout`,
+workers (`sync.Worker`), modules with private `_x` names and data-file imports, the
+standard library above, the `Fogu` object, the JIT, the bytecode VM (opt-in), REPL,
+CLI, `fogu check`, `fmt`, `test`, `play`, the git package manager, standalone
+executables (`build --compile`) and shared libraries (`build --lib`).
 
-Known gaps:
+**Not implemented yet** (planned in the [specification](docs/spec.md) and the
+[roadmap](docs/roadmap.md)):
 
-- the JIT does not compile strings, lists, maps, structs, `?`, `error`, destructuring or `fg`;
-- `const [a, b] = f()` destructures lists, so for native functions that return
-  lists (`json.parse` of an array, `db.query`) use `?`;
-- generic type arguments are not checked (only the outer kind);
-- transitive dependencies are flat (the first version found wins, with a warning).
+- permissions (`--allow-net`, `--allow-fs`…): a program can do whatever the user
+  who runs it can do;
+- `fogu audit`, `fogu publish`, a central package registry and package signatures;
+- `fogu build --target wasm` as a supported target;
+- the bytecode VM as the default engine: it is opt-in (`--engine=vm`), and a
+  function with closures, `match`, `fg`, channel operators or `?.` runs on the
+  tree-walking interpreter;
+- servers on every core by default, channels across workers, cancelling a task
+  from outside, backpressure on streams; consumer groups in `fogu:kafka`.
 
-See [docs/analysis.md](docs/analysis.md) and the [CHANGELOG.md](CHANGELOG.md).
+**Known gaps:**
+
+- **Memory:** values are reference counted, without a cycle collector. A scope and
+  the closures stored in it are freed when nothing else holds them, but a plain data
+  cycle — a list that contains itself, two structs or maps that point at each other —
+  is never freed: in a long-running program, break such cycles (set a field to
+  `nil`) when they are no longer needed.
+- **Destructuring:** `const [a, b] = xs` splits a tuple or a list written in the
+  declaration; any other list is one value (`a` is the list, `b` is `nil`). Index
+  the list instead; `fogu check` warns (W0005).
+- **JIT:** it compiles numeric code and loops, and inside hot loops list `push`,
+  text building and list / map reads (with speculation and deoptimization). Structs,
+  closures, `?`, `error`, destructuring and `fg` run interpreted.
+- **Performance** on the code the JIT does not compile (text, structs, maps,
+  calls): several times slower than Python and far slower than Go on the program
+  benchmarks (`bench/RESULTS_PROGRAMS.md`); the VM narrows it.
+- **Types:** generic type arguments are not checked (only the outer kind);
+  `fogu check` infers from literals, annotations and the functions of the same file.
+- **Packages:** transitive dependencies are flat (the first version found wins, with
+  a warning).
+- **Security:** the bundled SQLite has an advisory without an available fix
+  (RUSTSEC-2026-0459, a local attack through a crafted database file): do not open
+  untrusted SQLite files with `fogu:sql` until `sqlx` updates
+  (`.cargo/audit.toml`). A `str` returned by a `fogu:http` / `fogu:web` handler that
+  starts with `<` is served as HTML, as documented; a stricter policy (escaped text,
+  explicit HTML responses) is a pending decision.
+- **Platforms:** the Windows-specific fixes of the next release (quoting of
+  `fogu.json` scripts, batch files in `fogu:shell`, paths) were made from the code and
+  are not yet run on Windows; `build --lib` was run on Linux only.
 
 ---
 
