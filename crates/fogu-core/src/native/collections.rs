@@ -415,7 +415,7 @@ fn str_method(s: &str, name: &str, args: &[Value]) -> Option<Result<Value, Strin
             }
             "replace" => Value::Str(s.replace(str_arg(args, 0, name)?, str_arg(args, 1, name)?).into()),
             "repeat" => match args.first() {
-                Some(Value::Int(n)) if *n >= 0 => Value::Str(s.repeat(*n as usize).into()),
+                Some(Value::Int(n)) if *n >= 0 => Value::Str(crate::native::util::repeat_str(s, *n as usize, "repeat")?.into()),
                 _ => return Err("repeat expects an int >= 0".into()),
             },
             "slice" => {

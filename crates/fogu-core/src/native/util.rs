@@ -145,6 +145,47 @@ pub fn sleep_coop(d: std::time::Duration) -> Result<(), String> {
     })
 }
 
+/// The error of an allocation the system refused: a size that comes from the
+/// program (or its input) stops it with this message, never aborts the process.
+pub fn alloc_error(what: &str, n: impl std::fmt::Display) -> String {
+    format!("{}: cannot allocate {} bytes (out of memory)", what, n)
+}
+
+/// `n` zero bytes, or [`alloc_error`] when the memory cannot be had.
+pub fn zeroed_bytes(n: usize, what: &str) -> Result<Vec<u8>, String> {
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    let layout = std::alloc::Layout::array::<u8>(n).map_err(|_| alloc_error(what, n))?;
+    // SAFETY: a non-empty layout of `n` bytes from the global allocator, all
+    // zeroed: exactly what a `Vec<u8>` of length and capacity `n` owns.
+    unsafe {
+        let p = std::alloc::alloc_zeroed(layout);
+        if p.is_null() {
+            return Err(alloc_error(what, n));
+        }
+        Ok(Vec::from_raw_parts(p, n, n))
+    }
+}
+
+/// `s` repeated `n` times, or [`alloc_error`] when the text would not fit.
+pub fn repeat_str(s: &str, n: usize, what: &str) -> Result<String, String> {
+    if s.is_empty() || n == 0 {
+        return Ok(String::new());
+    }
+    let total = s.len().checked_mul(n).ok_or_else(|| alloc_error(what, format!("{} × {}", s.len(), n)))?;
+    let mut out = String::new();
+    out.try_reserve_exact(total).map_err(|_| alloc_error(what, total))?;
+    out.push_str(s);
+    while out.len() < total {
+        // a prefix of whole copies: `out` is k copies and what is missing a multiple of `s`
+        let take = (total - out.len()).min(out.len());
+        // SAFETY: `take` ends between two copies of `s`, so the bytes stay UTF-8.
+        unsafe { out.as_mut_vec().extend_from_within(..take) };
+    }
+    Ok(out)
+}
+
 /// Bytes from a str (UTF-8) or a list of ints.
 pub fn bytes_of(v: &Value, what: &str) -> Result<Vec<u8>, String> {
     match v {
