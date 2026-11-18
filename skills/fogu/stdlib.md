@@ -110,7 +110,7 @@ print(load("{\"name\": \"fogu\"}"), load("nope") != nil)
 output:
 
 ```text
-invalid config: json.parse: invalid JSON at position 2: Some('b')
+invalid config: json.parse: invalid JSON at position 2: 'b'
 name: fogu
 nil true
 ```
@@ -309,9 +309,9 @@ Runtime helpers available everywhere, without an import.
 - `Fogu.cores() · Fogu.cores(n) · Fogu.cores([cpus])` → int · list · error — How many threads the runtime uses for networking and blocking work (default: the machine's CPUs) · use `n` · run only on those CPUs (Linux, Windows). Set it at the top of the program — once the runtime has started it is an error value. Also `--cores 4`, `--cores 0,2-3`, `$FOGU_CORES`.
 - `Fogu.env` → map — Environment variables.
 - `Fogu.args` → list — Arguments after the script name (`fogu run app.fg a b`).
-- `Fogu.file(path)` → File — `text() lines() json() write(s) append(s) exists() size() remove()`, fields `path name ext dir`.
+- `Fogu.file(path)` → File — `text() lines() json() write(data) append(data) exists() size() remove()`, fields `path name ext dir`. `data` is a str (UTF-8) or a buffer (its bytes); another type stops the program.
 - `Fogu.asset(path)` → str — A project file: relative to the project root — and inside `fogu build --compile` executables, the extracted embedded files.
-- `Fogu.run(cmd, args?, opts?)` → map — Runs a program → `{ ok, code, stdout, stderr }` (see [fogu:process](#foguprocess)).
+- `Fogu.run(cmd, args?, opts?)` → map · error — Runs a program → `{ ok, code, stdout, stderr }` (see [fogu:process](#foguprocess)).
 - `Fogu.glob(pattern)` → list — Files matching `*`, `?` and `**`.
 - `Fogu.hash(data, algo?)` → str — Hex digest, `sha256` (default) or `sha512`.
 - `Fogu.sql(url)` → Database — Same as `sql.open(url)`.
@@ -320,7 +320,7 @@ Runtime helpers available everywhere, without an import.
 - `Fogu.signal.on(name, fn(data)) · off(name) · emit(name, data?) · last · names` — Handlers for OS signals (`SIGINT SIGTERM SIGHUP SIGQUIT SIGUSR1 SIGUSR2`; Windows: `SIGINT SIGBREAK SIGTERM`) or the program's own events; they run as `fg` tasks. With no handler and nobody waiting, SIGINT/SIGTERM still end the program (exit code 130/143) — after releasing sshfs mounts, browsers and SurrealKV/broker stores. `emit` also simulates a signal.
 - `Fogu.host.embedded · Fogu.host.emit(name, data)` → bool — When the runtime is embedded through the C API ([libfogu_rt](#embed)): calls the host's callback; `false` without one.
 - `Fogu.write(...values)` → nil — Like `print`, without spaces or newline (streaming output).
-- `Fogu.watch(path | [paths], { recursive = true, debounce = 50ms })` → Watcher · error — File system events: `w.next(timeout?)` → `{ kind, path, paths }` (`create modify remove rename`), `tryNext()`, `close()`.
+- `Fogu.watch(path | [paths], { recursive = true, debounce = 50ms })` → Watcher · error — File system events: `w.next(timeout?)` → `{ kind, path, paths }` (`create modify remove rename`; absolute paths, written with `/`), `tryNext()`, `close()`.
 - `Fogu.exit(code?)` → — — Ends the program.
 
 ```fogu
@@ -377,9 +377,9 @@ while true {
 output:
 
 ```text
-modify src/app.fg
-create src/new.fg
-remove src/old.fg
+modify /home/ana/app/src/app.fg
+create /home/ana/app/src/new.fg
+remove /home/ana/app/src/old.fg
 ```
 
 ## fogu:math
@@ -388,7 +388,7 @@ remove src/old.fg
 import math from "fogu:math"
 ```
 
-Numbers. Rounding to an int (`floor ceil trunc round`) keeps ints as they are; the other functions return floats. The JIT compiles these calls inside hot code with the same results.
+Numbers. Rounding to an int (`floor ceil trunc round`) keeps ints as they are; a float with no int value (NaN, ±inf, beyond ±2^63) stops the program instead of becoming 0 or MAX_INT; the other functions return floats. The JIT compiles these calls inside hot code with the same results.
 
 - `math.PI · E · TAU · LN2 · LN10 · SQRT2 · EPSILON · INF · NAN` → float — Constants.
 - `math.MAX_INT · math.MIN_INT` → int — The int range (64-bit).
@@ -684,7 +684,7 @@ import process from "fogu:process"
 
 A program that exits with a non-zero code is not an error: check `ok` and `code`. Not being able to start it is an error value. For pipes and Linux commands see [fogu:shell](#fogushell).
 
-- `process.run(cmd, args?, { cwd, env, input })` → map · error — `{ ok, code, stdout, stderr }`.
+- `process.run(cmd, args?, { cwd, env, input })` → map · error — `{ ok, code, stdout, stderr }`. `input` is a str or a buffer; a missing `cwd` folder or a program that cannot start → error value; an unknown option stops the program.
 - `process.shell(command)` → map — Through `sh -c` / `cmd /C`.
 - `process.env(name) · process.setEnv(name, value)` → str · nil
 - `process.cwd() · process.chdir(path)` → str · nil
@@ -855,7 +855,7 @@ Rust `regex` syntax (linear time, no backtracking). Positions are character inde
 - `re.replace(text, repl) · re.replaceAll(text, repl)` → str — `$1`, `${name}`, `$$` in `repl`.
 - `re.split(text, limit?)` → list
 - `re.source · re.groups · re.names` — Pattern · group count · group names.
-- `regex.test/find/findAll/replace/replaceAll/split/matches(text, pattern, …)` — One-off shortcuts.
+- `regex.test/find/findAll/replace/replaceAll/split/matches(text, pattern, …, opts?)` — One-off shortcuts; a trailing map is the options of `compile`. In a replacement, `$1x` is the group named `1x`: write `${1}x`.
 - `regex.escape(text)` → str — A literal pattern.
 
 ```fogu
@@ -890,10 +890,10 @@ import crypto from "fogu:crypto"
 - `crypto.hashFile(algo, path, { base64 })` → str · error — The digest of a file's bytes (executables, archives: files `fs.readText` cannot read). Missing file → error value.
 - `crypto.hmac(algo, key, data, { base64 })` → str
 - `crypto.encrypt(data, key)` → str — AES-256-GCM; `key` is a password (argon2id) or 64 hex chars. Base64 output with salt and nonce.
-- `crypto.decrypt(box, key, { bytes })` → str · error — Wrong key or altered data → error value.
+- `crypto.decrypt(box, key, { bytes })` → str · buffer · error — Wrong key or altered data → error value. `{ bytes: true }` returns a buffer; without it, data that is not UTF-8 text is an error value.
 - `crypto.hashPassword(password)` → str — argon2id PHC string (OWASP parameters), for storing passwords. [`fogu:password`](#fogupassword) adds bcrypt, scrypt, PBKDF2, peppers and rehash checks.
 - `crypto.verifyPassword(password, hash)` → bool · error — Any hash `password.verify` understands; a malformed hash → error value.
-- `crypto.randomBytes(n) · crypto.randomHex(n)` → list · str — Secure random.
+- `crypto.randomBytes(n) · crypto.randomHex(n)` → buffer · str — Secure random.
 - `crypto.generateKeyPair(algorithm = "ed25519", { bits }?)` → { algorithm, bits, privateKey, publicKey } — A new key pair as PEM text (private: PKCS#8, public: SPKI — what OpenSSL, JWT libraries and `fogu:tls` read). Algorithms: `ed25519`, `p256` (ECDSA, also `es256`), `p384` (`es384`) and `rsa` with `bits` 2048 (default), 3072 or 4096 (also written `"rsa-4096"`; big RSA keys take a moment). Certificates: `tls.selfSigned`.
 - `crypto.randomInt(min, max)` → int — Inclusive, unbiased.
 - `crypto.uuid(version = 4, namespace?, name?)` → str — `uuid()` / `uuid(4)` random, `uuid(7)` time-ordered, `uuid(5, namespace, name)` name-based.
@@ -944,8 +944,8 @@ import password from "fogu:password"
 
 Password storage. `hash` and `verify` are slow on purpose and run off the interpreter thread, so other `fg` tasks keep running. The salt is always random (16 bytes). Defaults follow the OWASP Password Storage Cheat Sheet: argon2id m=19456 KiB t=2 p=1 · bcrypt cost 12 · scrypt N=2 17 r=8 p=1 · PBKDF2-SHA256 600 000 / PBKDF2-SHA512 210 000 iterations.
 
-- `password.hash(pw, { algorithm, memory, time, parallelism, cost, n, r, p, iterations, pepper })` → str · error — `algorithm`: `argon2id` (default), `argon2i`, `argon2d`, `bcrypt`, `scrypt`, `pbkdf2-sha256`, `pbkdf2-sha512`. argon2: `memory` (KiB), `time`, `parallelism`; bcrypt: `cost` 4..31; scrypt: `n` (power of two), `r`, `p`; PBKDF2: `iterations`. Returns a PHC string (`$argon2id$…`, `$scrypt$…`, `$pbkdf2-sha256$…`) or bcrypt's `$2b$…`. Unknown options stop the program.
-- `password.verify(pw, hash, { pepper })` → bool · error — Detects the algorithm from the hash (`$argon2id$`, `$2a$`/`$2b$`/`$2y$`, `$scrypt$`, `$pbkdf2-sha256$`…); constant-time comparison. A malformed or unsupported hash → error value. Accepts the same options map as `hash`.
+- `password.hash(pw, { algorithm, memory, time, parallelism, cost, n, r, p, iterations, pepper })` → str · error — `algorithm`: `argon2id` (default), `argon2i`, `argon2d`, `bcrypt`, `scrypt`, `pbkdf2-sha256`, `pbkdf2-sha512`. argon2: `memory` (KiB), `time`, `parallelism`; bcrypt: `cost` 4..20; scrypt: `n` (power of two), `r`, `p`; PBKDF2: `iterations`. Costs beyond any recommended setting are refused, for new and stored hashes alike: argon2 memory above 2 GiB or memory × time above 8 GiB, scrypt above 2 GiB of memory or 8 GiB of work, bcrypt cost above 20, more than 20 000 000 PBKDF2 iterations. Returns a PHC string (`$argon2id$…`, `$scrypt$…`, `$pbkdf2-sha256$…`) or bcrypt's `$2b$…`. Unknown options stop the program.
+- `password.verify(pw, hash, { pepper })` → bool · error — Detects the algorithm from the hash (`$argon2id$`, `$2a$`/`$2b$`/`$2y$`, `$scrypt$`, `$pbkdf2-sha256$`…); constant-time comparison. A malformed or unsupported hash, or one whose parameters are too large (a hash with `m=4294967295` would abort the process) → error value. Accepts the same options map as `hash`.
 - `password.needsRehash(hash, options?)` → bool · error — True when the hash uses another algorithm or weaker parameters than `options` (default: argon2id with the defaults), or bcrypt `$2a$`. Check it after a successful login and store a new hash.
 - `password.info(hash)` → map · error — `{ algorithm, version, … }` without salt or hash: argon2 `memory time parallelism length`, bcrypt `cost`, scrypt `n r p length`, PBKDF2 `iterations length`.
 - `password.generate(length = 16, { upper, lower, digits, symbols, excludeAmbiguous })` → str — From the OS CSPRNG, unbiased, with at least one character of every class chosen (all on by default). `symbols`: a bool or the set of symbols to use; `excludeAmbiguous` drops `Il1O0o`.
@@ -1025,7 +1025,7 @@ Reads `.xlsx .xlsm .xls .xlsb .ods`; writes `.xlsx` (bold, frozen header row, co
 
 - `excel.read(path, { sheet, header = true })` → list · map · error — The first sheet (or `sheet`: name or index) as rows; `sheet: "*"` → `{ name: rows }`.
 - `excel.sheets(path)` → list · error — Sheet names.
-- `excel.write(path, rows | { Sheet: rows }, { header = true, columns })` → nil · error — One sheet per map key.
+- `excel.write(path, rows | { Sheet: rows }, { header = true, columns })` → nil · error — One sheet per map key, in the alphabetical order of the keys (the first sheet is the first key); the parent folders are created. NaN, ±inf and buffers are an error value; an int beyond 2^53 is written as text (an Excel number is a double).
 
 ```fogu
 import excel from "fogu:excel"
@@ -1035,7 +1035,7 @@ const products = [
 ]
 excel.write("shop.xlsx", { Products: products, Notes: [["checked", true]] })?
 print(excel.sheets("shop.xlsx")?)
-print(excel.read("shop.xlsx")?)
+print(excel.read("shop.xlsx", { sheet: "Products" })?)
 print(excel.read("shop.xlsx", { sheet: "Notes", header: false })?)
 ```
 
@@ -1043,7 +1043,7 @@ output:
 
 ```text
 [Notes, Products]
-[]
+[{id: 1, name: Café, price: 4.5, stock: true}, {id: 2, name: Pão, price: 0.8, stock: false}]
 [[checked, true]]
 ```
 
@@ -1569,6 +1569,7 @@ import etcd from "fogu:etcd"
 
 etcd v3 over gRPC (the official protos, no code generation): keys, ranges by prefix, leases, transactions, watches and cluster status. Calls go to every endpoint in turn; with `user` the token is renewed when it expires.
 
+- `etcd.defaultEndpoints()` → list — The endpoints `connect()` uses without arguments (`$ETCDCTL_ENDPOINTS` or `http://127.0.0.1:2379`).
 - `etcd.connect(url? | { endpoints, user, password, tls, timeout = 15s, connectTimeout = 5s })` → Etcd · error — Default `$ETCDCTL_ENDPOINTS` or `http://127.0.0.1:2379`; `user` may be `"name:pass"` (also `$ETCDCTL_USER`/`$ETCDCTL_PASSWORD`).
 - `db.get(key, { prefix, rangeEnd, limit, revision, keysOnly, countOnly, serializable, sort, sortTarget })` → { kvs, count, more, revision } — `kvs`: `[{ key, value, version, createRevision, modRevision, lease }]`.
 - `db.put(key, value, { lease, prevKv, ignoreValue, ignoreLease }) · db.delete(key, { prefix, rangeEnd, prevKv })` → { revision, prevKv } · { deleted, prevKvs }
@@ -2313,7 +2314,7 @@ import events from "fogu:events"
 - `e.on(event, fn) · e.once(event, fn)` → nil — Listeners receive every emitted argument (declare them all).
 - `e.off(event, fn?) · e.removeAll(event?)` → nil
 - `e.emit(event, ...args)` → bool — `true` when someone listened.
-- `e.listeners(event) · e.eventNames() · e.hasListeners(event)`
+- `e.listeners(event) · e.eventNames() · e.hasListeners(event)` → int · list · bool — `listeners` is the number of listeners of the event (Node's `listenerCount`).
 
 ```fogu
 import events from "fogu:events"
@@ -2344,8 +2345,8 @@ import cron from "fogu:cron"
 
 Jobs run when the program calls `cron.tick()` (typically in its main loop).
 
-- `cron.every(interval, fn)` → nil — A job every `interval` (duration or ms).
-- `cron.schedule(expression, fn)` → nil — 5-field cron expression (`"*/5 * * * *"`); an invalid one stops the program.
+- `cron.every(interval, fn)` → nil — A job every `interval` (duration, ms or a str like `"2s"`; at least 1 ms).
+- `cron.schedule(expression, fn)` → nil — 5-field cron expression (`"*/5 * * * *"`), evaluated in UTC : each field is a list of `*`, `n` or `a-b`, each with an optional `/step`; month and weekday names (`JAN`, `MON-FRI`); weekday 7 is Sunday; the macros `@yearly @monthly @weekly @daily @hourly`. When both day of month and day of week are restricted, a day matches either (as in Vixie cron). An invalid expression, one that never matches a date (`0 0 31 2 *`) or `L W # ?` stops the program.
 - `cron.tick()` → int — Runs the jobs that are due; returns how many ran.
 - `cron.list()` → list — Job names (`every(10ms)`, the cron expression…).
 - `cron.clear()` → nil — Removes every job.
@@ -2782,6 +2783,7 @@ import mail from "fogu:mail"
 E-mail over SMTP (presets for Gmail, Outlook, Office 365, Yahoo, iCloud, Zoho, Fastmail, AOL, GMX, Amazon SES, Mailtrap, Mailpit) or the HTTP APIs of Resend, SendGrid, Mailgun, Postmark, Brevo, MailerSend and Mailjet. The SMTP client and the MIME builder are Fogu's own (STARTTLS, implicit TLS, AUTH PLAIN/LOGIN, attachments, inline images, UTF-8 headers). The `console` provider only prints (development and tests).
 
 - `mail.connect({ provider, … } | url)` → Mailer — No connection is made yet.
+- `mail.providers` → list — The names accepted by `provider`.
 - `SMTP: { provider: "gmail" | "smtp" | …, host, port, secure, user, password, region }` — `secure`: `tls` (465), `starttls` (587), `none`; URLs `smtp://user:pass@host:587`, `smtps://…`.
 - `APIs: { provider: "resend" | "sendgrid" | …, apiKey, domain, region, baseUrl }` — `apiKey` defaults to `$RESEND_API_KEY`, `$SENDGRID_API_KEY`…; Mailgun needs `domain`, Mailjet `apiSecret`.
 - `common: { from, timeout }` — Default sender.
@@ -2845,6 +2847,7 @@ LLMs over HTTP: OpenAI-compatible APIs (OpenAI, Groq, OpenRouter, DeepSeek, Mist
 
 A tool that returns an `error` value sends `error: …` back to the model, which can recover.
 
+- `ai.providers` → list — The names accepted by `provider`.
 - `ai.tool(name, description, parameters, run?)` → map — `parameters` is a JSON schema; also a plain map `{ name, description, parameters, run }`.
 - `ai.agent({ client, model, instructions, tools, maxSteps = 10, temperature, maxTokens, memory, onStep })` → Agent — Tools need `run(args)`.
 - `agent.run(input)` → map · error — Calls the model and the tools until it answers: `{ text, steps, messages, usage, finishReason }`.
@@ -3188,7 +3191,7 @@ The runtime builds as a dynamic library that other programs load: `cargo ffi` (=
 - `fogu_emit(rt, name, dataJson)` → char* — Fires the program's `Fogu.signal.on(name, fn)` handlers.
 - `fogu_on_host(rt, cb, user)` → char* — `void cb(char *name, char *json, void *user)` — called by `Fogu.host.emit(name, data)` on the runtime's thread; it owns both strings (`fogu_free_string`), so asynchronous hosts can read them later.
 
-```fogu
+```ts
 import { dlopen, FFIType, CString, JSCallback } from "bun:ffi";
 const { symbols: F } = dlopen("target/release/libfogu_rt.so", {
   fogu_new: { args: [], returns: FFIType.ptr },
@@ -3329,7 +3332,7 @@ Bia 30 go
 - `cli.isTTY("stdin" | "stdout" | "stderr") · cli.size()` → bool · { columns, rows } | nil
 - `cli.clear() · clearLine() · hideCursor() · showCursor() · readKey()` — `readKey` → a character or `Enter Escape Backspace Tab ArrowUp ArrowDown ArrowLeft ArrowRight Home End PageUp PageDown Delete`.
 - `cli.spinner(text, { frames })` → Spinner — `text(t) succeed(msg?) fail(msg?) warn(msg?) info(msg?) stop()`.
-- `cli.progress(total, { message, prefix, template, chars })` → ProgressBar — `inc(n = 1) set(n) length(n) message(m) println(line) finish(msg?)`, fields `position length elapsed finished`. Templates of `indicatif`.
+- `cli.progress(total, { message, prefix, template, chars })` → ProgressBar — `inc(n = 1) set(n) length(n?) message(m) println(line) finish(msg?)` (`length()` returns the total), fields `position elapsed finished`. Templates of `indicatif`.
 - `cli.table(rows, { headers, style: "rounded" | "utf8" | "ascii" | "markdown" | "none", align, width })` → str — Rows are lists or maps; numbers are right aligned.
 
 ```fogu
@@ -3423,9 +3426,9 @@ Fogu 1.0 nil
 
 ### Templates (Jinja)
 
-- `html.render(source, data)` → str · error — Autoescaped; `{{ x | markdown }}` and `| striptags` are added to the Jinja filters.
+- `html.render(source, data)` → str · error — Autoescaped; `{{ x | markdown }}` (its HTML is sanitized like `html.sanitize`: no scripts, event attributes or `javascript:` links) and `| striptags` are added to the Jinja filters. `nil` prints nothing and booleans print `true`/`false`.
 - `html.template(source, { autoescape = true })` → Template — `t.render(data)`.
-- `html.templates(folder, { autoescape })` → Templates — `render(name, data)`, `renderString(source, data)`, `has(name)`; `extends`/`include`/`import` load from the folder; autoescape by extension.
+- `html.templates(folder, { autoescape })` → Templates — `render(name, data)`, `renderString(source, data)`, `has(name)`; `extends`/`include`/`import` load from the folder; autoescape by extension (an inline `renderString` template counts as `.html`).
 
 ```fogu
 import html from "fogu:html"
@@ -3530,7 +3533,7 @@ Create, transform, draw on and encode images (PNG, JPEG, WebP, GIF, BMP, ICO, TI
 - `image.info(path)` → { width, height, format } · error — Without decoding the pixels.
 - `image.gif(frames, { delay = 100ms, loop = 0, speed }) · image.writeGif(path, frames, opts)` → buffer · nil — Frames: images or `{ image, delay }`.
 - `image.frames(path | buffer)` → list · error — `[{ image, delay }]` of an animated GIF.
-- `image.color(c)` → list — `[r, g, b, a]`.
+- `image.color(c)` → list · error — `[r, g, b, a]`; an invalid colour is an error value (elsewhere it stops the program).
 - `img.width · img.height` → int
 - `img.resize(w, h?, { fit = "fill" | "contain" | "cover", filter }) · thumbnail(w, h?) · crop(x, y, w, h)` → Image — One side keeps the aspect ratio.
 - `img.rotate(degrees, { background }) · flipH() · flipV()` → Image — Any angle; 90/180/270 are exact.
@@ -3580,6 +3583,7 @@ import plot from "fogu:plot"
 Charts in the style of matplotlib — line, scatter, area, bar (grouped), histogram and pie/donut — drawn as SVG and saved as SVG, PNG, JPEG or WebP. Works with lists and ranges (arrays and data frames from the `datascience` lib: pass `a.toList()` / `df.col(name)`).
 
 - `plot.figure({ title, xlabel, ylabel, width = 800, height = 450, theme = "light" | "dark", grid = true, legend = true, xmin, xmax, ymin, ymax, background })` → Figure
+- `plot.palette` → list — The default series colours, in order.
 - `fig.line(x?, y, { label, color, width, dash, marker, size, opacity }) · scatter(…) · area(…)` → nil — `line(y)` uses 0, 1, 2… as x.
 - `fig.bar(categories, values, { label, color })` → nil — Several `bar` calls are grouped.
 - `fig.hist(values, { bins = 10 }) · fig.pie(labels, values, { donut })` → nil

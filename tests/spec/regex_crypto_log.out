@@ -11,7 +11,7 @@ ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
 ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=
 f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8
 b2zDoQ== olá __4
-6869 hi [255, 0]
+6869 hi <buffer 2 bytes: ff 00>
 true segredo ✓
 error: crypto.decrypt: wrong key or corrupted data
 64 with a raw key

@@ -1,6 +1,6 @@
 true
-[7, usr1]
+[7, term]
 nil
 tick {data: 42, name: tick}
 SIGTERM
-[7, usr1]
+[7, term, term]

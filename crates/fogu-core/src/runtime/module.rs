@@ -385,7 +385,8 @@ pub fn display_path(p: &Path) -> String {
     }
     if let Ok(cwd) = std::env::current_dir().and_then(|c| c.canonicalize()) {
         if let Ok(rel) = p.strip_prefix(&cwd) {
-            return rel.display().to_string();
+            // relative paths with `/` on every platform, as imports write them
+            return crate::native::util::path_str(rel);
         }
     }
     let s = p.display().to_string();

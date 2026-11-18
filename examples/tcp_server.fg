@@ -9,6 +9,12 @@ while served < 3 {
     print("client connected:", conn.peer)
 
     let line = conn.readLine()
+    // nil when the client closed without a line (a port check), an error when the read failed
+    if typeof(line) != "str" {
+        print("no line:", line)
+        conn.close()
+        continue
+    }
     print("received:", line)
 
     conn.writeLine("echo: " + line)

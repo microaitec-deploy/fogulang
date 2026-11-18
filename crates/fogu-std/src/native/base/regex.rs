@@ -30,7 +30,7 @@ pub fn build() -> ModuleValue {
     e.insert("compile".into(), nfn_var("compile", 1, |a| {
         max_args(a, 2, "regex.compile")?;
         let re = compile(&str_arg(a, 0, "regex.compile")?, a.get(1))?;
-        Ok(NativeObjectRef::new(RegexValue { re }).to_value())
+        Ok(NativeObjectRef::new(RegexValue::new(re)).to_value())
     }));
     e.insert("escape".into(), nfn_var("escape", 1, |a| {
         max_args(a, 1, "regex.escape")?;
@@ -62,36 +62,117 @@ fn shortcut(name: &str) -> fn(&[Value]) -> Result<Value, String> {
 fn run_short(op: &str, a: &[Value]) -> Result<Value, String> {
     let what = format!("regex.{}", op);
     let text = str_arg(a, 0, &what)?;
-    let re = compile(&str_arg(a, 1, &what)?, None)?;
+    // a trailing map is the options of the pattern, as in `regex.compile(pattern, opts)`
+    let (extra, opts) = match a[2..].split_last() {
+        Some((o @ Value::Map(_), rest)) => (rest, Some(o)),
+        _ => (&a[2..], None),
+    };
+    let re = compile(&str_arg(a, 1, &what)?, opts)?;
     let mut rest = vec![Value::Str(text.into())];
-    rest.extend(a[2..].iter().cloned());
-    RegexValue { re }.call(op, &rest)
+    rest.extend(extra.iter().cloned());
+    let (max, usage) = match op {
+        "replace" | "replaceAll" => (1, "(text, pattern, replacement, opts?)"),
+        "split" => (1, "(text, pattern, limit?, opts?)"),
+        _ => (0, "(text, pattern, opts?)"),
+    };
+    if extra.len() > max {
+        return Err(format!("{}{} expects at most {} arguments, got {}", what, usage, max + 3, a.len()));
+    }
+    RegexValue::new(re).call(op, &rest)
 }
 
-fn compile(pattern: &str, opts: Option<&Value>) -> Result<Regex, String> {
-    let mut b = RegexBuilder::new(pattern);
+/// The options of `regex.compile(pattern, opts)`.
+#[derive(Clone, Copy)]
+struct Flags {
+    ignore_case: bool,
+    multiline: bool,
+    dot_all: bool,
+    verbose: bool,
+    unicode: bool,
+}
+
+fn compile(pattern: &str, opts: Option<&Value>) -> Result<(Regex, Flags), String> {
+    let mut f = Flags { ignore_case: false, multiline: false, dot_all: false, verbose: false, unicode: true };
     if let Some(Value::Map(o)) = opts {
         let o = o.borrow();
         let flag = |k: &str| o.get(k).is_some_and(|v| v.is_truthy());
-        b.case_insensitive(flag("ignoreCase"))
-            .multi_line(flag("multiline"))
-            .dot_matches_new_line(flag("dotAll"))
-            .ignore_whitespace(flag("verbose"))
-            .unicode(!o.get("unicode").is_some_and(|v| !v.is_truthy()));
+        f = Flags {
+            ignore_case: flag("ignoreCase"),
+            multiline: flag("multiline"),
+            dot_all: flag("dotAll"),
+            verbose: flag("verbose"),
+            unicode: !o.get("unicode").is_some_and(|v| !v.is_truthy()),
+        };
     }
-    b.build().map_err(|e| io_err!("regex: invalid pattern: {}", e.to_string().lines().last().unwrap_or("")))
+    Ok((build_with(pattern, f)?, f))
+}
+
+fn build_with(pattern: &str, f: Flags) -> Result<Regex, String> {
+    RegexBuilder::new(pattern)
+        .case_insensitive(f.ignore_case)
+        .multi_line(f.multiline)
+        .dot_matches_new_line(f.dot_all)
+        .ignore_whitespace(f.verbose)
+        .unicode(f.unicode)
+        .build()
+        .map_err(|e| io_err!("regex: invalid pattern: {}", e.to_string().lines().last().unwrap_or("")))
 }
 
 pub struct RegexValue {
     re: Regex,
+    flags: Flags,
+    /// `\A(?:pattern)\z` with the same options, built on the first `matches`
+    full: Option<Regex>,
 }
 
-/// byte offset → character index
-fn char_index(s: &str, byte: usize) -> i64 {
-    s[..byte].chars().count() as i64
+impl RegexValue {
+    fn new((re, flags): (Regex, Flags)) -> Self {
+        RegexValue { re, flags, full: None }
+    }
+
+    /// Does the whole text match? Not `find` covering the text: leftmost-first stops at the
+    /// first alternative (`a|abc` finds `a` in "abc").
+    fn full_match(&mut self, t: &str) -> Result<bool, String> {
+        if self.full.is_none() {
+            // `\A`/`\z`: whole text even with `multiline` (where ^ and $ match at lines);
+            // with `verbose` the pattern may end in a comment, hence the newline
+            let nl = if self.flags.verbose { "\n" } else { "" };
+            let anchored = format!(r"\A(?:{}{})\z", self.re.as_str(), nl);
+            self.full = Some(build_with(&anchored, self.flags)?);
+        }
+        Ok(self.full.as_ref().is_some_and(|f| f.is_match(t)))
+    }
 }
 
-fn match_value(text: &str, caps: &::regex::Captures, re: &Regex) -> Value {
+/// byte offset → character index, for offsets visited in increasing order (all the matches of
+/// a text): counting from the start for each one made `findAll` quadratic
+struct CharIndex<'a> {
+    text: &'a str,
+    ascii: bool,
+    byte: usize,
+    chars: i64,
+}
+
+impl<'a> CharIndex<'a> {
+    fn new(text: &'a str) -> Self {
+        CharIndex { text, ascii: text.is_ascii(), byte: 0, chars: 0 }
+    }
+
+    fn at(&mut self, byte: usize) -> i64 {
+        if self.ascii {
+            return byte as i64;
+        }
+        if byte < self.byte {
+            self.byte = 0;
+            self.chars = 0;
+        }
+        self.chars += self.text[self.byte..byte].chars().count() as i64;
+        self.byte = byte;
+        self.chars
+    }
+}
+
+fn match_value(pos: &mut CharIndex, caps: &::regex::Captures, re: &Regex) -> Value {
     let whole = caps.get(0).unwrap();
     let groups: Vec<Value> = (1..caps.len())
         .map(|i| caps.get(i).map_or(Value::Nil, |m| Value::Str(m.as_str().to_string().into())))
@@ -103,8 +184,8 @@ fn match_value(text: &str, caps: &::regex::Captures, re: &Regex) -> Value {
         .collect();
     map(vec![
         ("text", Value::Str(whole.as_str().to_string().into())),
-        ("start", Value::Int(char_index(text, whole.start()))),
-        ("end", Value::Int(char_index(text, whole.end()))),
+        ("start", Value::Int(pos.at(whole.start()))),
+        ("end", Value::Int(pos.at(whole.end()))),
         ("groups", list(groups)),
         ("named", map(named)),
     ])
@@ -135,17 +216,18 @@ impl FoguObject for RegexValue {
             "matches" => {
                 max_args(args, 1, "matches")?;
                 let t = text()?;
-                Ok(Value::Bool(self.re.find(&t).is_some_and(|m| m.start() == 0 && m.end() == t.len())))
+                Ok(Value::Bool(self.full_match(&t)?))
             }
             "find" => {
                 max_args(args, 1, "find")?;
                 let t = text()?;
-                Ok(self.re.captures(&t).map_or(Value::Nil, |c| match_value(&t, &c, &self.re)))
+                Ok(self.re.captures(&t).map_or(Value::Nil, |c| match_value(&mut CharIndex::new(&t), &c, &self.re)))
             }
             "findAll" => {
                 max_args(args, 1, "findAll")?;
                 let t = text()?;
-                Ok(list(self.re.captures_iter(&t).map(|c| match_value(&t, &c, &self.re)).collect()))
+                let mut pos = CharIndex::new(&t);
+                Ok(list(self.re.captures_iter(&t).map(|c| match_value(&mut pos, &c, &self.re)).collect()))
             }
             // replace(text, replacement) — `$1`, `${name}`, `$$` for a literal $
             "replace" | "replaceAll" => {

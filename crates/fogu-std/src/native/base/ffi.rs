@@ -237,7 +237,8 @@ fn candidates_for(name: &str, os: Platform) -> Vec<String> {
     }
     if name == "m" || name == "libm" {
         return match os {
-            Platform::Windows => vec!["msvcrt.dll".into()],
+            // the Universal CRT first: msvcrt.dll (VC6) has no C99 math (fma, cbrt, round, log2…)
+            Platform::Windows => vec!["ucrtbase.dll".into(), "msvcrt.dll".into()],
             Platform::MacOs => vec!["libm.dylib".into(), "/usr/lib/libSystem.B.dylib".into()],
             Platform::Linux => vec!["libm.so.6".into(), "libm.so".into()],
         };

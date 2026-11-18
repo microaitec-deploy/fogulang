@@ -1,0 +1,79 @@
+// Data integrity and security fixes of the standard library (bugs.md part 4 B01–B12, round 2 M50)
+import jwt from "fogu:jwt"
+import html from "fogu:html"
+import yaml from "fogu:yaml"
+import toml from "fogu:toml"
+import json from "fogu:json"
+import log from "fogu:log"
+import path from "fogu:path"
+import regex from "fogu:regex"
+import shell from "fogu:shell"
+import security from "fogu:security"
+import fs from "fogu:fs"
+
+// B01: a buffer is written as its bytes, never as its printed form
+const f = "stdlib_data.tmp.bin"
+Fogu.file(f).write(bytes([0, 255, 128, 10]))
+print(Fogu.file(f).size())
+Fogu.file(f).append(bytes([13]))
+print(Fogu.file(f).size())
+fs.remove(f)
+print(Fogu.hash(bytes([97, 98, 99])) == Fogu.hash("abc"))
+
+// B02: NumericDate claims that are floats are checked; other types are invalid
+const k = "k"
+print(jwt.verify(jwt.sign({ exp: 1000.5 }, k), k))
+print(jwt.verify(jwt.sign({ nbf: 99999999999.5 }, k), k))
+print(jwt.verify(jwt.sign({ exp: "tomorrow" }, k), k))
+print(jwt.verify(jwt.sign(json.parse("{\"exp\": 99999999999.5, \"n\": 18446744073709551615}"), k), k)?.n)
+
+// B03, M50: the markdown filter is sanitized, renderString escapes
+print(html.render("{{ x | markdown }}", { x: "hi <script>alert(1)</script> [l](javascript:alert(1)) **b**" }))
+fs.mkdir("stdlib_tpl.tmp.d")
+const t = html.templates("stdlib_tpl.tmp.d")
+print(t.renderString("{{ x }}", { x: "<script>" })?)
+fs.removeAll("stdlib_tpl.tmp.d")
+// B34: nil prints nothing, booleans as Fogu writes them
+print(html.render("[{{ n }}] {{ t }} {{ f }}", { n: nil, t: true, f: false }))
+
+// B04, B06: numbers beyond the int range are floats; inf/nan survive yaml and toml
+print(yaml.parse("name: ana\nid: 18446744073709551615\n"))
+print(json.parse("{\"id\":18446744073709551615}"))
+print(yaml.parse("h: .inf\ni: -.inf\nf: 1.0\n"))
+print(toml.parse("f = inf\ng = 1.0\n"))
+print(yaml.stringify({ v: 1.0, n: 2, s: "x" }), typeof(toml.parse(toml.stringify({ f: 1.0 }))?.f))
+let deep = [1]
+for i in 0..200 {
+    deep = [deep]
+}
+print(len(yaml.stringify(deep)) > 200, len(toml.stringify({ a: deep })?) > 200)
+
+// B05: floats stay floats through json
+print(json.stringify(1.0), json.stringify(1e20), json.stringify(0.1), json.stringify([2.5, 3]))
+print(typeof(json.parse(json.stringify(2.0))), json.parse(json.stringify({ v: 1e20 })).v == 1e20)
+
+// B07: leading .. are kept
+print(path.normalize("../../a"), path.join("..", "..", "etc", "passwd"), path.normalize("/../a"), path.normalize("a/../../b"))
+
+// B08: IPv4-mapped IPv6 addresses
+print(security.isPrivate("::ffff:10.0.0.1"), security.isPrivate("::ffff:127.0.0.1"), security.isPrivate("::ffff:8.8.8.8"))
+print(security.inCidr("::ffff:10.1.2.3", "10.0.0.0/8"))
+
+// B09, B10: one line per entry; the entry's own keys are kept
+log.setOutput("stdout")
+log.setTime(false)
+log.info("two\nlines", { user: "ana\nERROR forged" })
+log.setFormat("json")
+log.error("failed", { code: 23, msg: "field named msg", level: "x" })
+log.setFormat("text")
+
+// B11, B19, R2.6 P02: whole-text match, options in the shortcuts, positions
+print(regex.matches("abc", "a|abc"), regex.compile("a|abc")?.matches("abc"), regex.matches("abcd", "a|abc"))
+print(regex.test("ABC", "b", { ignoreCase: true }), regex.replaceAll("A-a", "a", "x", { ignoreCase: true }))
+const ms = regex.findAll("é1 ü22 3", "[0-9]+")
+print(ms.map((m) => [m.start, m.end]))
+
+// B12: output that is not JSON is an error value
+print(shell.json("echo notjson"))
+// B22: >&2 is a redirection; a subshell is refused
+print(shell.run("echo err >&2").stderr.trim())

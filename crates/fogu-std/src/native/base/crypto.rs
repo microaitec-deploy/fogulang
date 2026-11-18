@@ -28,7 +28,7 @@ use sha2::Digest;
 
 use crate::runtime::value::{ModuleValue, Value};
 
-use crate::native::util::{list, map, max_args, nfn_var, str_arg};
+use crate::native::util::{map, max_args, nfn_var, str_arg};
 
 pub fn build() -> ModuleValue {
     let mut e: HashMap<String, Value> = HashMap::new();
@@ -46,7 +46,7 @@ pub fn build() -> ModuleValue {
     f("verifyPassword", 2, verify_password);
     f("randomBytes", 1, |a| {
         max_args(a, 1, "randomBytes")?;
-        Ok(list(random(count(a, "randomBytes")?)?.into_iter().map(|b| Value::Int(b as i64)).collect()))
+        Ok(Value::buffer(random(count(a, "randomBytes")?)?))
     });
     f("randomHex", 1, |a| {
         max_args(a, 1, "randomHex")?;
@@ -200,15 +200,17 @@ fn bytes_arg(v: &Value, what: &str) -> Result<Vec<u8>, String> {
     crate::native::util::bytes_of(v, what)
 }
 
-/// Decoded data as text, or as bytes with `{ bytes: true }` (or when not UTF-8).
+/// Decoded data as text, or as a buffer with `{ bytes: true }`. The type no longer depends on
+/// the content: bytes that are not UTF-8 without `{ bytes: true }` are an error value.
 fn as_text_or_bytes(bytes: Vec<u8>, opts: Option<&Value>) -> Result<Value, String> {
     let want_bytes = matches!(opts, Some(Value::Map(m)) if m.borrow().get("bytes").is_some_and(|v| v.is_truthy()));
-    if !want_bytes {
-        if let Ok(s) = String::from_utf8(bytes.clone()) {
-            return Ok(Value::Str(s.into()));
-        }
+    if want_bytes {
+        return Ok(Value::buffer(bytes));
     }
-    Ok(list(bytes.into_iter().map(|b| Value::Int(b as i64)).collect()))
+    match String::from_utf8(bytes) {
+        Ok(s) => Ok(Value::Str(s.into())),
+        Err(_) => Err(io_err!("crypto: the decoded data is not UTF-8 text (pass {{ bytes: true }} for a buffer)")),
+    }
 }
 
 fn count(a: &[Value], what: &str) -> Result<usize, String> {

@@ -44,7 +44,7 @@ print(csv.read("out.csv")?)
                 "api": [
                     ("excel.read(path, { sheet, header = true })", "list · map · error", "The first sheet (or <code>sheet</code>: name or index) as rows; <code>sheet: \"*\"</code> → <code>{ name: rows }</code>."),
                     ("excel.sheets(path)", "list · error", "Sheet names."),
-                    ("excel.write(path, rows | { Sheet: rows }, { header = true, columns })", "nil · error", "One sheet per map key."),
+                    ("excel.write(path, rows | { Sheet: rows }, { header = true, columns })", "nil · error", "One sheet per map key, in the alphabetical order of the keys (the first sheet is the first key); the parent folders are created. NaN, ±inf and buffers are an error value; an int beyond 2^53 is written as text (an Excel number is a double)."),
                 ],
                 "example": r'''
 import excel from "fogu:excel"
@@ -54,7 +54,7 @@ const products = [
 ]
 excel.write("shop.xlsx", { Products: products, Notes: [["checked", true]] })?
 print(excel.sheets("shop.xlsx")?)
-print(excel.read("shop.xlsx")?)
+print(excel.read("shop.xlsx", { sheet: "Products" })?)
 print(excel.read("shop.xlsx", { sheet: "Notes", header: false })?)
 ''',
                 "run": True,
@@ -542,6 +542,7 @@ print(ev.action, ev.record, ev.result.age)
         "blocks": [
             {
                 "api": [
+                    ("etcd.defaultEndpoints()", "list", "The endpoints <code>connect()</code> uses without arguments (<code>$ETCDCTL_ENDPOINTS</code> or <code>http://127.0.0.1:2379</code>)."),
                     ("etcd.connect(url? | { endpoints, user, password, tls, timeout = 15s, connectTimeout = 5s })", "Etcd · error", "Default <code>$ETCDCTL_ENDPOINTS</code> or <code>http://127.0.0.1:2379</code>; <code>user</code> may be <code>\"name:pass\"</code> (also <code>$ETCDCTL_USER</code>/<code>$ETCDCTL_PASSWORD</code>)."),
                     ("db.get(key, { prefix, rangeEnd, limit, revision, keysOnly, countOnly, serializable, sort, sortTarget })", "{ kvs, count, more, revision }", "<code>kvs</code>: <code>[{ key, value, version, createRevision, modRevision, lease }]</code>."),
                     ("db.put(key, value, { lease, prevKv, ignoreValue, ignoreLease }) · db.delete(key, { prefix, rangeEnd, prevKv })", "{ revision, prevKv } · { deleted, prevKvs }", ""),

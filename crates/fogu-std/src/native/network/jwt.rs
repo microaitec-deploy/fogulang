@@ -306,22 +306,33 @@ fn verify_token(token: &str, key: &[u8], o: &HashMap<Str, Value>) -> Result<Valu
         return Err(io_err!("jwt: invalid signature"));
     }
     let p = &parts.payload;
-    let now = now_secs();
-    let leeway = seconds(o.get("leeway"), "jwt.verify: leeway")?.unwrap_or(0);
+    // NumericDate (RFC 7519) is any JSON number, fractions included; compared as f64 so that
+    // neither a float claim slips past the check nor a huge int overflows the sums
+    let date = |k: &str| -> Result<Option<f64>, String> {
+        match claim(p, k) {
+            Value::Nil => Ok(None),
+            Value::Int(n) => Ok(Some(n as f64)),
+            Value::Float(f) if f.is_finite() => Ok(Some(f)),
+            _ => Err(io_err!("jwt: invalid '{}' claim (not a number)", k)),
+        }
+    };
+    let now = now_secs() as f64;
+    let leeway = seconds(o.get("leeway"), "jwt.verify: leeway")?.unwrap_or(0) as f64;
     let ignore_exp = o.get("ignoreExpiration").is_some_and(|v| v.is_truthy());
-    if let Value::Int(exp) = claim(p, "exp") {
+    if let Some(exp) = date("exp")? {
         if !ignore_exp && now >= exp + leeway {
             return Err(io_err!("jwt: token expired"));
         }
     }
-    if let Value::Int(nbf) = claim(p, "nbf") {
+    if let Some(nbf) = date("nbf")? {
         if now + leeway < nbf {
             return Err(io_err!("jwt: token not active yet"));
         }
     }
+    let iat = date("iat")?;
     if let Some(max) = seconds(o.get("maxAge"), "jwt.verify: maxAge")? {
-        match claim(p, "iat") {
-            Value::Int(iat) if now - iat <= max + leeway => {}
+        match iat {
+            Some(iat) if now - iat <= max as f64 + leeway => {}
             _ => return Err(io_err!("jwt: token too old (maxAge)")),
         }
     }

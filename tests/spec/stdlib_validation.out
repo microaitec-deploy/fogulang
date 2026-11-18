@@ -1,0 +1,18 @@
+error: image: invalid color #aéa
+error: image: invalid color rgb(nan, 0, 0)
+[255, 128, 0, 255]
+true
+1 1
+{n: 2}
+{x: 1.5}
+true
+{port: -1}
+{file: x.txt, force: false}
+false
+error: password.verify: not a valid password hash (parameters too large: argon2 memory above 2097152 KiB)
+error: password.verify: not a valid password hash (parameters too large: argon2 memory * time above 8388608 KiB)
+error: password.verify: not a valid password hash (parameters too large: pbkdf2 iterations above 20000000)
+error: types.toInt: cannot convert str "9223372036854775808" to int error: types.toInt: cannot convert str "99999999999999999999" to int -16 -9223372036854775808
+0 0 3 -3
+1200.0 1.0
+-2 1000000000000000 -9

@@ -212,7 +212,7 @@ fn run(o: &Opts) -> i32 {
     let failed = n_err > 0 || (o.strict && n_warn > 0);
     if o.json {
         let out = json!({
-            "files": files.len(),
+            "files": files.len() + missing.len(),
             "errors": n_err,
             "warnings": n_warn,
             "ok": !failed,

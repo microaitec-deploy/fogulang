@@ -35,7 +35,7 @@ use crate::runtime::value::{ModuleValue, Value};
 
 use crate::native::json::stringify_value;
 use crate::native::object::{FoguObject, NativeObjectRef, Poller};
-use crate::native::util::{duration_arg, json_to_value, list, max_args, nfn_var, opt_arg, str_arg, thread_poller};
+use crate::native::util::{duration_arg, json_to_value, max_args, nfn_var, opt_arg, str_arg, thread_poller};
 
 pub fn build() -> ModuleValue {
     let mut e: HashMap<String, Value> = HashMap::new();
@@ -836,7 +836,7 @@ impl FoguObject for PageValue {
                             }
                             Ok(Some(data))
                         },
-                        |d| Ok(d.map_or(Value::Nil, |d| list(d.into_iter().map(|b| Value::Int(b as i64)).collect()))),
+                        |d| Ok(d.map_or(Value::Nil, Value::buffer)),
                     )
                 }
                 "setViewport" => {

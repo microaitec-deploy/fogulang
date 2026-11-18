@@ -54,7 +54,8 @@ pub fn build() -> ModuleValue {
     }));
     e.insert("json".into(), nfn_var("json", 1, |a| {
         let out = checked(a, "json")?;
-        crate::native::json::parse_value(&out)
+        // output that is not JSON is an operational failure (an `error` value), like a failed command
+        crate::native::json::parse_value(&out).map_err(|e| io_err!("shell.json: {}", e))
     }));
     e.insert("quote".into(), nfn_var("quote", 1, |a| {
         max_args(a, 1, "quote")?;
@@ -133,6 +134,7 @@ enum Redir {
     All(Word),        // &>
     In(Word),         // <
     ErrToOut,         // 2>&1
+    OutToErr,         // >&2 / 1>&2
 }
 
 #[derive(Clone, Debug, Default)]
@@ -207,6 +209,15 @@ fn lex(src: &str) -> Result<Vec<Tok>, String> {
             toks.push(Tok::Redir("2>&1".into()));
             i += 4;
             continue;
+        }
+        if four == "1>&2" || four.starts_with(">&2") {
+            toks.push(Tok::Redir(">&2".into()));
+            i += if four == "1>&2" { 4 } else { 3 };
+            continue;
+        }
+        // a subshell would otherwise be read as words (`(echo a; echo b)` ran `b)`)
+        if ch == '(' || ch == ')' {
+            return Err(format!("shell: '{}' (subshells) is not supported", ch));
         }
         if let Some(r) = ["2>>", "2>", "&>", ">>", ">", "<"]
             .iter()
@@ -395,7 +406,7 @@ fn parse(src: &str) -> Result<Script, String> {
                 cmd.words.push(w);
             }
             Tok::Redir(r) => {
-                let target = if r == "2>&1" {
+                let target = if r == "2>&1" || r == ">&2" {
                     None
                 } else {
                     match it.next() {
@@ -405,6 +416,7 @@ fn parse(src: &str) -> Result<Script, String> {
                 };
                 cmd.redirs.push(match (r.as_str(), target) {
                     ("2>&1", _) => Redir::ErrToOut,
+                    (">&2", _) => Redir::OutToErr,
                     (">", Some(w)) => Redir::Out(w, false),
                     (">>", Some(w)) => Redir::Out(w, true),
                     ("2>", Some(w)) => Redir::Err(w, false),
@@ -632,7 +644,7 @@ fn run_cmd(cmd: &Cmd, ctx: &mut Ctx, mode: Mode, stdin: Vec<u8>) -> Result<Out, 
                 }
             }
             Redir::ErrToOut => err_to_out = true,
-            Redir::Out(..) | Redir::All(..) => redirect_out = true,
+            Redir::Out(..) | Redir::All(..) | Redir::OutToErr => redirect_out = true,
             Redir::Err(..) => {}
         }
     }
@@ -652,6 +664,10 @@ fn run_cmd(cmd: &Cmd, ctx: &mut Ctx, mode: Mode, stdin: Vec<u8>) -> Result<Out, 
     if err_to_out {
         let e = std::mem::take(&mut out.stderr);
         out.stdout.extend(e);
+    }
+    if cmd.redirs.iter().any(|r| matches!(r, Redir::OutToErr)) {
+        let o = std::mem::take(&mut out.stdout);
+        out.stderr.extend(o);
     }
     for r in &cmd.redirs {
         let res = match r {
@@ -689,10 +705,10 @@ fn exec_one(args: &[String], ctx: &mut Ctx, stdin: Vec<u8>, inherit: bool) -> Re
     let Some(program) = find_program_in(name, &ctx.env) else {
         return Ok(Out { code: 127, stdout: Vec::new(), stderr: format!("{}: command not found\n", name).into_bytes() });
     };
-    // `.bat` / `.cmd` too: the standard library runs them through cmd.exe
-    // with their arguments escaped for it (or refuses ones it cannot
-    // escape). Building `cmd /C <bat> <args>` here passed `&`, `"` and `%`
-    // to cmd.exe as they are (CVE-2024-24576, "BatBadBut").
+    // `.bat`/`.cmd` too: since Rust 1.77.2 `Command` runs a batch file through cmd.exe with its
+    // arguments escaped for cmd (and refuses one it cannot escape, CVE-2024-24576 "BatBadBut").
+    // Building `cmd /C <bat> <args>` by hand bypassed that: `"&calc` or `%VAR%` in an argument
+    // ran a command or expanded a variable.
     let mut c = Command::new(&program);
     c.args(&args[1..]).current_dir(&ctx.cwd).env_clear().envs(&ctx.env);
     c.stdin(Stdio::piped());
@@ -895,9 +911,18 @@ fn builtin(name: &str, args: &[String], ctx: &mut Ctx, stdin: Vec<u8>) -> Result
             Ok(Out { code, ..Default::default() })
         }
         "sleep" => {
-            let secs: f64 = args.first().and_then(|a| a.trim_end_matches('s').parse().ok()).unwrap_or(0.0);
+            let arg = args.first().map(|a| a.as_str()).unwrap_or("0");
+            let d = arg
+                .trim_end_matches('s')
+                .parse::<f64>()
+                .ok()
+                .filter(|s| *s >= 0.0)
+                .and_then(|s| std::time::Duration::try_from_secs_f64(s).ok());
+            let Some(d) = d else {
+                return fail(1, format!("sleep: invalid time interval '{}'", arg));
+            };
             // cooperative: the other `fg` tasks keep running
-            crate::native::util::sleep_coop(std::time::Duration::from_secs_f64(secs.max(0.0)))?;
+            crate::native::util::sleep_coop(d)?;
             ok("")
         }
         "seq" => {
@@ -1355,6 +1380,7 @@ fn run_args(a: &[Value], what: &str) -> Result<(Script, Ctx, Vec<u8>), String> {
             match m.get("input") {
                 Some(Value::Str(s)) => input = s.as_bytes().to_vec(),
                 Some(Value::Nil) | None => {}
+                Some(Value::Buffer(b)) => input = b.borrow().clone(),
                 Some(other) => input = other.to_display_string().into_bytes(),
             }
             if let Some(Value::Bool(b)) = m.get("native") {

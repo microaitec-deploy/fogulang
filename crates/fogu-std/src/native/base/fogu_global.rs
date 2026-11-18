@@ -47,22 +47,24 @@ pub fn build() -> ModuleValue {
             Some(Value::Int(n)) => *n as i32,
             Some(other) => return Err(format!("Fogu.exit expects int, got '{}'", other.type_name())),
         };
-        crate::native::exit(code)
+        crate::native::exit_program(code)
     }));
     // hash(data, "sha256" | "sha512") → hex string
     e.insert("hash".into(), nfn_var("hash", 1, |a| {
         max_args(a, 2, "Fogu.hash")?;
-        let data = match &a[0] {
-            Value::Str(s) => s.clone(),
-            other => other.to_display_string().into(),
+        // a buffer is hashed as its bytes, never as its printed form
+        let data: Vec<u8> = match &a[0] {
+            Value::Str(s) => s.as_bytes().to_vec(),
+            Value::Buffer(b) => b.borrow().clone(),
+            other => other.to_display_string().into_bytes(),
         };
         let algo = match opt_arg(a, 1) {
             None => "sha256".to_string(),
             Some(_) => str_arg(a, 1, "Fogu.hash")?,
         };
         let bytes: Vec<u8> = match algo.as_str() {
-            "sha256" => Sha256::digest(data.as_bytes()).to_vec(),
-            "sha512" => Sha512::digest(data.as_bytes()).to_vec(),
+            "sha256" => Sha256::digest(&data).to_vec(),
+            "sha512" => Sha512::digest(&data).to_vec(),
             other => return Err(format!("Fogu.hash: unknown algorithm '{}' (use sha256 or sha512)", other)),
         };
         Ok(Value::Str(bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>().into()))
@@ -141,10 +143,11 @@ impl FoguObject for FileValue {
             }
             "write" | "append" => {
                 use std::io::Write;
-                let text = match args.first() {
-                    Some(Value::Str(s)) => s.clone(),
-                    Some(other) => other.to_display_string().into(),
-                    None => return Err(format!("file.{}(text) expects 1 argument", method)),
+                // a str is written as UTF-8, a buffer (or a list of byte ints) as its bytes;
+                // anything else is a mistake, never its printed form
+                let data = match args.first() {
+                    Some(v) => crate::native::util::bytes_of(v, &format!("file.{}", method))?,
+                    None => return Err(format!("file.{}(data) expects 1 argument", method)),
                 };
                 std::fs::OpenOptions::new()
                     .create(true)
@@ -152,7 +155,7 @@ impl FoguObject for FileValue {
                     .append(method == "append")
                     .truncate(method == "write")
                     .open(&self.path)
-                    .and_then(|mut f| f.write_all(text.as_bytes()))
+                    .and_then(|mut f| f.write_all(&data))
                     .map(|_| Value::Nil)
                     .map_err(|e| io_err!("file.{}: {}: {}", method, self.path, e))
             }

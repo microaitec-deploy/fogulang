@@ -89,10 +89,12 @@ pub fn build() -> ModuleValue {
                     ))
                 }
             };
-            if secs < 0.0 {
-                return Err("sleep(s) expects seconds >= 0".into());
-            }
-            crate::native::util::sleep_coop(Duration::from_secs_f64(secs))?;
+            // NaN, infinities and durations too large for the clock are errors, like a negative one
+            let d = match Duration::try_from_secs_f64(secs) {
+                Ok(d) if secs >= 0.0 => d,
+                _ => return Err(format!("sleep(s) expects a finite number of seconds >= 0, got {}", secs)),
+            };
+            crate::native::util::sleep_coop(d)?;
             Ok(Value::Nil)
         }),
     );
@@ -245,6 +247,23 @@ fn from_local(zone: Tz, ndt: NaiveDateTime) -> Result<DateValue, String> {
     }
 }
 
+/// The first instant at or after a local time: midnight skipped by a clock change (São Paulo
+/// before 2019) is the start of that day, 01:00, as in JavaScript and Go.
+fn first_instant(zone: Tz, ndt: NaiveDateTime) -> Result<DateValue, String> {
+    if let Ok(d) = from_local(zone, ndt) {
+        return Ok(d);
+    }
+    // clock changes skip at most a few hours
+    for m in (1..=6 * 60).step_by(1) {
+        if let Some(t) = ndt.checked_add_signed(chrono::TimeDelta::minutes(m)) {
+            if let Some(dt) = zone.from_local_datetime(&t).earliest() {
+                return Ok(DateValue { ms: dt.timestamp_millis(), zone });
+            }
+        }
+    }
+    from_local(zone, ndt)
+}
+
 /// `time.parse`: RFC 3339 / ISO 8601, RFC 2822, common layouts, or a strftime format.
 fn parse(text: &str, fmt: Option<&str>, zone: Option<Tz>) -> Result<DateValue, String> {
     let text = text.trim();
@@ -252,14 +271,30 @@ fn parse(text: &str, fmt: Option<&str>, zone: Option<Tz>) -> Result<DateValue, S
     let with_offset = |dt: DateTime<FixedOffset>| DateValue { ms: dt.timestamp_millis(), zone: zone_or_default };
     match fmt {
         Some(f) => {
+            // chrono reads %Z but drops it: the zone would be silently ignored
+            if f.contains("%Z") {
+                return Err("time.parse: %Z (a zone name) cannot be parsed; use %z (+01:00) or the zone argument".into());
+            }
             if let Ok(dt) = DateTime::parse_from_str(text, f) {
                 return Ok(with_offset(dt));
             }
             if let Ok(ndt) = NaiveDateTime::parse_from_str(text, f) {
                 return from_local(zone_or_default, ndt);
             }
+            // a format with an hour but no minutes (`%Y-%m-%d %H`): minute 0, not a dropped hour
+            let has = |specs: &[&str]| specs.iter().any(|x| f.contains(x));
+            let has_time = has(&["%H", "%I", "%k", "%l", "%M", "%S", "%T", "%R", "%r", "%X"]);
+            if has(&["%H", "%I", "%k", "%l"]) && !has(&["%M", "%T", "%R", "%r", "%X"]) {
+                let (t2, f2) = (format!("{}\u{1}00", text), format!("{}\u{1}%M", f));
+                if let Ok(ndt) = NaiveDateTime::parse_from_str(&t2, &f2) {
+                    return from_local(zone_or_default, ndt);
+                }
+            }
+            if has_time {
+                return Err(io_err!("time.parse: '{}' does not match '{}'", text, f));
+            }
             match NaiveDate::parse_from_str(text, f) {
-                Ok(d) => from_local(zone_or_default, d.and_time(NaiveTime::MIN)),
+                Ok(d) => first_instant(zone_or_default, d.and_time(NaiveTime::MIN)),
                 Err(e) => Err(io_err!("time.parse: '{}' does not match '{}': {}", text, f, e)),
             }
         }
@@ -276,7 +311,9 @@ fn parse(text: &str, fmt: Option<&str>, zone: Option<Tz>) -> Result<DateValue, S
                 }
             }
             match NaiveDate::parse_from_str(text, "%Y-%m-%d") {
-                Ok(d) => from_local(zone_or_default, d.and_time(NaiveTime::MIN)),
+                Ok(d) => first_instant(zone_or_default, d.and_time(NaiveTime::MIN)),
+                // the right shape, an impossible day (2026-02-30)
+                Err(e) if e.kind() == chrono::format::ParseErrorKind::OutOfRange => Err(io_err!("time.parse: invalid date '{}'", text)),
                 Err(_) => Err(io_err!("time.parse: unrecognized date '{}' (give a format, e.g. \"%d/%m/%Y\")", text)),
             }
         }
@@ -313,11 +350,13 @@ fn new_date(a: &[Value]) -> Result<Value, String> {
             let date = i32::try_from(y)
                 .ok()
                 .and_then(|y| NaiveDate::from_ymd_opt(y, u32::try_from(mo).ok()?, u32::try_from(d).ok()?))
-                .ok_or_else(|| format!("time.Date: invalid date {}-{}-{}", y, mo, d))?;
-            let t = NaiveTime::from_hms_milli_opt(h as u32, mi as u32, s as u32, ms as u32)
-                .filter(|_| [h, mi, s, ms].iter().all(|v| *v >= 0))
-                .ok_or_else(|| format!("time.Date: invalid time {}:{}:{}.{}", h, mi, s, ms))?;
-            match from_local(zone, date.and_time(t)) {
+                .ok_or_else(|| io_err!("time.Date: invalid date {}-{}-{}", y, mo, d))?;
+            // u32::try_from: `as u32` turned 2^32 into 0 (M65)
+            let u = |v: i64| u32::try_from(v).ok();
+            // millis < 1000: chrono reads 1000..1999 as a leap second
+            let t = (|| NaiveTime::from_hms_milli_opt(u(h)?, u(mi)?, u(s)?, u(ms).filter(|m| *m < 1000)?))()
+                .ok_or_else(|| io_err!("time.Date: invalid time {}:{}:{}.{}", h, mi, s, ms))?;
+            match first_instant(zone, date.and_time(t)) {
                 Ok(d) => d,
                 Err(e) => return Err(e),
             }
@@ -420,14 +459,15 @@ impl DateValue {
     /// calendar units move the local date (the end of the month is kept), the others the instant.
     fn add(&self, v: &Value, sign: i64) -> Result<i64, String> {
         match v {
-            Value::Duration(ns) => Ok(self.ms + sign * ns.div_euclid(1_000_000)),
-            Value::Int(ms) => Ok(self.ms + sign * ms),
+            // checked: near the limits a date wrapped around to the year -292275055
+            Value::Duration(ns) => sign.checked_mul(ns.div_euclid(1_000_000)).and_then(|d| self.ms.checked_add(d)).ok_or_else(|| "add: the date is out of range".to_string()),
+            Value::Int(ms) => sign.checked_mul(*ms).and_then(|d| self.ms.checked_add(d)).ok_or_else(|| "add: the date is out of range".to_string()),
             Value::Map(m) => {
                 let m = m.borrow();
                 let get = |k: &str| -> Result<i64, String> {
                     match m.get(k) {
                         None | Some(Value::Nil) => Ok(0),
-                        Some(Value::Int(n)) => Ok(*n * sign),
+                        Some(Value::Int(n)) => n.checked_mul(sign).ok_or_else(|| format!("add: '{}' is out of range", k)),
                         Some(other) => Err(format!("add: '{}' must be an int, got '{}'", k, other.type_name())),
                     }
                 };
@@ -437,16 +477,20 @@ impl DateValue {
                     }
                 }
                 let mut ms = self.ms;
-                let months = get("years")? * 12 + get("months")?;
-                let days = get("weeks")? * 7 + get("days")?;
+                let range = || "add: the date is out of range".to_string();
+                let (years, months, weeks, days) = (get("years")?, get("months")?, get("weeks")?, get("days")?);
+                let months = years.checked_mul(12).and_then(|y| y.checked_add(months)).ok_or_else(range)?;
+                let days = weeks.checked_mul(7).and_then(|w| w.checked_add(days)).ok_or_else(range)?;
+                // u32::try_from: `as u32` wrapped 2^32 months to 0 (M65)
+                let months_u32 = u32::try_from(months.unsigned_abs()).map_err(|_| range())?;
                 if months != 0 || days != 0 {
                     let dt = self.local().ok_or("add: the date is out of range")?.naive_local();
                     let dt = if months >= 0 {
-                        dt.checked_add_months(Months::new(months as u32))
+                        dt.checked_add_months(Months::new(months_u32))
                     } else {
-                        dt.checked_sub_months(Months::new(months.unsigned_abs() as u32))
+                        dt.checked_sub_months(Months::new(months_u32))
                     }
-                    .and_then(|d| d.checked_add_signed(chrono::TimeDelta::days(days)))
+                    .and_then(|d| d.checked_add_signed(chrono::TimeDelta::try_days(days)?))
                     .ok_or("add: the date is out of range")?;
                     ms = from_local(self.zone, dt).or_else(|_| {
                         // a local time skipped by a clock change: keep the same UTC offset
@@ -454,7 +498,11 @@ impl DateValue {
                         Ok::<_, String>(DateValue { ms: dt.and_utc().timestamp_millis() - off, zone: self.zone })
                     })?.ms;
                 }
-                Ok(ms + get("hours")? * 3_600_000 + get("minutes")? * 60_000 + get("seconds")? * 1000 + get("millis")?)
+                let mut total = ms;
+                for (k, unit) in [("hours", 3_600_000), ("minutes", 60_000), ("seconds", 1000), ("millis", 1)] {
+                    total = get(k)?.checked_mul(unit).and_then(|d| total.checked_add(d)).ok_or_else(range)?;
+                }
+                Ok(total)
             }
             other => Err(format!("add expects a map of units, a duration or ms, got '{}'", other.type_name())),
         }
@@ -464,6 +512,17 @@ impl DateValue {
     fn start_of(&self, unit: &str) -> Result<i64, String> {
         let dt = self.local().ok_or("startOf: the date is out of range")?.naive_local();
         let d = dt.date();
+        // hour, minute and second: the elapsed part is removed from the instant, so the offset
+        // stays the one of the date (an ambiguous hour after a clock change is kept)
+        let sub_ms = match unit {
+            "second" => Some(0),
+            "minute" => Some(dt.second() as i64 * 1000),
+            "hour" => Some(dt.minute() as i64 * 60_000 + dt.second() as i64 * 1000),
+            _ => None,
+        };
+        if let Some(extra) = sub_ms {
+            return Ok(self.ms - self.ms.rem_euclid(1000) - extra);
+        }
         let ndt = match unit {
             "year" => NaiveDate::from_ymd_opt(d.year(), 1, 1).unwrap().and_time(NaiveTime::MIN),
             "month" => NaiveDate::from_ymd_opt(d.year(), d.month(), 1).unwrap().and_time(NaiveTime::MIN),
@@ -474,7 +533,8 @@ impl DateValue {
             "second" => d.and_hms_opt(dt.hour(), dt.minute(), dt.second()).unwrap(),
             other => return Err(format!("startOf: unknown unit '{}' (year month week day hour minute second)", other)),
         };
-        Ok(from_local(self.zone, ndt).map(|d| d.ms).unwrap_or(self.ms))
+        // a day that starts after a skipped midnight starts at its first instant
+        first_instant(self.zone, ndt).map(|d| d.ms)
     }
 }
 

@@ -610,6 +610,24 @@ pub fn spawn(f: Box<dyn FnOnce() -> Result<(), String>>) -> Result<(), String> {
     Ok(())
 }
 
+thread_local! {
+    /// Errors that ended `fg` tasks, for `fogu test` (`take_task_errors`): a failed `expect`
+    /// inside a task must fail the test that started it.
+    static TASK_ERRORS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    static COLLECT_TASK_ERRORS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Starts (or stops) keeping the errors of `fg` tasks for [`take_task_errors`] (only `fogu test`:
+/// a long-running program must not accumulate them).
+pub fn collect_task_errors(on: bool) {
+    COLLECT_TASK_ERRORS.with(|c| c.set(on));
+}
+
+/// The errors of the `fg` tasks that ended since the last call.
+pub fn take_task_errors() -> Vec<String> {
+    TASK_ERRORS.with(|n| std::mem::take(&mut *n.borrow_mut()))
+}
+
 /// Resumes a task once. Returns `true` if it finished.
 fn step(task: &mut Task) -> bool {
     let prev = CTX.with(|c| c.get());
@@ -621,6 +639,9 @@ fn step(task: &mut Task) -> bool {
             note_progress();
             if let Err(e) = res {
                 eprintln!("error in task (fg): {}", e);
+                if COLLECT_TASK_ERRORS.with(|c| c.get()) {
+                    TASK_ERRORS.with(|n| n.borrow_mut().push(e));
+                }
                 if STRICT.load(std::sync::atomic::Ordering::Relaxed) {
                     eprintln!("--strict: terminating the process");
                     std::process::exit(1);

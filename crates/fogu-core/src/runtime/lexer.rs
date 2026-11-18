@@ -9,6 +9,8 @@ pub struct Lexer {
 
 impl Lexer {
     pub fn new(source: &str) -> Self {
+        // a UTF-8 byte order mark (Notepad, PowerShell 5.1) is not part of the program
+        let source = source.strip_prefix('\u{feff}').unwrap_or(source);
         Self::at(source.chars().collect(), 1, 1)
     }
 

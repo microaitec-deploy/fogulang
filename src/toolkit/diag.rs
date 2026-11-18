@@ -32,13 +32,19 @@ pub struct Diag {
 /// * `file:L: runtime error: msg`
 pub fn parse(err: &str) -> Diag {
     let mut lines = err.lines();
-    let first = lines.next().unwrap_or("");
+    let mut message = lines.next().unwrap_or("").trim_end().to_string();
     let mut help: Vec<String> = Vec::new();
     for l in lines {
         if let Some(h) = l.trim().strip_prefix("help:") {
             help.push(h.trim().to_string());
+        } else if help.is_empty() && !l.trim().is_empty() {
+            // a message of several lines (an OS error text with a line break, error("a\nb"))
+            // is kept whole, on one line, instead of being cut at the first one
+            message.push(' ');
+            message.push_str(l.trim());
         }
     }
+    let first = message.as_str();
 
     let mut d = Diag {
         file: None,
@@ -155,6 +161,9 @@ fn underline(src_line: &str, col: Option<u32>, msg: &str) -> (usize, usize) {
             .max(1);
         return (start, len);
     }
+    // without a column, only the code is marked: never the text of a `//` comment
+    let code_len = code_end(&chars);
+    let chars = &chars[..code_len];
     // quoted name in the message (e.g. variable 'x') present in the line
     if let Some(name) = msg.split('\'').nth(1).filter(|n| !n.is_empty()) {
         let name: Vec<char> = name.chars().collect();
@@ -173,6 +182,25 @@ fn underline(src_line: &str, col: Option<u32>, msg: &str) -> (usize, usize) {
     let start = chars.iter().take_while(|c| c.is_whitespace()).count();
     let end = chars.len() - chars.iter().rev().take_while(|c| c.is_whitespace()).count();
     (start, end.saturating_sub(start).max(1))
+}
+
+/// Where a trailing `//` comment starts (outside string literals), or the line's length.
+fn code_end(chars: &[char]) -> usize {
+    let mut quote: Option<char> = None;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        match quote {
+            Some(_) if c == '\\' => i += 1,
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == '"' || c == '\'' || c == '`' => quote = Some(c),
+            None if c == '/' && chars.get(i + 1) == Some(&'/') => return i,
+            None => {}
+        }
+        i += 1;
+    }
+    chars.len()
 }
 
 /// Code and help of a warning of the resolver (`line N: msg`).
@@ -337,6 +365,9 @@ mod tests {
         assert_eq!(underline("  return a / b", None, "division by zero"), (2, 12));
         assert_eq!(underline("let x = (1 +", Some(9), ""), (8, 1));
         assert_eq!(underline("print(n.x)", None, "parameter 'n' expects"), (6, 1));
+        // a name that is only in the comment is not underlined there
+        assert_eq!(underline("print(total + \"a\")   // 'int' with 'str'", None, "operator not applicable between 'int' and 'str'"), (0, 18));
+        assert_eq!(underline("print(\"// not a comment\", x)", None, "variable 'x' is not defined"), (26, 1));
     }
 
     #[test]

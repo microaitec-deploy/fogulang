@@ -16,7 +16,7 @@ true hello zip
 true
 error: zip.read: no entry 'nope.txt' in pack.tmp.zip
 true
-1
+4
 true
 [untar.tmp.d/src.tmp.d/a.txt, untar.tmp.d/src.tmp.d/sub/b.txt]
 31 139 hello hello hello hello

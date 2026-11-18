@@ -26,7 +26,7 @@ error: image: invalid SVG: SVG data parsing failed cause the document does not h
 jpg
 data:image/png;base64, 20
 10 20
-error: image.open: missing.tmp.png: No such file or directory (os error 2)
+true
 error: image: unknown image format 'xyz' (png jpg webp gif bmp ico tiff)
 3 50ms #0000ff
 1s 100ms

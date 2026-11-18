@@ -4,9 +4,9 @@ import time from "fogu:time"
 print(Fogu.signal.names.contains("SIGINT"))
 const seen = []
 Fogu.signal.on("job.done", fn(d) { seen.push(d.id) })
-Fogu.signal.on("SIGUSR1", fn() { seen.push("usr1") })
+Fogu.signal.on("SIGTERM", fn() { seen.push("term") })
 Fogu.signal.emit("job.done", { id: 7 })
-Fogu.signal.emit("SIGUSR1")
+Fogu.signal.emit("SIGTERM")
 time.delay(10ms)
 print(seen)
 

@@ -139,7 +139,8 @@ pub fn build() -> ModuleValue {
     }));
     e.insert("color".into(), nfn_var("color", 1, |a| {
         max_args(a, 1, "image.color")?;
-        let c = color(&a[0])?;
+        // a parser of colours (they often come from requests): an invalid one is an error value
+        let c = color(&a[0]).map_err(|e| io_err!("{}", e))?;
         Ok(list(c.0.iter().map(|&x| Value::Int(x as i64)).collect()))
     }));
     ModuleValue {
@@ -238,6 +239,10 @@ pub fn color(v: &Value) -> Result<Rgba<u8>, String> {
         Value::Str(s) => {
             let s = s.trim().to_ascii_lowercase();
             if let Some(hex) = s.strip_prefix('#') {
+                // byte slicing below: anything that is not ASCII hex is invalid anyway
+                if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(bad());
+                }
                 let h = |i: usize, n: usize| u8::from_str_radix(&hex[i..i + n], 16).map_err(|_| bad());
                 let x = |i: usize| h(i, 1).map(|d| d * 17);
                 return Ok(Rgba(match hex.len() {
@@ -250,7 +255,10 @@ pub fn color(v: &Value) -> Result<Rgba<u8>, String> {
             }
             if let Some(inner) = s.strip_prefix("rgba(").or_else(|| s.strip_prefix("rgb(")).and_then(|r| r.strip_suffix(')')) {
                 let parts: Vec<f32> = inner.split(',').map(|p| p.trim().parse::<f32>()).collect::<Result<_, _>>().map_err(|_| bad())?;
-                let c = |f: f32| f.clamp(0.0, 255.0).round() as u8;
+                if parts.iter().any(|p| !p.is_finite()) {
+                    return Err(bad());
+                }
+                let c =|f: f32| f.clamp(0.0, 255.0).round() as u8;
                 return match parts[..] {
                     [r, g, b] => Ok(Rgba([c(r), c(g), c(b), 255])),
                     // alpha in 0..1, like CSS
@@ -708,7 +716,11 @@ impl FoguObject for Image {
             // rotate(degrees, { background }) — clockwise; any angle (the canvas grows to fit)
             "rotate" => {
                 max_args(a, 2, "rotate")?;
-                let deg = num_at(a, 0, "rotate")?.rem_euclid(360.0);
+                let deg = num_at(a, 0, "rotate")?;
+                if !deg.is_finite() {
+                    return Err(format!("rotate: the angle must be a finite number, got {}", deg));
+                }
+                let deg = deg.rem_euclid(360.0);
                 let o = opts(opt_arg(a, 1), "rotate")?;
                 match deg {
                     d if d == 0.0 => new(self.img.clone()),
@@ -720,7 +732,7 @@ impl FoguObject for Image {
                         let (s, c) = (r.sin().abs(), r.cos().abs());
                         let nw = (w as f32 * c + h as f32 * s).ceil() as u32;
                         let nh = (w as f32 * s + h as f32 * c).ceil() as u32;
-                        let mut pm = Pixmap::new(nw, nh).expect("non-empty");
+                        let mut pm = Pixmap::new(nw, nh).ok_or_else(|| format!("rotate: a {}x{} image is too large", nw, nh))?;
                         if let Some(bg) = o.get("background") {
                             let b = color(bg)?;
                             pm.fill(tiny_skia::Color::from_rgba8(b.0[0], b.0[1], b.0[2], b.0[3]));

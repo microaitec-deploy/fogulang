@@ -6,6 +6,11 @@ print("local socket at", cli.addr)
 
 cli.sendTo("127.0.0.1:9001", "ping 1")
 let r = cli.recvFrom()
-print("reply:", r.text, "(from", r.from, ")")
+if typeof(r) == "error" {
+    // no server: the network error is a value
+    print("no reply:", r)
+} else {
+    print("reply:", r.text, "(from", r.from, ")")
+}
 
 cli.close()

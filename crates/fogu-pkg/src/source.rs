@@ -63,9 +63,24 @@ pub fn parse(spec: &str) -> Result<(Source, String), String> {
     // local folders
     if let Some(p) = base.strip_prefix("file:") {
         let p = p.trim_start_matches("//");
+        // file:///C:/x → C:/x (not /C:/x, which Windows reads as C:\c:\x)
+        let p = match p.as_bytes() {
+            [b'/', d, b':', ..] if d.is_ascii_alphabetic() => &p[1..],
+            _ => p,
+        };
         return Ok((Source::Local { path: p.to_string() }, default_name(p)));
     }
-    if base.starts_with("./") || base.starts_with("../") || base.starts_with('/') || base == "." {
+    // also Windows paths: `.\x`, `..\x`, `C:\x`, `C:/x` (what a Windows terminal completes)
+    let drive = matches!(base.as_bytes(), [d, b':', b'\\' | b'/', ..] if d.is_ascii_alphabetic());
+    if base.starts_with("./")
+        || base.starts_with("../")
+        || base.starts_with(".\\")
+        || base.starts_with("..\\")
+        || base.starts_with('/')
+        || base == "."
+        || base == ".."
+        || drive
+    {
         return Ok((Source::Local { path: base.to_string() }, default_name(base)));
     }
 
@@ -121,8 +136,8 @@ fn strip_archive(u: &str) -> &str {
 }
 
 fn default_name(s: &str) -> String {
-    let s = s.trim_end_matches('/').trim_end_matches(".git");
-    let last = s.rsplit(['/', ':']).next().unwrap_or(s);
+    let s = s.trim_end_matches(['/', '\\']).trim_end_matches(".git");
+    let last = s.rsplit(['/', '\\', ':']).next().unwrap_or(s);
     last.to_string()
 }
 
@@ -185,6 +200,20 @@ pub fn split_add_arg(arg: &str) -> Result<(Option<String>, String), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_paths_are_local() {
+        for (spec, path, name) in [
+            ("..\\greet", "..\\greet", "greet"),
+            ("C:\\Users\\a\\greet", "C:\\Users\\a\\greet", "greet"),
+            ("C:/Users/a/greet", "C:/Users/a/greet", "greet"),
+            ("file:///c:/Users/a/greet", "c:/Users/a/greet", "greet"),
+        ] {
+            let (src, n) = parse(spec).unwrap();
+            assert!(matches!(&src, Source::Local { path: p } if p == path), "{}: {:?}", spec, src);
+            assert_eq!(n, name, "{}", spec);
+        }
+    }
 
     #[test]
     fn forms() {

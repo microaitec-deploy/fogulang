@@ -258,7 +258,7 @@ fn pow(a: &[Value]) -> R {
 fn to_int(a: &[Value], name: &str, f: fn(f64) -> f64) -> R {
     match &a[0] {
         Value::Int(n) => Ok(Value::Int(*n)),
-        Value::Float(n) => Ok(Value::Int(f(*n) as i64)),
+        Value::Float(n) => Ok(Value::Int(crate::runtime::ops::float_to_int(f(*n))?)),
         other => Err(format!("'{}' not applicable to '{}'", name, other.type_name())),
     }
 }
@@ -278,13 +278,20 @@ fn trunc(a: &[Value]) -> R {
 /// round(x) → int (halves away from zero); round(x, digits) → float.
 fn round(a: &[Value]) -> R {
     match a {
-        [x] => to_int(a, "round", f64::round).map_err(|_| format!("'round' not applicable to '{}'", x.type_name())),
+        [_] => to_int(a, "round", crate::runtime::ops::round_half_away),
         [x, Value::Int(d)] => match x {
             Value::Int(n) if *d >= 0 => Ok(Value::Int(*n)),
             _ => {
                 let v = num(x)?;
-                let p = 10f64.powi((*d).clamp(-308, 308) as i32);
-                Ok(Value::Float((v * p).round() / p))
+                let d = (*d).clamp(-308, 308) as i32;
+                // negative digits divide by an exact power of ten (10^-2 is not exact)
+                if d >= 0 {
+                    let p = 10f64.powi(d);
+                    Ok(Value::Float(crate::runtime::ops::round_half_away(v * p) / p))
+                } else {
+                    let p = 10f64.powi(-d);
+                    Ok(Value::Float(crate::runtime::ops::round_half_away(v / p) * p))
+                }
             }
         },
         _ => Err("round(x, digits?) expects a number and an int".into()),

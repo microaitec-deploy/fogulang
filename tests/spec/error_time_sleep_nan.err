@@ -1,0 +1,2 @@
+sleep(s) expects a finite number of seconds >= 0, got NaN
+error_time_sleep_nan.fg:6

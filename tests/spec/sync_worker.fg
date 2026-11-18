@@ -40,6 +40,6 @@ print(sq.call("square", 12)?, sq.core)
 
 w.close()
 print(w.closed, w.call("countPrimes", 10))
-print(sync.Worker("./_no_such_worker.fg"))
+print(sync.Worker("./_no_such_worker.fg").message.starts_with("sync.Worker: ./_no_such_worker.fg: "))
 print(sync.Worker("fn broken( {"))
 print(typeof(sync.Worker("fn f() {}", { core: 100000 })))

@@ -216,7 +216,9 @@ fn emit(level: Level, base: &[(String, Value)], a: &[Value]) -> Result<Value, St
             obj.insert("level".into(), level.name().into());
             obj.insert("msg".into(), msg.into_string().into());
             for (k, v) in &fields {
-                obj.insert(k.clone(), serde_json::from_str(&crate::native::json::stringify_value(v)).unwrap_or(serde_json::Value::Null));
+                // a field named like the entry's own keys must not replace them
+                let k = if matches!(k.as_str(), "time" | "level" | "msg") { format!("fields.{}", k) } else { k.clone() };
+                obj.insert(k, serde_json::from_str(&crate::native::json::stringify_value(v)).unwrap_or(serde_json::Value::Null));
             }
             serde_json::Value::Object(obj).to_string()
         } else {
@@ -227,10 +229,17 @@ fn emit(level: Level, base: &[(String, Value)], a: &[Value]) -> Result<Value, St
             } && std::env::var_os("NO_COLOR").is_none();
             let lvl = format!("{:<5}", level.name().to_uppercase());
             let lvl = if color { format!("{}{}\x1b[0m", level.color(), lvl) } else { lvl };
+            // one line per entry: control characters (a newline in the message or a field) are
+            // escaped, so a value cannot forge another entry
+            let msg: String = if msg.chars().any(char::is_control) {
+                msg.chars().map(|ch| if ch.is_control() { ch.escape_default().to_string() } else { ch.to_string() }).collect()
+            } else {
+                msg.to_string()
+            };
             let mut s = if c.time { format!("{} {} {}", now_iso(), lvl, msg) } else { format!("{} {}", lvl, msg) };
             for (k, v) in &fields {
                 let text = match v {
-                    Value::Str(t) if t.is_empty() || t.contains([' ', '=', '"']) => format!("{:?}", t),
+                    Value::Str(t) if t.is_empty() || t.contains([' ', '=', '"']) || t.chars().any(char::is_control) => format!("{:?}", t),
                     Value::Str(t) => t.to_string(),
                     Value::Map(_) | Value::List(_) => crate::native::json::stringify_value(v),
                     other => other.to_display_string(),

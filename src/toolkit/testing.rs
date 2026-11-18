@@ -56,6 +56,7 @@ pub fn test(args: &[String]) -> i32 {
         return 0;
     }
 
+    crate::native::set_test_mode(true);
     let started = Instant::now();
     let (mut passed, mut failed, mut skipped, mut broken) = (0, 0, 0, 0);
     for f in &files {

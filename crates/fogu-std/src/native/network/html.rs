@@ -615,9 +615,18 @@ pub fn markdown_to_html(md: &str) -> String {
 fn new_env(autoescape: bool) -> Environment<'static> {
     let mut env = Environment::new();
     env.set_auto_escape_callback(move |_| if autoescape { AutoEscape::Html } else { AutoEscape::None });
-    // {{ text | markdown }} → HTML (not escaped again), sanitized: Markdown
-    // passes raw HTML through, so `<script>` in the text would reach the page
+    // {{ text | markdown }} → HTML (not escaped again). Markdown lets raw HTML through, so the
+    // result is sanitized like html.sanitize: the filter is applied to data, often a user's
+    // (`<script>`, `onerror=`, `javascript:` links are removed)
     env.add_filter("markdown", |s: String| minijinja::Value::from_safe_string(ammonia::clean(&markdown_to_html(&s))));
+    // nil prints nothing and booleans as Fogu writes them (`true`), not Python's `None`/`True`
+    env.set_formatter(|out, state, value| match value.kind() {
+        minijinja::value::ValueKind::None | minijinja::value::ValueKind::Undefined => Ok(()),
+        minijinja::value::ValueKind::Bool => {
+            out.write_str(if value.is_true() { "true" } else { "false" }).map_err(minijinja::Error::from)
+        }
+        _ => minijinja::escape_formatter(out, state, value),
+    });
     env.add_filter("striptags", |s: String| to_text(Html::parse_fragment(&s).tree.root()));
     env
 }
@@ -697,7 +706,12 @@ impl FoguObject for Templates {
             "renderString" => {
                 max_args(args, 2, "renderString")?;
                 let src = str_arg(args, 0, "renderString")?;
-                self.env.render_str(&src, context(args.get(1))).map(Value::str).map_err(|e| tmpl_err("renderString", e))
+                // named as an .html template: the autoescape-by-extension of the folder escapes it
+                // (as `<string>` it was never escaped); an explicit `autoescape` still decides
+                self.env
+                    .render_named_str("inline.html", &src, context(args.get(1)))
+                    .map(Value::str)
+                    .map_err(|e| tmpl_err("renderString", e))
             }
             "has" => {
                 max_args(args, 1, "has")?;

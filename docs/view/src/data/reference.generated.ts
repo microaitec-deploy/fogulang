@@ -14,7 +14,7 @@ export const REFERENCE: Record<string, RefData> = {
     "h3": "Conventions",
     "text": "<strong>Errors are values.</strong> Operational failures — a missing file, a refused connection, a server error, malformed input — come back as an <code>error</code> value: handle them with <code>?</code> (propagate) or <code>const [value, err] = f()</code>. Programming mistakes — a wrong argument type, an unknown option — stop the program with a message. <strong>Options</strong> are passed as a last map argument: <code>f(x, { timeout: 5s })</code>. <strong>Durations</strong> accept a duration literal (<code>500ms</code>, <code>2s</code>, <code>1h</code>) or an int number of milliseconds. Network operations wait cooperatively: other <code>fg</code> tasks keep running while one waits.",
     "example": "import json from \"fogu:json\"\n\nconst [cfg, err] = json.parse(\"{ broken\")      // an error value, not a crash\nif err != nil {\n    print(\"invalid config:\", err.message)\n}\n\nfn load(text: str): error {\n    const data = json.parse(text)?              // ? returns the error to the caller\n    print(\"name:\", data.name)\n    return nil\n}\nprint(load(\"{\\\"name\\\": \\\"fogu\\\"}\"), load(\"nope\") != nil)",
-    "output": "invalid config: json.parse: invalid JSON at position 2: Some('b')\nname: fogu\nnil true",
+    "output": "invalid config: json.parse: invalid JSON at position 2: 'b'\nname: fogu\nnil true",
     "outputTitle": "output"
    }
   ]
@@ -379,7 +379,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "Fogu.file(path)",
       "File",
-      "<code>text() lines() json() write(s) append(s) exists() size() remove()</code>, fields <code>path name ext dir</code>."
+      "<code>text() lines() json() write(data) append(data) exists() size() remove()</code>, fields <code>path name ext dir</code>. <code>data</code> is a str (UTF-8) or a buffer (its bytes); another type stops the program."
      ],
      [
       "Fogu.asset(path)",
@@ -388,7 +388,7 @@ export const REFERENCE: Record<string, RefData> = {
      ],
      [
       "Fogu.run(cmd, args?, opts?)",
-      "map",
+      "map · error",
       "Runs a program → <code>{ ok, code, stdout, stderr }</code> (see <a class=\"underline\" href=\"#mod-process\">fogu:process</a>)."
      ],
      [
@@ -434,7 +434,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "Fogu.watch(path | [paths], { recursive = true, debounce = 50ms })",
       "Watcher · error",
-      "File system events: <code>w.next(timeout?)</code> → <code>{ kind, path, paths }</code> (<code>create modify remove rename</code>), <code>tryNext()</code>, <code>close()</code>."
+      "File system events: <code>w.next(timeout?)</code> → <code>{ kind, path, paths }</code> (<code>create modify remove rename</code>; absolute paths, written with <code>/</code>), <code>tryNext()</code>, <code>close()</code>."
      ],
      [
       "Fogu.exit(code?)",
@@ -456,7 +456,7 @@ export const REFERENCE: Record<string, RefData> = {
     "text": "Watching files — rebuild on every change:",
     "title": "watch.fg",
     "example": "const w = Fogu.watch(\"src\")?\nwhile true {\n    const ev = w.next()?\n    print(ev.kind, ev.path)\n    Fogu.run(\"fogu\", [\"test\"])\n}",
-    "output": "modify src/app.fg\ncreate src/new.fg\nremove src/old.fg",
+    "output": "modify /home/ana/app/src/app.fg\ncreate /home/ana/app/src/new.fg\nremove /home/ana/app/src/old.fg",
     "outputTitle": "output"
    }
   ]
@@ -466,7 +466,7 @@ export const REFERENCE: Record<string, RefData> = {
   "group": "Core modules",
   "title": "fogu:math",
   "import": "import math from \"fogu:math\"",
-  "intro": "Numbers. Rounding to an int (<code>floor ceil trunc round</code>) keeps ints as they are; the other functions return floats. The JIT compiles these calls inside hot code with the same results.",
+  "intro": "Numbers. Rounding to an int (<code>floor ceil trunc round</code>) keeps ints as they are; a float with no int value (NaN, ±inf, beyond ±2^63) stops the program instead of becoming 0 or MAX_INT; the other functions return floats. The JIT compiles these calls inside hot code with the same results.",
   "blocks": [
    {
     "api": [
@@ -1045,7 +1045,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "process.run(cmd, args?, { cwd, env, input })",
       "map · error",
-      "<code>{ ok, code, stdout, stderr }</code>."
+      "<code>{ ok, code, stdout, stderr }</code>. <code>input</code> is a str or a buffer; a missing <code>cwd</code> folder or a program that cannot start → error value; an unknown option stops the program."
      ],
      [
       "process.shell(command)",
@@ -1278,9 +1278,9 @@ export const REFERENCE: Record<string, RefData> = {
       "Pattern · group count · group names."
      ],
      [
-      "regex.test/find/findAll/replace/replaceAll/split/matches(text, pattern, …)",
+      "regex.test/find/findAll/replace/replaceAll/split/matches(text, pattern, …, opts?)",
       "",
-      "One-off shortcuts."
+      "One-off shortcuts; a trailing map is the options of <code>compile</code>. In a replacement, <code>$1x</code> is the group named <code>1x</code>: write <code>${1}x</code>."
      ],
      [
       "regex.escape(text)",
@@ -1330,8 +1330,8 @@ export const REFERENCE: Record<string, RefData> = {
      ],
      [
       "crypto.decrypt(box, key, { bytes })",
-      "str · error",
-      "Wrong key or altered data → error value."
+      "str · buffer · error",
+      "Wrong key or altered data → error value. <code>{ bytes: true }</code> returns a buffer; without it, data that is not UTF-8 text is an error value."
      ],
      [
       "crypto.hashPassword(password)",
@@ -1345,7 +1345,7 @@ export const REFERENCE: Record<string, RefData> = {
      ],
      [
       "crypto.randomBytes(n) · crypto.randomHex(n)",
-      "list · str",
+      "buffer · str",
       "Secure random."
      ],
      [
@@ -1413,12 +1413,12 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "password.hash(pw, { algorithm, memory, time, parallelism, cost, n, r, p, iterations, pepper })",
       "str · error",
-      "<code>algorithm</code>: <code>argon2id</code> (default), <code>argon2i</code>, <code>argon2d</code>, <code>bcrypt</code>, <code>scrypt</code>, <code>pbkdf2-sha256</code>, <code>pbkdf2-sha512</code>. argon2: <code>memory</code> (KiB), <code>time</code>, <code>parallelism</code>; bcrypt: <code>cost</code> 4..31; scrypt: <code>n</code> (power of two), <code>r</code>, <code>p</code>; PBKDF2: <code>iterations</code>. Returns a PHC string (<code>$argon2id$…</code>, <code>$scrypt$…</code>, <code>$pbkdf2-sha256$…</code>) or bcrypt's <code>$2b$…</code>. Unknown options stop the program."
+      "<code>algorithm</code>: <code>argon2id</code> (default), <code>argon2i</code>, <code>argon2d</code>, <code>bcrypt</code>, <code>scrypt</code>, <code>pbkdf2-sha256</code>, <code>pbkdf2-sha512</code>. argon2: <code>memory</code> (KiB), <code>time</code>, <code>parallelism</code>; bcrypt: <code>cost</code> 4..20; scrypt: <code>n</code> (power of two), <code>r</code>, <code>p</code>; PBKDF2: <code>iterations</code>. Costs beyond any recommended setting are refused, for new and stored hashes alike: argon2 memory above 2 GiB or memory × time above 8 GiB, scrypt above 2 GiB of memory or 8 GiB of work, bcrypt cost above 20, more than 20 000 000 PBKDF2 iterations. Returns a PHC string (<code>$argon2id$…</code>, <code>$scrypt$…</code>, <code>$pbkdf2-sha256$…</code>) or bcrypt's <code>$2b$…</code>. Unknown options stop the program."
      ],
      [
       "password.verify(pw, hash, { pepper })",
       "bool · error",
-      "Detects the algorithm from the hash (<code>$argon2id$</code>, <code>$2a$</code>/<code>$2b$</code>/<code>$2y$</code>, <code>$scrypt$</code>, <code>$pbkdf2-sha256$</code>…); constant-time comparison. A malformed or unsupported hash → error value. Accepts the same options map as <code>hash</code>."
+      "Detects the algorithm from the hash (<code>$argon2id$</code>, <code>$2a$</code>/<code>$2b$</code>/<code>$2y$</code>, <code>$scrypt$</code>, <code>$pbkdf2-sha256$</code>…); constant-time comparison. A malformed or unsupported hash, or one whose parameters are too large (a hash with <code>m=4294967295</code> would abort the process) → error value. Accepts the same options map as <code>hash</code>."
      ],
      [
       "password.needsRehash(hash, options?)",
@@ -1510,11 +1510,11 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "excel.write(path, rows | { Sheet: rows }, { header = true, columns })",
       "nil · error",
-      "One sheet per map key."
+      "One sheet per map key, in the alphabetical order of the keys (the first sheet is the first key); the parent folders are created. NaN, ±inf and buffers are an error value; an int beyond 2^53 is written as text (an Excel number is a double)."
      ]
     ],
-    "example": "import excel from \"fogu:excel\"\nconst products = [\n    { id: 1, name: \"Café\", price: 4.5, stock: true },\n    { id: 2, name: \"Pão\", price: 0.8, stock: false },\n]\nexcel.write(\"shop.xlsx\", { Products: products, Notes: [[\"checked\", true]] })?\nprint(excel.sheets(\"shop.xlsx\")?)\nprint(excel.read(\"shop.xlsx\")?)\nprint(excel.read(\"shop.xlsx\", { sheet: \"Notes\", header: false })?)",
-    "output": "[Notes, Products]\n[]\n[[checked, true]]",
+    "example": "import excel from \"fogu:excel\"\nconst products = [\n    { id: 1, name: \"Café\", price: 4.5, stock: true },\n    { id: 2, name: \"Pão\", price: 0.8, stock: false },\n]\nexcel.write(\"shop.xlsx\", { Products: products, Notes: [[\"checked\", true]] })?\nprint(excel.sheets(\"shop.xlsx\")?)\nprint(excel.read(\"shop.xlsx\", { sheet: \"Products\" })?)\nprint(excel.read(\"shop.xlsx\", { sheet: \"Notes\", header: false })?)",
+    "output": "[Notes, Products]\n[{id: 1, name: Café, price: 4.5, stock: true}, {id: 2, name: Pão, price: 0.8, stock: false}]\n[[checked, true]]",
     "outputTitle": "output"
    }
   ]
@@ -2184,6 +2184,11 @@ export const REFERENCE: Record<string, RefData> = {
   "blocks": [
    {
     "api": [
+     [
+      "etcd.defaultEndpoints()",
+      "list",
+      "The endpoints <code>connect()</code> uses without arguments (<code>$ETCDCTL_ENDPOINTS</code> or <code>http://127.0.0.1:2379</code>)."
+     ],
      [
       "etcd.connect(url? | { endpoints, user, password, tls, timeout = 15s, connectTimeout = 5s })",
       "Etcd · error",
@@ -3136,8 +3141,8 @@ export const REFERENCE: Record<string, RefData> = {
      ],
      [
       "e.listeners(event) · e.eventNames() · e.hasListeners(event)",
-      "",
-      ""
+      "int · list · bool",
+      "<code>listeners</code> is the number of listeners of the event (Node's <code>listenerCount</code>)."
      ]
     ],
     "example": "import events from \"fogu:events\"\nconst bus = events.EventEmitter()\nbus.on(\"order\", (id, total) => print(\"order\", id, \"total\", total))\nbus.once(\"order\", (id, total) => print(\"first order only:\", id))\nprint(bus.emit(\"order\", 1, 9.9))\nprint(bus.emit(\"order\", 2, 15))\nprint(bus.emit(\"nobody-listens\"), bus.eventNames())",
@@ -3158,12 +3163,12 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "cron.every(interval, fn)",
       "nil",
-      "A job every <code>interval</code> (duration or ms)."
+      "A job every <code>interval</code> (duration, ms or a str like <code>\"2s\"</code>; at least 1 ms)."
      ],
      [
       "cron.schedule(expression, fn)",
       "nil",
-      "5-field cron expression (<code>\"*/5 * * * *\"</code>); an invalid one stops the program."
+      "5-field cron expression (<code>\"*/5 * * * *\"</code>), evaluated in <b>UTC</b>: each field is a list of <code>*</code>, <code>n</code> or <code>a-b</code>, each with an optional <code>/step</code>; month and weekday names (<code>JAN</code>, <code>MON-FRI</code>); weekday 7 is Sunday; the macros <code>@yearly @monthly @weekly @daily @hourly</code>. When both day of month and day of week are restricted, a day matches either (as in Vixie cron). An invalid expression, one that never matches a date (<code>0 0 31 2 *</code>) or <code>L W # ?</code> stops the program."
      ],
      [
       "cron.tick()",
@@ -3834,6 +3839,11 @@ export const REFERENCE: Record<string, RefData> = {
       "No connection is made yet."
      ],
      [
+      "mail.providers",
+      "list",
+      "The names accepted by <code>provider</code>."
+     ],
+     [
       "SMTP: { provider: \"gmail\" | \"smtp\" | …, host, port, secure, user, password, region }",
       "",
       "<code>secure</code>: <code>tls</code> (465), <code>starttls</code> (587), <code>none</code>; URLs <code>smtp://user:pass@host:587</code>, <code>smtps://…</code>."
@@ -3931,6 +3941,11 @@ export const REFERENCE: Record<string, RefData> = {
     "h3": "Tools and agents",
     "text": "A tool that returns an <code>error</code> value sends <code>error: …</code> back to the model, which can recover.",
     "api": [
+     [
+      "ai.providers",
+      "list",
+      "The names accepted by <code>provider</code>."
+     ],
      [
       "ai.tool(name, description, parameters, run?)",
       "map",
@@ -4321,6 +4336,7 @@ export const REFERENCE: Record<string, RefData> = {
   "intro": "The runtime builds as a dynamic library that other programs load: <code>cargo ffi</code> (= <code>cargo build --release -p fogu-ffi</code>) writes <code>target/release/libfogu_rt.so</code> (<code>fogu_rt.dll</code> on Windows — <code>cargo ffi --target x86_64-pc-windows-gnu</code> from Linux — and <code>libfogu_rt.dylib</code> on macOS); the header is <code>ffi/fogu.h</code>. A runtime runs on its own thread: code evaluated by the host shares its globals, and servers, <code>fg</code> tasks and <code>Fogu.signal</code> handlers keep running between calls. Values cross as JSON; every call returns <code>{\"ok\":true,\"value\":…}</code> or <code>{\"ok\":false,\"error\":\"…\"}</code>, freed with <code>fogu_free_string</code>. Rust programs can use <code>fogu::embed::Runtime</code> directly.",
   "blocks": [
    {
+    "lang": "ts",
     "title": "host.ts (bun:ffi)",
     "api": [
      [
@@ -4511,7 +4527,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "cli.progress(total, { message, prefix, template, chars })",
       "ProgressBar",
-      "<code>inc(n = 1) set(n) length(n) message(m) println(line) finish(msg?)</code>, fields <code>position length elapsed finished</code>. Templates of <code>indicatif</code>."
+      "<code>inc(n = 1) set(n) length(n?) message(m) println(line) finish(msg?)</code> (<code>length()</code> returns the total), fields <code>position elapsed finished</code>. Templates of <code>indicatif</code>."
      ],
      [
       "cli.table(rows, { headers, style: \"rounded\" | \"utf8\" | \"ascii\" | \"markdown\" | \"none\", align, width })",
@@ -4594,7 +4610,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "html.render(source, data)",
       "str · error",
-      "Autoescaped; <code>{{ x | markdown }}</code> and <code>| striptags</code> are added to the Jinja filters."
+      "Autoescaped; <code>{{ x | markdown }}</code> (its HTML is sanitized like <code>html.sanitize</code>: no scripts, event attributes or <code>javascript:</code> links) and <code>| striptags</code> are added to the Jinja filters. <code>nil</code> prints nothing and booleans print <code>true</code>/<code>false</code>."
      ],
      [
       "html.template(source, { autoescape = true })",
@@ -4604,7 +4620,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "html.templates(folder, { autoescape })",
       "Templates",
-      "<code>render(name, data)</code>, <code>renderString(source, data)</code>, <code>has(name)</code>; <code>extends</code>/<code>include</code>/<code>import</code> load from the folder; autoescape by extension."
+      "<code>render(name, data)</code>, <code>renderString(source, data)</code>, <code>has(name)</code>; <code>extends</code>/<code>include</code>/<code>import</code> load from the folder; autoescape by extension (an inline <code>renderString</code> template counts as <code>.html</code>)."
      ]
     ],
     "example": "import html from \"fogu:html\"\nconst page = html.render(\"<h1>{{ title }}</h1>{% for p in items %}<li>{{ loop.index }}. {{ p.name | upper }}</li>{% endfor %}\", {\n    title: \"Tom & Jerry\",\n    items: [{ name: \"café\" }, { name: \"pão\" }],\n})?\nprint(page)\nconst [_, err] = html.render(\"{% if %}\", {})\nprint(err)",
@@ -4783,8 +4799,8 @@ export const REFERENCE: Record<string, RefData> = {
      ],
      [
       "image.color(c)",
-      "list",
-      "<code>[r, g, b, a]</code>."
+      "list · error",
+      "<code>[r, g, b, a]</code>; an invalid colour is an error value (elsewhere it stops the program)."
      ],
      [
       "img.width · img.height",
@@ -4861,6 +4877,11 @@ export const REFERENCE: Record<string, RefData> = {
       "plot.figure({ title, xlabel, ylabel, width = 800, height = 450, theme = \"light\" | \"dark\", grid = true, legend = true, xmin, xmax, ymin, ymax, background })",
       "Figure",
       ""
+     ],
+     [
+      "plot.palette",
+      "list",
+      "The default series colours, in order."
      ],
      [
       "fig.line(x?, y, { label, color, width, dash, marker, size, opacity }) · scatter(…) · area(…)",

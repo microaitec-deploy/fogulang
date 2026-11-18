@@ -48,6 +48,46 @@ const PBKDF2_SHA256_ITERATIONS: u32 = 600_000;
 const PBKDF2_SHA512_ITERATIONS: u32 = 210_000;
 /// scrypt memory (128·N·r bytes) above this is refused, also when verifying a stored hash
 const SCRYPT_MAX_MEMORY: u128 = 2 << 30;
+// Upper bounds of the other cost parameters, checked for new hashes and stored ones alike: a
+// stored hash comes from outside, and `m=4294967295` would abort the process on the allocation
+// and `t=4294967295` (or `i=`) would hang it. Each is far above any recommended setting.
+/// argon2 memory, KiB (2 GiB, like scrypt)
+const ARGON2_MAX_MEMORY: u32 = 2 << 20;
+/// argon2 memory × passes, KiB (8 GiB of memory traffic, a few seconds)
+const ARGON2_MAX_WORK: u64 = 8 << 20;
+/// scrypt 128·N·r·p bytes (the work of p sequential passes)
+const SCRYPT_MAX_WORK: u128 = 8 << 30;
+const BCRYPT_MAX_COST: u32 = 20;
+const PBKDF2_MAX_ITERATIONS: u32 = 20_000_000;
+
+/// `None` when the cost parameters are within the bounds above, else why not.
+fn too_costly(p: &Parsed) -> Option<String> {
+    match *p {
+        Parsed::Argon2 { memory, time, .. } => {
+            if memory > ARGON2_MAX_MEMORY {
+                Some(format!("argon2 memory above {} KiB", ARGON2_MAX_MEMORY))
+            } else if memory as u64 * time as u64 > ARGON2_MAX_WORK {
+                Some(format!("argon2 memory * time above {} KiB", ARGON2_MAX_WORK))
+            } else {
+                None
+            }
+        }
+        Parsed::Scrypt { log_n, r, p, .. } => {
+            if scrypt_memory(log_n, r) > SCRYPT_MAX_MEMORY {
+                Some("scrypt parameters need more than 2 GiB of memory".into())
+            } else if scrypt_memory(log_n, r) * p as u128 > SCRYPT_MAX_WORK {
+                Some("scrypt work (128 * n * r * p bytes) above 8 GiB".into())
+            } else {
+                None
+            }
+        }
+        Parsed::Bcrypt { cost, .. } if cost > BCRYPT_MAX_COST => Some(format!("bcrypt cost above {}", BCRYPT_MAX_COST)),
+        Parsed::Pbkdf2 { iterations, .. } if iterations > PBKDF2_MAX_ITERATIONS => {
+            Some(format!("pbkdf2 iterations above {}", PBKDF2_MAX_ITERATIONS))
+        }
+        _ => None,
+    }
+}
 
 pub fn build() -> ModuleValue {
     let mut e: HashMap<String, Value> = HashMap::new();
@@ -235,6 +275,15 @@ fn spec(v: Option<&Value>, what: &str) -> Result<Spec, String> {
     if let Some(i) = opt_u32(&o, "iterations", 1000, u32::MAX, what)? {
         s.iterations = i;
     }
+    let as_parsed = match s.algo {
+        Algo::Argon2(_) => Parsed::Argon2 { algo: s.algo, version: 0x13, memory: s.memory, time: s.time, parallelism: s.parallelism, length: 32 },
+        Algo::Bcrypt => Parsed::Bcrypt { version: "2b".into(), cost: s.cost },
+        Algo::Scrypt => Parsed::Scrypt { log_n: s.log_n, r: s.r, p: s.p, length: 32 },
+        Algo::Pbkdf2Sha256 | Algo::Pbkdf2Sha512 => Parsed::Pbkdf2 { algo: s.algo, iterations: s.iterations, length: 32 },
+    };
+    if let Some(why) = too_costly(&as_parsed) {
+        return Err(format!("{}: parameters too large ({})", what, why));
+    }
     s.pepper = pepper_opt(&o, what)?;
     Ok(s)
 }
@@ -378,6 +427,9 @@ fn parse(stored: &str) -> Result<Parsed, String> {
 /// `Err` is a plain message (a malformed or unsupported hash).
 fn verify_with(pw: &str, stored: &str, pepper: Option<&[u8]>) -> Result<bool, String> {
     let parsed = parse(stored)?;
+    if let Some(why) = too_costly(&parsed) {
+        return Err(format!("not a valid password hash (parameters too large: {})", why));
+    }
     let input = secret(pw, pepper);
     let outcome = match parsed {
         Parsed::Bcrypt { .. } => {

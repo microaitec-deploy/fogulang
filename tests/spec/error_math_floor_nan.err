@@ -1,0 +1,2 @@
+cannot convert NaN, infinity or a float out of the int range to int
+error_math_floor_nan.fg:5

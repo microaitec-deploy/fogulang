@@ -140,6 +140,21 @@ pub struct Figure {
     background: Option<String>,
 }
 
+/// An axis range that can be drawn: finite, increasing, with a width that is itself finite (an
+/// empty range `xmin == xmax` or values like ±1e308 gave NaN coordinates in the SVG).
+fn sane_range(lo: f64, hi: f64) -> (f64, f64) {
+    if !lo.is_finite() || !hi.is_finite() {
+        return (0.0, 1.0);
+    }
+    let (lo, hi) = if hi < lo { (hi, lo) } else { (lo, hi) };
+    let (lo, hi) = (lo.max(-f64::MAX / 4.0), hi.min(f64::MAX / 4.0));
+    if hi > lo {
+        return (lo, hi);
+    }
+    let d = (lo.abs() * 0.01).max(0.5);
+    (lo - d, hi + d)
+}
+
 /// "Nice" tick values covering [lo, hi] (1-2-5 steps).
 fn ticks(lo: f64, hi: f64, target: usize) -> Vec<f64> {
     if !(hi > lo) {
@@ -268,8 +283,10 @@ impl Figure {
             y0 -= 1.0;
             y1 += 1.0;
         }
-        let pad = (y1 - y0) * 0.05;
-        let (mut y0, mut y1) = (self.ymin.unwrap_or(if y0 == 0.0 { 0.0 } else { y0 - pad }), self.ymax.unwrap_or(y1 + pad));
+        let (y0, y1) = sane_range(y0, y1);
+        // computed so that it cannot overflow (y1 - y0 can for ±1e308)
+        let pad = y1 * 0.05 - y0 * 0.05;
+        let (mut y0, mut y1) = sane_range(self.ymin.unwrap_or(if y0 == 0.0 { 0.0 } else { y0 - pad }), self.ymax.unwrap_or(y1 + pad));
         let yt = ticks(y0, y1, 6);
         if self.ymin.is_none() {
             y0 = y0.min(*yt.first().unwrap_or(&y0));
@@ -284,7 +301,7 @@ impl Figure {
             let (a, b) = all_x.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
             let (a, b) = if a.is_finite() { (a, b) } else { (0.0, 1.0) };
             let (a, b) = if a == b { (a - 1.0, b + 1.0) } else { (a, b) };
-            (self.xmin.unwrap_or(a), self.xmax.unwrap_or(b))
+            sane_range(self.xmin.unwrap_or(a), self.xmax.unwrap_or(b))
         };
         let sx = |x: f64| left + (x - x0) / (x1 - x0) * pw;
         let sy = |y: f64| top + ph - (y - y0) / (y1 - y0) * ph;

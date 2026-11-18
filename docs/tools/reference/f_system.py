@@ -207,6 +207,7 @@ await Bun.sleep(100);
 F.fogu_free(rt);
 ''',
                 "title": "host.ts (bun:ffi)",
+                "lang": "ts",
             }
         ],
     },
@@ -313,7 +314,7 @@ if cli.confirm(`Save ${name}?`, { default: true })? { print(name, age, lang) }
                     ("cli.isTTY(\"stdin\" | \"stdout\" | \"stderr\") · cli.size()", "bool · { columns, rows } | nil", ""),
                     ("cli.clear() · clearLine() · hideCursor() · showCursor() · readKey()", "", "<code>readKey</code> → a character or <code>Enter Escape Backspace Tab ArrowUp ArrowDown ArrowLeft ArrowRight Home End PageUp PageDown Delete</code>."),
                     ("cli.spinner(text, { frames })", "Spinner", "<code>text(t) succeed(msg?) fail(msg?) warn(msg?) info(msg?) stop()</code>."),
-                    ("cli.progress(total, { message, prefix, template, chars })", "ProgressBar", "<code>inc(n = 1) set(n) length(n) message(m) println(line) finish(msg?)</code>, fields <code>position length elapsed finished</code>. Templates of <code>indicatif</code>."),
+                    ("cli.progress(total, { message, prefix, template, chars })", "ProgressBar", "<code>inc(n = 1) set(n) length(n?) message(m) println(line) finish(msg?)</code> (<code>length()</code> returns the total), fields <code>position elapsed finished</code>. Templates of <code>indicatif</code>."),
                     ("cli.table(rows, { headers, style: \"rounded\" | \"utf8\" | \"ascii\" | \"markdown\" | \"none\", align, width })", "str", "Rows are lists or maps; numbers are right aligned."),
                 ],
                 "example": r"""

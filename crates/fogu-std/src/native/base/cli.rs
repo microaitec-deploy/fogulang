@@ -353,7 +353,12 @@ fn multi_select(args: &[Value]) -> Result<Value, String> {
             }
             let picked: Option<Vec<usize>> = line.split(',').map(|p| pick(&items, p)).collect();
             match picked {
-                Some(v) => break Some(v),
+                // in the list's order and once each, as in the interactive prompt
+                Some(mut v) => {
+                    v.sort_unstable();
+                    v.dedup();
+                    break Some(v);
+                }
                 None => eprintln!("choose items by name or number, separated by commas"),
             }
         }
@@ -604,9 +609,9 @@ impl FoguObject for BarValue {
 
     fn get(&self, field: &str) -> Option<Value> {
         Some(match field {
+            // `length`, `message` and `text` are methods: a field of the same name hid them
+            // (`bar.length(10)` called an int)
             "position" => Value::Int(self.bar.position() as i64),
-            "length" => self.bar.length().map_or(Value::Nil, |n| Value::Int(n as i64)),
-            "message" | "text" => Value::Str(self.bar.message().into()),
             "elapsed" => Value::Duration(self.bar.elapsed().as_nanos() as i64),
             "finished" => Value::Bool(self.done || self.bar.is_finished()),
             _ => return None,
@@ -631,7 +636,9 @@ impl FoguObject for BarValue {
                 Some(Value::Int(n)) if *n >= 0 => self.bar.set_position(*n as u64),
                 _ => return Err("set expects a non-negative int".into()),
             },
+            // length() → the total; length(n) sets it
             "length" => match args.first() {
+                None => return Ok(self.bar.length().map_or(Value::Nil, |n| Value::Int(n as i64))),
                 Some(Value::Int(n)) if *n >= 0 => self.bar.set_length(*n as u64),
                 _ => return Err("length expects a non-negative int".into()),
             },
@@ -695,9 +702,16 @@ fn table(args: &[Value]) -> Result<Value, String> {
         _ => None,
     };
     if headers.is_none() {
-        if let Some(Value::Map(m)) = rows.first() {
-            let mut keys: Vec<String> = m.borrow().keys().map(|k| k.to_string()).collect();
+        // the keys of every map row, not only the first one's
+        let mut keys: Vec<String> = Vec::new();
+        for r in &rows {
+            if let Value::Map(m) = r {
+                keys.extend(m.borrow().keys().map(|k| k.to_string()));
+            }
+        }
+        if !keys.is_empty() {
             keys.sort();
+            keys.dedup();
             headers = Some(keys);
         }
     }
@@ -711,19 +725,23 @@ fn table(args: &[Value]) -> Result<Value, String> {
         Some(other) => return Err(format!("cli.table: style must be rounded, utf8, ascii, markdown or none, got '{}'", other)),
     };
     t.load_preset(preset);
-    if matches!(o.get("style"), None) {
+    let style = o.get("style").map(|v| v.to_display_string());
+    let markdown = style.as_deref() == Some("markdown");
+    if matches!(style.as_deref(), None | Some("rounded")) {
         t.apply_modifier(comfy_table::modifiers::UTF8_ROUND_CORNERS);
     }
     t.set_content_arrangement(ContentArrangement::Dynamic);
     if let Some(Value::Int(w)) = o.get("width") {
         t.set_width((*w).clamp(10, u16::MAX as i64) as u16);
     }
+    // a markdown cell is one line without a bare `|`
+    let md = |s: String| if markdown { s.replace('|', r"\|").replace("\r\n", "<br>").replace('\n', "<br>") } else { s };
     if let Some(h) = &headers {
-        t.set_header(h.clone());
+        t.set_header(h.iter().cloned().map(md).collect::<Vec<_>>());
     }
     let cell = |v: &Value| match v {
         Value::Nil => String::new(),
-        v => v.to_display_string(),
+        v => md(v.to_display_string()),
     };
     for r in &rows {
         let cells: Vec<String> = match r {
@@ -795,13 +813,16 @@ fn command_of(spec: &HashMap<Str, Value>, fallback: &str) -> Result<(clap::Comma
     if let Some(a) = s_of(spec, "about") {
         cmd = cmd.about(a);
     }
-    let mut specs = Vec::new();
+    let mut specs: Vec<ArgSpec> = Vec::new();
+    let mut positionals = 0;
+    let mut longs: Vec<String> = Vec::new();
+    let mut shorts: Vec<char> = Vec::new();
     let args = match spec.get("args") {
         None | Some(Value::Nil) => Vec::new(),
         Some(Value::List(l)) => l.borrow().clone(),
         Some(other) => return Err(format!("cli.parse: args must be a list of maps, got '{}'", other.type_name())),
     };
-    for (i, a) in args.iter().enumerate() {
+    for a in args.iter() {
         let a = match a {
             Value::Map(m) => m.borrow().clone(),
             _ => return Err("cli.parse: each arg is a map { name, ... }".into()),
@@ -810,13 +831,34 @@ fn command_of(spec: &HashMap<Str, Value>, fallback: &str) -> Result<(clap::Comma
         let kind = s_of(&a, "type").unwrap_or_else(|| "str".into());
         let multiple = a.get("multiple").is_some_and(|v| v.is_truthy());
         let positional = a.get("positional").is_some_and(|v| v.is_truthy());
+        // clap only checks these with debug assertions: a release build would silently
+        // drop one of two args with the same name or flag
+        if specs.iter().any(|s| s.name == name) {
+            return Err(format!("cli.parse: two args are named '{}'", name));
+        }
         let mut arg = Arg::new(name.clone());
         if positional {
-            arg = arg.index(i + 1);
+            // positionals are numbered among themselves: flags declared before them do not count
+            positionals += 1;
+            arg = arg.index(positionals);
         } else {
-            arg = arg.long(s_of(&a, "long").unwrap_or_else(|| name.clone()));
+            let long = s_of(&a, "long").unwrap_or_else(|| name.clone());
+            if longs.contains(&long) {
+                return Err(format!("cli.parse: two args use the flag '--{}'", long));
+            }
+            arg = arg.long(long.clone());
+            longs.push(long);
             if let Some(s) = s_of(&a, "short") {
-                arg = arg.short(s.chars().next().ok_or("cli.parse: empty 'short'")?);
+                let mut cs = s.chars();
+                let c = match (cs.next(), cs.next()) {
+                    (Some(c), None) if c != '-' => c,
+                    _ => return Err(format!("cli.parse: 'short' of '{}' must be one character, got '{}'", name, s)),
+                };
+                if shorts.contains(&c) {
+                    return Err(format!("cli.parse: two args use the flag '-{}'", c));
+                }
+                shorts.push(c);
+                arg = arg.short(c);
             }
         }
         if let Some(h) = s_of(&a, "help") {
@@ -831,8 +873,9 @@ fn command_of(spec: &HashMap<Str, Value>, fallback: &str) -> Result<(clap::Comma
         arg = match kind.as_str() {
             "bool" => arg.action(ArgAction::SetTrue),
             "count" => arg.action(ArgAction::Count),
-            "int" => arg.value_parser(clap::value_parser!(i64)),
-            "float" => arg.value_parser(clap::value_parser!(f64)),
+            // negative numbers are values, not flags (`--port -1`)
+            "int" => arg.value_parser(clap::value_parser!(i64)).allow_negative_numbers(true),
+            "float" => arg.value_parser(clap::value_parser!(f64)).allow_negative_numbers(true),
             "str" => arg,
             other => return Err(format!("cli.parse: type of '{}' must be str, int, float, bool or count, got '{}'", name, other)),
         };
@@ -841,7 +884,27 @@ fn command_of(spec: &HashMap<Str, Value>, fallback: &str) -> Result<(clap::Comma
         }
         if let Some(Value::List(c)) = a.get("choices") {
             let c: Vec<String> = c.borrow().iter().map(|v| v.to_display_string()).collect();
-            arg = arg.value_parser(clap::builder::PossibleValuesParser::new(c));
+            // the value keeps the type of the arg (a PossibleValuesParser would yield a String
+            // where an i64/f64 is read back, and clap panics on the mismatch)
+            let shown = c.join(", ");
+            arg = match kind.as_str() {
+                "int" => {
+                    let ok: Vec<i64> = c.iter().map(|x| x.parse::<i64>()).collect::<Result<_, _>>().map_err(|_| format!("cli.parse: choices of '{}' must be ints", name))?;
+                    arg.value_parser(move |v: &str| -> Result<i64, String> {
+                        let n = v.parse::<i64>().map_err(|e| e.to_string())?;
+                        if ok.contains(&n) { Ok(n) } else { Err(format!("possible values: {}", shown)) }
+                    })
+                }
+                "float" => {
+                    let ok: Vec<f64> = c.iter().map(|x| x.parse::<f64>()).collect::<Result<_, _>>().map_err(|_| format!("cli.parse: choices of '{}' must be numbers", name))?;
+                    arg.value_parser(move |v: &str| -> Result<f64, String> {
+                        let n = v.parse::<f64>().map_err(|e| e.to_string())?;
+                        if ok.contains(&n) { Ok(n) } else { Err(format!("possible values: {}", shown)) }
+                    })
+                }
+                "bool" | "count" => return Err(format!("cli.parse: '{}' is a {} and cannot have choices", name, kind)),
+                _ => arg.value_parser(clap::builder::PossibleValuesParser::new(c)),
+            };
         }
         match a.get("default") {
             None | Some(Value::Nil) => {}
@@ -946,7 +1009,9 @@ fn parse(args: &[Value]) -> Result<Value, String> {
                 let _ = e.print();
                 std::process::exit(2);
             }
-            Err(io_err!("{}", console::strip_ansi_codes(&e.render().to_string()).trim_end()))
+            // the error value already says "error:"; clap starts its message with it too
+            let msg = console::strip_ansi_codes(&e.render().to_string()).trim_end().to_string();
+            Err(io_err!("{}", msg.strip_prefix("error: ").unwrap_or(&msg)))
         }
     }
 }

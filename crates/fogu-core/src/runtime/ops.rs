@@ -8,6 +8,8 @@ pub const ERR_NEG_POW: &str = "negative integer exponent in '**' (use float)";
 pub const ERR_STACK: &str = "stack overflow (recursion too deep)";
 pub const ERR_MATCH: &str = "non-exhaustive match: no arm matched";
 pub const ERR_SHIFT: &str = "negative shift count";
+/// A float that has no int value (NaN, ±inf, |x| >= 2^63) turned into an int.
+pub const ERR_FLOAT_INT: &str = "cannot convert NaN, infinity or a float out of the int range to int";
 /// Native code was stopped by the deadline of its `fogu:vm` run (the
 /// interpreter turns it into the timeout error of that run).
 pub const ERR_CANCEL: &str = "script execution timed out";
@@ -19,6 +21,27 @@ pub const CODE_NEG_POW: i64 = 3;
 pub const CODE_STACK: i64 = 4;
 pub const CODE_MATCH: i64 = 5;
 pub const CODE_SHIFT: i64 = 6;
+pub const CODE_FLOAT_INT: i64 = 7;
+
+/// Rounds halves away from zero, computed exactly on every platform (the C runtime's `round`
+/// of the Windows target gave 1 for 0.49999999999999994, the double just below 0.5).
+#[inline]
+pub fn round_half_away(x: f64) -> f64 {
+    let t = x.trunc();
+    // `x - t` is exact for every double
+    if (x - t).abs() >= 0.5 { t + x.signum() } else { t }
+}
+
+/// The int value of an already rounded float, or [`ERR_FLOAT_INT`] (never a saturated value).
+#[inline]
+pub fn float_to_int(f: f64) -> Result<i64, &'static str> {
+    // NaN fails the comparison; |f| < 2^63 (also -2^63 is refused, like the JIT's single check)
+    if f.abs() < 9_223_372_036_854_775_808.0 {
+        Ok(f as i64)
+    } else {
+        Err(ERR_FLOAT_INT)
+    }
+}
 
 pub fn code_message(code: i64) -> &'static str {
     match code {
@@ -28,6 +51,7 @@ pub fn code_message(code: i64) -> &'static str {
         CODE_STACK => ERR_STACK,
         CODE_MATCH => ERR_MATCH,
         CODE_SHIFT => ERR_SHIFT,
+        CODE_FLOAT_INT => ERR_FLOAT_INT,
         c if c >= CODE_CUSTOM => CUSTOM.with(|m| m.borrow().get((c - CODE_CUSTOM) as usize).copied()).unwrap_or("unknown error in native code"),
         _ => "unknown error in native code",
     }

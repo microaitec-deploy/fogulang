@@ -107,6 +107,27 @@ skip("later", () => {})
 }
 
 #[test]
+fn test_command_fails_tests_that_exit_or_fail_in_a_task() {
+    let d = TempDir::new("test-exit");
+    d.write("a.test.fg", "import { test, expect } from \"fogu:test\"\ntest(\"fails\", () => { expect(1).toBe(2) })\n");
+    d.write("b.test.fg", "import { test, expect } from \"fogu:test\"\ntest(\"exits\", () => { Fogu.exit(0) })\n");
+    d.write(
+        "c.test.fg",
+        "import { test, expect } from \"fogu:test\"\nimport time from \"fogu:time\"\ntest(\"never skipped\", () => { expect(1).toBe(1) })\ntest(\"task fails\", () => {\n    fg fn() { expect(1).toBe(2) }()\n    time.delay(20ms)\n})\n",
+    );
+    let o = fogu(d.path(), &["test"]);
+    let out = text(&o);
+    // Fogu.exit(0) in a test used to end the run with code 0 and skip the other files
+    assert_eq!(o.status.code(), Some(1), "{}", out);
+    assert!(out.contains("✗ exits"), "{}", out);
+    assert!(out.contains("exit(0) called during a test"), "{}", out);
+    assert!(out.contains("✓ never skipped"), "{}", out);
+    // a failed expect inside an `fg` task fails the test that started it
+    assert!(out.contains("✗ task fails"), "{}", out);
+    assert!(out.contains("1 passed, 3 failed"), "{}", out);
+}
+
+#[test]
 fn build_compile_makes_a_standalone_executable() {
     let d = TempDir::new("build");
     assert!(fogu(d.path(), &["init", "-y"]).status.success());

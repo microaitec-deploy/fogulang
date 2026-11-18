@@ -144,19 +144,29 @@ fn to_int(v: &Value) -> Option<Value> {
         Value::Bool(b) => i64::from(*b),
         Value::Str(s) => {
             let t = s.trim().replace('_', "");
-            if let Some(h) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
-                i64::from_str_radix(h, 16).ok()?
-            } else if let Some(b) = t.strip_prefix("0b") {
-                i64::from_str_radix(b, 2).ok()?
+            let (neg, u) = match t.strip_prefix('-') {
+                Some(u) => (true, u),
+                None => (false, t.as_str()),
+            };
+            let radix = |digits: &str, r: u32| -> Option<i64> {
+                // through i128 so that -0x8000000000000000 (i64::MIN) is in range
+                let n = i128::from_str_radix(digits, r).ok().filter(|_| !digits.starts_with(['+', '-']))?;
+                i64::try_from(if neg { -n } else { n }).ok()
+            };
+            if let Some(h) = u.strip_prefix("0x").or_else(|| u.strip_prefix("0X")) {
+                radix(h, 16)?
+            } else if let Some(b) = u.strip_prefix("0b").or_else(|| u.strip_prefix("0B")) {
+                radix(b, 2)?
             } else {
                 match t.parse::<i64>() {
                     Ok(n) => n,
                     Err(_) => {
                         let f = t.parse::<f64>().ok()?;
-                        if f.fract() != 0.0 || !f.is_finite() {
+                        // out of the int range is not convertible (never a saturated MAX_INT)
+                        if f.fract() != 0.0 {
                             return None;
                         }
-                        f as i64
+                        crate::runtime::ops::float_to_int(f).ok()?
                     }
                 }
             }

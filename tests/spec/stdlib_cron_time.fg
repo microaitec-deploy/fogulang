@@ -1,0 +1,30 @@
+// fogu:cron validation and standard syntax, fogu:time limits (round 2 M65, M67, M68, M70, M71; B20, B21)
+import cron from "fogu:cron"
+import time from "fogu:time"
+
+fn ok(expr) {
+    cron.schedule(expr, () => 1)
+    print("ok", expr)
+}
+// standard syntax: ranges with a step, mixed lists, 7 = Sunday, names, macros
+ok("1-10/2 * * * *")
+ok("5/15 * * * *")
+ok("1-5,10 * * * *")
+ok("0 0 * * 7")
+ok("0 9 * JAN-MAR MON-FRI")
+ok("@daily")
+ok("0 0 29 2 *")
+
+// B20: an invalid date is an error value; an impossible day says so
+print(time.Date({ year: 2023, month: 13, day: 1 }))
+print(time.Date({ year: 2023, month: 1, day: 1, hour: 4294967296 }))
+print(time.parse("2026-02-30"))
+print(time.parse("someday"))
+print(time.Date({ year: 2024, month: 2, day: 29, zone: "UTC" }).iso())
+// M63, M65: an hour without minutes is kept; millis must be < 1000
+print(time.parse("2026-03-10 15", "%Y-%m-%d %H")?.iso())
+print(time.Date({ year: 2026, second: 59, millis: 1500 }))
+// M61, M62: a skipped midnight is the start of the day; startOf keeps the instant's offset
+print(time.parse("2018-11-04", nil, "America/Sao_Paulo")?.iso())
+print(time.Date({ year: 2018, month: 11, day: 4, hour: 10, zone: "America/Sao_Paulo" }).startOf("day").iso())
+print(time.Date("2026-10-25T01:30:45.500Z", "Europe/Lisbon").startOf("second").iso())

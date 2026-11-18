@@ -1278,7 +1278,14 @@ fn run_module(module: &str, args: &J, c: &Ctx) -> Result<TaskResult, String> {
         }),
         "wait_for" => {
             let timeout = args.get("timeout").and_then(num_of).unwrap_or(30.0);
-            let deadline = Instant::now() + Duration::from_secs_f64(timeout);
+            let deadline = Duration::try_from_secs_f64(timeout)
+                .ok()
+                .and_then(|d| Instant::now().checked_add(d))
+                .ok_or_else(|| format!("wait_for: invalid timeout {}", timeout));
+            let deadline = match deadline {
+                Ok(d) => d,
+                Err(e) => return Ok(failed(e)),
+            };
             let host = arg_str(args, "host").unwrap_or_else(|| "127.0.0.1".into());
             loop {
                 let ready = if let Some(port) = args.get("port").and_then(num_of) {

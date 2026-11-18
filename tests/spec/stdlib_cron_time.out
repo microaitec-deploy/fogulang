@@ -1,0 +1,17 @@
+ok 1-10/2 * * * *
+ok 5/15 * * * *
+ok 1-5,10 * * * *
+ok 0 0 * * 7
+ok 0 9 * JAN-MAR MON-FRI
+ok @daily
+ok 0 0 29 2 *
+error: time.Date: invalid date 2023-13-1
+error: time.Date: invalid time 4294967296:0:0.0
+error: time.parse: invalid date '2026-02-30'
+error: time.parse: unrecognized date 'someday' (give a format, e.g. "%d/%m/%Y")
+2024-02-29T00:00:00.000Z
+2026-03-10T15:00:00.000Z
+error: time.Date: invalid time 0:0:59.1500
+2018-11-04T01:00:00.000-02:00
+2018-11-04T01:00:00.000-02:00
+2026-10-25T01:30:45.000+00:00

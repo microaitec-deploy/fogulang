@@ -1,6 +1,6 @@
 # Design note: `fogu:time`
 
-Source: [`src/native/time.rs`](../../src/native/time.rs).
+Source: [`crates/fogu-std/src/native/base/time.rs`](../../crates/fogu-std/src/native/base/time.rs).
 
 ## API
 
@@ -28,10 +28,10 @@ time.sleep(0.25)                        // seconds (a float or a duration)
 2. **The getters follow JavaScript** where it makes sense: `getMonth()` returns
    **0–11**, `getDay()` returns **0 = Sunday**, `getDate()` returns 1–31. The
    direct field `month` is 1–12.
-3. **`delay` / `sleep` block the thread** with `std::thread::sleep` (and with it
-   every `fg` task); the spec's non-blocking behaviour needs the future
-   scheduler. They accept `duration` values (`delay(200ms)`).
-4. **UTC only**: no time zones, to avoid platform-specific code or external
-   dependencies.
+3. **`delay` / `sleep` are cooperative**: the task waits on a scheduler timer and the
+   other `fg` tasks keep running. They accept `duration` values (`delay(200ms)`); a
+   negative, NaN or infinite time is an error.
+4. **Time zones** come from `chrono-tz` (IANA names): every `Date` has a zone, new dates
+   take the default zone (`time.zone()`, "UTC" until `time.setZone`).
 5. **Calendar conversion** uses Howard Hinnant's `civil_from_days` algorithm,
    exact for every year of the Gregorian calendar.

@@ -1,0 +1,6 @@
+// a cron expression that never fires (31 February) stops the program instead of running every minute
+import cron from "fogu:cron"
+
+cron.schedule("0 0 31 1,3 *", () => 1)
+print("31 of January or March is fine")
+cron.schedule("0 0 31 2 *", () => 1)

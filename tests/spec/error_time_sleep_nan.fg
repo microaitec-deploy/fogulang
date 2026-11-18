@@ -1,0 +1,6 @@
+// time.sleep(NaN) is an error like sleep(-1), not a panic of the process
+import time from "fogu:time"
+
+time.sleep(0)
+print("slept")
+time.sleep(0.0 / 0.0)

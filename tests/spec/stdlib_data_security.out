@@ -1,0 +1,32 @@
+4
+5
+true
+error: jwt: token expired
+error: jwt: token not active yet
+error: jwt: invalid 'exp' claim (not a number)
+18446744073709551616.0
+<p>hi  <a rel="noopener noreferrer">l</a> <strong>b</strong></p>
+
+&lt;script&gt;
+[] true false
+{id: 18446744073709551616.0, name: ana}
+{id: 18446744073709551616.0}
+{f: 1.0, h: inf, i: -inf}
+{f: inf, g: 1.0}
+n: 2
+s: x
+v: 1.0
+ float
+true true
+1.0 1e20 0.1 [2.5,3]
+float true
+../../a ../../etc/passwd /a ../b
+true true false
+true
+INFO  two\nlines user="ana\nERROR forged"
+{"level":"error","msg":"failed","code":23,"fields.level":"x","fields.msg":"field named msg"}
+true true false
+true x-x
+[[1, 2], [4, 6], [7, 8]]
+error: shell.json: expected 'null' at position 0
+err

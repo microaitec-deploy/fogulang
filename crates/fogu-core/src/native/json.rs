@@ -60,8 +60,10 @@ fn write_value(v: &Value, out: &mut String) {
         }
         // JSON has no NaN or infinity
         Value::Float(n) if !n.is_finite() => out.push_str("null"),
+        // `{:?}` keeps the float a float (`1.0`, `1e20`): `{}` wrote `1` and 21 digits for
+        // 1e20, which came back as an int (or failed to parse)
         Value::Float(n) => {
-            let _ = write!(out, "{}", n);
+            let _ = write!(out, "{:?}", n);
         }
         Value::Str(s) => write_str(s, out),
         Value::List(l) => {
@@ -155,6 +157,8 @@ fn write_str(s: &str, out: &mut String) {
 pub const MAX_DEPTH: usize = 512;
 
 fn parse(s: &str) -> Result<Value, String> {
+    // a byte order mark before the document is not part of it
+    let s = s.strip_prefix('\u{feff}').unwrap_or(s);
     let mut p = JsonParser { s, b: s.as_bytes(), pos: 0, depth: 0 };
     let v = p.parse_value()?;
     p.skip_ws();
@@ -184,9 +188,12 @@ impl JsonParser<'_> {
         self.b.get(self.pos).copied()
     }
 
-    /// The character at the current position (error messages).
-    fn peek_char(&self) -> Option<char> {
-        self.s.get(self.pos..).and_then(|r| r.chars().next())
+    /// The character at the current position, for error messages: `'x'` or `end of input`.
+    fn peek_char(&self) -> String {
+        match self.s.get(self.pos..).and_then(|r| r.chars().next()) {
+            Some(c) => format!("'{}'", c.escape_default()),
+            None => "end of input".into(),
+        }
     }
 
     /// The position counted in characters (error messages).
@@ -211,7 +218,7 @@ impl JsonParser<'_> {
                 v
             }
             Some(c) if c == b'-' || c.is_ascii_digit() => self.parse_number(),
-            _ => Err(format!("invalid JSON at position {}: {:?}", self.char_pos(), self.peek_char())),
+            _ => Err(format!("invalid JSON at position {}: {}", self.char_pos(), self.peek_char())),
         }
     }
 
@@ -242,6 +249,7 @@ impl JsonParser<'_> {
                     return Ok(out);
                 }
                 b'\\' => break,
+                0..=0x1f => return Err(format!("invalid JSON: a raw control character in a string at position {}", self.char_pos())),
                 _ => self.pos += 1,
             }
         }
@@ -281,14 +289,14 @@ impl JsonParser<'_> {
                                     self.pos = save;
                                 }
                             }
-                            if let Some(ch) = char::from_u32(code) {
-                                out.push(ch);
-                            }
+                            // a lone surrogate is U+FFFD, not dropped
+                            out.push(char::from_u32(code).unwrap_or('\u{fffd}'));
                         }
                         other => return Err(format!("invalid escape: \\{}", other as char)),
                     }
                     run = self.pos;
                 }
+                0..=0x1f => return Err(format!("invalid JSON: a raw control character in a string at position {}", self.char_pos())),
                 _ => self.pos += 1,
             }
         }
@@ -305,12 +313,22 @@ impl JsonParser<'_> {
                 p.pos += 1;
             }
         };
+        // RFC 8259: no leading zeros (`01`), digits after `.` and after the exponent
+        let bad = |p: &Self| format!("invalid number at position {}", p.char_pos());
+        let int_start = self.pos;
         digits(self);
+        if self.pos == int_start || (self.b[int_start] == b'0' && self.pos - int_start > 1) {
+            return Err(bad(self));
+        }
         let mut is_float = false;
         if self.peek() == Some(b'.') {
             is_float = true;
             self.pos += 1;
+            let at = self.pos;
             digits(self);
+            if self.pos == at {
+                return Err(bad(self));
+            }
         }
         if matches!(self.peek(), Some(b'e' | b'E')) {
             is_float = true;
@@ -318,13 +336,22 @@ impl JsonParser<'_> {
             if matches!(self.peek(), Some(b'+' | b'-')) {
                 self.pos += 1;
             }
+            let at = self.pos;
             digits(self);
+            if self.pos == at {
+                return Err(bad(self));
+            }
         }
         let text = &self.s[start..self.pos];
         if is_float {
             text.parse::<f64>().map(Value::Float).map_err(|e| format!("invalid number: {}", e))
         } else {
-            text.parse::<i64>().map(Value::Int).map_err(|e| format!("invalid number: {}", e))
+            // an integer beyond the int range is a float (as in JavaScript and Python's float),
+            // not an error that loses the whole document
+            match text.parse::<i64>() {
+                Ok(n) => Ok(Value::Int(n)),
+                Err(_) => text.parse::<f64>().map(Value::Float).map_err(|e| format!("invalid number: {}", e)),
+            }
         }
     }
 
@@ -345,7 +372,7 @@ impl JsonParser<'_> {
                     self.pos += 1;
                     break;
                 }
-                _ => return Err(format!("expected ',' or ']', found {:?}", self.peek_char())),
+                _ => return Err(format!("expected ',' or ']', found {}", self.peek_char())),
             }
         }
         Ok(Value::List(Rc::new(RefCell::new(items))))
@@ -362,7 +389,7 @@ impl JsonParser<'_> {
         loop {
             self.skip_ws();
             if self.peek() != Some(b'"') {
-                return Err(format!("invalid JSON at position {}: {:?}", self.char_pos(), self.peek_char()));
+                return Err(format!("invalid JSON at position {}: {}", self.char_pos(), self.peek_char()));
             }
             let key = self.parse_string()?;
             self.skip_ws();
@@ -379,7 +406,7 @@ impl JsonParser<'_> {
                     self.pos += 1;
                     break;
                 }
-                _ => return Err(format!("expected ',' or '}}', found {:?}", self.peek_char())),
+                _ => return Err(format!("expected ',' or '}}', found {}", self.peek_char())),
             }
         }
         Ok(Value::Map(Rc::new(RefCell::new(map))))
@@ -398,7 +425,7 @@ mod tests {
         assert_eq!(stringify(&Value::Float(f64::INFINITY)), "null");
         assert!(parse("[1,").is_err());
         assert_eq!(parse("\"abc").unwrap_err(), "unterminated JSON string");
-        assert_eq!(parse("{\"é\": x}").unwrap_err(), "invalid JSON at position 6: Some('x')");
+        assert_eq!(parse("{\"é\": x}").unwrap_err(), "invalid JSON at position 6: 'x'");
         assert_eq!(parse("  [1] x").unwrap_err(), "extra content after JSON at position 6");
         // nesting: up to MAX_DEPTH levels, an error (not a stack overflow) beyond
         let deep = |n: usize| format!("{}{}", "[".repeat(n), "]".repeat(n));

@@ -24,9 +24,23 @@ fn fail(msg: &str) -> i32 {
 // project / scripts
 // ---------------------------------------------------------------------
 
+/// The project's fogu.json. A file that does not load (malformed JSON) is reported and ends the
+/// command: hiding the error sent the user looking for a missing entry or script.
+fn load_manifest(root: &Path) -> Option<Manifest> {
+    let path = root.join(MANIFEST);
+    match Manifest::load(&path) {
+        Ok(m) => Some(m),
+        Err(e) => {
+            // the error already names the file: "invalid '<path>': <reason>"
+            fail(&e.to_string());
+            std::process::exit(1)
+        }
+    }
+}
+
 pub fn default_entry() -> Option<String> {
     let root = pkg::find_root(&cwd())?;
-    let m = Manifest::load(&root.join(MANIFEST)).ok()?;
+    let m = load_manifest(&root)?;
     let e = root.join(m.entry()?);
     Some(e.to_string_lossy().to_string())
 }
@@ -35,22 +49,74 @@ fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// One argument for a `cmd.exe` command line: quoted for the program's own parser (the MSVCRT
+/// rules: `"…"`, `\"` for a quote, backslashes doubled before a quote), then the cmd
+/// metacharacters that end up outside cmd's own quoting (it toggles on every `"`, escaped or
+/// not) are escaped with `^`. `%VAR%` cannot be escaped inside quotes in `cmd /C`, so `%` stays.
+pub(crate) fn cmd_quote(s: &str) -> String {
+    let plain = !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_./\\:=,+@".contains(c));
+    let q = if plain {
+        s.to_string()
+    } else {
+        let mut q = String::from("\"");
+        let mut slashes = 0;
+        for c in s.chars() {
+            match c {
+                '\\' => slashes += 1,
+                '"' => {
+                    q.extend(std::iter::repeat_n('\\', slashes * 2 + 1));
+                    slashes = 0;
+                }
+                _ => {
+                    q.extend(std::iter::repeat_n('\\', slashes));
+                    slashes = 0;
+                }
+            }
+            if c != '\\' {
+                q.push(c);
+            }
+        }
+        q.extend(std::iter::repeat_n('\\', slashes * 2));
+        q.push('"');
+        q
+    };
+    let mut out = String::with_capacity(q.len());
+    let mut quoted = false;
+    for c in q.chars() {
+        if c == '"' {
+            quoted = !quoted;
+        } else if !quoted && "&|<>^()".contains(c) {
+            out.push('^');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Runs `fogu <name>` as a script from fogu.json. `None` if it does not exist.
 pub fn try_script(name: &str, extra: &[String]) -> Option<i32> {
     let root = pkg::find_root(&cwd())?;
-    let m = Manifest::load(&root.join(MANIFEST)).ok()?;
+    let m = load_manifest(&root)?;
     let (_, cmd) = m.scripts().into_iter().find(|(k, _)| k == name)?;
     let mut line = cmd.clone();
     for a in extra {
         line.push(' ');
-        line.push_str(&sh_quote(a));
+        // quoted for the shell that runs the line: '…' means nothing to cmd.exe
+        line.push_str(&if cfg!(windows) { cmd_quote(a) } else { sh_quote(a) });
     }
     eprintln!("{} {}", ui::dim("$"), ui::dim(&line));
-    let mut c = if cfg!(windows) {
+    #[cfg(windows)]
+    let mut c = {
+        // the line goes to cmd.exe untouched: `.args(["/C", line])` escaped its `"` as `\"`
+        // (the MSVCRT rules), which cmd does not understand. `/S /C "<line>"`: cmd strips the
+        // outer quotes and runs the rest as written.
+        use std::os::windows::process::CommandExt;
         let mut c = Command::new("cmd");
-        c.args(["/C", &line]);
+        c.args(["/S", "/C"]).raw_arg(format!("\"{}\"", line));
         c
-    } else {
+    };
+    #[cfg(not(windows))]
+    let mut c = {
         let mut c = Command::new("sh");
         c.args(["-c", &line]);
         c
@@ -90,6 +156,11 @@ fn ask(prompt: &str, default: &str) -> String {
 }
 
 pub fn init(args: &[String]) -> i32 {
+    // an unknown argument (a typo) must not create a project
+    if let Some(a) = args.iter().find(|a| !matches!(a.as_str(), "-y" | "--yes")) {
+        ui::error(&format!("unknown option for 'fogu init': {}\n  usage: fogu init [-y]", a));
+        return 2;
+    }
     let yes = args.iter().any(|a| a == "-y" || a == "--yes") || !std::io::stdin().is_terminal();
     let dir = cwd();
     let path = dir.join(MANIFEST);
@@ -514,7 +585,21 @@ pub(super) fn snapshot(dir: &Path) -> u64 {
 }
 
 pub fn watch(orig: &[String]) -> i32 {
-    let child_args: Vec<String> = orig.iter().filter(|a| *a != "--watch" && *a != "-w").cloned().collect();
+    // only Fogu's own -w/--watch (before the file or script) is removed: the arguments after
+    // the file belong to the program
+    let mut child_args: Vec<String> = Vec::with_capacity(orig.len());
+    let mut options = true;
+    let mut takes_value = false;
+    for a in orig {
+        if options && !takes_value && (a == "--watch" || a == "-w") {
+            continue;
+        }
+        if options && !takes_value && (!a.starts_with('-') || a == "-") {
+            options = false;
+        }
+        takes_value = options && !takes_value && matches!(a.as_str(), "--engine" | "--cores" | "-e" | "--eval" | "-p" | "--print");
+        child_args.push(a.clone());
+    }
     let exe = match std::env::current_exe() {
         Ok(e) => e,
         Err(e) => return fail(&e.to_string()),
@@ -551,5 +636,25 @@ pub fn watch(orig: &[String]) -> i32 {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cmd_quote_tests {
+    use super::cmd_quote;
+
+    #[test]
+    fn quotes_for_msvcrt_and_cmd() {
+        assert_eq!(cmd_quote("abc"), "abc");
+        assert_eq!(cmd_quote("a b"), "\"a b\"");
+        assert_eq!(cmd_quote(""), "\"\"");
+        // the inner quote is \" for the program; after it cmd sees text outside quotes
+        assert_eq!(cmd_quote("c\"d"), "\"c\\\"d\"");
+        assert_eq!(cmd_quote("x'y"), "\"x'y\"");
+        // a trailing backslash is doubled before the closing quote
+        assert_eq!(cmd_quote("a b\\"), "\"a b\\\\\"");
+        // `&` inside quotes is safe; after an odd quote it is escaped for cmd
+        assert_eq!(cmd_quote("a&b"), "\"a&b\"");
+        assert_eq!(cmd_quote("\"&calc"), "\"\\\"^&calc\"");
     }
 }
