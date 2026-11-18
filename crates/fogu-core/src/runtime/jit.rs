@@ -3554,13 +3554,16 @@ impl<'a, 'f> Gen<'a, 'f> {
                 let zero = self.b.ins().icmp_imm_s(IntCC::Equal, b, 0);
                 self.trap_if(zero, ops::CODE_DIV_ZERO);
                 let m1 = self.b.ins().icmp_imm_s(IntCC::Equal, b, -1);
-                let mn = self.b.ins().icmp_imm_s(IntCC::Equal, a, i64::MIN);
-                let both = self.b.ins().band(m1, mn);
-                self.trap_if(both, ops::CODE_OVERFLOW);
                 if op == Div {
+                    let mn = self.b.ins().icmp_imm_s(IntCC::Equal, a, i64::MIN);
+                    let both = self.b.ins().band(m1, mn);
+                    self.trap_if(both, ops::CODE_OVERFLOW);
                     self.b.ins().sdiv(a, b)
                 } else {
-                    self.b.ins().srem(a, b)
+                    // `x % -1` is 0 (`ops::int_rem`); `MIN % -1` would trap in the hardware
+                    let one = self.b.ins().iconst(types::I64, 1);
+                    let d = self.b.ins().select(m1, one, b);
+                    self.b.ins().srem(a, d)
                 }
             }
             Pow => {

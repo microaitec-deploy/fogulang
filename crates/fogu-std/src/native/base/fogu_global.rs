@@ -44,7 +44,9 @@ pub fn build() -> ModuleValue {
     e.insert("exit".into(), nfn_var("exit", 0, |a| {
         let code = match opt_arg(a, 0) {
             None => 0,
-            Some(Value::Int(n)) => *n as i32,
+            // 0..255 is what every system keeps (POSIX takes the low 8 bits)
+            Some(Value::Int(n)) if (0..=255).contains(n) => *n as i32,
+            Some(Value::Int(n)) => return Err(format!("Fogu.exit: the code must be 0..255, got {}", n)),
             Some(other) => return Err(format!("Fogu.exit expects int, got '{}'", other.type_name())),
         };
         crate::native::exit(code)

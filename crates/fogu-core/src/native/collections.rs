@@ -285,7 +285,17 @@ fn list_method(
                         list(o)
                     }
                     "each" => {
-                        for (i, x) in items.into_iter().enumerate() { call_fn(it, f, vec![x, Value::Int(i as i64)], name)?; }
+                        // the index too when the callback takes it: `(v) => …` gets the item only
+                        let index = match f {
+                            Value::Fn(func) => {
+                                func.params.len() >= 2 || func.params.iter().any(|p| p.starts_with(crate::runtime::ast::REST_PREFIX))
+                            }
+                            _ => true,
+                        };
+                        for (i, x) in items.into_iter().enumerate() {
+                            let a = if index { vec![x, Value::Int(i as i64)] } else { vec![x] };
+                            call_fn(it, f, a, name)?;
+                        }
                         Value::Nil
                     }
                     "find" => {
@@ -451,8 +461,14 @@ pub fn install(ctx: &mut NativeContext) {
 
     // error(msg, cause?) — spec §29.
     ctx.define_global_variadic("error", 1, |args| {
+        if args.len() > 2 {
+            return Err(format!("native function 'error' expects at most 2 arguments, got {}", args.len()));
+        }
         let message = args[0].to_display_string();
         let cause = args.get(1).cloned().unwrap_or(Value::Nil);
+        if !matches!(cause, Value::Nil | Value::Error(_)) {
+            return Err(format!("error: the cause must be an error or nil, got '{}'", cause.type_name()));
+        }
         Ok(Value::Error(Rc::new(ErrorValue { message, cause, trace: Vec::new() })))
     });
 

@@ -93,6 +93,10 @@ pub fn int_rem(a: i64, b: i64) -> Result<i64, i64> {
     if b == 0 {
         return Err(CODE_DIV_ZERO);
     }
+    // `MIN % -1` is 0, as in Go: only the quotient overflows
+    if b == -1 {
+        return Ok(0);
+    }
     a.checked_rem(b).ok_or(CODE_OVERFLOW)
 }
 
@@ -199,7 +203,11 @@ pub fn out_of_range(name: &str, kind: Sized) -> String {
 
 /// `uint64(-1)`.
 pub fn err_negative(name: &str) -> String {
-    format!("cannot convert a negative int to {} (it holds 0..{})", name, i64::MAX)
+    format!(
+        "cannot convert a negative int to {} (it holds 0..{}: a Fogu int is 64-bit signed, so unlike Go it cannot wrap around)",
+        name,
+        i64::MAX
+    )
 }
 
 thread_local! {

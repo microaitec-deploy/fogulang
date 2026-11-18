@@ -76,6 +76,7 @@ fn load(path: &Path) -> Result<(Interpreter, Vec<ast::Stmt>, String), String> {
         .unwrap_or_else(|| PathBuf::from("."));
     interp.set_base_dir(&base);
     interp.set_main_file(&filename);
+    interp.enter_main(path);
     crate::pkg::set_main_dir(&base);
     Ok((interp, program, filename))
 }

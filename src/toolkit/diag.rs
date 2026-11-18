@@ -103,10 +103,11 @@ fn split_kind(s: &str) -> (Option<&'static str>, String) {
     (None, s.to_string())
 }
 
-/// `<eval>`, `<print>` and `<repl>` are not files.
+/// The file of a message. `<eval>`, `<print>` and `<repl>` are kept (the
+/// position is still shown) but have no source to quote.
 fn real_file(f: &str) -> Option<String> {
     let f = f.trim();
-    if f.is_empty() || f.starts_with('<') {
+    if f.is_empty() {
         None
     } else {
         Some(f.to_string())
@@ -286,7 +287,7 @@ pub fn render(err: &str) -> String {
         };
         out.push_str(&format!("\n  {} {}", ui::cyan_err("-->"), pos));
 
-        let src_line = d.line.and_then(|l| source_line(file, l));
+        let src_line = d.line.filter(|_| !file.starts_with('<')).and_then(|l| source_line(file, l));
         if let (Some(l), Some(src)) = (d.line, src_line) {
             let num = l.to_string();
             let pad = " ".repeat(num.len());

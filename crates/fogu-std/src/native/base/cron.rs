@@ -64,27 +64,18 @@ pub struct CronFields {
     weekday: FieldSpec,
 }
 
+/// The values a field of a cron expression accepts (bit `v` set: `v`
+/// matches), and whether it was written `*` (day of month and day of week
+/// then combine with "or", as in standard cron).
 #[derive(Clone, Copy)]
-enum FieldSpec {
-    Any,
-    Value(u32),
-    Step { start: u32, step: u32 },
-    List([u32; 60], usize), // up to 60 values; used for 'a,b,c'
+struct FieldSpec {
+    mask: u64,
+    any: bool,
 }
 
 impl FieldSpec {
     fn matches(&self, v: u32) -> bool {
-        match self {
-            FieldSpec::Any => true,
-            FieldSpec::Value(x) => *x == v,
-            FieldSpec::Step { start, step } => {
-                if v < *start {
-                    return false;
-                }
-                (v - start) % step == 0
-            }
-            FieldSpec::List(items, n) => items[..*n].contains(&v),
-        }
+        v < 64 && self.mask & (1u64 << v) != 0
     }
 }
 
@@ -129,7 +120,8 @@ pub fn build() -> ModuleValue {
             ensure_callable(&func)?;
             let fields = parse_cron(&expr)?;
             let now = now_ms();
-            let next = next_run_after(&fields, now);
+            let next = next_run_after(&fields, now)
+                .ok_or_else(|| format!("cron expression '{}' never matches a date", expr))?;
             JOBS.with(|jobs| {
                 jobs.borrow_mut().push(Job {
                     kind: JobKind::Schedule { fields },
@@ -183,10 +175,7 @@ pub fn build() -> ModuleValue {
                 let _ = &job;
                 executed += 1;
                 // Reschedule.
-                let next = match &job.kind {
-                    JobKind::Every { interval_ms } => now + interval_ms,
-                    JobKind::Schedule { fields } => next_run_after(fields, now),
-                };
+                let next = next_after(&job, now);
                 JOBS.with(|jobs| {
                     jobs.borrow_mut().push(Job {
                         kind: clone_kind(&job.kind),
@@ -245,10 +234,7 @@ pub fn take_ready_jobs() -> Vec<Value> {
         for job in v.drain(..) {
             if job.next_run_ms <= now {
                 ready_funcs.push(job.func.clone());
-                let next = match &job.kind {
-                    JobKind::Every { interval_ms } => now + interval_ms,
-                    JobKind::Schedule { fields } => next_run_after(fields, now),
-                };
+                let next = next_after(&job, now);
                 keep.push(Job {
                     kind: job.kind,
                     func: job.func,
@@ -280,14 +266,38 @@ fn now_ms() -> i64 {
 /// Parses a duration: accepts `Value::Duration`, `Value::Int` (ms) or a
 /// `Value::str` such as "2s", "500ms", "5m", "1h".
 fn as_ms(v: &Value) -> Result<i64, String> {
-    match v {
-        Value::Int(n) if *n > 0 => Ok(*n),
-        Value::Duration(ns) if *ns >= 1_000_000 => Ok(*ns / 1_000_000),
-        Value::Str(s) => parse_duration(s),
-        other => Err(format!(
-            "expected a duration (2s, int ms or a str like \"2s\"; minimum 1ms), got '{}'",
-            other.type_name()
-        )),
+    let ms = match v {
+        Value::Int(n) => *n,
+        Value::Duration(ns) => *ns / 1_000_000,
+        Value::Str(s) => parse_duration(s)?,
+        other => {
+            return Err(format!(
+                "expected a duration (2s, int ms or a str like \"2s\"; minimum 1ms), got '{}'",
+                other.type_name()
+            ))
+        }
+    };
+    if ms < 1 {
+        return Err(format!("the interval must be at least 1ms, got {}", v.to_display_string()));
+    }
+    Ok(ms)
+}
+
+/// When a job that just ran runs next. An `every` job keeps its cadence (the
+/// next run is counted from the previous one, not from when `tick()` came),
+/// skipping the runs it missed.
+fn next_after(job: &Job, now: i64) -> i64 {
+    match &job.kind {
+        JobKind::Every { interval_ms } => {
+            let iv = *interval_ms;
+            let mut next = job.next_run_ms + iv;
+            if next <= now {
+                next += ((now - next) / iv + 1) * iv;
+            }
+            next
+        }
+        // an expression that matched once matches again within years
+        JobKind::Schedule { fields } => next_run_after(fields, now).unwrap_or(i64::MAX),
     }
 }
 
@@ -348,6 +358,14 @@ fn clone_kind(k: &JobKind) -> JobKind {
 // ---------- Cron parser ----------
 
 fn parse_cron(expr: &str) -> Result<CronFields, String> {
+    let expr = match expr.trim() {
+        "@yearly" | "@annually" => "0 0 1 1 *",
+        "@monthly" => "0 0 1 * *",
+        "@weekly" => "0 0 * * 0",
+        "@daily" | "@midnight" => "0 0 * * *",
+        "@hourly" => "0 * * * *",
+        other => other,
+    };
     let parts: Vec<&str> = expr.split_whitespace().collect();
     if parts.len() != 5 {
         return Err(format!(
@@ -355,83 +373,79 @@ fn parse_cron(expr: &str) -> Result<CronFields, String> {
             parts.len()
         ));
     }
+    const MONTHS: [&str; 12] = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+    const DAYS: [&str; 7] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+    let mut weekday = parse_field(parts[4], 0, 7, &DAYS, 0)?;
+    // 7 is Sunday too
+    if weekday.mask & (1 << 7) != 0 {
+        weekday.mask = (weekday.mask & !(1 << 7)) | 1;
+    }
     Ok(CronFields {
-        minute: parse_field(parts[0], 0, 59)?,
-        hour: parse_field(parts[1], 0, 23)?,
-        day: parse_field(parts[2], 1, 31)?,
-        month: parse_field(parts[3], 1, 12)?,
-        weekday: parse_field(parts[4], 0, 6)?,
+        minute: parse_field(parts[0], 0, 59, &[], 0)?,
+        hour: parse_field(parts[1], 0, 23, &[], 0)?,
+        day: parse_field(parts[2], 1, 31, &[], 0)?,
+        month: parse_field(parts[3], 1, 12, &MONTHS, 1)?,
+        weekday,
     })
 }
 
-fn parse_field(s: &str, min: u32, max: u32) -> Result<FieldSpec, String> {
-    if s == "*" {
-        return Ok(FieldSpec::Any);
-    }
-    if let Some(rest) = s.strip_prefix("*/") {
-        let step: u32 = rest
-            .parse()
-            .map_err(|e| format!("invalid step in '{}': {}", s, e))?;
-        if step == 0 {
-            return Err(format!("invalid step 0 in '{}'", s));
+/// One field: a list of `*`, `n` or `a-b`, each with an optional `/step`
+/// (`n/step` is `n-max/step`); names (`jan`, `mon`) where the field has them,
+/// `names[i]` being the value `i + first`.
+fn parse_field(s: &str, min: u32, max: u32, names: &[&str], first: u32) -> Result<FieldSpec, String> {
+    let value = |t: &str| -> Result<u32, String> {
+        let t = t.trim();
+        if let Some(i) = names.iter().position(|n| n.eq_ignore_ascii_case(t)) {
+            return Ok(i as u32 + first);
         }
-        return Ok(FieldSpec::Step { start: min, step });
-    }
-    if s.contains(',') {
-        let mut items = [0u32; 60];
-        let mut n = 0;
-        for part in s.split(',') {
-            let v: u32 = part
-                .trim()
-                .parse()
-                .map_err(|e| format!("invalid value in '{}': {}", s, e))?;
-            if v < min || v > max {
-                return Err(format!("value {} out of the range {}-{}", v, min, max));
+        if t.contains(['L', 'W', '#', '?']) {
+            return Err(format!("'{}': L, W, # and ? are not supported in cron expressions", s));
+        }
+        let v: u32 = t.parse().map_err(|_| format!("invalid value '{}' in '{}'", t, s))?;
+        if v < min || v > max {
+            return Err(format!("value {} out of the range {}-{} in '{}'", v, min, max, s));
+        }
+        Ok(v)
+    };
+    let mut mask = 0u64;
+    let any = s == "*";
+    for part in s.split(',') {
+        let (range, step) = match part.split_once('/') {
+            Some((r, st)) => {
+                let st: u32 = st.trim().parse().map_err(|_| format!("invalid step in '{}'", s))?;
+                if st == 0 {
+                    return Err(format!("invalid step 0 in '{}'", s));
+                }
+                (r, Some(st))
             }
-            if n >= items.len() {
-                return Err("cron list too long".into());
+            None => (part, None),
+        };
+        let (lo, hi) = if range.trim() == "*" {
+            (min, max)
+        } else if let Some((a, b)) = range.split_once('-') {
+            let (a, b) = (value(a)?, value(b)?);
+            if a > b {
+                return Err(format!("invalid range '{}' in '{}'", range, s));
             }
-            items[n] = v;
-            n += 1;
+            (a, b)
+        } else {
+            let a = value(range)?;
+            // `5/15`: from 5 to the end, every 15
+            (a, if step.is_some() { max } else { a })
+        };
+        let mut v = lo;
+        while v <= hi {
+            mask |= 1u64 << v;
+            v += step.unwrap_or(1);
         }
-        return Ok(FieldSpec::List(items, n));
     }
-    if let Some((a, b)) = s.split_once('-') {
-        let start: u32 = a
-            .trim()
-            .parse()
-            .map_err(|e| format!("invalid range in '{}': {}", s, e))?;
-        let end: u32 = b
-            .trim()
-            .parse()
-            .map_err(|e| format!("invalid range in '{}': {}", s, e))?;
-        if start > end {
-            return Err(format!("invalid range in '{}'", s));
-        }
-        // Convert the range into a List
-        let mut items = [0u32; 60];
-        let mut n = 0;
-        for v in start..=end {
-            if n >= items.len() {
-                break;
-            }
-            items[n] = v;
-            n += 1;
-        }
-        return Ok(FieldSpec::List(items, n));
-    }
-    let v: u32 = s
-        .parse()
-        .map_err(|e| format!("invalid value in '{}': {}", s, e))?;
-    if v < min || v > max {
-        return Err(format!("value {} out of the range {}-{}", v, min, max));
-    }
-    Ok(FieldSpec::Value(v))
+    Ok(FieldSpec { mask, any })
 }
 
 /// Determines the next instant (in ms) at which the cron expression should
-/// fire, starting from `after_ms` (exclusive).
-fn next_run_after(f: &CronFields, after_ms: i64) -> i64 {
+/// fire, starting from `after_ms` (exclusive); `None` if it never does (31
+/// February).
+fn next_run_after(f: &CronFields, after_ms: i64) -> Option<i64> {
     // Advance minute by minute until one matches.
     let start_minute = after_ms / 60_000 + 1;
     let mut t = start_minute;
@@ -448,18 +462,20 @@ fn next_run_after(f: &CronFields, after_ms: i64) -> i64 {
 
         let _ = year; // the year is not used in the expression
 
-        if f.month.matches(month)
-            && f.day.matches(day)
-            && f.weekday.matches(weekday)
-            && f.hour.matches(hour)
-            && f.minute.matches(minute)
-        {
-            return total_minutes * 60_000;
+        // standard cron: with both restricted, either the day of the month or
+        // the day of the week may match
+        let day_ok = if f.day.any || f.weekday.any {
+            f.day.matches(day) && f.weekday.matches(weekday)
+        } else {
+            f.day.matches(day) || f.weekday.matches(weekday)
+        };
+        if f.month.matches(month) && day_ok && f.hour.matches(hour) && f.minute.matches(minute) {
+            return Some(total_minutes * 60_000);
         }
         t += 1;
-        // Guard against an infinite loop: give up after 4 years.
-        if t > start_minute + 60 * 24 * 365 * 4 {
-            return after_ms + 60_000;
+        // every date repeats within 28 years (29 February within 8)
+        if t > start_minute + 60 * 24 * 366 * 9 {
+            return None;
         }
     }
 }

@@ -180,6 +180,11 @@ impl Interpreter {
         (self.cur_file.borrow().to_string(), self.cur_line.get())
     }
 
+    /// The program's entry file (an import of it is a cycle, not a second run).
+    pub fn enter_main(&self, path: &Path) {
+        self.module_cache.enter_main(path);
+    }
+
     pub fn set_main_file(&self, f: &str) {
         *self.cur_file.borrow_mut() = Rc::from(f);
         self.globals.borrow_mut().set_module(f);

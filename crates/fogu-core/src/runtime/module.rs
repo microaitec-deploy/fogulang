@@ -162,6 +162,9 @@ pub fn unknown_type(path: &Path) -> Option<String> {
 
 pub struct ModuleCache {
     modules: RefCell<HashMap<PathBuf, Rc<ModuleValue>>>,
+    /// Modules whose evaluation failed: importing one again gives the same
+    /// error without running its top level again (spec §39).
+    failed: RefCell<HashMap<PathBuf, String>>,
     data: RefCell<HashMap<PathBuf, Value>>,
     in_progress: RefCell<Vec<PathBuf>>,
     natives: NativeContext,
@@ -171,9 +174,18 @@ impl ModuleCache {
     pub fn new() -> Self {
         Self {
             modules: RefCell::new(HashMap::new()),
+            failed: RefCell::new(HashMap::new()),
             data: RefCell::new(HashMap::new()),
             in_progress: RefCell::new(Vec::new()),
             natives: NativeContext::new(),
+        }
+    }
+
+    /// The program's entry file is being run: importing it (directly or
+    /// through a cycle) is a cyclic dependency, not a second run of it.
+    pub fn enter_main(&self, path: &Path) {
+        if let Ok(p) = path.canonicalize() {
+            self.in_progress.borrow_mut().push(p);
         }
     }
 
@@ -232,10 +244,19 @@ impl ModuleCache {
             ));
         }
 
+        if let Some(e) = self.failed.borrow().get(&canonical) {
+            return Err(e.clone());
+        }
         self.in_progress.borrow_mut().push(canonical.clone());
         let result = self.load_module(&canonical, interp);
         self.in_progress.borrow_mut().pop();
-        let exports = result?;
+        let exports = match result {
+            Ok(m) => m,
+            Err(e) => {
+                self.failed.borrow_mut().insert(canonical.clone(), e.clone());
+                return Err(e);
+            }
+        };
 
         self.modules
             .borrow_mut()

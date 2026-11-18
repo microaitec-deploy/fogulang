@@ -235,12 +235,16 @@ select {
   `process.run`, `shell.run`, `sql` statements, `w.next()` of queues and
   watchers) let other tasks run; a busy `while true {}` does not. Run slow
   calls in `fg` tasks to overlap them.
-- Servers (`fogu:http`, `fogu:web`) and `fogu:cron` do their work **while the
-  main program waits**; each request runs in its own task, so a handler that waits
+- Servers (`fogu:http`, `fogu:web`) do their work **while the main program
+  waits**; each request runs in its own task, so a handler that waits
   does not hold the others. `app.listen(port)` returns at once: keep the program
   alive with `Fogu.signal.wait()` (until Ctrl+C) or a waiting loop, or it exits. The address is a port (127.0.0.1)
   or a string: `app.listen("0.0.0.0:3000")`, `"[::1]:3000"`, `":3000"`.
-  A deadlock between tasks is detected and reported.
+  A deadlock between tasks is detected and reported. `fogu:cron` jobs run when the
+  program calls `cron.tick()` (e.g. in a loop with `time.delay`), not by themselves.
+- `time.delay(0ms)` lets the other tasks run once. An error that ends an `fg` task
+  is printed like any error (file, line, code) and the other tasks go on; under
+  `fogu test` it fails the test that started the task.
 
 ```fogu
 import web from "fogu:web"

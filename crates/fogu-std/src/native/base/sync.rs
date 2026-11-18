@@ -53,7 +53,7 @@ use crate::native::util::{max_args, nfn_var};
 pub fn build() -> ModuleValue {
     let mut e: HashMap<String, Value> = HashMap::new();
     e.insert("Mutex".into(), nfn("Mutex", 0, |_| {
-        Ok(NativeObjectRef::new(MutexValue { locked: Rc::new(Cell::new(false)) }).to_value())
+        Ok(NativeObjectRef::new(MutexValue { locked: Rc::new(Cell::new(false)), turns: Turns::default() }).to_value())
     }));
     e.insert("WaitGroup".into(), nfn("WaitGroup", 0, |_| {
         Ok(NativeObjectRef::new(WaitGroupValue { count: Rc::new(Cell::new(0)) }).to_value())
@@ -65,7 +65,7 @@ pub fn build() -> ModuleValue {
             Value::Int(n) if n >= 1 => n,
             ref other => return Err(format!("sync.Semaphore(n) expects an int >= 1, got {}", other.to_display_string())),
         };
-        Ok(NativeObjectRef::new(SemaphoreValue { permits: Rc::new(Cell::new(n)), size: n }).to_value())
+        Ok(NativeObjectRef::new(SemaphoreValue { permits: Rc::new(Cell::new(n)), size: n, turns: Turns::default() }).to_value())
     }));
     e.insert("Once".into(), nfn("Once", 0, |_| Ok(NativeObjectRef::new(OnceValue { done: false }).to_value())));
     e.insert("Atomic".into(), nfn_var("Atomic", 0, |a| {
@@ -90,8 +90,41 @@ fn no_args(args: &[Value], what: &str) -> Result<(), String> {
 
 // ---------- Mutex ----------
 
+/// First come, first served: each waiter takes a ticket and goes when its
+/// number is served, so a task that releases a lock and asks for it again
+/// queues behind the ones already waiting instead of taking it back at once.
+#[derive(Clone, Default)]
+struct Turns(Rc<(Cell<u64>, Cell<u64>)>);
+
+impl Turns {
+    /// A ticket for a new waiter.
+    fn take(&self) -> u64 {
+        let t = self.0 .0.get();
+        self.0 .0.set(t + 1);
+        t
+    }
+
+    fn is_turn(&self, ticket: u64) -> bool {
+        self.0 .1.get() == ticket
+    }
+
+    /// The waiter whose turn it was got what it waited for (a call that did
+    /// not wait for a turn leaves the queue as it is).
+    fn served(&self) {
+        if self.0 .1.get() < self.0 .0.get() {
+            self.0 .1.set(self.0 .1.get() + 1);
+        }
+    }
+
+    /// Nobody is waiting (`tryLock` may take it without jumping the queue).
+    fn idle(&self) -> bool {
+        self.0 .0.get() == self.0 .1.get()
+    }
+}
+
 pub struct MutexValue {
     locked: Rc<Cell<bool>>,
+    turns: Turns,
 }
 
 impl FoguObject for MutexValue {
@@ -102,20 +135,25 @@ impl FoguObject for MutexValue {
         (field == "locked").then(|| Value::Bool(self.locked.get()))
     }
     fn wait_for(&self, method: &str) -> Option<Box<dyn Fn() -> bool>> {
-        let locked = Rc::clone(&self.locked);
-        (method == "lock").then(|| Box::new(move || !locked.get()) as Box<dyn Fn() -> bool>)
+        if method != "lock" {
+            return None;
+        }
+        let (locked, turns) = (Rc::clone(&self.locked), self.turns.clone());
+        let ticket = turns.take();
+        Some(Box::new(move || !locked.get() && turns.is_turn(ticket)))
     }
     fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
         match method {
-            // the interpreter already waited until the mutex was free
+            // the interpreter already waited until the mutex was free and it was this caller's turn
             "lock" => {
                 no_args(args, "lock()")?;
                 self.locked.set(true);
+                self.turns.served();
                 Ok(Value::Nil)
             }
             "tryLock" => {
                 no_args(args, "tryLock()")?;
-                if self.locked.get() {
+                if self.locked.get() || !self.turns.idle() {
                     return Ok(Value::Bool(false));
                 }
                 self.locked.set(true);
@@ -140,7 +178,7 @@ impl FoguObject for MutexValue {
 
 /// A `sync.Mutex` over an existing flag (`fogu:vm` contexts expose theirs).
 pub(crate) fn mutex_over(locked: Rc<Cell<bool>>) -> Value {
-    NativeObjectRef::new(MutexValue { locked }).to_value()
+    NativeObjectRef::new(MutexValue { locked, turns: Turns::default() }).to_value()
 }
 
 // ---------- Semaphore ----------
@@ -148,6 +186,7 @@ pub(crate) fn mutex_over(locked: Rc<Cell<bool>>) -> Value {
 pub struct SemaphoreValue {
     permits: Rc<Cell<i64>>,
     size: i64,
+    turns: Turns,
 }
 
 /// The permits counter of a `sync.Semaphore` value (for `fogu:vm`).
@@ -170,8 +209,12 @@ impl FoguObject for SemaphoreValue {
         }
     }
     fn wait_for(&self, method: &str) -> Option<Box<dyn Fn() -> bool>> {
-        let permits = Rc::clone(&self.permits);
-        (method == "acquire").then(|| Box::new(move || permits.get() > 0) as Box<dyn Fn() -> bool>)
+        if method != "acquire" {
+            return None;
+        }
+        let (permits, turns) = (Rc::clone(&self.permits), self.turns.clone());
+        let ticket = turns.take();
+        Some(Box::new(move || permits.get() > 0 && turns.is_turn(ticket)))
     }
     fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
         match method {
@@ -179,11 +222,12 @@ impl FoguObject for SemaphoreValue {
             "acquire" => {
                 no_args(args, "acquire()")?;
                 self.permits.set(self.permits.get() - 1);
+                self.turns.served();
                 Ok(Value::Nil)
             }
             "tryAcquire" => {
                 no_args(args, "tryAcquire()")?;
-                if self.permits.get() <= 0 {
+                if self.permits.get() <= 0 || !self.turns.idle() {
                     return Ok(Value::Bool(false));
                 }
                 self.permits.set(self.permits.get() - 1);

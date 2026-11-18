@@ -1,0 +1,3 @@
+// A cron expression that never matches a date is refused.
+import cron from "fogu:cron"
+cron.schedule("0 0 31 2 *", () => 1)
