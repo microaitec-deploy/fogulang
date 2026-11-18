@@ -6,7 +6,50 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
-- Built with Rust 1.100.0 (`rust-toolchain.toml`; the build image `docker/Dockerfile` is pinned to `rust:1.100.0-bookworm` instead of the moving `rust:1`).
+## [0.8.1] - 2026-11-18
+
+A consolidation release. Two rounds of external tests found 286 bugs in 0.8.0 (3 critical,
+32 high); this release fixes the critical ones and most of the high ones, makes the three
+engines (interpreter, JIT, bytecode VM) give the same results on every test, and adds
+acceptance tests for memory, determinism and numbers. It adds no new direction: the
+execution model, the value model and the architecture are those of 0.8.0. Readiness is
+stated in `docs/production-readiness.md`: **pre-production, with positive indicators**.
+
+Not done in this release, on purpose: the comparison campaign of performance against 0.8.0 on
+a quiet machine (`bench/compare.fg` is ready; the development measurements are in the
+entries below), the 72-hour soak test on a second machine (the procedure is ready), and a
+cycle collector (plain data cycles are still never freed).
+
+- Built with Rust 1.100.0 (`rust-toolchain.toml`; the build image `docker/Dockerfile` is pinned
+  to `rust:1.100.0-bookworm` instead of the moving `rust:1`).
+
+### Security
+
+- **HTTP server and `fogu:web`: one canonical request path**, made once before static files,
+  Socket.IO, middlewares and routes see it. `//api/x` no longer skips `app.use("/api", …)`
+  (critical, R2 S01). Encoded `/` or `\`, a raw `\`, control characters, bad escapes and `..`
+  above the root are a 400; repeated slashes collapse; `.` and `..` are resolved. A static
+  file under a middleware's prefix is served only after the middlewares pass; dotfiles are
+  checked on the real path. `web.file` with `%2F` / `%5C` can no longer read other files.
+- **Server limits with defaults**: `maxHeaderBytes` (64 KB), `headerTimeout` (30 s),
+  `readTimeout` (60 s), `handlerTimeout` (60 s, 0 = none), next to `maxBody`. A Rust panic in a
+  handler gives a 500 and the server goes on; default 500s no longer show internal messages.
+  Multipart with Unicode in `Content-Disposition` no longer panics.
+- **JSON nested deeper than 512 levels is an error** (it overflowed the stack of the process).
+- **XSS**: the Jinja `| markdown` filter is sanitized; `Templates.renderString` escapes.
+  **CSRF**: topcoat procedures and shards need the runtime's `x-topcoat` header and a
+  same-site origin.
+- **`jwt.verify`** checks `exp` / `nbf` / `iat` given as floats and refuses other types; non
+  canonical tokens are refused.
+- **`fogu:shell`** runs `.bat` / `.cmd` through the standard library's escaping
+  (CVE-2024-24576, "BatBadBut"; made from the code, not run on Windows).
+- `security.isPrivate` / `inCidr` understand IPv4-mapped, NAT64 and 6to4 addresses; HTTP client
+  redirects only to http/https; CORS with credentials echoes the origin; log lines escape
+  control characters; a TLS server with `clientAuth` and no `ca` is refused.
+- Dependencies: ammonia 4.2.5 (mutation XSS), surrealkv 1.4.0 (out-of-bounds read), rustix
+  1.1.6 (unsound). One advisory has no fix available (RUSTSEC-2026-0459, bundled SQLite, local
+  attack through crafted database files): accepted, with its exposure and closing condition in
+  `.cargo/audit.toml` — do not open untrusted SQLite files with `fogu:sql` until `sqlx` updates.
 
 ### Added
 
@@ -34,6 +77,15 @@ be incompatible changes (spec §75).
   downloaded from the server). Tested on linux-x64 by loading the library from a host
   (`tests/cli.rs`); the Windows code that finds the library's own file is type-checked for
   `x86_64-pc-windows-gnu` but was not run, and no macOS runtime library exists yet. See `docs/cli.md`.
+- **Acceptance tests** in the conformance suite, on the three engines: closures that escape
+  their scope in eleven ways, Mutex / Semaphore order, the text of cyclic values and floats,
+  numeric representation and JSON (`numeric_serialization`, `numeric_edges`,
+  `json_float_boundaries`). **Stress suite** (`tests/stress/`, 10 programs: call depth, 20 000
+  tasks, channel floods, large collections, closures, errors) and **`bench/compare.fg`**, the
+  protocol every performance claim follows (a quiet machine, interleaved runs, checked
+  outputs, median, p95, spread).
+- `docs/production-readiness.md`: what is indicative of, ready for and recommended for
+  production, the evidence that exists and the evidence still missing.
 
 ### Changed
 
@@ -65,6 +117,60 @@ be incompatible changes (spec §75).
   than 0.8.0; the other programs are equal or slightly faster. Nothing a program can observe
   changes (`tests/spec/map_keys.fg`).
 - The conformance suite runs every test a third time on the VM (`tests/spec.rs`).
+- `fogu check` and the check before a program runs find redeclarations, assignments to
+  constants, functions, imports and loop variables, `break`/`continue` outside a loop and
+  calls of values that are not functions; `fogu check` also reports unknown `fogu:` modules,
+  missing packages and names a module does not export. A duplicate import is an error.
+- `Fogu.exit` takes 0..255; `json.stringify(2.0)` is `2.0`, and floats are written in JSON as
+  `print` writes them (an exponent at >= 1e21 or < 1e-6); crypto `{ bytes }` and `randomBytes`
+  return buffers; bcrypt `cost` is capped at 20; `zip.tar` returns the number of entries.
+- A map key hides a built-in method only when it holds a function (`m.has(k)` works on JSON
+  data with a `has` key).
+- In test mode `Fogu.exit` is an error: a test file that exits fails instead of turning CI green.
+
+### Fixed
+
+- **Memory: a scope and the closures stored in it are freed together** when nothing else
+  holds them (R2 P01, critical). A request handler with a local helper leaked about 4 KB per
+  call; in the measurement, 300 000 calls stay at 8–11 MB where 0.8.0 grew to 242 MB, on
+  the three engines (`docs/architecture/closure-cycles.md`). Plain data cycles are not freed.
+- Values that contain themselves print as `[...]` / `{...}` / `T{...}`, compare with `==` and
+  copy with `types.clone` without overflowing the stack; `json.stringify` of one returns an
+  error value. `str()` of deep nesting is linear.
+- Huge allocations (`bytes(n)`, `str.repeat`) stop the program with an error instead of
+  aborting the process; so do NaN, ±infinity and huge values in `time.sleep`, `image` colours
+  and rotations, `cli.parse` choices and argon2 / scrypt / bcrypt / pbkdf2 costs.
+- `int()` and `math.floor/ceil/trunc/round` of NaN, ±infinity or a float outside
+  [-2^63, 2^63) are an error in the three engines (they returned 0 or a saturated int).
+  `math.round` rounds halves away from zero exactly on every platform. In compiled code the
+  check costs about 0.5 ns per call (a floor-only loop of 50M iterations: +27%; no program of
+  `bench/` uses it).
+- **Concurrency**: tasks blocked on channels, `select`, timers and sleeps park behind gates —
+  20 000 blocked senders take under a second instead of minutes (R1 runtime §1); sleeping tasks
+  wake in deadline order and `time.delay(0ms)` yields. An error that ends an `fg` task is shown
+  with file, line and where the task started, and fails `fogu test`. Task ids are never reused,
+  so `vm.cancel()` only stops its own run (it killed unrelated tasks). Mutex and Semaphore
+  serve waiters in order.
+- **Data**: `Fogu.file().write` / `append`, `Fogu.hash`, `process.run` input, `fogu:sql` and
+  `fogu:kv` keep buffers as bytes (they wrote their printed form); integers beyond i64 parse
+  as floats in json, yaml, jwt and protobuf; JSON floats round-trip; yaml / toml no longer go
+  through JSON. SQLite reads BOOLEAN, DATE, DATETIME and BLOB columns. A SQL or ORM
+  transaction belongs to the task that began it (it caught other tasks' writes); ORM
+  `createMany` is atomic.
+- **Servers**: several HTTP / web servers run in one program (a second one turned off the
+  first); Socket.IO `emitWithAck` and `disconnect` no longer panic and broadcasts stay in order;
+  broker publications reach each matching subscription exactly once; WebRTC messages over
+  128 KiB are an error value instead of blocking the channel.
+- `regex.findAll` is linear: 800 KB with 100 000 matches, 8.6 s → 0.31 s. `fogu:cron` refuses
+  impossible expressions and accepts the standard syntax (ranges with steps, names, `7`,
+  `@daily`), with day of month OR day of week. `fogu:time` invalid dates are error values.
+- CLI: `fogu.json` scripts and arguments with quotes or spaces on Windows (made from the code,
+  not run on Windows); `fmt` / `init` reject unknown options; `--help` never runs anything; a
+  malformed `fogu.json` is reported; a BOM is accepted; multi-line errors are shown whole.
+- Smaller fixes of the test rounds: `;` after a block, keywords as field names after a dot, CR
+  and U+2028/2029 end lines, `MIN % -1 == 0`, `-9223372036854775808` can be written, events
+  `off` / `removeAll`, an import of the entry file is a cycle, a failed module is not run again.
+  The list per bug, with its status, is in the re-evaluation of the test report.
 
 ## [0.8.0] - 2026-11-13
 

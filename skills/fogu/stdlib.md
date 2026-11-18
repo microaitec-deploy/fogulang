@@ -1177,7 +1177,7 @@ CommonMark plus the GitHub extensions (tables, strikethrough, task lists, footno
 - `markdown.headings(text)` → list — `{ level, text, id }` for every heading; `id` is a unique GitHub-style slug.
 - `markdown.toc(text, { minLevel = 1, maxLevel = 6 })` → str — A table of contents: a nested Markdown list of links to the headings.
 - `markdown.slug(text)` → str — GitHub-style anchor: `"Hello, World!"` → `hello-world`.
-- `markdown.frontmatter(text)` → list · error — `[meta, body]`; `meta` is `{}` without front matter. Invalid YAML/TOML is an error value.
+- `markdown.frontmatter(text)` → tuple · error — `[meta, body]`; `meta` is `{}` without front matter. Invalid YAML/TOML is an error value.
 
 ```fogu
 import markdown from "fogu:markdown"
@@ -1223,11 +1223,11 @@ Tasks
 import kv from "fogu:kv"
 ```
 
-An embedded key-value store in a single file (redb, ACID). Values are any Fogu value (stored as JSON).
+An embedded key-value store in a single file (redb, ACID). Values are nil, bools, numbers, strs, buffers, durations, lists and maps (stored as JSON); they read back with their type.
 
 - `kv.open(path)` → Store · error — Creates the file if needed.
 - `store.set(key, value) · store.get(key)` → nil · value — `get` → nil when missing.
-- `store.has(key) · store.delete(key)` → bool
+- `store.has(key) · store.delete(key)` → bool — `delete`: whether the key existed.
 - `store.keys() · store.len() · store.clear()` → list · int · nil
 - `store.path · store.close()` → str · nil
 
@@ -1260,7 +1260,7 @@ SQLite, PostgreSQL and MySQL/MariaDB by URL: `sqlite://app.db`, `sqlite::memory:
 - `db.query(sql, params?)` → list · error — Rows as maps.
 - `db.one(sql, params?)` → map · nil · error — The first row.
 - `db.exec(sql)` → nil · error — Raw SQL without parameters — may hold several statements (migrations).
-- `db.begin() · db.commit() · db.rollback()` → nil · error — Transactions.
+- `db.begin() · db.commit() · db.rollback()` → nil · error — Transactions. A transaction belongs to the task that began it: statements of other tasks wait for its commit or rollback.
 - `db.driver · db.url · db.close()`
 
 ```fogu
@@ -1546,8 +1546,8 @@ import surrealdb from "fogu:surrealdb"
 const db = surrealdb.connect("ws://127.0.0.1:8000", { namespace: "shop", database: "main", user: "root", pass: "root", define: true })?
 db.create("person:ana", { name: "Ana", age: 30 })?
 db.insert("person", [{ id: "bia", name: "Bia", age: 17 }, { id: "caio", name: "Caio", age: 41 }])?
-const [adults, total] = db.query("SELECT name FROM person WHERE age >= $min ORDER BY name; RETURN count(SELECT * FROM person)", { min: 18 })?
-print(adults, total)
+const results = db.query("SELECT name FROM person WHERE age >= $min ORDER BY name; RETURN count(SELECT * FROM person)", { min: 18 })?
+print(results[0], results[1])
 const live = db.live("person")?
 db.merge("person:bia", { age: 18 })?
 const ev = live.next(2s)?
@@ -1621,7 +1621,7 @@ A minimal HTTP server (one handler for every request) and an HTTP client. For ro
 
 ### Server
 
-- `http.serve(port | "ip:port", fn(req), { tls: { cert, key }, quiet, maxBody }?)` → nil — `tls` serves HTTPS (see [fogu:tls](#fogutls)). Requests are answered as soon as they arrive while the program is alive — waiting in `Fogu.signal.wait()`, `time.delay`, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or `"0.0.0.0:8080"`, `"[::1]:8080"`, `":8080"`.
+- `http.serve(port | "ip:port", fn(req), { tls: { cert, key }, quiet, maxBody, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout }?)` → nil — `tls` serves HTTPS (see [fogu:tls](#fogutls)). The handler returns a response (`http.text/json/html`), a str (text), any other value (JSON), nil (404) or an `error` (logged; the client gets a 500). Limits (defaults): `maxBody` (10 MB, 413), `maxHeaderBytes` (64 KB for the request line and headers, 431), `headerTimeout` (30s to send the headers; also closes idle keep-alive connections), `readTimeout` (60s for the body, 408), `handlerTimeout` (60s for the program's answer, 504; `0` = none). The request path is made canonical once, before static files, middlewares and routes see it: decoded once (`+` stays `+`), repeated slashes collapsed, `.`/`..` resolved; an encoded `/` or `\`, a raw `\`, a control character or a `..` above the root is a 400. A Rust panic in a handler answers that request with a 500 and the server goes on. Several servers may run in one program. Requests are answered as soon as they arrive while the program is alive — waiting in `Fogu.signal.wait()`, `time.delay`, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or `"0.0.0.0:8080"`, `"[::1]:8080"`, `":8080"`.
 - `req.method · req.path · req.query · req.headers · req.body` — `query` is the raw query string.
 - `req.header(name) · req.json() · req.form() · req.bytes()` — `form()`: urlencoded and multipart bodies.
 - `http.text(body, opts?) · http.json(value, opts?) · http.html(body, opts?)` → Response — `opts: { status, headers }`.
@@ -1710,11 +1710,11 @@ A web framework: routes with parameters, middleware, static files and SPA builds
 - `app.get/post/put/patch/delete/head/options/all(path, ...middlewares, handler)` → App — `/users/:id` parameters, `*` wildcard.
 - `app.use(fn) · app.use(prefix, fn)` → App — Middleware for every request, or under a path prefix.
 - `app.after((ctx, res) => …)` → App — After the handler; returning a value replaces the response.
-- `app.onError((ctx, err) => response)` → App — For runtime errors and returned `error` values (default: 500).
-- `app.static(dir) · app.static(prefix, dir, { spa, index, maxAge, dotfiles })` → App — Files served by the server thread: ETag/304, `Cache-Control`; `spa: true` serves `index.html` for unknown HTML routes (React, Vue, Svelte builds).
+- `app.onError((ctx, err) => response)` → App — For runtime errors and returned `error` values (default: a 500 `internal error`; the message goes to the log, never to the client).
+- `app.static(dir) · app.static(prefix, dir, { spa, index, maxAge, dotfiles })` → App — Files served by the server thread: ETag/304, `Cache-Control`; a file under the prefix of an `app.use` middleware is served only after the middlewares let the request through; `spa: true` serves `index.html` for unknown HTML routes (React, Vue, Svelte builds).
 - `app.ws(path, ...middlewares, (ws, ctx) => …, { protocols })` → App — WebSocket routes; the handler runs in its own task with a [WebSocket](#foguwebsocket) on the upgraded HTTP connection.
 - `app.set(key, value) · app.store` → App · map — Shared state (`ctx.store`).
-- `app.listen(port | "ip:port", { host = "127.0.0.1", maxBody = 10 MB, quiet, tls: { cert, key } })` → nil · error — `tls` serves HTTPS: PEM text or file paths (`tls.selfSigned(["localhost"])` for development; options as `tls.listen`). `app.listen("0.0.0.0:3000")` (or `host: "0.0.0.0"`) accepts other machines; IPv6 as `"[::1]:3000"`. A host in the string wins over `host`.
+- `app.listen(port | "ip:port", { host = "127.0.0.1", maxBody = 10 MB, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout, quiet, tls: { cert, key } })` → nil · error — Limits and the canonical path as in `http.serve`; an unknown option stops the program. `tls` serves HTTPS: PEM text or file paths (`tls.selfSigned(["localhost"])` for development; options as `tls.listen`). `app.listen("0.0.0.0:3000")` (or `host: "0.0.0.0"`) accepts other machines; IPv6 as `"[::1]:3000"`. A host in the string wins over `host`.
 - `app.handler()` → fn — Calls the app without a network (tests): `h({ method, path, headers, body })` → Response.
 - `app.routes()` → list
 
@@ -1727,9 +1727,9 @@ A web framework: routes with parameters, middleware, static files and SPA builds
 - `handler result` — A str (text or HTML), any value (JSON), a response, or nil (204).
 - `web.json/text/html(body, { status, headers })` → Response
 - `web.redirect(url, status = 302)` → Response
-- `web.file(path, { download, contentType, status })` → Response · error — Sent by the server thread (binary safe).
+- `web.file(path, { download, contentType, status })` → Response · error — Sent by the server thread (binary safe). `download: true` uses the file's name, `download: "name"` another (non-ASCII names as RFC 6266 `filename*`).
 - `web.sse({ retry, headers })` → SseStream — Return it from the handler; `send(data, { event, id })`, `comment(text)`, `close()`, field `open`.
-- `web.cors({ origin, methods, headers, credentials, maxAge })` → middleware — Answers preflight requests.
+- `web.cors({ origin, methods, headers, credentials, maxAge })` → middleware — Answers preflight requests, also as a route's own middleware. With `credentials: true` and `origin: "*"` the request's origin is echoed (browsers refuse `*` with credentials).
 - `web.logger()` → middleware — `GET /path 200 0.4ms`.
 - `UploadedFile: filename, contentType, size, text(), bytes(), json(), save(path)` — `save("uploads/")` keeps a sanitized file name.
 
@@ -1861,9 +1861,10 @@ app.get("/", fn(ctx) {
 // what the browser does, without a network:
 const call = app.handler()
 print(call({ method: "GET", path: "/" }).body.contains("data-tc-text=\"count.get()\""))
-const swap = json.parse(call({ method: "POST", path: "/_tc/s/results", body: "{\"props\":{\"query\":\"an\"}}" }).body)
+// the runtime sends x-topcoat with every call: requests without it are refused (CSRF)
+const swap = json.parse(call({ method: "POST", path: "/_tc/s/results", headers: { "x-topcoat": "shard" }, body: "{\"props\":{\"query\":\"an\"}}" }).body)
 print(swap.t, swap.html.contains("banana"), swap.html.contains("apple"))
-print(call({ method: "POST", path: "/_tc/p/double", body: "[21]" }).body)
+print(call({ method: "POST", path: "/_tc/p/double", headers: { "x-topcoat": "procedure" }, body: "[21]" }).body)
 // app.listen(3000) and Fogu.signal.wait() to serve it
 ```
 
@@ -1919,7 +1920,7 @@ Socket.IO (protocol v5) servers and clients, compatible with the official JavaSc
 
 - `socketio.server({ path = "/socket.io", pingInterval, pingTimeout, ackTimeout, maxPayload })` → SocketIoServer
 - `io.on("connection", fn(socket)) · io.of("/ns").on("connection", fn)` → nil — Namespaces.
-- `io.listen(port | "host:port") · app.listen(port, { socketio: io })` → int · nil — Standalone, or on a fogu:web app (same port).
+- `io.listen(port | "host:port") · app.listen(port, { socketio: io })` → int · nil — Standalone, or on a fogu:web app (same port). An int port listens on 127.0.0.1; `"0.0.0.0:port"` for other machines.
 - `io.emit(event, ...args) · io.to(room).emit(…) · io.except(room) · io.of(ns).emit(…) · io.close()` — Several arguments travel as several arguments.
 - `socket.on(event, fn(...args, ack?)) · socket.on("disconnect", fn(reason)) · socket.off(event)` → nil — `ack` is passed when the client asked for one: `ack(value)`.
 - `socket.emit(event, ...args) · socket.emitWithAck(event, data, { timeout })` → nil · value
@@ -1976,7 +1977,7 @@ gRPC servers and clients without code generation: the messages are described by 
 - `grpc.server(schema)` → GrpcServer
 - `srv.handle(method, fn(req, call)) · srv.handle({ method: fn }) · srv.service("pkg.Service", { Method: fn })` → nil — Methods: `"pkg.Service/Method"`, `"pkg.Service.Method"` or a unique `"Method"`. Client streaming: `req` is a list.
 - `call.send(msg) · call.metadata · call.peer · call.method · call.cancelled` — `send` for server streaming (or return a list).
-- `srv.listen(port | "host:port", { cert, key })` → int · error — The port. `cert`/`key`: PEM files for TLS.
+- `srv.listen(port | "host:port", { cert, key })` → int · error — The port (an int port listens on 127.0.0.1; `"0.0.0.0:port"` for other machines). `cert`/`key`: PEM files for TLS.
 - `srv.serve() · srv.close() · srv.port · srv.address · srv.methods` — `serve` runs until `close` (start it with `fg`).
 - `return nil, grpc.status("NOT_FOUND", "msg")` — Fails the call with that code (any other error is `UNKNOWN`); `grpc.codes` lists them.
 - `grpc.connect(url, schema, { timeout, metadata, ca, domain })` → GrpcClient — `https://` uses TLS (system roots or `ca`). Connects on the first call.
@@ -2150,7 +2151,7 @@ Peer-to-peer data channels (WebRTC) with other Fogu programs and with browsers, 
 - `peer.accept(timeout?)` → DataChannel · nil — A channel the other side opened (nil on timeout or close).
 - `peer.on(event, fn)` — `state(s)`, `connected()`, `channel(ch)`, `candidate(c)`, `close()` — each call in its own task.
 - `peer.state · peer.connected · peer.closed · peer.candidates · peer.addresses · peer.channels · peer.error · peer.close()` — A peer whose connection stays lost for `disconnectTimeout` closes.
-- `ch.send(str | buffer)` → nil · error — str → text message, buffer / list of bytes → binary; queued until the channel opens.
+- `ch.send(str | buffer)` → nil · error — str → text message, buffer / list of bytes → binary; queued until the channel opens. At most 128 KB per message (larger: an error value; split it).
 - `ch.recv(timeout?) · for msg in ch · ch.tryRecv()` → str · buffer · nil — nil on timeout or when the channel closes (which ends the `for`).
 - `ch.on("open" | "message" | "close", fn) · ch.wait(timeout?) · ch.close()` — With a `message` handler, messages go to it instead of `recv`.
 - `ch.label · ch.open · ch.closed · ch.ordered · ch.protocol · ch.pending · ch.buffered`

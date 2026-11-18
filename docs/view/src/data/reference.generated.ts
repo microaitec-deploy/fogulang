@@ -1689,7 +1689,7 @@ export const REFERENCE: Record<string, RefData> = {
      ],
      [
       "markdown.frontmatter(text)",
-      "list · error",
+      "tuple · error",
       "<code>[meta, body]</code>; <code>meta</code> is <code>{}</code> without front matter. Invalid YAML/TOML is an error value."
      ]
     ],
@@ -1704,7 +1704,7 @@ export const REFERENCE: Record<string, RefData> = {
   "group": "Storage",
   "title": "fogu:kv",
   "import": "import kv from \"fogu:kv\"",
-  "intro": "An embedded key-value store in a single file (redb, ACID). Values are any Fogu value (stored as JSON).",
+  "intro": "An embedded key-value store in a single file (redb, ACID). Values are nil, bools, numbers, strs, buffers, durations, lists and maps (stored as JSON); they read back with their type.",
   "blocks": [
    {
     "api": [
@@ -1721,7 +1721,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "store.has(key) · store.delete(key)",
       "bool",
-      ""
+      "<code>delete</code>: whether the key existed."
      ],
      [
       "store.keys() · store.len() · store.clear()",
@@ -1777,7 +1777,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "db.begin() · db.commit() · db.rollback()",
       "nil · error",
-      "Transactions."
+      "Transactions. A transaction belongs to the task that began it: statements of other tasks wait for its commit or rollback."
      ],
      [
       "db.driver · db.url · db.close()",
@@ -2169,7 +2169,7 @@ export const REFERENCE: Record<string, RefData> = {
       ""
      ]
     ],
-    "example": "import surrealdb from \"fogu:surrealdb\"\nconst db = surrealdb.connect(\"ws://127.0.0.1:8000\", { namespace: \"shop\", database: \"main\", user: \"root\", pass: \"root\", define: true })?\ndb.create(\"person:ana\", { name: \"Ana\", age: 30 })?\ndb.insert(\"person\", [{ id: \"bia\", name: \"Bia\", age: 17 }, { id: \"caio\", name: \"Caio\", age: 41 }])?\nconst [adults, total] = db.query(\"SELECT name FROM person WHERE age >= $min ORDER BY name; RETURN count(SELECT * FROM person)\", { min: 18 })?\nprint(adults, total)\nconst live = db.live(\"person\")?\ndb.merge(\"person:bia\", { age: 18 })?\nconst ev = live.next(2s)?\nprint(ev.action, ev.record, ev.result.age)",
+    "example": "import surrealdb from \"fogu:surrealdb\"\nconst db = surrealdb.connect(\"ws://127.0.0.1:8000\", { namespace: \"shop\", database: \"main\", user: \"root\", pass: \"root\", define: true })?\ndb.create(\"person:ana\", { name: \"Ana\", age: 30 })?\ndb.insert(\"person\", [{ id: \"bia\", name: \"Bia\", age: 17 }, { id: \"caio\", name: \"Caio\", age: 41 }])?\nconst results = db.query(\"SELECT name FROM person WHERE age >= $min ORDER BY name; RETURN count(SELECT * FROM person)\", { min: 18 })?\nprint(results[0], results[1])\nconst live = db.live(\"person\")?\ndb.merge(\"person:bia\", { age: 18 })?\nconst ev = live.next(2s)?\nprint(ev.action, ev.record, ev.result.age)",
     "output": "[{name: Ana}, {name: Caio}] 3\nUPDATE person:bia 18",
     "outputTitle": "output (with a SurrealDB server)"
    }
@@ -2288,9 +2288,9 @@ export const REFERENCE: Record<string, RefData> = {
     "title": "server.fg",
     "api": [
      [
-      "http.serve(port | \"ip:port\", fn(req), { tls: { cert, key }, quiet, maxBody }?)",
+      "http.serve(port | \"ip:port\", fn(req), { tls: { cert, key }, quiet, maxBody, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout }?)",
       "nil",
-      "<code>tls</code> serves HTTPS (see <a class=\"underline\" href=\"#mod-tls\">fogu:tls</a>). Requests are answered as soon as they arrive while the program is alive — waiting in <code>Fogu.signal.wait()</code>, <code>time.delay</code>, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or <code>\"0.0.0.0:8080\"</code>, <code>\"[::1]:8080\"</code>, <code>\":8080\"</code>."
+      "<code>tls</code> serves HTTPS (see <a class=\"underline\" href=\"#mod-tls\">fogu:tls</a>). The handler returns a response (<code>http.text/json/html</code>), a str (text), any other value (JSON), nil (404) or an <code>error</code> (logged; the client gets a 500). Limits (defaults): <code>maxBody</code> (10 MB, 413), <code>maxHeaderBytes</code> (64 KB for the request line and headers, 431), <code>headerTimeout</code> (30s to send the headers; also closes idle keep-alive connections), <code>readTimeout</code> (60s for the body, 408), <code>handlerTimeout</code> (60s for the program's answer, 504; <code>0</code> = none). The request path is made canonical once, before static files, middlewares and routes see it: decoded once (<code>+</code> stays <code>+</code>), repeated slashes collapsed, <code>.</code>/<code>..</code> resolved; an encoded <code>/</code> or <code>\\</code>, a raw <code>\\</code>, a control character or a <code>..</code> above the root is a 400. A Rust panic in a handler answers that request with a 500 and the server goes on. Several servers may run in one program. Requests are answered as soon as they arrive while the program is alive — waiting in <code>Fogu.signal.wait()</code>, <code>time.delay</code>, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or <code>\"0.0.0.0:8080\"</code>, <code>\"[::1]:8080\"</code>, <code>\":8080\"</code>."
      ],
      [
       "req.method · req.path · req.query · req.headers · req.body",
@@ -2357,12 +2357,12 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "app.onError((ctx, err) => response)",
       "App",
-      "For runtime errors and returned <code>error</code> values (default: 500)."
+      "For runtime errors and returned <code>error</code> values (default: a 500 <code>internal error</code>; the message goes to the log, never to the client)."
      ],
      [
       "app.static(dir) · app.static(prefix, dir, { spa, index, maxAge, dotfiles })",
       "App",
-      "Files served by the server thread: ETag/304, <code>Cache-Control</code>; <code>spa: true</code> serves <code>index.html</code> for unknown HTML routes (React, Vue, Svelte builds)."
+      "Files served by the server thread: ETag/304, <code>Cache-Control</code>; a file under the prefix of an <code>app.use</code> middleware is served only after the middlewares let the request through; <code>spa: true</code> serves <code>index.html</code> for unknown HTML routes (React, Vue, Svelte builds)."
      ],
      [
       "app.ws(path, ...middlewares, (ws, ctx) => …, { protocols })",
@@ -2375,9 +2375,9 @@ export const REFERENCE: Record<string, RefData> = {
       "Shared state (<code>ctx.store</code>)."
      ],
      [
-      "app.listen(port | \"ip:port\", { host = \"127.0.0.1\", maxBody = 10 MB, quiet, tls: { cert, key } })",
+      "app.listen(port | \"ip:port\", { host = \"127.0.0.1\", maxBody = 10 MB, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout, quiet, tls: { cert, key } })",
       "nil · error",
-      "<code>tls</code> serves HTTPS: PEM text or file paths (<code>tls.selfSigned([\"localhost\"])</code> for development; options as <code>tls.listen</code>). <code>app.listen(\"0.0.0.0:3000\")</code> (or <code>host: \"0.0.0.0\"</code>) accepts other machines; IPv6 as <code>\"[::1]:3000\"</code>. A host in the string wins over <code>host</code>."
+      "Limits and the canonical path as in <code>http.serve</code>; an unknown option stops the program. <code>tls</code> serves HTTPS: PEM text or file paths (<code>tls.selfSigned([\"localhost\"])</code> for development; options as <code>tls.listen</code>). <code>app.listen(\"0.0.0.0:3000\")</code> (or <code>host: \"0.0.0.0\"</code>) accepts other machines; IPv6 as <code>\"[::1]:3000\"</code>. A host in the string wins over <code>host</code>."
      ],
      [
       "app.handler()",
@@ -2433,7 +2433,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "web.file(path, { download, contentType, status })",
       "Response · error",
-      "Sent by the server thread (binary safe)."
+      "Sent by the server thread (binary safe). <code>download: true</code> uses the file's name, <code>download: \"name\"</code> another (non-ASCII names as RFC 6266 <code>filename*</code>)."
      ],
      [
       "web.sse({ retry, headers })",
@@ -2443,7 +2443,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "web.cors({ origin, methods, headers, credentials, maxAge })",
       "middleware",
-      "Answers preflight requests."
+      "Answers preflight requests, also as a route's own middleware. With <code>credentials: true</code> and <code>origin: \"*\"</code> the request's origin is echoed (browsers refuse <code>*</code> with credentials)."
      ],
      [
       "web.logger()",
@@ -2582,7 +2582,7 @@ export const REFERENCE: Record<string, RefData> = {
       "<code>true</code> loads Tailwind v4's browser build (development) with the theme tokens as utilities (<code>bg-primary</code>, <code>text-muted-foreground</code>, <code>border-border</code>, <code>dark:</code>); for production build a stylesheet with the Tailwind CLI (<code>@import \"tailwindcss\"; @source \"./**/*.fg\";</code> plus <code>tc.tailwindTheme</code>) and pass its URL."
      ]
     ],
-    "example": "import web from \"fogu:web\"\nimport tc from \"fogu:topcoat\"\nimport json from \"fogu:json\"\nconst h = tc.h\nconst ui = tc.ui\n\nconst results = tc.shard(\"results\", fn(ctx, props) {\n    const found = [\"apple\", \"banana\", \"mango\"].filter(fn(f) { return f.contains(props.query ?? \"\") })\n    return ui.table([\"fruit\"], found.map(fn(f) { return { fruit: f } }), { empty: \"Nothing found\" })\n})\nconst app = web.app()\napp.procedure(\"double\", fn(ctx, n) { return n * 2 })\napp.get(\"/\", fn(ctx) {\n    const count = tc.signal(ctx, \"count\", 0)\n    const query = tc.signal(ctx, \"query\", \"\")\n    return tc.page({ title: \"Demo\", body: ui.container([\n        h(\"p\", nil, \"Count: \", count),\n        ui.button(\"+1\", { \"@click\": \"count.increment()\" }),\n        ui.button(\"double on the server\", { variant: \"outline\", \"@click\": \"count.set(await call('double', count.get()))\" }),\n        ui.input({ placeholder: \"Search\", \":value\": query, \"@input\": \"query.set(e.target.value)\" }),\n        results.render(ctx, { query: tc.expr(\"query.get()\", query.peek()) }),\n    ])})\n})\n\n// what the browser does, without a network:\nconst call = app.handler()\nprint(call({ method: \"GET\", path: \"/\" }).body.contains(\"data-tc-text=\\\"count.get()\\\"\"))\nconst swap = json.parse(call({ method: \"POST\", path: \"/_tc/s/results\", body: \"{\\\"props\\\":{\\\"query\\\":\\\"an\\\"}}\" }).body)\nprint(swap.t, swap.html.contains(\"banana\"), swap.html.contains(\"apple\"))\nprint(call({ method: \"POST\", path: \"/_tc/p/double\", body: \"[21]\" }).body)\n// app.listen(3000) and Fogu.signal.wait() to serve it",
+    "example": "import web from \"fogu:web\"\nimport tc from \"fogu:topcoat\"\nimport json from \"fogu:json\"\nconst h = tc.h\nconst ui = tc.ui\n\nconst results = tc.shard(\"results\", fn(ctx, props) {\n    const found = [\"apple\", \"banana\", \"mango\"].filter(fn(f) { return f.contains(props.query ?? \"\") })\n    return ui.table([\"fruit\"], found.map(fn(f) { return { fruit: f } }), { empty: \"Nothing found\" })\n})\nconst app = web.app()\napp.procedure(\"double\", fn(ctx, n) { return n * 2 })\napp.get(\"/\", fn(ctx) {\n    const count = tc.signal(ctx, \"count\", 0)\n    const query = tc.signal(ctx, \"query\", \"\")\n    return tc.page({ title: \"Demo\", body: ui.container([\n        h(\"p\", nil, \"Count: \", count),\n        ui.button(\"+1\", { \"@click\": \"count.increment()\" }),\n        ui.button(\"double on the server\", { variant: \"outline\", \"@click\": \"count.set(await call('double', count.get()))\" }),\n        ui.input({ placeholder: \"Search\", \":value\": query, \"@input\": \"query.set(e.target.value)\" }),\n        results.render(ctx, { query: tc.expr(\"query.get()\", query.peek()) }),\n    ])})\n})\n\n// what the browser does, without a network:\nconst call = app.handler()\nprint(call({ method: \"GET\", path: \"/\" }).body.contains(\"data-tc-text=\\\"count.get()\\\"\"))\n// the runtime sends x-topcoat with every call: requests without it are refused (CSRF)\nconst swap = json.parse(call({ method: \"POST\", path: \"/_tc/s/results\", headers: { \"x-topcoat\": \"shard\" }, body: \"{\\\"props\\\":{\\\"query\\\":\\\"an\\\"}}\" }).body)\nprint(swap.t, swap.html.contains(\"banana\"), swap.html.contains(\"apple\"))\nprint(call({ method: \"POST\", path: \"/_tc/p/double\", headers: { \"x-topcoat\": \"procedure\" }, body: \"[21]\" }).body)\n// app.listen(3000) and Fogu.signal.wait() to serve it",
     "output": "true\nswap true false\n{\"ok\":42}",
     "outputTitle": "output"
    }
@@ -2647,7 +2647,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "io.listen(port | \"host:port\") · app.listen(port, { socketio: io })",
       "int · nil",
-      "Standalone, or on a fogu:web app (same port)."
+      "Standalone, or on a fogu:web app (same port). An int port listens on 127.0.0.1; <code>\"0.0.0.0:port\"</code> for other machines."
      ],
      [
       "io.emit(event, ...args) · io.to(room).emit(…) · io.except(room) · io.of(ns).emit(…) · io.close()",
@@ -2728,7 +2728,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "srv.listen(port | \"host:port\", { cert, key })",
       "int · error",
-      "The port. <code>cert</code>/<code>key</code>: PEM files for TLS."
+      "The port (an int port listens on 127.0.0.1; <code>\"0.0.0.0:port\"</code> for other machines). <code>cert</code>/<code>key</code>: PEM files for TLS."
      ],
      [
       "srv.serve() · srv.close() · srv.port · srv.address · srv.methods",
@@ -2942,7 +2942,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "ch.send(str | buffer)",
       "nil · error",
-      "str → text message, buffer / list of bytes → binary; queued until the channel opens."
+      "str → text message, buffer / list of bytes → binary; queued until the channel opens. At most 128 KB per message (larger: an error value; split it)."
      ],
      [
       "ch.recv(timeout?) · for msg in ch · ch.tryRecv()",

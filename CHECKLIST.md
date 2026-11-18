@@ -26,7 +26,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` to do. `§` refers to the section o
 - [x] `nil bool int float str list map fn struct chan error`
 - [x] `buffer` type (mutable bytes, not in the spec): `bytes(x, encoding)`, `b[i]`, `for`, `==`, `read*/write*` numbers, `buffer` annotation — `buffer.fg`
 - [x] `duration` type: arithmetic, comparison, fields `ns us ms seconds minutes hours`; accepted by `time.delay/sleep`, `cron.every`, `timeout`
-- [~] `tuple`: `return a, b` and `const [x, err] = f()` work, but there is no separate immutable `tuple` type
+- [x] `tuple`: `return a, b` builds an immutable tuple, distinct from a list; `[v, err]` and `?` read only tuples and errors (0.8.1, `tuples.fg`, `docs/architecture/tuples.md`)
 - [~] `typeof` — also returns `range`, `module`, `object`, `struct-type`, `interface`, which are not in the spec
 - [x] Mutable lists: `push`, `pop`, `len` and more
 - [x] Maps with `str` keys, `.x` and `["x"]` access, missing key → `nil`
@@ -168,8 +168,8 @@ Fundamental API (§44):
 
 - [~] Pipeline Lexer → Parser → AST → Resolver → tree-walking interpreter + Cranelift JIT. The spec asks for Bytecode → VM
 - [x] Resolver (static name, type-name, `?` and `match` checks) — `src/runtime/resolver.rs`, runs before execution
-- [ ] Bytecode and VM (§55)
-- [~] Memory management with `Rc`: reference cycles are not collected; no GC (§56)
+- [~] Bytecode and VM (§55): opt-in `--engine=vm`, per function (closures, `match`, `fg`, `?.` run on the interpreter); the conformance suite runs on the three engines (0.8.1, `docs/bytecode.md`)
+- [~] Memory management with `Rc`: a scope and the closures stored in it are freed together (0.8.1, `docs/architecture/closure-cycles.md`); plain data cycles are not collected, no GC (§56)
 - [x] Diagnostics (§58): `error[E0201]: …`, `--> file:line:column`, excerpt with `^^^`, `= help:` — `src/toolkit/diag.rs`, `error_diagnostic.fg`
 - [x] Errors inside functions of another module point to that module's file — `error_other_module.fg`
 
@@ -267,7 +267,7 @@ to what already exists.
 
 ### Phase I — Bytecode VM and memory (very high)
 
-- [ ] AST → bytecode compiler, VM, closures in bytecode
+- [~] AST → bytecode compiler, VM (0.8.1, opt-in); closures in bytecode: not yet
 - [ ] Integrate the JIT with the VM
 - [ ] GC (tracing, or reference counting with cycle collection)
 - [ ] Fuzzing of the lexer, parser, bytecode loader and VM
