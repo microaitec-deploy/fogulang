@@ -206,13 +206,13 @@ print(markdown.parse("Hi **there**")[0])
         "group": S,
         "title": "fogu:kv",
         "import": 'import kv from "fogu:kv"',
-        "intro": "An embedded key-value store in a single file (redb, ACID). Values are any Fogu value (stored as JSON).",
+        "intro": "An embedded key-value store in a single file (redb, ACID). Values are nil, bools, numbers, strs, buffers, durations, lists and maps (stored as JSON); they read back with their type.",
         "blocks": [
             {
                 "api": [
                     ("kv.open(path)", "Store · error", "Creates the file if needed."),
                     ("store.set(key, value) · store.get(key)", "nil · value", "<code>get</code> → nil when missing."),
-                    ("store.has(key) · store.delete(key)", "bool", ""),
+                    ("store.has(key) · store.delete(key)", "bool", "<code>delete</code>: whether the key existed."),
                     ("store.keys() · store.len() · store.clear()", "list · int · nil", ""),
                     ("store.path · store.close()", "str · nil", ""),
                 ],
@@ -245,7 +245,7 @@ db.close()
                     ("db.query(sql, params?)", "list · error", "Rows as maps."),
                     ("db.one(sql, params?)", "map · nil · error", "The first row."),
                     ("db.exec(sql)", "nil · error", "Raw SQL without parameters — may hold several statements (migrations)."),
-                    ("db.begin() · db.commit() · db.rollback()", "nil · error", "Transactions."),
+                    ("db.begin() · db.commit() · db.rollback()", "nil · error", "Transactions. A transaction belongs to the task that began it: statements of other tasks wait for its commit or rollback."),
                     ("db.driver · db.url · db.close()", "", ""),
                 ],
                 "example": r'''

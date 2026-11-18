@@ -239,6 +239,20 @@ struct Inner {
     dialect: Dialect,
     models: HashMap<String, Model>,
     log: bool,
+    /// The task that ran `begin()` (`sched::task_id`), until its `commit()` /
+    /// `rollback()`: the one connection is inside its transaction, so the
+    /// calls of other tasks wait for it instead of running inside it.
+    tx_owner: Rc<std::cell::Cell<Option<usize>>>,
+}
+
+impl Inner {
+    /// `FoguObject::wait_for` of the client and its models: while another
+    /// task's transaction is open, wait (cooperatively) for it to end.
+    fn wait_tx(&self) -> Option<Box<dyn Fn() -> bool>> {
+        self.tx_owner.get()?;
+        let owner = Rc::clone(&self.tx_owner);
+        Some(Box::new(move || owner.get().is_none_or(|o| o == crate::runtime::sched::task_id())))
+    }
 }
 
 fn create_client(a: &[Value]) -> Result<Value, String> {
@@ -273,7 +287,12 @@ fn create_client(a: &[Value]) -> Result<Value, String> {
         _ => "none".into(),
     };
     let conn = SqlConn::open(&url).map_err(|e| io_err!("orm: cannot connect: {}", e))?;
-    let inner = Rc::new(Inner { conn: RefCell::new(conn), dialect, models, log });
+    // text filters distinguish case unless `mode: "insensitive"` asks
+    // otherwise, as on PostgreSQL (SQLite's LIKE ignores ASCII case by default)
+    if dialect == Dialect::Sqlite {
+        conn.execute("PRAGMA case_sensitive_like = ON", &[]).map_err(|e| io_err!("orm: {}", e))?;
+    }
+    let inner = Rc::new(Inner { conn: RefCell::new(conn), dialect, models, log, tx_owner: Rc::new(std::cell::Cell::new(None)) });
     if migrate == "auto" {
         migrate_all(&inner)?;
     }
@@ -296,6 +315,10 @@ pub struct ClientValue {
 impl FoguObject for ClientValue {
     fn name(&self) -> &str {
         "OrmClient"
+    }
+
+    fn wait_for(&self, _method: &str) -> Option<Box<dyn Fn() -> bool>> {
+        self.inner.wait_tx()
     }
 
     fn get(&self, field: &str) -> Option<Value> {
@@ -326,7 +349,9 @@ impl FoguObject for ClientValue {
                     ("commit", _) => "COMMIT",
                     _ => "ROLLBACK",
                 };
-                self.inner.exec(sql, &[]).map(|_| Value::Nil)
+                self.inner.exec(sql, &[])?;
+                self.inner.tx_owner.set((method == "begin").then(crate::runtime::sched::task_id));
+                Ok(Value::Nil)
             }
             other => Err(format!(
                 "method '{}' does not exist on the ORM client (models: {})",
@@ -576,6 +601,11 @@ fn to_db(f: &Field, v: &Value) -> Result<Value, String> {
         FieldType::DateTime => match v {
             Value::Str(_) => v.clone(),
             Value::Int(ms) => Value::Str(iso(*ms).into()),
+            // a `fogu:time` date (its `ms` since the epoch), stored as ISO text
+            Value::Object(o) => match o.get("ms") {
+                Some(Value::Int(ms)) => Value::Str(iso(ms).into()),
+                _ => return Err(bad()),
+            },
             _ => return Err(bad()),
         },
         FieldType::Json => Value::Str(crate::native::json::stringify_value(v).into()),
@@ -692,6 +722,7 @@ fn field_cond(sql: &mut Sql, f: &Field, v: &Value) -> Result<String, String> {
         let c = match op.as_str() {
             "mode" => continue,
             "equals" if matches!(x, Value::Nil) => format!("{} IS NULL", col),
+            "equals" if insensitive => format!("LOWER({}) = LOWER({})", col, sql.ph(to_db(f, x)?)),
             "equals" => format!("{} = {}", col, sql.ph(to_db(f, x)?)),
             "not" => match x {
                 Value::Nil => format!("{} IS NOT NULL", col),
@@ -1012,6 +1043,13 @@ impl ModelValue {
             let expr = match v {
                 Value::Map(op) if f.ty != FieldType::Json => {
                     let op = op.borrow();
+                    // one operation per field: with several, which one ran
+                    // depended on the map's order
+                    if op.len() > 1 {
+                        let mut names: Vec<&str> = op.keys().map(|n| n.as_str()).collect();
+                        names.sort();
+                        return Err(format!("one update operation per field, got {} on '{}'", names.join(" and "), k));
+                    }
                     let (name, x) = op.iter().next().ok_or_else(|| format!("empty update operation on '{}'", k))?;
                     let p = sql.ph(to_db(f, x)?);
                     match name.as_str() {
@@ -1101,6 +1139,10 @@ impl FoguObject for ModelValue {
         "OrmModel"
     }
 
+    fn wait_for(&self, _method: &str) -> Option<Box<dyn Fn() -> bool>> {
+        self.inner.wait_tx()
+    }
+
     fn get(&self, field: &str) -> Option<Value> {
         (field == "name").then(|| Value::Str(self.model.clone().into()))
     }
@@ -1137,10 +1179,34 @@ impl FoguObject for ModelValue {
                     Some(Value::List(l)) => l.borrow().clone(),
                     _ => return Err(format!("{}: 'data' must be a list of maps", what)),
                 };
-                for it in &items {
-                    self.insert(as_map(it, "data item")?.borrow().clone())?;
+                // all or nothing: in a transaction of its own, or in a
+                // savepoint of the program's open transaction
+                let nested = self.inner.tx_owner.get().is_some();
+                let (open, ok, undo) = match (nested, self.inner.dialect) {
+                    (true, _) => ("SAVEPOINT fogu_create_many", "RELEASE SAVEPOINT fogu_create_many", "ROLLBACK TO SAVEPOINT fogu_create_many"),
+                    (false, Dialect::Mysql) => ("START TRANSACTION", "COMMIT", "ROLLBACK"),
+                    (false, _) => ("BEGIN", "COMMIT", "ROLLBACK"),
+                };
+                self.inner.exec(open, &[])?;
+                let all = (|| -> Result<(), String> {
+                    for it in &items {
+                        self.insert(as_map(it, "data item")?.borrow().clone())?;
+                    }
+                    Ok(())
+                })();
+                match all {
+                    Ok(()) => {
+                        self.inner.exec(ok, &[])?;
+                        Ok(count_map(items.len() as u64))
+                    }
+                    Err(e) => {
+                        let _ = self.inner.exec(undo, &[]);
+                        if nested {
+                            let _ = self.inner.exec(ok, &[]);
+                        }
+                        Err(e)
+                    }
                 }
-                Ok(count_map(items.len() as u64))
             }
             "update" => {
                 let data = self.data(&opts, "data")?;

@@ -12,3 +12,4 @@ Dan 4
 error: author.delete: record not found
 true
 [{n: 1}]
+[other task]

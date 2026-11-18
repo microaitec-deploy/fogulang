@@ -81,15 +81,18 @@ impl KvValue {
             Value::Int(n) => Ok(format!("\u{0}int:{}", n)),
             Value::Float(f) => Ok(format!("\u{0}float:{}", f)),
             Value::Str(s) => Ok(format!("\u{0}str:{}", s)),
-            Value::List(l) => {
-                let mut parts = Vec::new();
-                for item in l.borrow().iter() {
-                    parts.push(json_value(item)?);
+            // a buffer keeps its bytes (hex), a duration its nanoseconds
+            Value::Buffer(_) => {
+                let bytes = crate::native::util::bytes_of(v, "kv")?;
+                let mut hex = String::with_capacity(bytes.len() * 2);
+                for b in bytes {
+                    hex.push_str(&format!("{:02x}", b));
                 }
-                Ok(format!("\u{0}list:[{}]", parts.join(",")))
+                Ok(format!("\u{0}buf:{}", hex))
             }
-            // maps (and any nesting) are stored as JSON
-            Value::Map(_) => Ok(format!("\u{0}json:{}", crate::native::json::stringify_value(v))),
+            Value::Duration(ns) => Ok(format!("\u{0}dur:{}", ns)),
+            // lists and maps (and any nesting) are stored as JSON
+            Value::List(_) | Value::Map(_) => Ok(format!("\u{0}json:{}", crate::native::json::stringify_value(v))),
             other => Err(format!(
                 "kv: unsupported type '{}'",
                 other.type_name()
@@ -120,6 +123,14 @@ impl KvValue {
             if let Some(s) = rest.strip_prefix("str:") {
                 return Ok(Value::Str(s.to_string().into()));
             }
+            if let Some(h) = rest.strip_prefix("buf:") {
+                let bytes: Option<Vec<u8>> = (0..h.len() / 2).map(|i| h.get(i * 2..i * 2 + 2).and_then(|x| u8::from_str_radix(x, 16).ok())).collect();
+                return bytes.map(Value::buffer).ok_or_else(|| io_err!("kv: invalid buffer"));
+            }
+            if let Some(n) = rest.strip_prefix("dur:") {
+                return n.parse::<i64>().map(Value::Duration).map_err(|e| io_err!("kv: invalid duration: {}", e));
+            }
+            // lists written by older versions
             if let Some(l) = rest.strip_prefix("list:") {
                 return json_parse_list(l);
             }
@@ -202,18 +213,21 @@ impl FoguObject for KvValue {
                 let write_txn = db
                     .begin_write()
                     .map_err(|e| io_err!("kv.delete: {}", e))?;
-                {
+                let had = {
                     let mut table = write_txn
                         .open_table(TABLE)
                         .map_err(|e| io_err!("kv.delete: {}", e))?;
-                    table
+                    let had = table
                         .remove(key.as_str())
-                        .map_err(|e| io_err!("kv.delete: {}", e))?;
-                }
+                        .map_err(|e| io_err!("kv.delete: {}", e))?
+                        .is_some();
+                    had
+                };
                 write_txn
                     .commit()
                     .map_err(|e| io_err!("kv.delete commit: {}", e))?;
-                Ok(Value::Nil)
+                // true when the key existed
+                Ok(Value::Bool(had))
             }
 
             "has" => {
@@ -326,28 +340,7 @@ fn str_key(v: &Value, ctx: &str) -> Result<String, String> {
     }
 }
 
-// ---------- Serializing lists as JSON ----------
-
-fn json_value(v: &Value) -> Result<String, String> {
-    match v {
-        Value::Nil => Ok("null".into()),
-        Value::Bool(b) => Ok(b.to_string()),
-        Value::Int(n) => Ok(n.to_string()),
-        Value::Float(f) => Ok(f.to_string()),
-        Value::Str(s) => Ok(format!("{:?}", s)),
-        Value::List(l) => {
-            let mut parts = Vec::new();
-            for item in l.borrow().iter() {
-                parts.push(json_value(item)?);
-            }
-            Ok(format!("[{}]", parts.join(",")))
-        }
-        other => Err(format!(
-            "kv: type '{}' not supported in lists",
-            other.type_name()
-        )),
-    }
-}
+// ---------- Lists written by older versions ----------
 
 fn json_parse_list(s: &str) -> Result<Value, String> {
     let s = s.trim();

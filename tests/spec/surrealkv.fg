@@ -67,3 +67,11 @@ print(nokey != nil)
 const enc2 = surrealkv.open("surrealkv-enc.tmp.db", { key: key })?
 print(enc2.get("secret"))
 enc2.close()
+
+// buffers and durations read back as the same type (not a list, a str)
+const typed = surrealkv.open("surrealkv-typed.tmp.db")?
+typed.set("c", bytes([0, 255]))?
+typed.set("d", 5s)?
+typed.batch({ set: { e: bytes([7]) } })?
+print(typeof(typed.get("c")), typed.get("c"), typeof(typed.get("d")), typed.get("d"), typed.get("e"))
+typed.close()
