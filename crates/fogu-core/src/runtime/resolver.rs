@@ -346,6 +346,8 @@ pub struct Resolver<'a> {
     /// them per run (the bodies of a `select`'s send and default cases): a
     /// name declared in two of them is not declared twice.
     shared: bool,
+    /// Loops around the current statement, in the current function.
+    loops: u32,
 }
 
 /// Everything found in a program: errors and warnings, in source order,
@@ -381,6 +383,7 @@ pub fn analyze(program: &[Stmt], builtins: &HashSet<String>) -> Report {
         errors: Vec::new(),
         warnings: Vec::new(),
         shared: false,
+        loops: 0,
     };
     r.push(program, HashSet::new(), false);
     r.stmts(program);
@@ -917,7 +920,10 @@ impl Resolver<'_> {
         self.push(body, declared, true);
         self.returns.push((name.to_string(), ret));
         let saved = self.line;
+        // a loop outside the function is not one `break` may leave
+        let loops = std::mem::replace(&mut self.loops, 0);
         self.stmts(body);
+        self.loops = loops;
         self.line = saved;
         self.returns.pop();
         self.pop();
@@ -1058,7 +1064,9 @@ impl Resolver<'_> {
             }
             Stmt::While { cond, body, .. } => {
                 self.expr(cond)?;
+                self.loops += 1;
                 self.branch(body);
+                self.loops -= 1;
             }
             Stmt::For {
                 var,
@@ -1071,8 +1079,15 @@ impl Resolver<'_> {
                 let mut vars: HashSet<String> = HashSet::from([var.clone()]);
                 vars.extend(var2.iter().cloned());
                 self.push(&[], vars, false);
+                self.loops += 1;
                 self.branch(body);
+                self.loops -= 1;
                 self.pop();
+            }
+            // what the interpreter reports when it runs it
+            Stmt::Break if self.loops == 0 => return Err(format!("line {}: syntax error: 'break' outside a loop", self.line)),
+            Stmt::Continue if self.loops == 0 => {
+                return Err(format!("line {}: syntax error: 'continue' outside a loop", self.line))
             }
             Stmt::Break | Stmt::Continue | Stmt::Return(None) => {}
             Stmt::Return(Some(e)) => {
