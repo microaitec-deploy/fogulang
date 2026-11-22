@@ -121,6 +121,7 @@ impl NativeContext {
         self.define_global("len", 1, |args| match &args[0] {
             Value::Str(s) => Ok(Value::Int(s.char_len() as i64)),
             Value::List(l) => Ok(Value::Int(l.borrow().len() as i64)),
+            Value::Array(a) => Ok(Value::Int(a.borrow().len() as i64)),
             Value::Tuple(t) => Ok(Value::Int(t.len() as i64)),
             Value::Buffer(b) => Ok(Value::Int(b.borrow().len() as i64)),
             Value::Map(m) => Ok(Value::Int(m.borrow().len() as i64)),
@@ -204,6 +205,7 @@ impl NativeContext {
             )*};
         }
         sized!("int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "uint", "uintptr", "byte", "rune", "float32", "float64");
+        sized!("i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64");
 
         crate::native::collections::install(self);
 

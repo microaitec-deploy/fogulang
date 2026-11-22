@@ -137,21 +137,23 @@ pub enum Sized {
 pub const SIZED_NAMES: &[&str] = &[
     "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "uint", "uintptr",
     "byte", "rune", "float32", "float64",
+    // the short names: the same types
+    "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64",
 ];
 
 impl Sized {
     pub fn from_name(name: &str) -> Option<Sized> {
         Some(match name {
-            "int8" => Sized::I8,
-            "int16" => Sized::I16,
-            "int32" | "rune" => Sized::I32,
-            "int64" => Sized::I64,
-            "uint8" | "byte" => Sized::U8,
-            "uint16" => Sized::U16,
-            "uint32" => Sized::U32,
-            "uint64" | "uint" | "uintptr" => Sized::U64,
-            "float32" => Sized::F32,
-            "float64" => Sized::F64,
+            "int8" | "i8" => Sized::I8,
+            "int16" | "i16" => Sized::I16,
+            "int32" | "i32" | "rune" => Sized::I32,
+            "int64" | "i64" => Sized::I64,
+            "uint8" | "u8" | "byte" => Sized::U8,
+            "uint16" | "u16" => Sized::U16,
+            "uint32" | "u32" => Sized::U32,
+            "uint64" | "u64" | "uint" | "uintptr" => Sized::U64,
+            "float32" | "f32" => Sized::F32,
+            "float64" | "f64" => Sized::F64,
             _ => return None,
         })
     }

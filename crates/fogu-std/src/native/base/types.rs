@@ -455,7 +455,7 @@ fn check_name(v: &Value, s: &str, path: &str, errs: &mut Vec<String>, all: bool,
         "nil" => matches!(v, Value::Nil),
         "bool" => matches!(v, Value::Bool(_)),
         "int" => matches!(v, Value::Int(_)),
-        "float" | "float32" | "float64" => matches!(v, Value::Float(_) | Value::Int(_)),
+        "float" | "float32" | "float64" | "f32" | "f64" => matches!(v, Value::Float(_) | Value::Int(_)),
         // sized integers, as in the language's annotations: an int in the type's range
         "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" | "uint64" | "uint" | "uintptr" | "byte"
         | "rune" => matches!((v, Sized::from_name(s)), (Value::Int(n), Some(k)) if k.fits(*n)),
@@ -479,9 +479,9 @@ fn check_name(v: &Value, s: &str, path: &str, errs: &mut Vec<String>, all: bool,
         if let Some(o) = out {
             // a float spec turns ints into floats
             *o = match (s, v) {
-                ("float" | "float64", Value::Int(n)) => Value::Float(*n as f64),
-                ("float32", Value::Int(n)) => Value::Float(Sized::F32.round(*n as f64)),
-                ("float32", Value::Float(f)) => Value::Float(Sized::F32.round(*f)),
+                ("float" | "float64" | "f64", Value::Int(n)) => Value::Float(*n as f64),
+                ("float32" | "f32", Value::Int(n)) => Value::Float(Sized::F32.round(*n as f64)),
+                ("float32" | "f32", Value::Float(f)) => Value::Float(Sized::F32.round(*f)),
                 _ => v.clone(),
             };
         }
@@ -1008,6 +1008,7 @@ fn install_schema(e: &mut HashMap<String, Value>) {
     // types.int8() … types.float32(): the sized numbers of the language
     typed!("char");
     typed!("int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "uint", "byte", "rune", "float32", "float64");
+    typed!("i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64");
     e.insert("literal".into(), nfn_var("literal", 1, |a| {
         max_args(a, 1, "types.literal")?;
         let mut s = Schema::of_type(Value::Str("any".into()));

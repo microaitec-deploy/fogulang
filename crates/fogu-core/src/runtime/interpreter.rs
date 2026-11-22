@@ -874,9 +874,10 @@ impl Interpreter {
 
     #[inline(never)]
     fn exec_let(&self, name: &str, mutable: &bool, init: &Expr, ty: &Option<TypeExpr>, env: Rc<RefCell<Environment>>) -> Result<Flow, String> {
-        let value = self.eval(init, env.clone())?;
+        let mut value = self.eval(init, env.clone())?;
         if let Some(t) = ty {
             self.check_var(name, &value, t, &env)?;
+            value = self.sized_storage(name, value, t)?;
         }
         self.declare(&env, name, value, *mutable)?;
         Ok(Flow::Normal)
@@ -1142,6 +1143,17 @@ impl Interpreter {
                 Ok(Flow::Normal)
             }
 
+            // a snapshot in its own (compact) storage; one element value at a time
+            Value::Array(a) => {
+                let snapshot = a.borrow().clone();
+                for i in 0..snapshot.len() {
+                    if let Some(f) = run_body!(snapshot.get(i)) {
+                        return Ok(f);
+                    }
+                }
+                Ok(Flow::Normal)
+            }
+
             Value::Buffer(b) => {
                 let snapshot: Vec<u8> = b.borrow().clone();
                 for byte in snapshot {
@@ -1234,6 +1246,10 @@ impl Interpreter {
                 keys.into_iter()
                     .map(|k| (Value::Str(k.clone().into()), b[k].clone()))
                     .collect()
+            }
+            Value::Array(a) => {
+                let a = a.borrow();
+                (0..a.len()).map(|i| (Value::Int(i as i64), a.get(i))).collect()
             }
             Value::List(l) => l
                 .borrow()
@@ -1873,6 +1889,7 @@ impl Interpreter {
             (Value::Struct(_), _) | (Value::List(_), Value::List(_)) | (Value::Map(_), Value::Map(_)) => {
                 deep_equal(l, r, 0, &mut None, &mut |s, o| self.call_equals(s, o, env))
             }
+            (Value::Array(_), Value::Array(_) | Value::List(_)) | (Value::List(_), Value::Array(_)) => Ok(array_equal(l, r)),
             _ => Ok(scalar_equal(l, r)),
         }
     }
@@ -1887,7 +1904,7 @@ impl Interpreter {
         env: Rc<RefCell<Environment>>,
     ) -> Result<Value, String> {
         let is_builtin_recv = match &recv {
-            Value::List(_) | Value::Str(_) | Value::Buffer(_) => true,
+            Value::List(_) | Value::Array(_) | Value::Str(_) | Value::Buffer(_) => true,
             Value::Map(m) => !map_key_is_method(m, field),
             _ => false,
         };
@@ -2239,6 +2256,12 @@ impl Interpreter {
 
     #[inline(never)]
     fn call_native_fn(&self, f: &NativeFnValue, arg_vals: Vec<Value>) -> Result<Value, String> {
+        // the few that read sized lists themselves get them as they are
+        let arg_vals = if matches!(f.name.as_str(), "len" | "print" | "str" | "typeof" | "stringify") {
+            arg_vals
+        } else {
+            lists_for_natives(arg_vals)
+        };
         if f.variadic {
             if arg_vals.len() < f.arity {
                 return Err(format!(
@@ -2261,6 +2284,7 @@ impl Interpreter {
 
     #[inline(never)]
     fn call_bound(&self, receiver: NativeObjectRef, method: String, arg_vals: Vec<Value>, env: Rc<RefCell<Environment>>) -> Result<Value, String> {
+        let arg_vals = lists_for_natives(arg_vals);
         // methods that need the interpreter (`Agent.run`, `GrpcServer.serve`)
         if let Some(r) = crate::host::get().and_then(|h| h.intercept_method(&receiver, &method, &arg_vals, self, &env)) {
             return self.native_result(r);
@@ -2394,6 +2418,29 @@ impl Interpreter {
         ))
     }
 
+    /// A list declared with a sized element type (`let xs: list<u8> = …`) is
+    /// stored with that size, when the declaration owns it (a literal or a
+    /// fresh result: nothing else references it); every element must fit. A
+    /// list other variables still reference keeps its storage (packing it would
+    /// split it in two). See `docs/architecture/sized-storage.md`.
+    pub(crate) fn sized_storage(&self, name: &str, v: Value, ty: &TypeExpr) -> Result<Value, String> {
+        let TypeExpr::Generic(outer, args) = ty else { return Ok(v) };
+        let (true, [TypeExpr::Named(el)]) = (outer == "list", args.as_slice()) else { return Ok(v) };
+        let Some(kind) = ops::Sized::from_name(el) else { return Ok(v) };
+        let items = match &v {
+            Value::List(l) if Rc::strong_count(l) == 1 && Rc::weak_count(l) == 0 => l.borrow().clone(),
+            Value::Array(a) if Rc::strong_count(a) == 1 && a.borrow().kind() != kind => a.borrow().to_values(),
+            _ => return Ok(v),
+        };
+        match super::array::TypedArray::from_values(kind, &items) {
+            Ok(a) => Ok(Value::Array(Rc::new(RefCell::new(a)))),
+            Err((i, why)) => Err(format!(
+                "type mismatch: variable '{}' is declared as {}, element {} is {}",
+                name, ty, i, why
+            )),
+        }
+    }
+
     /// Does `v` match the annotation `ty`? Struct and interface names are
     /// looked up in `env`; generic arguments are not checked (spec §27).
     fn type_matches(
@@ -2446,10 +2493,10 @@ impl Interpreter {
         Ok(match name {
             "int" => matches!(v, Value::Int(_)),
             // int → float promotion (spec §10)
-            "float" | "float64" | "float32" => matches!(v, Value::Float(_) | Value::Int(_)),
+            "float" | "float64" | "float32" | "f64" | "f32" => matches!(v, Value::Float(_) | Value::Int(_)),
             // sized integers (as in Go): an int inside the type's range
             "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" | "uint64" | "uint"
-            | "uintptr" | "byte" | "rune" => match (v, ops::Sized::from_name(name)) {
+            | "uintptr" | "byte" | "rune" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => match (v, ops::Sized::from_name(name)) {
                 (Value::Int(n), Some(k)) => k.fits(*n),
                 _ => false,
             },
@@ -2459,7 +2506,7 @@ impl Interpreter {
             "bool" => matches!(v, Value::Bool(_)),
             "nil" | "void" => matches!(v, Value::Nil),
             "duration" => matches!(v, Value::Duration(_)),
-            "list" => matches!(v, Value::List(_)),
+            "list" => matches!(v, Value::List(_) | Value::Array(_)),
             "tuple" => matches!(v, Value::Tuple(_)),
             "buffer" => matches!(v, Value::Buffer(_)),
             "map" => matches!(v, Value::Map(_)),
@@ -3003,6 +3050,11 @@ fn eval_index(target: Value, index: Value) -> Result<Value, String> {
             let idx = norm_index(i, t.len())?;
             Ok(t[idx].clone())
         }
+        (Value::Array(a), Value::Int(i)) => {
+            let a = a.borrow();
+            let idx = norm_index(i, a.len())?;
+            Ok(a.get(idx))
+        }
         (Value::Map(m), Value::Str(k)) => Ok(m.borrow().get(k.as_str()).cloned().unwrap_or(Value::Nil)),
         (Value::Module(m), Value::Str(k)) => {
             Ok(m.exports.borrow().get(k.as_str()).cloned().unwrap_or(Value::Nil))
@@ -3036,6 +3088,11 @@ fn assign_index(target: &Value, index: Value, v: Value) -> Result<(), String> {
         (Value::Map(m), Value::Str(k)) => {
             m.borrow_mut().insert(k, v);
             Ok(())
+        }
+        (Value::Array(a), Value::Int(i)) => {
+            let mut a = a.borrow_mut();
+            let idx = norm_index(i, a.len())?;
+            a.set(idx, &v).map_err(|why| array_mismatch(&a, &why))
         }
         (Value::Buffer(b), Value::Int(i)) => {
             let byte = match v {
@@ -3156,6 +3213,15 @@ fn eval_binary(l: Value, op: BinaryOp, r: Value) -> Result<Value, String> {
             }
             _ => Err("operator not applicable to lists".into()),
         },
+        // a sized list with another list: an ordinary list of the values
+        (a @ (Value::Array(_) | Value::List(_)), b @ (Value::Array(_) | Value::List(_))) => match op {
+            Add => {
+                let mut result = list_items(&a);
+                result.extend(list_items(&b));
+                Ok(Value::List(Rc::new(RefCell::new(result))))
+            }
+            _ => Err("operator not applicable to lists".into()),
+        },
 
         (a, b) => Err(format!(
             "operator not applicable between '{}' and '{}'",
@@ -3261,11 +3327,57 @@ pub fn map_key_is_method(m: &RefCell<HashMap<Str, Value>>, name: &str) -> bool {
 #[inline]
 pub fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
+        (Value::Array(_), Value::Array(_) | Value::List(_)) | (Value::List(_), Value::Array(_)) => array_equal(a, b),
         (Value::List(_), Value::List(_)) | (Value::Map(_), Value::Map(_)) | (Value::Tuple(_), Value::Tuple(_)) => {
             deep_equal(a, b, 0, &mut None, &mut |_, _| Ok(None)).unwrap_or(false)
         }
         _ => scalar_equal(a, b),
     }
+}
+
+/// Native code reads lists as `Vec<Value>`: a sized list given to it is passed
+/// as an ordinary list of its values (a copy). A scan of the arguments, and
+/// nothing else, when there is none.
+#[inline]
+fn lists_for_natives(mut args: Vec<Value>) -> Vec<Value> {
+    if args.iter().any(|v| matches!(v, Value::Array(_))) {
+        for v in args.iter_mut() {
+            if let Value::Array(a) = v {
+                let items = a.borrow().to_values();
+                *v = Value::List(Rc::new(RefCell::new(items)));
+            }
+        }
+    }
+    args
+}
+
+/// The elements of a list or of a sized list, as values.
+pub(crate) fn list_items(v: &Value) -> Vec<Value> {
+    match v {
+        Value::List(l) => l.borrow().clone(),
+        Value::Array(a) => a.borrow().to_values(),
+        _ => Vec::new(),
+    }
+}
+
+/// `==` between a sized list and a list (or another sized list): the same
+/// numbers in the same order. A sized list holds only numbers, so a nested
+/// container on the other side is simply unequal.
+fn array_equal(a: &Value, b: &Value) -> bool {
+    if let (Value::Array(x), Value::Array(y)) = (a, b) {
+        if Rc::ptr_eq(x, y) {
+            return true;
+        }
+        let (x, y) = (x.borrow(), y.borrow());
+        return x.len() == y.len() && (0..x.len()).all(|i| scalar_equal(&x.get(i), &y.get(i)));
+    }
+    let (xs, ys) = (list_items(a), list_items(b));
+    xs.len() == ys.len() && xs.iter().zip(ys.iter()).all(|(p, q)| scalar_equal(p, q))
+}
+
+/// The message of a value a sized list cannot hold.
+pub(crate) fn array_mismatch(a: &super::array::TypedArray, why: &str) -> String {
+    format!("type mismatch: a list<{}> holds {}, got {}", a.kind_name(), a.kind_name(), why)
 }
 
 /// Pairs of containers already being compared, once the comparison is deep
@@ -3296,6 +3408,9 @@ where
             }
         }
         return Ok(true);
+    }
+    if matches!(a, Value::Array(_)) || matches!(b, Value::Array(_)) {
+        return Ok(matches!(a, Value::Array(_) | Value::List(_)) && matches!(b, Value::Array(_) | Value::List(_)) && array_equal(a, b));
     }
     let pair = match (a, b) {
         (Value::List(x), Value::List(y)) if !Rc::ptr_eq(x, y) => (Rc::as_ptr(x) as usize, Rc::as_ptr(y) as usize),

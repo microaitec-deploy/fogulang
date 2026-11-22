@@ -6,6 +6,24 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
+### Added
+
+- **Annotations that size the storage.** A list declared with a sized element type keeps its
+  numbers with that size: `let xs: list<u8> = []` holds one byte per element, `list<i32>` /
+  `list<f32>` four, `list<i64>` / `list<f64>` eight, instead of a 24-byte value each. A million
+  pushed elements: 52 MB above an empty program as a plain list, 5 MB as `list<u8>`, 10 MB as
+  `list<i32>`, 18 MB as `list<f64>`. It behaves as a list (`typeof` is `list`; indexing, `len`,
+  `for`, the mutating methods, `slice`/`reverse`/`sort`, `==`, printing and JSON); `map`,
+  `filter`, `join`, `concat` and `+` give ordinary lists; storing a value is checked like the
+  annotation. The value of the declaration is packed when the declaration owns it; a list other
+  variables reference is only checked. Native functions receive it as a list. Same results on
+  the interpreter, the JIT and the bytecode VM (`tests/spec/sized_storage.fg`). Every `bench/`
+  program measured against the previous code with the same build: no slower (a first version
+  slowed `json.stringify`/`json.parse` by 6–8% through one extra match arm; the sized path now
+  sits in a cold function). Design: `docs/architecture/sized-storage.md`.
+- **Short names of the sized types**: `i8 i16 i32 i64 u8 u16 u32 u64 f32 f64`, the same types as
+  `int8` … `float64`, in annotations, conversions (`u8(300) == 44`) and `fogu:types`.
+
 ## [0.8.1] - 2026-11-18
 
 A consolidation release. Two rounds of external tests found 286 bugs in 0.8.0 (3 critical,

@@ -21,6 +21,10 @@ pub enum Value {
     Duration(i64),
     Range(i64, i64),
     List(Rc<RefCell<Vec<Value>>>),
+    /// A list stored with the size its annotation gives (`list<u8>`, `list<f32>`…):
+    /// the numbers themselves, not a `Value` each. It behaves as a list
+    /// (`typeof` says `list`). See `docs/architecture/sized-storage.md`.
+    Array(Rc<RefCell<super::array::TypedArray>>),
     /// The values of `return a, b` (spec §8.4): immutable, and distinct from a
     /// list, so that `const [v, err] = f()` and `?` never take a list the
     /// function returned for one of these. See `docs/architecture/tuples.md`.
@@ -411,7 +415,7 @@ impl Value {
             Value::Str(_) => "str",
             Value::Duration(_) => "duration",
             Value::Range(_, _) => "range",
-            Value::List(_) => "list",
+            Value::List(_) | Value::Array(_) => "list",
             Value::Tuple(_) => "tuple",
             Value::Buffer(_) => "buffer",
             Value::Map(_) => "map",
@@ -487,6 +491,17 @@ impl Value {
                 let _ = write!(out, "{}..{}", a, b);
             }
             Value::Buffer(b) => out.push_str(&display_buffer(&b.borrow())),
+            Value::Array(a) => {
+                let a = a.borrow();
+                out.push('[');
+                for i in 0..a.len() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    a.get(i).write_display(out, path);
+                }
+                out.push(']');
+            }
             Value::List(l) => {
                 let p = Rc::as_ptr(l) as usize;
                 // a cycle, or nesting deeper than the stack of this task allows

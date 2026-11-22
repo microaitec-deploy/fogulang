@@ -1,0 +1,54 @@
+// Sized storage: a list annotated with a sized element type keeps its
+// numbers with that size (list<u8>: one byte each), and behaves as a list.
+import json from "fogu:json"
+
+// the short names are the long ones
+let a: u8 = 255
+let b: i8 = -128
+let c: f32 = 0.1
+print(a, b, c, u8(300), i16(40000), f32(1) == 1.0, typeof(u32(7)))
+
+let bytes: list<u8> = [1, 2, 3]
+bytes.push(250)
+bytes[0] = 9
+print(bytes, bytes.len(), len(bytes), typeof(bytes), bytes[-1])
+print(bytes.first(), bytes.last(), bytes.contains(250), bytes.index_of(3), bytes.index_of(7))
+print(bytes.pop(), bytes, bytes.shift(), bytes)
+bytes.insert(1, 77)
+bytes.unshift(5)
+print(bytes, bytes.remove(0), bytes)
+
+// iteration, sums, methods that build ordinary lists
+let samples: list<i16> = []
+for i in 0..10 { samples.push(i * 1000 - 3000) }
+let total = 0
+for s in samples { total = total + s }
+print(samples, total)
+for i, s in samples { if i == 9 { print(i, s) } }
+print(samples.map((x) => x / 1000), samples.filter((x) => x > 3000), samples.join("|"))
+print(samples.slice(2, 4), samples.reverse().first(), samples.sort().first(), samples.sort((x, y) => y - x).first())
+
+// floats: ints convert, f32 rounds to single precision
+let ws: list<f32> = [1, 2.5]
+ws.push(0.1)
+let ds: list<f64> = [0.1]
+print(ws, ds, ws[2] == 0.1, ws[2] == f32(0.1))
+
+// equality with ordinary lists, JSON, concatenation
+print(bytes == [2, 77, 3], bytes == [2, 77], [1, 2] == ws.slice(0, 1) + [2], json.stringify(samples.slice(0, 3)))
+print((bytes + [1000]).len(), typeof(bytes + [1]))
+
+// a list that another variable references keeps its storage (only checked)
+const shared = [1, 2, 3]
+let view: list<u8> = shared
+view.push(4)
+print(shared, view)
+
+// native functions receive a sized list as a list
+print(str(bytes), json.parse(json.stringify(bytes)))
+
+// a value a sized list cannot hold: the type mismatch of the annotation
+let small: list<u8> = [1]
+print(small)
+small[0] = 256
+print("not reached")

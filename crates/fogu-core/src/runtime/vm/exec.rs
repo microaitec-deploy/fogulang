@@ -43,6 +43,8 @@ enum Iter {
     /// A snapshot of a list, the sorted keys of a map, the characters of a text.
     Items(std::vec::IntoIter<Value>),
     Bytes(std::vec::IntoIter<u8>),
+    /// A snapshot of a sized list, in its compact storage, and the next index.
+    Array(crate::runtime::array::TypedArray, usize),
     Pairs(std::vec::IntoIter<(Value, Value)>),
     Chan(Rc<ChanValue>),
     /// `for conn in listener`
@@ -624,7 +626,7 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
                 }
                 let args = take_args!(b + 1, *n);
                 let builtin = match &recv {
-                    Value::List(_) | Value::Str(_) | Value::Buffer(_) => true,
+                    Value::List(_) | Value::Array(_) | Value::Str(_) | Value::Buffer(_) => true,
                     Value::Map(m) => !crate::runtime::interpreter::map_key_is_method(m, name.as_str()),
                     _ => false,
                 };
@@ -680,6 +682,11 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
             Op::CheckVar(a, t) => {
                 let (name, ty) = &cur.proto.types[t as usize];
                 it.check_var(name, &r!(a), ty, env!())?;
+                // `list<u8>` and the other sized lists: stored with their size
+                if matches!(ty, crate::runtime::ast::TypeExpr::Generic(..)) {
+                    let v = take(&mut r!(a));
+                    r!(a) = it.sized_storage(name, v, ty)?;
+                }
             }
 
             Op::IterInit(slot, b) => {
@@ -689,6 +696,7 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
                     Value::List(l) => Iter::Items(l.borrow().clone().into_iter()),
                     Value::Tuple(t) => Iter::Items(t.to_vec().into_iter()),
                     Value::Buffer(b) => Iter::Bytes(b.borrow().clone().into_iter()),
+                    Value::Array(a) => Iter::Array(a.borrow().clone(), 0),
                     Value::Chan(ch) => Iter::Chan(ch),
                     Value::Str(s) => Iter::Items(s.chars().map(|c| Value::Str(c.into())).collect::<Vec<_>>().into_iter()),
                     Value::Map(m) => {
@@ -711,6 +719,10 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
                         keys.into_iter().map(|k| (Value::Str(k.clone().into()), m[k].clone())).collect()
                     }
                     Value::List(l) => l.borrow().iter().enumerate().map(|(i, v)| (Value::Int(i as i64), v.clone())).collect(),
+                    Value::Array(a) => {
+                        let a = a.borrow();
+                        (0..a.len()).map(|i| (Value::Int(i as i64), a.get(i))).collect()
+                    }
                     Value::Tuple(t) => t.iter().enumerate().map(|(i, v)| (Value::Int(i as i64), v.clone())).collect(),
                     Value::Buffer(b) => b.borrow().iter().enumerate().map(|(i, x)| (Value::Int(i as i64), Value::Int(*x as i64))).collect(),
                     Value::Str(s) => s.chars().enumerate().map(|(i, c)| (Value::Int(i as i64), Value::Str(c.to_string().into()))).collect(),
@@ -733,6 +745,11 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
                     }
                     Iter::Items(items) => items.next(),
                     Iter::Bytes(bytes) => bytes.next().map(|x| Value::Int(x as i64)),
+                    Iter::Array(arr, i) => {
+                        let v = (*i < arr.len()).then(|| arr.get(*i));
+                        *i += 1;
+                        v
+                    }
                     Iter::Chan(ch) => match it.keep_loc(|| chan_recv(ch)) {
                         Ok(v) => Some(v),
                         Err(RecvError::Closed) => None,

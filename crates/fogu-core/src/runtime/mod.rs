@@ -1,5 +1,6 @@
 //! Runtime of the Fogu language.
 
+pub mod array;
 pub mod ast;
 pub mod environment;
 pub mod fnsrc;

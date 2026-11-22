@@ -109,12 +109,119 @@ fn dispatch(
 ) -> Option<Result<Value, String>> {
     match recv {
         Value::List(l) => list_method(it, l, recv, name, args),
+        Value::Array(a) => array_method(it, a, recv, name, args),
         Value::Map(m) => map_method(m, name, args),
         Value::Buffer(b) => crate::native::buffer::method(b, name, args),
         Value::Str(s) if name == "len" => Some(Ok(Value::Int(s.char_len() as i64))),
         Value::Str(s) => str_method(s, name, args),
         _ => None,
     }
+}
+
+/// The methods of a sized list (`list<u8>`…): the list's, on its compact
+/// storage. Methods that build lists of any values (`map`, `filter`, `join`,
+/// `concat`, `sort(fn)`…) run on its values as an ordinary list.
+fn array_method(
+    it: Option<&Interpreter>,
+    a: &Rc<RefCell<crate::runtime::array::TypedArray>>,
+    recv: &Value,
+    name: &str,
+    args: &[Value],
+) -> Option<Result<Value, String>> {
+    use crate::runtime::interpreter::{array_mismatch, values_equal};
+    let wrap = |t: crate::runtime::array::TypedArray| Value::Array(Rc::new(RefCell::new(t)));
+    let r = (|| -> Result<Value, String> {
+        Ok(match name {
+            "len" => Value::Int(a.borrow().len() as i64),
+            "push" => {
+                let mut b = a.borrow_mut();
+                for v in args {
+                    b.push(v).map_err(|why| array_mismatch(&b, &why))?;
+                }
+                drop(b);
+                recv.clone()
+            }
+            "pop" => a.borrow_mut().pop().unwrap_or(Value::Nil),
+            "shift" => {
+                let mut b = a.borrow_mut();
+                if b.is_empty() { Value::Nil } else { b.remove(0) }
+            }
+            "unshift" => {
+                let mut b = a.borrow_mut();
+                for (i, v) in args.iter().enumerate() {
+                    b.insert(i, v).map_err(|why| array_mismatch(&b, &why))?;
+                }
+                drop(b);
+                recv.clone()
+            }
+            "insert" => {
+                need(args, 2, name)?;
+                let n = a.borrow().len();
+                let i = idx(&args[0], n, "insert")?;
+                let mut b = a.borrow_mut();
+                b.insert(i, &args[1]).map_err(|why| array_mismatch(&b, &why))?;
+                drop(b);
+                recv.clone()
+            }
+            "remove" => {
+                need(args, 1, name)?;
+                let n = a.borrow().len();
+                let i = idx(&args[0], n, "remove")?;
+                if i >= n {
+                    return Err(format!("remove: index {} out of bounds (length {})", i, n));
+                }
+                a.borrow_mut().remove(i)
+            }
+            "clear" => {
+                a.borrow_mut().clear();
+                Value::Nil
+            }
+            "first" => {
+                let b = a.borrow();
+                if b.is_empty() { Value::Nil } else { b.get(0) }
+            }
+            "last" => {
+                let b = a.borrow();
+                if b.is_empty() { Value::Nil } else { b.get(b.len() - 1) }
+            }
+            "contains" | "index_of" => {
+                need(args, 1, name)?;
+                let b = a.borrow();
+                let at = (0..b.len()).find(|&i| values_equal(&b.get(i), &args[0]));
+                if name == "contains" {
+                    Value::Bool(at.is_some())
+                } else {
+                    Value::Int(at.map(|i| i as i64).unwrap_or(-1))
+                }
+            }
+            "reverse" => {
+                let mut t = a.borrow().clone();
+                t.reverse();
+                wrap(t)
+            }
+            "sort" if args.is_empty() => {
+                let mut t = a.borrow().clone();
+                t.sort();
+                wrap(t)
+            }
+            "slice" => {
+                let b = a.borrow();
+                let n = b.len();
+                let x = match args.first() { Some(v) => idx(v, n, "slice")?, None => 0 };
+                let y = match args.get(1) { Some(v) => idx(v, n, "slice")?, None => n };
+                wrap(b.slice(x, y.max(x)))
+            }
+            _ => {
+                let as_list = list(a.borrow().to_values());
+                let Value::List(l) = &as_list else { unreachable!() };
+                return match list_method(it, l, &as_list, name, args) {
+                    Some(r) => r,
+                    None => Err(format!("method '{}' does not exist on list", name)),
+                };
+            }
+        })
+    })();
+    Some(r)
 }
 
 fn list_method(

@@ -596,7 +596,8 @@ error[E0207]: type mismatch: parameter 'b' expects int, got str
       <h3 class="text-lg font-semibold mt-8">Sized numbers</h3>
       <p>The sized types of Go are type names and conversion functions: <code>int8 int16 int32 int64</code>,
       <code>uint8 uint16 uint32 uint64 uint uintptr</code>, <code>byte</code> (= <code>uint8</code>), <code>rune</code>
-      (= <code>int32</code>), <code>float32 float64</code>. At run time a number is still an <code>int</code> (64-bit signed)
+      (= <code>int32</code>), <code>float32 float64</code> — and their short names <code>i8 i16 i32 i64 u8 u16 u32 u64
+      f32 f64</code>. At run time a number is still an <code>int</code> (64-bit signed)
       or a <code>float</code> (64-bit): a sized type is a <strong>range</strong> when it annotates and a
       <strong>conversion</strong> when it is called.</p>
       <script type="text/x-fogu">let level: uint8 = 255                 // an annotation checks the range
@@ -631,6 +632,34 @@ print(out)                                     // gphv</script>
       <script type="text/x-fogu" data-lang="text">let c: char = "ab"
 
 error[E0207]: type mismatch: variable 'c' is declared as char, got str of 2 characters (a char is one character)</script>
+          <h3 class="text-lg font-semibold mt-8" id="sized-storage">Lists stored with their size</h3>
+      <p>A list annotated with a sized element type keeps its numbers with that size: <code>list&lt;u8&gt;</code> takes one
+      byte per element, <code>list&lt;i32&gt;</code> and <code>list&lt;f32&gt;</code> four, <code>list&lt;i64&gt;</code> and
+      <code>list&lt;f64&gt;</code> eight — instead of 24 bytes per value. Pushing a million elements took 52 MB
+      above an empty program as a plain list, 5 MB as <code>list&lt;u8&gt;</code>, 10 MB as <code>list&lt;i32&gt;</code>
+      and 18 MB as <code>list&lt;f64&gt;</code>. It is still a list (<code>typeof</code> says <code>list</code>): indexing, <code>len</code>,
+      <code>for</code>, <code>push pop insert remove shift unshift clear first last contains index_of slice reverse sort</code>,
+      <code>==</code>, printing and JSON behave as for any list; <code>map</code>, <code>filter</code>, <code>join</code>,
+      <code>concat</code> and <code>+</code> give ordinary lists. An element reads as an <code>int</code> (a <code>float</code>
+      for <code>f32</code>/<code>f64</code>); storing one is checked like the annotation: an int out of range is a type
+      mismatch, an int into a float list is converted, a float into an integer list is refused.</p>
+      <script type="text/x-fogu">let samples: list<i16> = []            // two bytes per element
+for i in 0..5 { samples.push(i * 1000 - 2000) }
+let pixels: list<u8> = [0, 128, 255]
+pixels[0] = 64
+print(samples, pixels, typeof(pixels), pixels.len())
+let total = 0
+for s in samples { total = total + s }
+print(total, samples.map((x) => x / 1000))
+pixels.push(256)                        // a type mismatch: a list<u8> holds u8</script>
+      <script type="text/x-fogu" data-lang="text">[-2000, -1000, 0, 1000, 2000] [64, 128, 255] list 3
+0 [-2, -1, 0, 1, 2]
+error[E0207]: type mismatch: a list&lt;u8&gt; holds u8, got int out of range (u8 is 0..255)</script>
+      <p>The list given to the declaration is stored this way when the declaration owns it — a literal, <code>[]</code> or
+      the fresh result of a call. A list that another variable still references keeps its storage and is only checked
+      (storing it apart would split it in two). Native functions receive a sized list as an ordinary list. Loops over sized
+      lists run in the interpreter (the JIT does not compile them yet): they save memory, not time. See
+      <code>docs/architecture/sized-storage.md</code>.</p>
     </section>
 
     <section id="strings" data-group="Language" data-title="Strings and templates" class="scroll-mt-20 mt-16">

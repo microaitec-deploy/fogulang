@@ -38,6 +38,7 @@ const BUILTIN_TYPES: &[&str] = &[
     // sized numbers, as in Go (`ops::SIZED_NAMES`)
     "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "uint", "uintptr",
     "byte", "rune", "float32", "float64",
+    "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64",
     // one character (a str of length 1)
     "char",
 ];
@@ -66,6 +67,16 @@ const CORE_GLOBALS: &[(&str, usize, bool, Ty)] = &[
     ("rune", 1, false, Ty::Int),
     ("float32", 1, false, Ty::Float),
     ("float64", 1, false, Ty::Float),
+    ("i8", 1, false, Ty::Int),
+    ("i16", 1, false, Ty::Int),
+    ("i32", 1, false, Ty::Int),
+    ("i64", 1, false, Ty::Int),
+    ("u8", 1, false, Ty::Int),
+    ("u16", 1, false, Ty::Int),
+    ("u32", 1, false, Ty::Int),
+    ("u64", 1, false, Ty::Int),
+    ("f32", 1, false, Ty::Float),
+    ("f64", 1, false, Ty::Float),
     ("char", 1, false, Ty::Str),
     ("clock", 0, false, Ty::Any),
     ("error", 1, true, Ty::Any),
@@ -123,7 +134,7 @@ impl Ty {
         match t {
             TypeExpr::Named(n) | TypeExpr::Generic(n, _) => match n.as_str() {
                 "int" => Ty::Int,
-                "float" | "float32" | "float64" => Ty::Num,
+                "float" | "float32" | "float64" | "f32" | "f64" => Ty::Num,
                 n if super::ops::Sized::from_name(n).is_some() => Ty::Int,
                 "str" | "string" | "char" => Ty::Str,
                 "bool" => Ty::Bool,
@@ -151,7 +162,7 @@ impl Ty {
                 let ok = match n.as_str() {
                     "int" if self == Ty::Num => return None,
                     "int" => self == Ty::Int,
-                    "float" | "float32" | "float64" => self.numeric(),
+                    "float" | "float32" | "float64" | "f32" | "f64" => self.numeric(),
                     // a sized integer: whether an int fits is only known at run time
                     n if super::ops::Sized::from_name(n).is_some() => {
                         if matches!(self, Ty::Int | Ty::Num) {
