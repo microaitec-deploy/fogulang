@@ -42,12 +42,17 @@ pub fn register(path: &Path, spans: Vec<(Block, Span)>) {
     if spans.is_empty() {
         return;
     }
-    // a path that stays valid if the program changes its working folder
-    // (files of an executable's bundle are read from the bundle as they are)
-    let path: Rc<Path> = if super::vfs::contains(path) {
+    // a path that stays valid if the program changes its working folder:
+    // joined to the current one (one cheap system call; `canonicalize` would
+    // look at every folder of the path, at every start). Files of an
+    // executable's bundle are read from the bundle as they are.
+    let path: Rc<Path> = if path.is_absolute() || super::vfs::contains(path) {
         Rc::from(path)
     } else {
-        Rc::from(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()).as_path())
+        match std::env::current_dir() {
+            Ok(cwd) => Rc::from(cwd.join(path).as_path()),
+            Err(_) => Rc::from(path),
+        }
     };
     TABLE.with(|t| {
         let mut t = t.borrow_mut();
