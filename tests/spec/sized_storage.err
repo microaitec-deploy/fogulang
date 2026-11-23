@@ -1,2 +1,2 @@
 type mismatch: a list<u8> holds u8, got int out of range (u8 is 0..255)
-sized_storage.fg:53
+sized_storage.fg:61

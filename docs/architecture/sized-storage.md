@@ -19,7 +19,8 @@ is bytes only and has its own methods.
    annotations and conversions: `i8 i16 i32 i64 u8 u16 u32 u64 f32 f64`.
 2. **A list annotated with a sized element type is stored with that size.**
    `let xs: list<u8> = []` holds a `Vec<u8>`; `list<f32>` a `Vec<f32>`;
-   `list<i64>` a `Vec<i64>`. A new `Value::Array(Rc<RefCell<TypedArray>>)`
+   `list<i64>` a `Vec<i64>`; `list<char>` a `Vec<char>` (4 bytes per character,
+   an element reads as a one-character `str`). A new `Value::Array(Rc<RefCell<TypedArray>>)`
    carries it (`Value` stays 24 bytes).
 3. **It behaves as a list.** `typeof` says `list`; indexing, `len`, iteration,
    `push`/`pop`/`insert`/`remove`/`clear`, `first`/`last`, `contains`/`index_of`,
@@ -53,7 +54,8 @@ is bytes only and has its own methods.
 ## Measured
 
 - Memory, a million elements pushed (peak RSS above an empty program, 7.4 MB): plain list 52 MB,
-  `list<u8>` 5 MB, `list<i32>` 10 MB, `list<f64>` 18 MB.
+  `list<u8>` 5 MB, `list<i32>` 10 MB, `list<f64>` 18 MB. A million characters: plain list 54 MB,
+  `list<char>` 11 MB.
 - Speed of the existing programs: every `bench/` program, against the code before this change
   built the same way, interleaved — no slower. The first version put the JSON writer's array case
   in the main match and slowed `stringify` by 6% and `parse` by 8% (codegen of the hot function);
@@ -64,7 +66,7 @@ is bytes only and has its own methods.
 
 ## How it is checked
 
-- Spec tests on both engines: every element type, range errors, float/int
+- Spec tests on the three engines: every element type, `list<char>`, range errors, float/int
   rules, list methods, iteration, equality, JSON, natives receiving arrays,
   shared lists not packed.
 - Memory: a million `u8` / `i32` / `f64` elements, peak RSS before and after.

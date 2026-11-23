@@ -139,7 +139,7 @@ fn write_value(v: &Value, out: &mut String, path: &mut WalkPath, on_cycle: Optio
     Ok(())
 }
 
-/// A sized list (`list<u8>`…) as a JSON array of its numbers.
+/// A sized list (`list<u8>`…, `list<char>`) as a JSON array of its elements.
 #[cold]
 #[inline(never)]
 fn write_array(a: &crate::runtime::array::TypedArray, out: &mut String) {
@@ -154,6 +154,7 @@ fn write_array(a: &crate::runtime::array::TypedArray, out: &mut String) {
                 let _ = write!(out, "{}", n);
             }
             Value::Float(f) if f.is_finite() => out.push_str(&crate::runtime::value::display_float(f)),
+            Value::Str(s) => write_str(&s, out),
             _ => out.push_str("null"),
         }
     }

@@ -140,7 +140,7 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
   edge-triggered and permanent: a reader may only wait after a receive found the socket empty.
   The built-in profiler (`FOGU_PPROF`) can crash when it samples a task's stack under load.
 - **Sized lists** (`Value::Array`, `runtime/array.rs`, `docs/architecture/sized-storage.md`): a list
-  declared `list<u8>` … `list<f64>` stores the numbers themselves. It must behave as a list in
+  declared `list<u8>` … `list<f64>` stores the numbers themselves (`list<char>`: the chars, `Elem::Char`). It must behave as a list in
   every engine; natives get it converted (`lists_for_natives`), except the few that read it
   directly (`len print str typeof stringify`). Keep new cases out of hot matches (a cold helper):
   an extra arm in the JSON writer cost 6–8%.

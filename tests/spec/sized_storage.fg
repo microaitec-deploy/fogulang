@@ -47,6 +47,14 @@ print(shared, view)
 // native functions receive a sized list as a list
 print(str(bytes), json.parse(json.stringify(bytes)))
 
+// list<char>: the characters themselves (4 bytes each); an element is a one-character str
+let word: list<char> = "fogu é 🔥".chars()
+word.push("!")
+word[0] = "F"
+print(word, len(word), typeof(word), word[5], word.join(""), word.contains("g"))
+print(word.slice(0, 4).reverse(), json.stringify(word.slice(5, 9)), word == word.join("").chars())
+for c in word.slice(0, 2) { print(c, c.code()) }
+
 // a value a sized list cannot hold: the type mismatch of the annotation
 let small: list<u8> = [1]
 print(small)

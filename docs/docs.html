@@ -637,7 +637,9 @@ error[E0207]: type mismatch: variable 'c' is declared as char, got str of 2 char
       byte per element, <code>list&lt;i32&gt;</code> and <code>list&lt;f32&gt;</code> four, <code>list&lt;i64&gt;</code> and
       <code>list&lt;f64&gt;</code> eight — instead of 24 bytes per value. Pushing a million elements took 52 MB
       above an empty program as a plain list, 5 MB as <code>list&lt;u8&gt;</code>, 10 MB as <code>list&lt;i32&gt;</code>
-      and 18 MB as <code>list&lt;f64&gt;</code>. It is still a list (<code>typeof</code> says <code>list</code>): indexing, <code>len</code>,
+      and 18 MB as <code>list&lt;f64&gt;</code>. <code>list&lt;char&gt;</code> keeps the characters themselves, four bytes
+      each, and an element reads as a one-character <code>str</code> (a million characters: 54 MB as a plain list, 11 MB
+      as <code>list&lt;char&gt;</code>). It is still a list (<code>typeof</code> says <code>list</code>): indexing, <code>len</code>,
       <code>for</code>, <code>push pop insert remove shift unshift clear first last contains index_of slice reverse sort</code>,
       <code>==</code>, printing and JSON behave as for any list; <code>map</code>, <code>filter</code>, <code>join</code>,
       <code>concat</code> and <code>+</code> give ordinary lists. An element reads as an <code>int</code> (a <code>float</code>
@@ -651,9 +653,13 @@ print(samples, pixels, typeof(pixels), pixels.len())
 let total = 0
 for s in samples { total = total + s }
 print(total, samples.map((x) => x / 1000))
+let word: list<char> = "fogu".chars()   // four bytes per character
+word[0] = "F"
+print(word, word.join(""), word.reverse())
 pixels.push(256)                        // a type mismatch: a list<u8> holds u8</script>
       <script type="text/x-fogu" data-lang="text">[-2000, -1000, 0, 1000, 2000] [64, 128, 255] list 3
 0 [-2, -1, 0, 1, 2]
+[F, o, g, u] Fogu [u, g, o, F]
 error[E0207]: type mismatch: a list&lt;u8&gt; holds u8, got int out of range (u8 is 0..255)</script>
       <p>The list given to the declaration is stored this way when the declaration owns it — a literal, <code>[]</code> or
       the fresh result of a call. A list that another variable still references keeps its storage and is only checked

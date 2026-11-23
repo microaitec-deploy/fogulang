@@ -12,7 +12,9 @@ be incompatible changes (spec §75).
   numbers with that size: `let xs: list<u8> = []` holds one byte per element, `list<i32>` /
   `list<f32>` four, `list<i64>` / `list<f64>` eight, instead of a 24-byte value each. A million
   pushed elements: 52 MB above an empty program as a plain list, 5 MB as `list<u8>`, 10 MB as
-  `list<i32>`, 18 MB as `list<f64>`. It behaves as a list (`typeof` is `list`; indexing, `len`,
+  `list<i32>`, 18 MB as `list<f64>`. `list<char>` holds the characters themselves, 4 bytes
+  each (a million: 54 MB as a plain list, 11 MB as `list<char>`); an element reads as a
+  one-character `str`. It behaves as a list (`typeof` is `list`; indexing, `len`,
   `for`, the mutating methods, `slice`/`reverse`/`sort`, `==`, printing and JSON); `map`,
   `filter`, `join`, `concat` and `+` give ordinary lists; storing a value is checked like the
   annotation. The value of the declaration is packed when the declaration owns it; a list other

@@ -2426,7 +2426,7 @@ impl Interpreter {
     pub(crate) fn sized_storage(&self, name: &str, v: Value, ty: &TypeExpr) -> Result<Value, String> {
         let TypeExpr::Generic(outer, args) = ty else { return Ok(v) };
         let (true, [TypeExpr::Named(el)]) = (outer == "list", args.as_slice()) else { return Ok(v) };
-        let Some(kind) = ops::Sized::from_name(el) else { return Ok(v) };
+        let Some(kind) = super::array::Elem::from_name(el) else { return Ok(v) };
         let items = match &v {
             Value::List(l) if Rc::strong_count(l) == 1 && Rc::weak_count(l) == 0 => l.borrow().clone(),
             Value::Array(a) if Rc::strong_count(a) == 1 && a.borrow().kind() != kind => a.borrow().to_values(),
