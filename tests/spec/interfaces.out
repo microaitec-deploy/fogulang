@@ -1,0 +1,7 @@
+[1, 2] list nil float
+[1, a, nil, 2.5] 8080 list
+7.14159
+square 16.0 circle 12.56636
+dot 0.0
+square nil
+tuple

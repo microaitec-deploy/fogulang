@@ -75,6 +75,8 @@ Legend: `[x]` done · `[~]` partial · `[ ]` to do. `§` refers to the section o
 - [x] `new(...)` constructor
 - [x] Composition with `embed` (fields and methods)
 - [x] Structural `interface` (§25): structs (and maps of functions) satisfy it when they have the methods — `types.fg`, `error_interface.fg`
+- [x] Interfaces with required fields (`name: str`), `embed Other`, and methods that must accept the declared arguments (0.8.2) — `interfaces.fg`, `error_interface_arity.fg`
+- [x] Sized storage: `list<u8>` … `list<f64>`, `list<char>` keep their elements with that size; short names `i8` … `f64` (0.8.2, `docs/architecture/sized-storage.md`) — `sized_storage.fg`
 - [x] Visibility (§26): `_x` private in modules (imports, `module._x`) and structs (fields and methods, read and write) — `error_private*.fg`, `private_struct.fg`
 - [x] `export struct` / `export interface` to share types between modules
 - [~] Generics `fn f<T>`, `struct Stack<T>`, `new Stack<int>()`, bounds `T: Interface` (§27) — parsed and erased at runtime; generic arguments and bounds are not checked — `types.fg`

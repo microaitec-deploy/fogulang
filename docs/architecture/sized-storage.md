@@ -1,6 +1,6 @@
 # Design note: storage sized by the annotation
 
-Status: implemented (unreleased, next version) · changes a fundamental (the value representation),
+Status: implemented (0.8.2) · changes a fundamental (the value representation),
 so it follows `engineering-principles.md`: this note, measurements before and
 after, the full suite.
 

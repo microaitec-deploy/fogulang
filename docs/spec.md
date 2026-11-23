@@ -900,9 +900,28 @@ interface Closable {
 }
 ```
 
-A type satisfies an interface when it has the required methods.
+A type satisfies an interface when it has what the interface requires:
 
-No explicit implementation declaration is needed.
+- **methods** — a method satisfies a requirement when it can be called with
+  the arguments the interface declares: as many parameters or more, or a
+  `...rest` parameter. A `...rest` parameter in the interface requires nothing;
+- **fields** — `name: type`: the value has the field and its value is of that
+  type;
+- **embedded interfaces** — `embed Other`: everything `Other` requires. `Other`
+  must be declared before; a requirement of the same name declared in the
+  interface itself replaces the embedded one.
+
+```fogu
+interface Named { name: str }
+interface Resource {
+    embed Closable
+    embed Named
+    read(n: int): buffer
+}
+```
+
+No explicit implementation declaration is needed: structs satisfy an interface
+structurally, and so does a map holding the fields and the functions.
 
 ---
 

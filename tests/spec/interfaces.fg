@@ -1,0 +1,65 @@
+// any: a value of any type; interface: what a value must have
+let box: any = 1
+box = "text"
+box = [1, 2]
+fn describe(v: any): str { return typeof(v) }
+print(box, describe(box), describe(nil), describe(3.5))
+let mixed: list<any> = [1, "a", nil, 2.5]
+let conf: map<str, any> = { port: 8080, host: "localhost", tags: ["a"] }
+print(mixed, conf.port, typeof(conf.tags))
+
+// methods, with the arguments they must accept
+interface Shape {
+    area(): float
+    scale(factor: float)
+}
+// fields
+interface Named { name: str }
+// embed: the requirements of other interfaces
+interface Figure {
+    embed Shape
+    embed Named
+    describe(): str
+}
+
+struct Square {
+    name = "square"
+    side = 2.0
+    area(): float { return this.side * this.side }
+    scale(factor: float) { this.side = this.side * factor }
+    describe(): str { return `${this.name} ${this.area()}` }
+}
+struct Circle {
+    name = "circle"
+    r = 1.0
+    area(): float { return 3.14159 * this.r * this.r }
+    scale(factor: float, around = nil) { this.r = this.r * factor }
+    describe(): str { return `${this.name} ${this.area()}` }
+}
+
+fn total(shapes: list<Shape>): float {
+    let sum = 0.0
+    for s in shapes { sum = sum + s.area() }
+    return sum
+}
+fn grow(f: Figure): str {
+    f.scale(2.0)
+    return f.describe()
+}
+print(total([new Square(), new Circle()]))
+print(grow(new Square()), grow(new Circle()))
+
+// a map with the fields and functions satisfies an interface too
+const dot: Figure = { name: "dot", area: () => 0.0, scale: (f) => nil, describe: () => "dot 0.0" }
+print(grow(dot))
+let n: Named = new Square()
+let opt: Named? = nil
+print(n.name, opt)
+
+// not satisfied: a method that cannot take the arguments, a field of another type, a missing embed
+struct NoArgs { area() { return 1.0 }
+    scale() { } }
+struct Num { name = 7 }
+fn asShape(v) { let s: Shape = v
+    return s, nil }
+print(typeof(asShape(new Square())))

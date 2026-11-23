@@ -207,9 +207,8 @@ while true { time.delay(100ms) }</script>
         </tbody>
       </table>
       <p class="mt-4">With eight workers these runs processed 1 412 363 messages without errors: 6.89 times the throughput of
-      one worker. These numbers describe these runs, not a guarantee for every program or platform; a comparison with
-      another language must use the same machine, load, duration, parameters and method (<code>bench/run_net.fg</code>
-      measures Go on the same matrix). Measuring, validating and optimising the runtime is continuous work — the
+      one worker. These numbers describe these runs, not a guarantee for every program or platform (method and code:
+      <code>bench/run_net.fg</code>). Measuring, validating and optimising the runtime is continuous work — the
       wake-ups between the schedulers of different workers are being investigated now.</p>
 
       <h3 class="mt-8 text-xl font-semibold">A solid foundation</h3>
@@ -393,8 +392,75 @@ print(typeof(bytes("hi")))  // buffer  — mutable bytes: b[0], b.hex(), b.readU
       </ul>
     </section>
 
-    <section id="whats-new" data-group="Getting started" data-title="What's new in 0.8.1" class="scroll-mt-20 mt-16">
-      <h2 class="text-2xl font-bold">What's new in 0.8.1</h2>
+    <section id="whats-new" data-group="Getting started" data-title="What's new in 0.8.2" class="scroll-mt-20 mt-16">
+      <h2 class="text-2xl font-bold">What's new in 0.8.2</h2>
+      <p>Version 0.8.2 makes type annotations do more: an annotation can now decide <strong>how data is stored</strong>,
+      and interfaces can describe <strong>fields and other interfaces</strong>, not only method names. Nothing existing
+      changes its meaning, and every program of <code>bench/</code> was measured against 0.8.1 with the same build: none is
+      slower.</p>
+
+      <h3 class="text-lg font-semibold mt-10" id="new-sized">Annotations that size the storage</h3>
+      <p>A list declared with a sized element type keeps its elements with that size — one byte per <code>u8</code>, four
+      per <code>i32</code>, <code>f32</code> or <code>char</code>, eight per <code>i64</code> or <code>f64</code> — instead
+      of a 24-byte value each. A million elements: 52 MB as a plain list, 5 MB as <code>list&lt;u8&gt;</code>, 10 MB as
+      <code>list&lt;i32&gt;</code>, 11 MB as <code>list&lt;char&gt;</code>, 18 MB as <code>list&lt;f64&gt;</code>. It is still
+      a list: the same methods, printing, <code>==</code> and JSON. The sized types also have short names:
+      <code>i8 i16 i32 i64 u8 u16 u32 u64 f32 f64</code>. Loops over these lists run in the interpreter for now: they save
+      memory, not time. More in <a class="underline" href="#sized-storage">Lists stored with their size</a>.</p>
+      <script type="text/x-fogu">let pixels: list<u8> = [0, 128, 255]      // 1 byte per element
+let samples: list<i16> = []               // 2 bytes
+let word: list<char> = "fogu".chars()     // 4 bytes
+for i in 0..5 { samples.push(i * 1000 - 2000) }
+pixels[0] = 64
+word[0] = "F"
+print(pixels, samples, word.join(""), typeof(pixels))
+print(samples.map((x) => x / 1000), pixels == [64, 128, 255])</script>
+      <script type="text/x-fogu" data-lang="text">[64, 128, 255] [-2000, -1000, 0, 1000, 2000] Fogu list
+[-2, -1, 0, 1, 2] true</script>
+
+      <h3 class="text-lg font-semibold mt-10" id="new-interfaces">Interfaces: fields, <code>embed</code>, and methods that fit</h3>
+      <p>An interface may require fields with their type and everything other interfaces require. A method satisfies a
+      requirement only when it can take the arguments the interface declares — <code>write()</code> no longer passes for
+      <code>write(data, n)</code>; before, the mismatch appeared only when the call failed. <code>any</code> is the type of
+      values of mixed types. More in <a class="underline" href="#interfaces">Interfaces</a>.</p>
+      <script type="text/x-fogu">interface Shape { area(): float }
+interface Named { name: str }                 // a required field
+interface Figure {                            // what Shape and Named ask, and one more
+    embed Shape
+    embed Named
+    describe(): str
+}
+struct Square {
+    name = "square"
+    side = 2.0
+    area(): float { return this.side * this.side }
+    describe(): str { return `${this.name} ${this.area()}` }
+}
+fn show(f: Figure): str { return f.describe() }
+print(show(new Square()))
+
+const things: list<any> = [new Square(), 42, "text", nil]
+for t in things { print(typeof(t)) }</script>
+      <script type="text/x-fogu" data-lang="text">square 4.0
+struct
+int
+str
+nil</script>
+
+      <h3 class="text-lg font-semibold mt-10" id="new-loops">Loops: division by a constant</h3>
+      <p>A <code>for i in a..b</code> with bounds within <code>0..2^31</code> is compiled knowing the range of
+      <code>i</code>: <code>i % 7</code> and <code>i / 7</code> become one multiplication and a shift, and small products
+      need no overflow check. Twenty million iterations of <code>sum + (i % 7) * 3</code>: 61.5 ms → 45.6 ms on the same
+      machine and build (measured under load, interleaved with 0.8.1).</p>
+
+      <h3 class="text-lg font-semibold mt-10" id="new-editor">The editor knows your code</h3>
+      <p>The VS Code extension reads the declarations of the file and of the files it imports:
+      <code>import { … } from "./shapes.fg"</code> lists what that file exports with typed signatures, members come
+      after a value whose struct or interface is declared (and after <code>this.</code>), calls show their parameters,
+      F12 goes to the definition, and the outline lists functions, structs and interfaces. New snippets cover typed
+      exports and imports, <code>any</code>, sized lists, interfaces and workers.</p>
+
+      <h3 class="text-lg font-semibold mt-12" id="new-081">From 0.8.1</h3>
       <p>Version 0.8.1 is a <strong>consolidation release</strong>. Two rounds of external tests found 286 bugs in 0.8.0;
       this release fixes the critical ones and most of the high ones, makes the interpreter, the JIT and the new bytecode VM
       give the same results on every test, and adds acceptance tests for memory, determinism and numbers. The architecture
@@ -587,7 +653,10 @@ let label: str | nil = nil                      // union type
 label = "ready"</script>
       <p>Built-in type names: <code>int float str bool nil duration list map buffer tuple fn chan error any</code>, plus struct
       and interface names. <code>error</code> also accepts <code>nil</code>. Generic arguments such as <code>list&lt;int&gt;</code>
-      document the intent; only the outer kind is checked.</p>
+      document the intent; only the outer kind is checked (except the <a class="underline" href="#sized-storage">sized lists</a>,
+      which store their elements with the size the annotation gives). <code>any</code> accepts every value, <code>nil</code>
+      included: it is the type to write when a variable, a parameter or the values of a list or map are not of one type
+      (<code>let v: any</code>, <code>list&lt;any&gt;</code>, <code>map&lt;str, any&gt;</code>).</p>
       <script type="text/x-fogu" data-lang="text">add(1, "2")
 
 error[E0207]: type mismatch: parameter 'b' expects int, got str
@@ -995,6 +1064,52 @@ struct Stack<T> {                     // generic struct
     push(v: T) { this.items.push(v) }
 }
 new Stack<int>().push(1)</script>
+
+      <h3 class="text-lg font-semibold mt-8" id="interfaces">Interfaces</h3>
+      <p>An interface says what a value must have, not what it is. It may ask for <strong>methods</strong> — a method
+      satisfies it when it can take the arguments the interface declares (a method with fewer parameters does not; more
+      parameters, defaults or <code>...rest</code> are fine) — for <strong>fields</strong> with their type
+      (<code>name: str</code>), and for everything other interfaces ask (<code>embed</code>). Structs satisfy it without
+      declaring so; a map with the fields and functions does too. An interface name is a type: in annotations of
+      variables, parameters and results, with <code>?</code> for an optional value.</p>
+      <script type="text/x-fogu">interface Shape {
+    area(): float
+    scale(factor: float)
+}
+interface Named { name: str }          // a required field
+interface Figure {                     // everything Shape and Named ask, and one more method
+    embed Shape
+    embed Named
+    describe(): str
+}
+
+struct Square {
+    name = "square"
+    side = 2.0
+    area(): float { return this.side * this.side }
+    scale(factor: float) { this.side = this.side * factor }
+    describe(): str { return `${this.name} ${this.area()}` }
+}
+
+fn grow(f: Figure): str {
+    f.scale(2.0)
+    return f.describe()
+}
+print(grow(new Square()))              // square 16.0
+
+// a map with the fields and the functions satisfies it too
+const dot: Figure = { name: "dot", area: () => 0.0, scale: (f) => nil, describe: () => "dot 0.0" }
+print(grow(dot))                       // dot 0.0
+
+let anything: any = new Square()       // any: every value
+anything = [1, "two", nil]
+print(typeof(anything))                // list</script>
+      <script type="text/x-fogu" data-lang="text">struct Flat { name = "flat"
+    area() { return 0.0 }
+    scale() { }                        // cannot take the factor
+    describe() { return "flat" } }
+grow(new Flat())
+error[E0207]: type mismatch: parameter 'f' expects Figure, got Flat</script>
     </section>
 
     <section id="modules" data-group="Language" data-title="Modules" class="scroll-mt-20 mt-16">

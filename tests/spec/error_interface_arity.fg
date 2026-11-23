@@ -1,0 +1,8 @@
+// an interface asks for methods that accept its arguments
+interface Writer { write(data: str, n: int): int }
+struct Short { write(data) { return 0 } }
+struct Full { write(data, n = 1, flush = false) { return n } }
+struct Rest { write(...parts) { return len(parts) } }
+fn send(w: Writer) { return w.write("a", 2) }
+print(send(new Full()), send(new Rest()))
+print(send(new Short()))

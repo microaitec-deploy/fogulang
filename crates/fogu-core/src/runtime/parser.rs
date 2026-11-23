@@ -354,7 +354,7 @@ impl Parser {
         Ok(params)
     }
 
-    /// `interface Name { method(a, b): T ... }` (spec §25).
+    /// `interface Name { method(a, b): T; field: T; embed Other ... }` (spec §25).
     fn parse_interface(&mut self) -> Result<InterfaceDecl, String> {
         self.advance(); // interface
         let name = self.expect_ident("an interface name")?;
@@ -363,18 +363,39 @@ impl Parser {
         let r = (|| -> Result<InterfaceDecl, String> {
             self.expect(Token::LBrace, "expected '{' in interface")?;
             let mut methods = Vec::new();
+            let mut fields = Vec::new();
+            let mut embeds = Vec::new();
+            let end = |p: &mut Self| {
+                if !p.matches(&Token::Semicolon) {
+                    let _ = p.matches(&Token::Comma);
+                }
+            };
             while !self.check(&Token::RBrace) && !self.check(&Token::Eof) {
+                if self.matches(&Token::Embed) {
+                    embeds.push(self.expect_ident("an interface name after embed")?);
+                    end(self);
+                    continue;
+                }
                 self.matches(&Token::Fn);
-                let m = self.expect_ident("a method name")?;
-                self.expect(Token::LParen, "expected '('")?;
+                let m = self.expect_ident("a method or field name")?;
+                if self.matches(&Token::Colon) {
+                    // a required field: `name: type`
+                    fields.push((m, self.parse_type()?));
+                    end(self);
+                    continue;
+                }
+                self.expect(Token::LParen, "expected '(' (a method) or ':' (a field)")?;
                 let mut n = 0;
                 while !self.check(&Token::RParen) && !self.check(&Token::Eof) {
-                    self.matches(&Token::Ellipsis);
+                    // `...rest` asks nothing of the method: it may take no more arguments
+                    let rest = self.matches(&Token::Ellipsis);
                     self.expect_ident("a parameter")?;
                     if self.matches(&Token::Colon) {
                         self.parse_type()?;
                     }
-                    n += 1;
+                    if !rest {
+                        n += 1;
+                    }
                     if !self.matches(&Token::Comma) {
                         break;
                     }
@@ -383,13 +404,11 @@ impl Parser {
                 if self.matches(&Token::Colon) {
                     self.parse_type()?;
                 }
-                if !self.matches(&Token::Semicolon) {
-                    let _ = self.matches(&Token::Comma);
-                }
+                end(self);
                 methods.push((m, n));
             }
             self.expect(Token::RBrace, "expected '}' in interface")?;
-            Ok(InterfaceDecl { name, methods })
+            Ok(InterfaceDecl { name, methods, fields, embeds })
         })();
         self.type_params.pop();
         r

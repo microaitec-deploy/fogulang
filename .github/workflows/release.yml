@@ -9,7 +9,7 @@
 #
 # The site serves the same files from server/releases/<version>/:
 #
-#   gh run download <run id> -p 'fogu-*' -D /tmp/rel && cp /tmp/rel/*/* server/releases/0.8.1/
+#   gh run download <run id> -p 'fogu-*' -D /tmp/rel && cp /tmp/rel/*/* server/releases/0.8.2/
 #
 # The .deb packages, the sources archive and the VS Code extension are still
 # made by server/publish-all.sh.
@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Tag or branch to build (e.g. v0.8.1)"
+        description: "Tag or branch to build (e.g. v0.8.2)"
         required: true
         default: main
       publish:

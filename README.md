@@ -32,7 +32,7 @@ while true { time.delay(100ms) }
 
 > 📖 **Official documentation:** open [docs/docs.html](docs/docs.html) in a browser.
 >
-> Version **0.8.1**. The full language specification
+> Version **0.8.2**. The full language specification
 > (Draft 0.4) is in [docs/spec.md](docs/spec.md); the status of every feature
 > is tracked in [CHECKLIST.md](CHECKLIST.md).
 

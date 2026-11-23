@@ -73,8 +73,13 @@ impl std::fmt::Display for TypeExpr {
 #[derive(Debug, Clone)]
 pub struct InterfaceDecl {
     pub name: String,
-    /// Required methods: (name, number of parameters).
+    /// Required methods: (name, number of parameters the method must accept).
     pub methods: Vec<(String, usize)>,
+    /// Required fields: (name, type) — `x: int`.
+    pub fields: Vec<(String, TypeExpr)>,
+    /// `embed Other`: the requirements of other interfaces. Empty in the
+    /// value the program holds: declaring the interface merges them in.
+    pub embeds: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

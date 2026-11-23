@@ -6,6 +6,8 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-23
+
 ### Added
 
 - **Annotations that size the storage.** A list declared with a sized element type keeps its
@@ -23,6 +25,14 @@ be incompatible changes (spec §75).
   program measured against the previous code with the same build: no slower (a first version
   slowed `json.stringify`/`json.parse` by 6–8% through one extra match arm; the sized path now
   sits in a cold function). Design: `docs/architecture/sized-storage.md`.
+- **Interfaces: fields, `embed` and methods that accept the arguments.** An interface may now
+  require fields with their type (`name: str`) and everything other interfaces require
+  (`embed Shape`). A method satisfies a requirement only when it can take the arguments the
+  interface declares: `write()` no longer satisfies `write(data, n)` (the mismatch was found
+  before only when the call failed) — more parameters, defaults and `...rest` do. Maps with the
+  fields and functions satisfy interfaces as structs do. `any` is documented as the type of
+  values of mixed types (`list<any>`, `map<str, any>`). Tests: `tests/spec/interfaces.fg`,
+  `error_interface_arity.fg`, on the three engines.
 - **Short names of the sized types**: `i8 i16 i32 i64 u8 u16 u32 u64 f32 f64`, the same types as
   `int8` … `float64`, in annotations, conversions (`u8(300) == 44`) and `fogu:types`.
 

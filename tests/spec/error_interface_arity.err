@@ -1,0 +1,2 @@
+type mismatch: parameter 'w' expects Writer, got Short
+error_interface_arity.fg:8

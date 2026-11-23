@@ -698,7 +698,7 @@ impl Interpreter {
                 Ok(())
             }
             ExportKind::Interface(decl) => {
-                let v = Value::Interface(Rc::new(decl.clone()));
+                let v = interface_value(decl, &env)?;
                 self.declare(&env, &decl.name, v.clone(), false)?;
                 add_export(exports, &decl.name, v)
             }
@@ -899,7 +899,7 @@ impl Interpreter {
 
     #[inline(never)]
     fn exec_interface(&self, decl: &InterfaceDecl, env: Rc<RefCell<Environment>>) -> Result<Flow, String> {
-        let v = Value::Interface(Rc::new(decl.clone()));
+        let v = interface_value(decl, &env)?;
         self.declare(&env, &decl.name, v, false)?;
         Ok(Flow::Normal)
     }
@@ -2528,7 +2528,7 @@ impl Interpreter {
                     Value::Struct(s) => s.borrow().type_name == t.decl.name,
                     _ => false,
                 },
-                Some(Value::Interface(i)) => satisfies(v, &i),
+                Some(Value::Interface(i)) => self.satisfies(v, &i, env)?,
                 Some(_) => return Err(format!("'{}' is not a type", other)),
                 None => return Err(format!("unknown type '{}'", other)),
             },
@@ -2854,21 +2854,84 @@ fn describe(v: &Value) -> String {
     }
 }
 
-/// Structural interfaces (spec §25): a struct (or a map of functions)
-/// satisfies an interface when it has every required method.
-fn satisfies(v: &Value, iface: &InterfaceDecl) -> bool {
-    match v {
-        Value::Struct(s) => {
-            let s = s.borrow();
-            iface.methods.iter().all(|(m, _)| s.methods.contains_key(m))
+/// The value of an `interface` declaration: its own requirements and those of
+/// the interfaces it embeds (already declared), merged — a check then looks
+/// at one flat list.
+fn interface_value(decl: &InterfaceDecl, env: &Rc<RefCell<Environment>>) -> Result<Value, String> {
+    if decl.embeds.is_empty() {
+        return Ok(Value::Interface(Rc::new(decl.clone())));
+    }
+    let mut flat = InterfaceDecl { name: decl.name.clone(), methods: Vec::new(), fields: Vec::new(), embeds: Vec::new() };
+    for e in &decl.embeds {
+        match env.borrow().get(e) {
+            Some(Value::Interface(other)) => {
+                flat.methods.extend(other.methods.iter().cloned());
+                flat.fields.extend(other.fields.iter().cloned());
+            }
+            Some(_) => return Err(format!("interface '{}' embeds '{}', which is not an interface", decl.name, e)),
+            None => return Err(format!("interface '{}' embeds '{}', which is not defined", decl.name, e)),
         }
-        Value::Map(m) => {
-            let m = m.borrow();
-            iface.methods.iter().all(|(name, _)| {
-                matches!(m.get(name.as_str()), Some(Value::Fn(_) | Value::NativeFn(_)))
-            })
+    }
+    // its own requirements replace the embedded ones of the same name
+    for (m, n) in &decl.methods {
+        flat.methods.retain(|(x, _)| x != m);
+        flat.methods.push((m.clone(), *n));
+    }
+    for (f, t) in &decl.fields {
+        flat.fields.retain(|(x, _)| x != f);
+        flat.fields.push((f.clone(), t.clone()));
+    }
+    Ok(Value::Interface(Rc::new(flat)))
+}
+
+/// Can a function with these parameters be called with `n` arguments?
+fn accepts(params: &[String], n: usize) -> bool {
+    match super::ast::rest_param(params) {
+        Some(_) => true,
+        None => params.len() >= n,
+    }
+}
+
+impl Interpreter {
+    /// Structural interfaces (spec §25): a struct (or a map) satisfies an
+    /// interface when it has every required method — one that accepts the
+    /// arguments the interface declares — and every required field, with a
+    /// value of the field's type.
+    fn satisfies(&self, v: &Value, iface: &InterfaceDecl, env: &Rc<RefCell<Environment>>) -> Result<bool, String> {
+        match v {
+            Value::Struct(s) => {
+                let s = s.borrow();
+                if !iface.methods.iter().all(|(m, n)| s.methods.get(m).is_some_and(|f| accepts(&f.params, *n))) {
+                    return Ok(false);
+                }
+                for (name, ty) in &iface.fields {
+                    match s.field(name) {
+                        Some(value) if self.type_matches(value, ty, env)? => {}
+                        _ => return Ok(false),
+                    }
+                }
+                Ok(true)
+            }
+            Value::Map(m) => {
+                let m = m.borrow();
+                let methods = iface.methods.iter().all(|(name, n)| match m.get(name.as_str()) {
+                    Some(Value::Fn(f)) => accepts(&f.params, *n),
+                    Some(Value::NativeFn(_)) => true,
+                    _ => false,
+                });
+                if !methods {
+                    return Ok(false);
+                }
+                for (name, ty) in &iface.fields {
+                    match m.get(name.as_str()) {
+                        Some(value) if self.type_matches(value, ty, env)? => {}
+                        _ => return Ok(false),
+                    }
+                }
+                Ok(true)
+            }
+            _ => Ok(false),
         }
-        _ => false,
     }
 }
 

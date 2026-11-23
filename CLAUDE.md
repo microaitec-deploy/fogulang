@@ -232,9 +232,11 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
 - Source files use CRLF line endings; keep them — except `scripts/*.sh` (LF: shells refuse CRLF).
 - `scripts/install.sh` / `install.ps1` install Fogu and set the PATH (test install.sh with a
   temporary `HOME`; do not run install.ps1 against the real Windows PATH).
-- The official server is `../server`: after any change that users can see (version, docs,
-  libs, the language) run `sh ../server/publish-all.sh` so every part of it is current
-  (releases, libs, frontend, `bin/fogu-server`, the deploy package).
+- The official server is `../server`. Release files are built by the GitHub workflow
+  (`.github/workflows/release.yml`: a `v*` tag builds every platform): do not run
+  `../server/publish-all.sh` after a change. The site's own sources
+  (`../server/web/templates`, `../server/internal/site`) are edited directly and checked with
+  `go test ./...` there.
 - Benchmarks: `bench/run.fg` (compute) and `bench/run_net.fg` (servers, concurrency) write
   `bench/results*.json`; `docs/tools/gen_bench.py` turns them into `docs/benchmarks.md`, the
   docs.html section and the docs/view page. Measure on a quiet machine (the runners record the
