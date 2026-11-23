@@ -1003,6 +1003,9 @@ enum Spec {
     Failed(String),
 }
 
+/// The largest end of a `for a..b` compiled as "small" (see [`LoopKey::small`]).
+const SMALL_BOUND: i64 = 1 << 31;
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct LoopKey {
     id: u32,
@@ -1015,6 +1018,11 @@ struct LoopKey {
     elem: Option<Ty>,
     /// Compiled for a run with a deadline (see [`Watch`]).
     checked: bool,
+    /// A `for a..b` whose bounds were in `0..=2^31` when it was compiled: the
+    /// code may rely on the loop variable being in that range (cheaper
+    /// divisions by constants, no overflow checks on small products). A run
+    /// with other bounds compiles its own version.
+    small: bool,
 }
 
 enum LoopEntry {
@@ -1136,6 +1144,29 @@ fn order_branches(func: &mut ir::Function) {
             blocks.swap(0, 1);
         }
     }
+}
+
+/// For a dividend in `0..=hi` and a divisor `d > 1`: a multiplier `m` and a
+/// shift `s` with `n / d == (n * m) >> s` for every such `n`, the product
+/// fitting 63 bits — or `None` when the range is too wide for that.
+/// With `m = ceil(2^s / d)` and `e = m*d - 2^s`, the quotient is exact while
+/// `hi * e < 2^s`.
+fn small_magic(d: u64, hi: u64) -> Option<(u64, u32)> {
+    if d < 2 || hi >= 1 << 40 {
+        return None;
+    }
+    for s in 1..63u32 {
+        let two = 1u128 << s;
+        let m = two.div_ceil(d as u128);
+        let e = m * d as u128 - two;
+        if (hi as u128) * m >= 1u128 << 63 {
+            return None;
+        }
+        if (hi as u128) * e < two {
+            return Some((m as u64, s));
+        }
+    }
+    None
 }
 
 /// The multiplier and shift that turn a signed division by the constant `d`
@@ -1651,7 +1682,7 @@ impl Inner {
                     let n = slots.len();
                     let lo = g.b.ins().load(types::I64, MemFlagsData::trusted(), slots_ptr, (8 * n) as i32);
                     let hi = g.b.ins().load(types::I64, MemFlagsData::trusted(), slots_ptr, (8 * (n + 1)) as i32);
-                    g.gen_for_range(var, lo, hi, body)?;
+                    g.gen_for_range(var, lo, hi, body, key.small.then_some((0, SMALL_BOUND - 1)))?;
                 }
                 LoopKind::ForList { var, body, .. } => {
                     let n = slots.len();
@@ -2244,6 +2275,13 @@ impl<'a, 'f> Gen<'a, 'f> {
             }
             let q = self.b.ins().sshr_imm_s(t, k);
             if d < 0 { self.b.ins().ineg(q) } else { q }
+        } else if let Some((m, s)) = self.range_of(a).and_then(|(lo, hi)| if lo >= 0 { small_magic(ad, hi as u64) } else { None }) {
+            // a dividend known to be small and not negative: one ordinary
+            // multiplication and a shift give the quotient (no high half, no
+            // sign corrections)
+            let p = self.b.ins().imul_imm_s(a, m as i64);
+            let q = self.b.ins().ushr_imm_s(p, s as i64);
+            if d < 0 { self.b.ins().ineg(q) } else { q }
         } else {
             let (m, s) = div_magic(d);
             let mc = self.b.ins().iconst(types::I64, m);
@@ -2468,7 +2506,7 @@ impl<'a, 'f> Gen<'a, 'f> {
                 if lt != Ty::Int || ht != Ty::Int {
                     return bail("range bounds must be int");
                 }
-                self.gen_for_range(var, lo, hi, body)
+                self.gen_for_range(var, lo, hi, body, None)
             }
             Stmt::Break => match self.loops.last() {
                 Some(&(_, brk)) => {
@@ -2658,7 +2696,9 @@ impl<'a, 'f> Gen<'a, 'f> {
         Ok(())
     }
 
-    fn gen_for_range(&mut self, var: &str, lo: ir::Value, hi: ir::Value, body: &Stmt) -> R<()> {
+    /// `known`: a range the caller guarantees for the loop variable inside the
+    /// body (the bounds themselves are run-time values).
+    fn gen_for_range(&mut self, var: &str, lo: ir::Value, hi: ir::Value, body: &Stmt, known: Option<(i64, i64)>) -> R<()> {
         let idx = self.b.declare_var(types::I64);
         self.b.def_var(idx, lo);
         let header = self.b.create_block();
@@ -2684,6 +2724,8 @@ impl<'a, 'f> Gen<'a, 'f> {
             if first < end {
                 self.ranges.insert(cur, (first, end - 1));
             }
+        } else if let Some(r) = known {
+            self.ranges.insert(cur, r);
         }
         let nested = !self.top_loop;
         let (eb, gb) = (self.effects, self.guards);
@@ -4386,6 +4428,7 @@ impl Jit {
             spec,
             elem,
             checked: deadline.is_some(),
+            small: matches!(kind, LoopKind::For { lo, hi, .. } if lo >= 0 && hi <= SMALL_BOUND),
         };
 
         let Some(inner) = self.inner() else {
@@ -4542,5 +4585,36 @@ mod div_magic_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod small_magic_tests {
+    use super::small_magic;
+
+    #[test]
+    fn exact_over_the_range() {
+        for d in [3u64, 5, 6, 7, 9, 10, 11, 12, 13, 100, 641, 1000, 65537, 1_000_003] {
+            for hi in [1u64, 6, 7, 255, 65535, 1_000_000, 20_000_000, 4_294_967_295, (1 << 40) - 1] {
+                let Some((m, s)) = small_magic(d, hi) else { continue };
+                let check = |n: u64| assert_eq!((n * m) >> s, n / d, "n={} d={} hi={}", n, d, hi);
+                for n in 0..=hi.min(200_000) {
+                    check(n);
+                }
+                // around every multiple near the top, where the error is largest
+                let top = hi / d * d;
+                for k in 0..2000u64 {
+                    let base = top.saturating_sub(k * d);
+                    for n in [base.saturating_sub(1), base, base + 1] {
+                        if n <= hi {
+                            check(n);
+                        }
+                    }
+                }
+                check(hi);
+            }
+        }
+        assert!(small_magic(7, 20_000_000).is_some());
+        assert!(small_magic(7, u64::MAX >> 1).is_none());
     }
 }

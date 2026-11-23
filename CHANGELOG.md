@@ -26,6 +26,15 @@ be incompatible changes (spec §75).
 - **Short names of the sized types**: `i8 i16 i32 i64 u8 u16 u32 u64 f32 f64`, the same types as
   `int8` … `float64`, in annotations, conversions (`u8(300) == 44`) and `fogu:types`.
 
+### Performance
+
+- **Division and remainder by a constant in small `for` loops.** A `for i in a..b` whose bounds
+  are within `0..2^31` is compiled knowing the range of `i`: `i % 7` and `i / 7` become one
+  multiplication and a shift (five operations before), and products of small values lose their
+  overflow checks. `bench/loop.fg` (20 million iterations of `sum + (i % 7) * 3`), same machine
+  and build, interleaved: 61.5 ms → 45.6 ms (Go: 50.7 ms). The other kernels are unchanged. A loop
+  run with other bounds compiles its own version, as before.
+
 ## [0.8.1] - 2026-11-18
 
 A consolidation release. Two rounds of external tests found 286 bugs in 0.8.0 (3 critical,
