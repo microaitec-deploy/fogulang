@@ -1,0 +1,8 @@
+import json from "fogu:json"
+
+fn add(a: int, b: int): int {
+    return a + b
+}
+
+const total = add(1, 2)
+print(`total: ${total}`, json.stringify({ ok: true }))

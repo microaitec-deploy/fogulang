@@ -232,8 +232,11 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
 - Source files use CRLF line endings; keep them — except `scripts/*.sh` (LF: shells refuse CRLF).
 - `scripts/install.sh` / `install.ps1` install Fogu and set the PATH (test install.sh with a
   temporary `HOME`; do not run install.ps1 against the real Windows PATH).
+- The VS Code extension lives in `editors/vscode` (bun: `bun run gen`, `bun test`,
+  `bun run package`); the release workflow packages it with the release's version.
 - The official server is `../server`. Release files are built by the GitHub workflow
-  (`.github/workflows/release.yml`: a `v*` tag builds every platform): do not run
+  (`.github/workflows/release.yml`: a `v*` tag builds every platform, the `.deb` packages,
+  `fogu-src.tar.gz`, the `.vsix` and `fogu-linux-amd64` / `fogu-linux-x86_64`): do not run
   `../server/publish-all.sh` after a change. The site's own sources
   (`../server/web/templates`, `../server/internal/site`) are edited directly and checked with
   `go test ./...` there.

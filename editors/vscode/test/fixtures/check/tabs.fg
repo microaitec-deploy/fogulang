@@ -1,0 +1,6 @@
+fn h() {
+	if true {
+		return zed
+	}
+}
+print(h)

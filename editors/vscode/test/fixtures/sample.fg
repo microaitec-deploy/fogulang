@@ -1,0 +1,45 @@
+import json from "fogu:json"
+import { readText, writeText as wt } from "fogu:fs"
+import { sum } from "./util.fg"
+
+/* block comment with "quotes" */
+const wait = 1500ms
+let count: int = 0
+const msg = `Hi ${name}, ${ { a: 1 }.a + count } and ${`nested ${x}`} // not a comment`
+const s = "a // not a comment \n \q"
+const n = 0xFF + 0b1010 + 1_000 + 2.5e-3 + 1.5h
+const v = user?.profile?.name ?? "anon"
+
+fn area<T>(w: float, h: float = 1.0, ...rest): (float, error) {
+    return w * h, nil
+}
+
+struct Point {
+    x: int = 0
+    y = 0
+    embed Base
+    new(x, y) {
+        this.x = x
+    }
+    fn dist2(): int { return this.x * this.x }
+}
+
+const p = new Point(3, 4)
+const [cfg, err] = load("a.json")
+const text = fs.readText(path)?
+for i in 0..3 { print(i) }
+loop { break }
+const size = match count {
+    0 => "none"
+    1 | 2 => "few"
+    _ => "some"
+}
+select {
+    case v = <-results: print(v)
+    case <-timeout(1s): print("timed out")
+    default: print("none")
+}
+fg fn(n) { results <- n * n }(1)
+Fogu.signal.wait()
+const m = { name: "x", port: 8080 }
+const f: fn(int): bool = (x) => x > 0

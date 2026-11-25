@@ -1,0 +1,48 @@
+// Shapes used by the editor tests.
+export const PI: float = 3.14159
+export let counter = 0
+
+// The area of a circle.
+export fn circle(r: float): float {
+    return PI * r * r
+}
+
+export fn parse(text: str, strict = false): (int, error) {
+    if text == "" { return 0, error("empty") }
+    return int(text), nil
+}
+
+const helper = (a: int, b: int): int => a + b
+fn _private(x) { return x }
+
+// A point on the plane.
+export struct Point {
+    x: int = 0
+    y = 0
+    label = "p"
+    new(x: int, y: int = 0) {
+        this.x = x
+        this.y = y
+    }
+    // Distance from the origin.
+    norm(): float { return (this.x ** 2 + this.y ** 2) ** 0.5 }
+    move(dx: int, dy: int) {
+        const text = `moved ${dx} { ${dy} }`
+        this.x += dx
+    }
+}
+
+struct Pixel {
+    embed Point
+    color: u8 = 0
+}
+
+export interface Shape {
+    area(): float
+    name(): str
+}
+
+interface Mini { a(); b(x: int): int }
+
+export { helper as add, Pixel }
+export default Point

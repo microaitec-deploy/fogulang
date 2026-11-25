@@ -7,12 +7,21 @@
 #     keeps the files as the run's artifacts; tick "publish" to attach them to
 #     the GitHub release too.
 #
+# Besides the executables and the runtime libraries, a release has:
+#
+#   - fogu-linux-amd64 and fogu-linux-x86_64: the Linux x64 executable (`fogu`)
+#     under the names other tools and scripts look for;
+#   - fogu-amd64.deb, fogu-arm64.deb, fogu-armhf.deb: Debian/Ubuntu/Raspberry Pi
+#     OS packages (/usr/bin/fogu);
+#   - fogu-src.tar.gz: the sources (one folder, fogu-<version>/);
+#   - fogu-vscode.vsix: the VS Code extension (editors/vscode);
+#   - SHA256SUMS.
+#
 # The site serves the same files from server/releases/<version>/:
 #
 #   gh run download <run id> -p 'fogu-*' -D /tmp/rel && cp /tmp/rel/*/* server/releases/0.8.2/
 #
-# The .deb packages, the sources archive and the VS Code extension are still
-# made by server/publish-all.sh.
+# server/publish-all.sh is no longer needed to make them.
 name: Release
 
 on:
@@ -196,8 +205,116 @@ jobs:
           path: out/*
           if-no-files-found: error
 
-  publish:
+  # The files made from the Linux executables and from the sources: the Linux x64
+  # executable under its other names, the Debian packages, the sources archive
+  # and the VS Code extension.
+  packages:
     needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REF }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fogu-linux-*
+          path: linux
+          merge-multiple: true
+
+      - name: Version
+        run: |
+          version=$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' Cargo.toml | head -n 1)
+          [ -n "$version" ] || { echo "no version in Cargo.toml"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          mkdir -p pkg
+          ls -l linux
+
+      - name: Linux x64 under its other names
+        run: |
+          [ -f linux/fogu ] || { echo "no Linux x64 executable (did linux-x64 fail?)"; exit 1; }
+          cp linux/fogu pkg/fogu-linux-amd64
+          cp linux/fogu pkg/fogu-linux-x86_64
+          chmod +x pkg/fogu-linux-*
+
+      - name: Debian packages
+        env:
+          MAINTAINER: ${{ vars.DEB_MAINTAINER || 'Edmilson Soares' }}
+        run: |
+          deb() { # deb <executable> <debian arch>
+            exe="linux/$1"; arch=$2
+            [ -f "$exe" ] || { echo "skip $arch: no $1"; return 0; }
+            root="work/fogu_$arch"
+            mkdir -p "$root/DEBIAN" "$root/usr/bin" "$root/usr/share/doc/fogu"
+            install -m 0755 "$exe" "$root/usr/bin/fogu"
+            cp LICENSE "$root/usr/share/doc/fogu/copyright"
+            size=$(du -k "$root/usr" | tail -n 1 | cut -f1)
+            # OpenSSL is compiled in (vendored): only the C library is needed
+            depends="libc6 (>= 2.17)"
+            if readelf -d "$exe" 2>/dev/null | grep -q 'libssl.so.3'; then
+              depends="$depends, libssl3 | libssl3t64"
+            fi
+            {
+              echo "Package: fogu"
+              echo "Version: $VERSION"
+              echo "Architecture: $arch"
+              echo "Maintainer: $MAINTAINER"
+              echo "Installed-Size: $size"
+              echo "Depends: $depends"
+              echo "Section: devel"
+              echo "Priority: optional"
+              echo "Homepage: https://fogulang.microaitec.com"
+              echo "Description: Fogu programming language and runtime"
+              echo " One language, from automation to devices: configuration, automation,"
+              echo " integrations, infrastructure, applications and microcontrollers, in one"
+              echo " executable with a JIT, cooperative tasks, workers and a standard library."
+            } > "$root/DEBIAN/control"
+            dpkg-deb --root-owner-group -Zxz --build "$root" "pkg/fogu-$arch.deb"
+            dpkg-deb --info "pkg/fogu-$arch.deb" | sed -n '/Package/,/Depends/p'
+          }
+          deb fogu amd64
+          deb fogu-linux-arm64 arm64
+          deb fogu-linux-armv7 armhf
+          # the amd64 package installs and runs
+          sudo dpkg -i pkg/fogu-amd64.deb
+          printf 'print(6 * 7)\n' > check.fg
+          [ "$(/usr/bin/fogu check.fg)" = 42 ] || { echo "the installed package does not run"; exit 1; }
+          sudo dpkg -r fogu
+
+      - name: Sources archive
+        run: |
+          # what git tracks, in one folder fogu-<version>/
+          git archive --format=tar.gz --prefix="fogu-$VERSION/" -o "pkg/fogu-src.tar.gz" HEAD
+          tar -tzf pkg/fogu-src.tar.gz | head -n 5
+          tar -tzf pkg/fogu-src.tar.gz | grep -q "^fogu-$VERSION/Cargo.toml$"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: VS Code extension
+        working-directory: editors/vscode
+        run: |
+          # the extension carries the release's version
+          sed -i "s/\"version\": \"[0-9][^\"]*\"/\"version\": \"$VERSION\"/" package.json
+          bun install --frozen-lockfile
+          bun run typecheck
+          bun run package
+          cp fogu-vscode.vsix ../../pkg/fogu-vscode.vsix
+
+      - name: List
+        run: ls -l pkg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fogu-packages
+          path: pkg/*
+          if-no-files-found: error
+
+  publish:
+    needs: [build, packages]
     if: ${{ !cancelled() && (github.event_name == 'push' || github.event.inputs.publish == 'true') }}
     runs-on: ubuntu-22.04
     steps:

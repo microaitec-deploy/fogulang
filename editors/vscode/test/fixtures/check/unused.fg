@@ -1,0 +1,6 @@
+fn g() {
+  let alpha = 1
+  let beta = 2
+  return 0
+}
+print(g())

@@ -1,0 +1,4721 @@
+{
+ "globals": [
+  {
+   "name": "print",
+   "signature": "print(...values)",
+   "returns": "nil",
+   "doc": "Writes the values separated by spaces and a newline (`Fogu.write` writes without them).",
+   "kind": "function"
+  },
+  {
+   "name": "len",
+   "signature": "len(x)",
+   "returns": "int",
+   "doc": "Length of a `str` (characters), `list`, `map`, `buffer` (bytes) or `chan` (queued items).",
+   "kind": "function"
+  },
+  {
+   "name": "typeof",
+   "signature": "typeof(x)",
+   "returns": "str",
+   "doc": "`int float str bool nil list map buffer fn duration chan error struct …`",
+   "kind": "function"
+  },
+  {
+   "name": "str",
+   "signature": "str(x)",
+   "returns": "str",
+   "doc": "Text form of any value (the same text `print` shows).",
+   "kind": "function"
+  },
+  {
+   "name": "int",
+   "signature": "int(x)",
+   "returns": "int",
+   "doc": "From a float (truncates), a numeric str or a bool. Invalid text stops the program.",
+   "kind": "function"
+  },
+  {
+   "name": "float",
+   "signature": "float(x)",
+   "returns": "float",
+   "doc": "From an int or a numeric str.",
+   "kind": "function"
+  },
+  {
+   "name": "bytes",
+   "signature": "bytes(x, encoding = \"utf8\")",
+   "returns": "buffer",
+   "doc": "A new [buffer](#values): from a str (encodings `utf8 hex base64 base64url latin1`), an int `n` (n zero bytes), a list of byte ints, or a buffer (a copy).",
+   "kind": "function"
+  },
+  {
+   "name": "clock",
+   "signature": "clock()",
+   "returns": "float",
+   "doc": "Seconds since the UNIX epoch, with fractions — use differences to measure time.",
+   "kind": "function"
+  },
+  {
+   "name": "error",
+   "signature": "error(message, cause?)",
+   "returns": "error",
+   "doc": "A new error value; `err.message`, `err.cause`.",
+   "kind": "function"
+  },
+  {
+   "name": "panic",
+   "signature": "panic(...values)",
+   "doc": "Stops the program with a message (for impossible situations).",
+   "kind": "function"
+  },
+  {
+   "name": "timeout",
+   "signature": "timeout(d)",
+   "returns": "chan",
+   "doc": "A channel that receives once after `d` (use with `select`).",
+   "kind": "function"
+  },
+  {
+   "name": "close",
+   "signature": "close(ch)",
+   "returns": "nil",
+   "doc": "Closes a channel: receivers get `nil` once it is empty.",
+   "kind": "function"
+  }
+ ],
+ "fogu": [
+  {
+   "name": "version",
+   "signature": "Fogu.version",
+   "returns": "str",
+   "doc": "Fogu's version · `windows`, `linux`, `macos`…",
+   "kind": "property"
+  },
+  {
+   "name": "os",
+   "signature": "Fogu.os",
+   "returns": "str",
+   "doc": "Fogu's version · `windows`, `linux`, `macos`…",
+   "kind": "property"
+  },
+  {
+   "name": "cores",
+   "signature": "Fogu.cores()",
+   "returns": "int · list · error",
+   "doc": "How many threads the runtime uses for networking and blocking work (default: the machine's CPUs) · use `n` · run only on those CPUs (Linux, Windows). Set it at the top of the program — once the runtime has started it is an error value. Also `--cores 4`, `--cores 0,2-3`, `$FOGU_CORES`.",
+   "kind": "function"
+  },
+  {
+   "name": "env",
+   "signature": "Fogu.env",
+   "returns": "map",
+   "doc": "Environment variables.",
+   "kind": "property"
+  },
+  {
+   "name": "args",
+   "signature": "Fogu.args",
+   "returns": "list",
+   "doc": "Arguments after the script name (`fogu run app.fg a b`).",
+   "kind": "property"
+  },
+  {
+   "name": "file",
+   "signature": "Fogu.file(path)",
+   "returns": "File",
+   "doc": "`text() lines() json() write(data) append(data) exists() size() remove()`, fields `path name ext dir`. `data` is a str (UTF-8) or a buffer (its bytes); another type stops the program.",
+   "kind": "function"
+  },
+  {
+   "name": "asset",
+   "signature": "Fogu.asset(path)",
+   "returns": "str",
+   "doc": "A project file: relative to the project root — and inside `fogu build --compile` executables, the extracted embedded files.",
+   "kind": "function"
+  },
+  {
+   "name": "run",
+   "signature": "Fogu.run(cmd, args?, opts?)",
+   "returns": "map · error",
+   "doc": "Runs a program → `{ ok, code, stdout, stderr }` (see [fogu:process](#foguprocess)).",
+   "kind": "function"
+  },
+  {
+   "name": "glob",
+   "signature": "Fogu.glob(pattern)",
+   "returns": "list",
+   "doc": "Files matching `*`, `?` and `**`.",
+   "kind": "function"
+  },
+  {
+   "name": "hash",
+   "signature": "Fogu.hash(data, algo?)",
+   "returns": "str",
+   "doc": "Hex digest, `sha256` (default) or `sha512`.",
+   "kind": "function"
+  },
+  {
+   "name": "sql",
+   "signature": "Fogu.sql(url)",
+   "returns": "Database",
+   "doc": "Same as `sql.open(url)`.",
+   "kind": "function"
+  },
+  {
+   "name": "sleep",
+   "signature": "Fogu.sleep(d)",
+   "returns": "nil",
+   "doc": "Waits (other tasks keep running).",
+   "kind": "function"
+  },
+  {
+   "name": "signal",
+   "signature": "Fogu.signal",
+   "doc": "`Fogu.signal.wait(names = [\"SIGINT\", \"SIGTERM\"], { timeout })` → str · nil — Keeps the program alive (servers — fogu:web/http requests are answered while it waits — and `fg` tasks keep running) until one of the signals or events happens; returns its name, `nil` after `timeout`.\n\n`Fogu.signal.on(name, fn(data))` — Handlers for OS signals (`SIGINT SIGTERM SIGHUP SIGQUIT SIGUSR1 SIGUSR2`; Windows: `SIGINT SIGBREAK SIGTERM`) or the program's own events; they run as `fg` tasks. With no handler and nobody waiting, SIGINT/SIGTERM still end the program (exit code 130/143) — after releasing sshfs mounts, browsers and SurrealKV/broker stores. `emit` also simulates a signal. · `Fogu.signal.off(name)` · `Fogu.signal.emit(name, data?)` · `Fogu.signal.last` · `Fogu.signal.names`",
+   "kind": "property"
+  },
+  {
+   "name": "host",
+   "signature": "Fogu.host",
+   "doc": "`Fogu.host.embedded` → bool — When the runtime is embedded through the C API ([libfogu_rt](#embed)): calls the host's callback; `false` without one. · `Fogu.host.emit(name, data)` → bool",
+   "kind": "property"
+  },
+  {
+   "name": "write",
+   "signature": "Fogu.write(...values)",
+   "returns": "nil",
+   "doc": "Like `print`, without spaces or newline (streaming output).",
+   "kind": "function"
+  },
+  {
+   "name": "watch",
+   "signature": "Fogu.watch(path | [paths], { recursive = true, debounce = 50ms })",
+   "returns": "Watcher · error",
+   "doc": "File system events: `w.next(timeout?)` → `{ kind, path, paths }` (`create modify remove rename`; absolute paths, written with `/`), `tryNext()`, `close()`.",
+   "kind": "function"
+  },
+  {
+   "name": "exit",
+   "signature": "Fogu.exit(code?)",
+   "doc": "Ends the program.",
+   "kind": "function"
+  }
+ ],
+ "modules": [
+  {
+   "name": "math",
+   "alias": "math",
+   "summary": "Numbers. Rounding to an int (`floor ceil trunc round`) keeps ints as they are; a float with no int value (NaN, ±inf, beyond ±2^63) stops the program instead of becoming 0 or MAX_INT; the other functions return floats. The JIT compiles these calls inside hot code with the same results.",
+   "members": [
+    {
+     "name": "PI",
+     "signature": "math.PI",
+     "returns": "float",
+     "doc": "Constants.",
+     "kind": "property"
+    },
+    {
+     "name": "MAX_INT",
+     "signature": "math.MAX_INT",
+     "returns": "int",
+     "doc": "The int range (64-bit).",
+     "kind": "property"
+    },
+    {
+     "name": "MIN_INT",
+     "signature": "math.MIN_INT",
+     "returns": "int",
+     "doc": "The int range (64-bit).",
+     "kind": "property"
+    },
+    {
+     "name": "abs",
+     "signature": "math.abs(x)",
+     "returns": "number",
+     "doc": "Ints stay ints; `sign` is -1, 0 or 1.",
+     "kind": "function"
+    },
+    {
+     "name": "sign",
+     "signature": "math.sign(x)",
+     "returns": "number",
+     "doc": "Ints stay ints; `sign` is -1, 0 or 1.",
+     "kind": "function"
+    },
+    {
+     "name": "sqrt",
+     "signature": "math.sqrt(x)",
+     "returns": "float",
+     "kind": "function"
+    },
+    {
+     "name": "cbrt",
+     "signature": "math.cbrt(x)",
+     "returns": "float",
+     "kind": "function"
+    },
+    {
+     "name": "pow",
+     "signature": "math.pow(base, exp)",
+     "returns": "float",
+     "kind": "function"
+    },
+    {
+     "name": "hypot",
+     "signature": "math.hypot(x, y)",
+     "returns": "float",
+     "kind": "function"
+    },
+    {
+     "name": "floor",
+     "signature": "math.floor(x)",
+     "returns": "int",
+     "doc": "`round` takes halves away from zero.",
+     "kind": "function"
+    },
+    {
+     "name": "ceil",
+     "signature": "math.ceil(x)",
+     "returns": "int",
+     "doc": "`round` takes halves away from zero.",
+     "kind": "function"
+    },
+    {
+     "name": "trunc",
+     "signature": "math.trunc(x)",
+     "returns": "int",
+     "doc": "`round` takes halves away from zero.",
+     "kind": "function"
+    },
+    {
+     "name": "round",
+     "signature": "math.round(x)",
+     "returns": "int",
+     "doc": "`round` takes halves away from zero.",
+     "kind": "function"
+    },
+    {
+     "name": "fract",
+     "signature": "math.fract(x)",
+     "returns": "float",
+     "doc": "Rounded to `digits` decimals; the fractional part.",
+     "kind": "function"
+    },
+    {
+     "name": "sin",
+     "signature": "math.sin cos tan asin acos atan (x)",
+     "returns": "float",
+     "doc": "Radians.",
+     "kind": "property"
+    },
+    {
+     "name": "atan2",
+     "signature": "math.atan2(y, x)",
+     "returns": "float",
+     "doc": "Radians.",
+     "kind": "function"
+    },
+    {
+     "name": "sinh",
+     "signature": "math.sinh cosh tanh asinh acosh atanh (x)",
+     "returns": "float",
+     "doc": "Hyperbolic.",
+     "kind": "property"
+    },
+    {
+     "name": "exp",
+     "signature": "math.exp(x)",
+     "returns": "float",
+     "doc": "`log(x)` is the natural logarithm.",
+     "kind": "function"
+    },
+    {
+     "name": "log",
+     "signature": "math.log(x, base?)",
+     "returns": "float",
+     "doc": "`log(x)` is the natural logarithm.",
+     "kind": "function"
+    },
+    {
+     "name": "degrees",
+     "signature": "math.degrees(rad)",
+     "returns": "float",
+     "kind": "function"
+    },
+    {
+     "name": "radians",
+     "signature": "math.radians(deg)",
+     "returns": "float",
+     "kind": "function"
+    },
+    {
+     "name": "min",
+     "signature": "math.min(...)",
+     "returns": "number",
+     "doc": "Of the arguments or of one list; keeps the winner's type.",
+     "kind": "function"
+    },
+    {
+     "name": "max",
+     "signature": "math.max(...)",
+     "returns": "number",
+     "doc": "Of the arguments or of one list; keeps the winner's type.",
+     "kind": "function"
+    },
+    {
+     "name": "clamp",
+     "signature": "math.clamp(x, lo, hi)",
+     "returns": "number · float",
+     "doc": "`clamp` of ints is an int.",
+     "kind": "function"
+    },
+    {
+     "name": "lerp",
+     "signature": "math.lerp(a, b, t)",
+     "returns": "number · float",
+     "doc": "`clamp` of ints is an int.",
+     "kind": "function"
+    },
+    {
+     "name": "isNaN",
+     "signature": "math.isNaN(x)",
+     "returns": "bool",
+     "kind": "function"
+    },
+    {
+     "name": "isInf",
+     "signature": "math.isInf(x)",
+     "returns": "bool",
+     "kind": "function"
+    },
+    {
+     "name": "isFinite",
+     "signature": "math.isFinite(x)",
+     "returns": "bool",
+     "kind": "function"
+    },
+    {
+     "name": "gcd",
+     "signature": "math.gcd(a, b)",
+     "returns": "int · bool",
+     "doc": "Ints; overflow is an error.",
+     "kind": "function"
+    },
+    {
+     "name": "lcm",
+     "signature": "math.lcm(a, b)",
+     "returns": "int · bool",
+     "doc": "Ints; overflow is an error.",
+     "kind": "function"
+    },
+    {
+     "name": "factorial",
+     "signature": "math.factorial(n)",
+     "returns": "int · bool",
+     "doc": "Ints; overflow is an error.",
+     "kind": "function"
+    },
+    {
+     "name": "isPrime",
+     "signature": "math.isPrime(n)",
+     "returns": "int · bool",
+     "doc": "Ints; overflow is an error.",
+     "kind": "function"
+    },
+    {
+     "name": "band",
+     "signature": "math.band(a, b)",
+     "returns": "int",
+     "doc": "Bit operations on ints (64-bit two's complement): and, or, exclusive or, complement.",
+     "kind": "function"
+    },
+    {
+     "name": "bor",
+     "signature": "math.bor(a, b)",
+     "returns": "int",
+     "doc": "Bit operations on ints (64-bit two's complement): and, or, exclusive or, complement.",
+     "kind": "function"
+    },
+    {
+     "name": "bxor",
+     "signature": "math.bxor(a, b)",
+     "returns": "int",
+     "doc": "Bit operations on ints (64-bit two's complement): and, or, exclusive or, complement.",
+     "kind": "function"
+    },
+    {
+     "name": "bnot",
+     "signature": "math.bnot(a)",
+     "returns": "int",
+     "doc": "Bit operations on ints (64-bit two's complement): and, or, exclusive or, complement.",
+     "kind": "function"
+    },
+    {
+     "name": "shl",
+     "signature": "math.shl(a, n)",
+     "returns": "int",
+     "doc": "Shifts: left, right keeping the sign, right filling with zeros. 64 or more shifts everything out; a negative `n` shifts the other way. With the sized conversions: `uint32(math.shl(x, 8))`.",
+     "kind": "function"
+    },
+    {
+     "name": "shr",
+     "signature": "math.shr(a, n)",
+     "returns": "int",
+     "doc": "Shifts: left, right keeping the sign, right filling with zeros. 64 or more shifts everything out; a negative `n` shifts the other way. With the sized conversions: `uint32(math.shl(x, 8))`.",
+     "kind": "function"
+    },
+    {
+     "name": "ushr",
+     "signature": "math.ushr(a, n)",
+     "returns": "int",
+     "doc": "Shifts: left, right keeping the sign, right filling with zeros. 64 or more shifts everything out; a negative `n` shifts the other way. With the sized conversions: `uint32(math.shl(x, 8))`.",
+     "kind": "function"
+    },
+    {
+     "name": "popcount",
+     "signature": "math.popcount(a)",
+     "returns": "int",
+     "doc": "Bits set, leading zeros, trailing zeros (64 for 0). Compiled code calls every bit function natively.",
+     "kind": "function"
+    },
+    {
+     "name": "clz",
+     "signature": "math.clz(a)",
+     "returns": "int",
+     "doc": "Bits set, leading zeros, trailing zeros (64 for 0). Compiled code calls every bit function natively.",
+     "kind": "function"
+    },
+    {
+     "name": "ctz",
+     "signature": "math.ctz(a)",
+     "returns": "int",
+     "doc": "Bits set, leading zeros, trailing zeros (64 for 0). Compiled code calls every bit function natively.",
+     "kind": "function"
+    },
+    {
+     "name": "sum",
+     "signature": "math.sum(list)",
+     "returns": "number · float",
+     "doc": "`sum` of ints is an int.",
+     "kind": "function"
+    },
+    {
+     "name": "mean",
+     "signature": "math.mean(list)",
+     "returns": "number · float",
+     "doc": "`sum` of ints is an int.",
+     "kind": "function"
+    },
+    {
+     "name": "median",
+     "signature": "math.median(list)",
+     "returns": "number · float",
+     "doc": "`sum` of ints is an int.",
+     "kind": "function"
+    },
+    {
+     "name": "random",
+     "signature": "math.random()",
+     "returns": "float · int · float",
+     "doc": "`[0, 1)`; both ends included; `[lo, hi)`. Not for secrets: use `crypto`.",
+     "kind": "function"
+    },
+    {
+     "name": "randomInt",
+     "signature": "math.randomInt(min, max)",
+     "returns": "float · int · float",
+     "doc": "`[0, 1)`; both ends included; `[lo, hi)`. Not for secrets: use `crypto`.",
+     "kind": "function"
+    },
+    {
+     "name": "uniform",
+     "signature": "math.uniform(lo, hi)",
+     "returns": "float · int · float",
+     "doc": "`[0, 1)`; both ends included; `[lo, hi)`. Not for secrets: use `crypto`.",
+     "kind": "function"
+    },
+    {
+     "name": "choice",
+     "signature": "math.choice(list)",
+     "returns": "value · list · nil",
+     "doc": "A random element (`nil` if empty); shuffles in place and returns the list; a repeatable sequence.",
+     "kind": "function"
+    },
+    {
+     "name": "shuffle",
+     "signature": "math.shuffle(list)",
+     "returns": "value · list · nil",
+     "doc": "A random element (`nil` if empty); shuffles in place and returns the list; a repeatable sequence.",
+     "kind": "function"
+    },
+    {
+     "name": "seed",
+     "signature": "math.seed(n)",
+     "returns": "value · list · nil",
+     "doc": "A random element (`nil` if empty); shuffles in place and returns the list; a repeatable sequence.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "json",
+   "alias": "json",
+   "summary": "const data = json.parse(\"{\\\"name\\\": \\\"Ana\\\", \\\"tags\\\": [\\\"a\\\", \\\"b\\\"], \\\"age\\\": 30}\")?",
+   "members": [
+    {
+     "name": "parse",
+     "signature": "json.parse(text)",
+     "returns": "value · error",
+     "doc": "JSON text → maps, lists, str, int, float, bool, nil. Invalid JSON is an error value.",
+     "kind": "function"
+    },
+    {
+     "name": "stringify",
+     "signature": "json.stringify(value)",
+     "returns": "str",
+     "doc": "Compact JSON (map keys in order).",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "types",
+   "alias": "types",
+   "summary": "Runtime type checks, lenient conversions and schemas for data that comes from outside (JSON bodies, query strings, environment variables, files).",
+   "members": [
+    {
+     "name": "isInt",
+     "signature": "types.isInt isFloat isNumber isStr isBool isNil isList isMap isBuffer isFn isError isDuration isRange isStruct isObject isChan (v)",
+     "returns": "bool",
+     "kind": "property"
+    },
+    {
+     "name": "isEmpty",
+     "signature": "types.isEmpty(v)",
+     "returns": "bool",
+     "doc": "`nil`, `\"\"`, `[]`, `{}`, an empty buffer or range.",
+     "kind": "function"
+    },
+    {
+     "name": "of",
+     "signature": "types.of(v)",
+     "returns": "str",
+     "doc": "Like `typeof`, but the name of a struct or native object (`\"User\"`, `\"Date\"`).",
+     "kind": "function"
+    },
+    {
+     "name": "toInt",
+     "signature": "types.toInt toFloat toBool toStr toList toMap (v, default?)",
+     "returns": "value · error",
+     "doc": "Lenient conversions: `\" 0x1F \"` → 31, `\"1_000\"` → 1000, `\"yes\"/\"off\"` → bool, a struct → map, pairs → map. When it can't convert: `default`, or an error value.",
+     "kind": "property"
+    },
+    {
+     "name": "is",
+     "signature": "types.is(v, spec)",
+     "returns": "bool",
+     "doc": "Whether `v` matches the spec.",
+     "kind": "function"
+    },
+    {
+     "name": "check",
+     "signature": "types.check(v, spec)",
+     "returns": "value · error",
+     "doc": "`v`, or an error value naming the first problem with its path (`tags[1]: expected str, got int 2`).",
+     "kind": "function"
+    },
+    {
+     "name": "validate",
+     "signature": "types.validate(v, spec)",
+     "returns": "list",
+     "doc": "Every problem (empty when valid).",
+     "kind": "function"
+    },
+    {
+     "name": "assert",
+     "signature": "types.assert(v, spec)",
+     "returns": "value",
+     "doc": "Like `check`, but a mismatch stops the program.",
+     "kind": "function"
+    },
+    {
+     "name": "coerce",
+     "signature": "types.coerce(v, spec)",
+     "returns": "value · error",
+     "doc": "A copy where texts become the ints, floats and bools the spec asks for (query strings, forms, env vars), then checked.",
+     "kind": "function"
+    },
+    {
+     "name": "equal",
+     "signature": "types.equal(a, b)",
+     "returns": "bool · value",
+     "doc": "Deep equality (structs by fields); a deep copy.",
+     "kind": "function"
+    },
+    {
+     "name": "clone",
+     "signature": "types.clone(v)",
+     "returns": "bool · value",
+     "doc": "Deep equality (structs by fields); a deep copy.",
+     "kind": "function"
+    },
+    {
+     "name": "str",
+     "signature": "types.str() int() float() number() bool() any() duration() buffer()",
+     "returns": "Schema",
+     "doc": "Schemas in the style of Zod: a spec with methods. Every method returns a new schema.",
+     "kind": "function"
+    },
+    {
+     "name": "object",
+     "signature": "types.object({ field: schema | spec, … }, { strict })",
+     "returns": "Schema",
+     "doc": "A map with those fields (a field made with `.optional()` may be missing or nil; `strict` refuses unknown fields); a list of `item`; a map whose values match `values`.",
+     "kind": "function"
+    },
+    {
+     "name": "list",
+     "signature": "types.list(item)",
+     "returns": "Schema",
+     "doc": "A map with those fields (a field made with `.optional()` may be missing or nil; `strict` refuses unknown fields); a list of `item`; a map whose values match `values`.",
+     "kind": "function"
+    },
+    {
+     "name": "map",
+     "signature": "types.map(values)",
+     "returns": "Schema",
+     "doc": "A map with those fields (a field made with `.optional()` may be missing or nil; `strict` refuses unknown fields); a list of `item`; a map whose values match `values`.",
+     "kind": "function"
+    },
+    {
+     "name": "enum",
+     "signature": "types.enum([values])",
+     "returns": "Schema",
+     "doc": "One of the values; exactly `v`; a value that matches one of the schemas; a struct or native object by name; a plain spec as a schema.",
+     "kind": "function"
+    },
+    {
+     "name": "literal",
+     "signature": "types.literal(v)",
+     "returns": "Schema",
+     "doc": "One of the values; exactly `v`; a value that matches one of the schemas; a struct or native object by name; a plain spec as a schema.",
+     "kind": "function"
+    },
+    {
+     "name": "union",
+     "signature": "types.union([schemas])",
+     "returns": "Schema",
+     "doc": "One of the values; exactly `v`; a value that matches one of the schemas; a struct or native object by name; a plain spec as a schema.",
+     "kind": "function"
+    },
+    {
+     "name": "instance",
+     "signature": "types.instance(\"Date\")",
+     "returns": "Schema",
+     "doc": "One of the values; exactly `v`; a value that matches one of the schemas; a struct or native object by name; a plain spec as a schema.",
+     "kind": "function"
+    },
+    {
+     "name": "schema",
+     "signature": "types.schema(spec)",
+     "returns": "Schema",
+     "doc": "One of the values; exactly `v`; a value that matches one of the schemas; a struct or native object by name; a plain spec as a schema.",
+     "kind": "function"
+    },
+    {
+     "name": "spec",
+     "signature": "types.spec()",
+     "returns": "bool · list · value · value · error · map",
+     "doc": "As the module functions, for this schema; `spec()` is the plain spec it stands for (usable anywhere a spec is).",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "time",
+   "alias": "time",
+   "summary": "Clocks, waits and dates. A Date is an instant plus a time zone (UTC unless you choose another); its fields and `format` use that zone. The IANA time zone database is built in.",
+   "members": [
+    {
+     "name": "now",
+     "signature": "time.now()",
+     "returns": "int",
+     "doc": "Milliseconds since the UNIX epoch.",
+     "kind": "function"
+    },
+    {
+     "name": "monotonic",
+     "signature": "time.monotonic()",
+     "returns": "float",
+     "doc": "Seconds from a fixed point; never goes backwards (the wall clock can jump): measure durations with it.",
+     "kind": "function"
+    },
+    {
+     "name": "Date",
+     "signature": "time.Date(at?, zone?)",
+     "returns": "Date · error",
+     "doc": "The current instant; or `at` = milliseconds, a text (as `time.parse`) or a map `{ year, month, day, hour, minute, second, millis, zone }`.",
+     "kind": "function"
+    },
+    {
+     "name": "zone",
+     "signature": "time.zone()",
+     "returns": "str · nil · error",
+     "doc": "The default zone of new dates (\"UTC\" at start): an IANA name (`\"America/Sao_Paulo\"`), `\"UTC\"` or `\"local\"` (the system's zone). An unknown name is an error value.",
+     "kind": "function"
+    },
+    {
+     "name": "setZone",
+     "signature": "time.setZone(name)",
+     "returns": "str · nil · error",
+     "doc": "The default zone of new dates (\"UTC\" at start): an IANA name (`\"America/Sao_Paulo\"`), `\"UTC\"` or `\"local\"` (the system's zone). An unknown name is an error value.",
+     "kind": "function"
+    },
+    {
+     "name": "localZone",
+     "signature": "time.localZone()",
+     "returns": "str · list",
+     "doc": "The system's zone (`TZ`, then the OS); every IANA name.",
+     "kind": "function"
+    },
+    {
+     "name": "zones",
+     "signature": "time.zones()",
+     "returns": "str · list",
+     "doc": "The system's zone (`TZ`, then the OS); every IANA name.",
+     "kind": "function"
+    },
+    {
+     "name": "parse",
+     "signature": "time.parse(text, format?, zone?)",
+     "returns": "Date · error",
+     "doc": "RFC 3339 / ISO 8601, RFC 2822, `YYYY-MM-DD[ HH:MM[:SS]]`, or a strftime `format`. Texts without an offset are read in `zone` (default: the default zone).",
+     "kind": "function"
+    },
+    {
+     "name": "format",
+     "signature": "time.format(date | ms, format, zone?)",
+     "returns": "str",
+     "doc": "strftime: `%Y %m %d %H %M %S %3f %A %a %B %b %j %U %Z %z %s`…",
+     "kind": "function"
+    },
+    {
+     "name": "isLeapYear",
+     "signature": "time.isLeapYear(y)",
+     "returns": "bool · int",
+     "kind": "function"
+    },
+    {
+     "name": "daysInMonth",
+     "signature": "time.daysInMonth(y, m)",
+     "returns": "bool · int",
+     "kind": "function"
+    },
+    {
+     "name": "delay",
+     "signature": "time.delay(d)",
+     "returns": "nil",
+     "doc": "Waits; other `fg` tasks keep running.",
+     "kind": "function"
+    },
+    {
+     "name": "sleep",
+     "signature": "time.sleep(seconds)",
+     "returns": "nil",
+     "doc": "Waits; other `fg` tasks keep running.",
+     "kind": "function"
+    },
+    {
+     "name": "getFullYear",
+     "signature": "time.getFullYear() getMonth() getDate() getDay() getHours() getMinutes() getSeconds() getMilliseconds() getTimezoneOffset()",
+     "returns": "int",
+     "doc": "JavaScript-style getters (month 0–11).",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "system",
+   "alias": "system",
+   "summary": "const info = system.info",
+   "members": [
+    {
+     "name": "args",
+     "signature": "system.args",
+     "returns": "list",
+     "doc": "Script arguments (`fogu run app.fg a b` → `[a, b]`).",
+     "kind": "property"
+    },
+    {
+     "name": "time",
+     "signature": "system.time()",
+     "returns": "float",
+     "doc": "Seconds since the epoch.",
+     "kind": "function"
+    },
+    {
+     "name": "readLine",
+     "signature": "system.readLine()",
+     "returns": "str · nil",
+     "doc": "The next line of stdin without its ending; `nil` at the end. Other `fg` tasks keep running while it waits.",
+     "kind": "function"
+    },
+    {
+     "name": "exit",
+     "signature": "system.exit(code)",
+     "doc": "Ends the program.",
+     "kind": "function"
+    },
+    {
+     "name": "info",
+     "signature": "system.info",
+     "doc": "`system.info.os` → str — `windows`/`linux`/`macos` · `x86_64`/`aarch64` · `windows`/`unix`. · `system.info..arch` → str · `system.info..family` → str\n\n`system.info.cores` → int — Logical CPUs · process id. · `system.info..pid` → int\n\n`system.info.env(name)` → str · nil — An environment variable.\n\n`system.info.sleep_ms(ms)` → nil — Blocks the whole program (prefer `time.delay`).",
+     "kind": "property"
+    }
+   ]
+  },
+  {
+   "name": "fs",
+   "alias": "fs",
+   "summary": "Files and folders. Failures (missing file, permission) are error values.",
+   "members": [
+    {
+     "name": "readText",
+     "signature": "fs.readText(path)",
+     "returns": "str · error",
+     "doc": "Whole file as UTF-8 text.",
+     "kind": "function"
+    },
+    {
+     "name": "readLines",
+     "signature": "fs.readLines(path)",
+     "returns": "list · error",
+     "doc": "Lines without line endings.",
+     "kind": "function"
+    },
+    {
+     "name": "writeText",
+     "signature": "fs.writeText(path, text)",
+     "returns": "nil · error",
+     "doc": "Creates or replaces.",
+     "kind": "function"
+    },
+    {
+     "name": "append",
+     "signature": "fs.append(path, text)",
+     "returns": "nil · error",
+     "doc": "Adds to the end (creates the file).",
+     "kind": "function"
+    },
+    {
+     "name": "exists",
+     "signature": "fs.exists(path)",
+     "returns": "bool",
+     "kind": "function"
+    },
+    {
+     "name": "isFile",
+     "signature": "fs.isFile(path)",
+     "returns": "bool",
+     "kind": "function"
+    },
+    {
+     "name": "isDir",
+     "signature": "fs.isDir(path)",
+     "returns": "bool",
+     "kind": "function"
+    },
+    {
+     "name": "mkdir",
+     "signature": "fs.mkdir(path)",
+     "returns": "nil · error",
+     "doc": "Creates the folder and its parents.",
+     "kind": "function"
+    },
+    {
+     "name": "list",
+     "signature": "fs.list(path)",
+     "returns": "list · error",
+     "doc": "Names inside a folder, sorted.",
+     "kind": "function"
+    },
+    {
+     "name": "stat",
+     "signature": "fs.stat(path)",
+     "returns": "map · error",
+     "doc": "`{ size, isFile, isDir, modified }` (modified: ms since the epoch).",
+     "kind": "function"
+    },
+    {
+     "name": "copy",
+     "signature": "fs.copy(from, to)",
+     "returns": "nil · error",
+     "kind": "function"
+    },
+    {
+     "name": "move",
+     "signature": "fs.move(from, to)",
+     "returns": "nil · error",
+     "kind": "function"
+    },
+    {
+     "name": "remove",
+     "signature": "fs.remove(path)",
+     "returns": "nil · error",
+     "doc": "A file or an empty folder.",
+     "kind": "function"
+    },
+    {
+     "name": "removeAll",
+     "signature": "fs.removeAll(path)",
+     "returns": "nil · error",
+     "doc": "A folder and everything inside.",
+     "kind": "function"
+    },
+    {
+     "name": "glob",
+     "signature": "fs.glob(pattern)",
+     "returns": "list",
+     "doc": "Paths matching `*`, `?`, `**`, sorted.",
+     "kind": "function"
+    },
+    {
+     "name": "cwd",
+     "signature": "fs.cwd()",
+     "returns": "str",
+     "doc": "Working folder · system temp folder.",
+     "kind": "function"
+    },
+    {
+     "name": "tempDir",
+     "signature": "fs.tempDir()",
+     "returns": "str",
+     "doc": "Working folder · system temp folder.",
+     "kind": "function"
+    },
+    {
+     "name": "remote",
+     "signature": "fs.remote(ssh | \"user@host\", { sudo })",
+     "returns": "RemoteFs",
+     "doc": "The same functions on a server through [fogu:ssh](#fogussh) (plus `upload(local, remote)` and `download(remote, local)`); every call is an SSH command.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "path",
+   "alias": "path",
+   "summary": "print(path.join(\"src\", \"lib\", \"../main.fg\"))",
+   "members": [
+    {
+     "name": "join",
+     "signature": "path.join(...parts)",
+     "returns": "str",
+     "doc": "Joined with `/` and normalized.",
+     "kind": "function"
+    },
+    {
+     "name": "dirname",
+     "signature": "path.dirname(p)",
+     "returns": "str",
+     "doc": "Folder · last component.",
+     "kind": "function"
+    },
+    {
+     "name": "basename",
+     "signature": "path.basename(p)",
+     "returns": "str",
+     "doc": "Folder · last component.",
+     "kind": "function"
+    },
+    {
+     "name": "stem",
+     "signature": "path.stem(p)",
+     "returns": "str",
+     "doc": "Name without extension · extension with the dot.",
+     "kind": "function"
+    },
+    {
+     "name": "extname",
+     "signature": "path.extname(p)",
+     "returns": "str",
+     "doc": "Name without extension · extension with the dot.",
+     "kind": "function"
+    },
+    {
+     "name": "normalize",
+     "signature": "path.normalize(p)",
+     "returns": "str",
+     "doc": "Resolves `.` and `..`.",
+     "kind": "function"
+    },
+    {
+     "name": "isAbsolute",
+     "signature": "path.isAbsolute(p)",
+     "returns": "bool",
+     "kind": "function"
+    },
+    {
+     "name": "absolute",
+     "signature": "path.absolute(p)",
+     "returns": "str",
+     "doc": "Absolute path from the working folder.",
+     "kind": "function"
+    },
+    {
+     "name": "sep",
+     "signature": "path.sep",
+     "returns": "str",
+     "doc": "The system separator.",
+     "kind": "property"
+    }
+   ]
+  },
+  {
+   "name": "process",
+   "alias": "process",
+   "summary": "A program that exits with a non-zero code is not an error: check `ok` and `code`. Not being able to start it is an error value. For pipes and Linux commands see [fogu:shell](#fogushell).",
+   "members": [
+    {
+     "name": "run",
+     "signature": "process.run(cmd, args?, { cwd, env, input })",
+     "returns": "map · error",
+     "doc": "`{ ok, code, stdout, stderr }`. `input` is a str or a buffer; a missing `cwd` folder or a program that cannot start → error value; an unknown option stops the program.",
+     "kind": "function"
+    },
+    {
+     "name": "shell",
+     "signature": "process.shell(command)",
+     "returns": "map",
+     "doc": "Through `sh -c` / `cmd /C`.",
+     "kind": "function"
+    },
+    {
+     "name": "env",
+     "signature": "process.env(name)",
+     "returns": "str · nil",
+     "kind": "function"
+    },
+    {
+     "name": "setEnv",
+     "signature": "process.setEnv(name, value)",
+     "returns": "str · nil",
+     "kind": "function"
+    },
+    {
+     "name": "cwd",
+     "signature": "process.cwd()",
+     "returns": "str · nil",
+     "kind": "function"
+    },
+    {
+     "name": "chdir",
+     "signature": "process.chdir(path)",
+     "returns": "str · nil",
+     "kind": "function"
+    },
+    {
+     "name": "pid",
+     "signature": "process.pid",
+     "kind": "property"
+    },
+    {
+     "name": "os",
+     "signature": "process.os",
+     "kind": "property"
+    },
+    {
+     "name": "arch",
+     "signature": "process.arch",
+     "kind": "property"
+    },
+    {
+     "name": "args",
+     "signature": "process.args",
+     "kind": "property"
+    },
+    {
+     "name": "exit",
+     "signature": "process.exit(code)",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "sync",
+   "alias": "sync",
+   "summary": "Coordination of `fg` tasks. Waiting operations yield to the other tasks; waiting forever is reported as a deadlock.",
+   "members": [
+    {
+     "name": "Mutex",
+     "signature": "sync.Mutex()",
+     "returns": "Mutex",
+     "doc": "`lock()` `unlock()` `tryLock()` → bool, field `locked`.",
+     "kind": "function"
+    },
+    {
+     "name": "WaitGroup",
+     "signature": "sync.WaitGroup()",
+     "returns": "WaitGroup",
+     "doc": "`add(n = 1)` `done()` `wait()`, field `count`.",
+     "kind": "function"
+    },
+    {
+     "name": "Once",
+     "signature": "sync.Once()",
+     "returns": "Once",
+     "doc": "`do(fn)` runs `fn` only the first time.",
+     "kind": "function"
+    },
+    {
+     "name": "Atomic",
+     "signature": "sync.Atomic(value)",
+     "returns": "Atomic",
+     "doc": "`get()` `set(v)` `add(n = 1)` → new value, `compareAndSwap(old, new)` → bool.",
+     "kind": "function"
+    },
+    {
+     "name": "Semaphore",
+     "signature": "sync.Semaphore(n)",
+     "returns": "Semaphore",
+     "doc": "`acquire()` (waits for a permit) `tryAcquire()` → bool `release()`, fields `available size`. Also limits [fogu:vm](#foguvm) tasks (`{ semaphore }`).",
+     "kind": "function"
+    },
+    {
+     "name": "Worker",
+     "signature": "sync.Worker(file | code | fn, { core }?)",
+     "returns": "Worker · error",
+     "doc": "From a function: its source is sent (never the value), `w.call(...args)` runs it; what it uses must be a `fogu:` module, a top-level function or a constant — a captured local is an error naming it. A program of its own on another OS thread, with its own interpreter — on CPU `core` if given: the way to use several cores (`fg` tasks share one thread). `w.call(name, ...args)` calls a global function of the worker and waits without stopping the other tasks; arguments and results cross as JSON (numbers, texts, bools, nil, lists, maps) and nothing else is shared. A failure of the call comes back as an error value. Each worker is a thread of the same process, not a separate process: its own interpreter, heap of Fogu values, task scheduler and socket reactor, so workers scale over cores without locks. With `net.tcpListen(addr, { reusePort: true })` in each, a TCP server uses every core (`bench/net/tcp_workers.fg`). `w.close()`, fields `core source closed`.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "test",
+   "alias": "",
+   "summary": "Used in `*.test.fg` files, run with `fogu test`. A test fails when an expectation fails, when it raises an error or returns an error value.",
+   "members": [
+    {
+     "name": "test",
+     "signature": "test(name, fn)",
+     "returns": "nil",
+     "doc": "Declares a test.",
+     "kind": "function"
+    },
+    {
+     "name": "skip",
+     "signature": "skip(name, fn)",
+     "returns": "nil",
+     "doc": "A test that is reported but not run.",
+     "kind": "function"
+    },
+    {
+     "name": "expect",
+     "signature": "expect(value)",
+     "returns": "Expectation",
+     "doc": "Then a matcher; `.not` negates it.",
+     "kind": "function"
+    },
+    {
+     "name": "toBe",
+     "signature": "toBe(x)",
+     "doc": "Equality (`toEqual` compares lists and maps deeply).",
+     "kind": "function"
+    },
+    {
+     "name": "toEqual",
+     "signature": "toEqual(x)",
+     "doc": "Equality (`toEqual` compares lists and maps deeply).",
+     "kind": "function"
+    },
+    {
+     "name": "toBeTruthy",
+     "signature": "toBeTruthy()",
+     "kind": "function"
+    },
+    {
+     "name": "toBeFalsy",
+     "signature": "toBeFalsy()",
+     "kind": "function"
+    },
+    {
+     "name": "toBeNil",
+     "signature": "toBeNil()",
+     "kind": "function"
+    },
+    {
+     "name": "toBeError",
+     "signature": "toBeError()",
+     "kind": "function"
+    },
+    {
+     "name": "toBeType",
+     "signature": "toBeType(\"int\")",
+     "kind": "function"
+    },
+    {
+     "name": "toContain",
+     "signature": "toContain(x)",
+     "kind": "function"
+    },
+    {
+     "name": "toHaveLength",
+     "signature": "toHaveLength(n)",
+     "kind": "function"
+    },
+    {
+     "name": "toBeGreaterThan",
+     "signature": "toBeGreaterThan(n)",
+     "kind": "function"
+    },
+    {
+     "name": "toBeLessThan",
+     "signature": "toBeLessThan(n)",
+     "kind": "function"
+    },
+    {
+     "name": "toBeCloseTo",
+     "signature": "toBeCloseTo(x, eps?)",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "log",
+   "alias": "log",
+   "summary": "Structured logs to stderr (default), stdout or a file. The level comes from `FOGU_LOG` (default `info`).",
+   "members": [
+    {
+     "name": "trace",
+     "signature": "log.trace(message, fields?)",
+     "returns": "nil",
+     "doc": "`fields`: a map added as `key=value` (or JSON keys).",
+     "kind": "function"
+    },
+    {
+     "name": "debug",
+     "signature": "log.debug(message, fields?)",
+     "returns": "nil",
+     "doc": "`fields`: a map added as `key=value` (or JSON keys).",
+     "kind": "function"
+    },
+    {
+     "name": "info",
+     "signature": "log.info(message, fields?)",
+     "returns": "nil",
+     "doc": "`fields`: a map added as `key=value` (or JSON keys).",
+     "kind": "function"
+    },
+    {
+     "name": "warn",
+     "signature": "log.warn(message, fields?)",
+     "returns": "nil",
+     "doc": "`fields`: a map added as `key=value` (or JSON keys).",
+     "kind": "function"
+    },
+    {
+     "name": "error",
+     "signature": "log.error(message, fields?)",
+     "returns": "nil",
+     "doc": "`fields`: a map added as `key=value` (or JSON keys).",
+     "kind": "function"
+    },
+    {
+     "name": "setLevel",
+     "signature": "log.setLevel(level)",
+     "returns": "nil",
+     "doc": "`trace debug info warn error off`.",
+     "kind": "function"
+    },
+    {
+     "name": "level",
+     "signature": "log.level()",
+     "returns": "str",
+     "doc": "Current level.",
+     "kind": "function"
+    },
+    {
+     "name": "setFormat",
+     "signature": "log.setFormat(\"text\" | \"json\")",
+     "returns": "nil",
+     "doc": "One line per entry.",
+     "kind": "function"
+    },
+    {
+     "name": "setOutput",
+     "signature": "log.setOutput(\"stderr\" | \"stdout\" | path)",
+     "returns": "nil · error",
+     "doc": "A file is appended to.",
+     "kind": "function"
+    },
+    {
+     "name": "setTime",
+     "signature": "log.setTime(bool)",
+     "returns": "nil",
+     "doc": "Show the time stamp (default true).",
+     "kind": "function"
+    },
+    {
+     "name": "child",
+     "signature": "log.child(fields)",
+     "returns": "Logger",
+     "doc": "A logger that adds `fields` to every line; same methods + `child`.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "regex",
+   "alias": "regex",
+   "summary": "Rust `regex` syntax (linear time, no backtracking). Positions are character indexes. In Fogu strings write `\\\\d` for `\\d`. An invalid pattern is an error value.",
+   "members": [
+    {
+     "name": "compile",
+     "signature": "regex.compile(pattern, { ignoreCase, multiline, dotAll, verbose })",
+     "returns": "Regex · error",
+     "kind": "function"
+    },
+    {
+     "name": "test",
+     "signature": "regex.test(text, pattern, …, opts?)",
+     "doc": "One-off shortcuts; a trailing map is the options of `compile`. In a replacement, `$1x` is the group named `1x`: write `${1}x`.",
+     "kind": "function"
+    },
+    {
+     "name": "find",
+     "signature": "regex.find(text, pattern, …, opts?)",
+     "doc": "One-off shortcuts; a trailing map is the options of `compile`. In a replacement, `$1x` is the group named `1x`: write `${1}x`.",
+     "kind": "function"
+    },
+    {
+     "name": "findAll",
+     "signature": "regex.findAll(text, pattern, …, opts?)",
+     "doc": "One-off shortcuts; a trailing map is the options of `compile`. In a replacement, `$1x` is the group named `1x`: write `${1}x`.",
+     "kind": "function"
+    },
+    {
+     "name": "replace",
+     "signature": "regex.replace(text, pattern, …, opts?)",
+     "doc": "One-off shortcuts; a trailing map is the options of `compile`. In a replacement, `$1x` is the group named `1x`: write `${1}x`.",
+     "kind": "function"
+    },
+    {
+     "name": "replaceAll",
+     "signature": "regex.replaceAll(text, pattern, …, opts?)",
+     "doc": "One-off shortcuts; a trailing map is the options of `compile`. In a replacement, `$1x` is the group named `1x`: write `${1}x`.",
+     "kind": "function"
+    },
+    {
+     "name": "split",
+     "signature": "regex.split(text, pattern, …, opts?)",
+     "doc": "One-off shortcuts; a trailing map is the options of `compile`. In a replacement, `$1x` is the group named `1x`: write `${1}x`.",
+     "kind": "function"
+    },
+    {
+     "name": "matches",
+     "signature": "regex.matches(text, pattern, …, opts?)",
+     "doc": "One-off shortcuts; a trailing map is the options of `compile`. In a replacement, `$1x` is the group named `1x`: write `${1}x`.",
+     "kind": "function"
+    },
+    {
+     "name": "escape",
+     "signature": "regex.escape(text)",
+     "returns": "str",
+     "doc": "A literal pattern.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "crypto",
+   "alias": "crypto",
+   "summary": "print(crypto.hash(\"sha256\", \"abc\"))",
+   "members": [
+    {
+     "name": "hash",
+     "signature": "crypto.hash(algo, data, { base64 })",
+     "returns": "str",
+     "doc": "`md5 sha1 sha256 sha384 sha512`; hex by default.",
+     "kind": "function"
+    },
+    {
+     "name": "encryptFile",
+     "signature": "crypto.encryptFile(src, dst, key)",
+     "returns": "int · error",
+     "doc": "Any file, binary too: AES-256-GCM with a key derived from `key` (the format of `encrypt`, without base64); returns the bytes written. A wrong key or an altered file is an error value and nothing is written.",
+     "kind": "function"
+    },
+    {
+     "name": "decryptFile",
+     "signature": "crypto.decryptFile(src, dst, key)",
+     "returns": "int · error",
+     "doc": "Any file, binary too: AES-256-GCM with a key derived from `key` (the format of `encrypt`, without base64); returns the bytes written. A wrong key or an altered file is an error value and nothing is written.",
+     "kind": "function"
+    },
+    {
+     "name": "hashFile",
+     "signature": "crypto.hashFile(algo, path, { base64 })",
+     "returns": "str · error",
+     "doc": "The digest of a file's bytes (executables, archives: files `fs.readText` cannot read). Missing file → error value.",
+     "kind": "function"
+    },
+    {
+     "name": "hmac",
+     "signature": "crypto.hmac(algo, key, data, { base64 })",
+     "returns": "str",
+     "kind": "function"
+    },
+    {
+     "name": "encrypt",
+     "signature": "crypto.encrypt(data, key)",
+     "returns": "str",
+     "doc": "AES-256-GCM; `key` is a password (argon2id) or 64 hex chars. Base64 output with salt and nonce.",
+     "kind": "function"
+    },
+    {
+     "name": "decrypt",
+     "signature": "crypto.decrypt(box, key, { bytes })",
+     "returns": "str · buffer · error",
+     "doc": "Wrong key or altered data → error value. `{ bytes: true }` returns a buffer; without it, data that is not UTF-8 text is an error value.",
+     "kind": "function"
+    },
+    {
+     "name": "hashPassword",
+     "signature": "crypto.hashPassword(password)",
+     "returns": "str",
+     "doc": "argon2id PHC string (OWASP parameters), for storing passwords. [`fogu:password`](#fogupassword) adds bcrypt, scrypt, PBKDF2, peppers and rehash checks.",
+     "kind": "function"
+    },
+    {
+     "name": "verifyPassword",
+     "signature": "crypto.verifyPassword(password, hash)",
+     "returns": "bool · error",
+     "doc": "Any hash `password.verify` understands; a malformed hash → error value.",
+     "kind": "function"
+    },
+    {
+     "name": "randomBytes",
+     "signature": "crypto.randomBytes(n)",
+     "returns": "buffer · str",
+     "doc": "Secure random.",
+     "kind": "function"
+    },
+    {
+     "name": "randomHex",
+     "signature": "crypto.randomHex(n)",
+     "returns": "buffer · str",
+     "doc": "Secure random.",
+     "kind": "function"
+    },
+    {
+     "name": "generateKeyPair",
+     "signature": "crypto.generateKeyPair(algorithm = \"ed25519\", { bits }?)",
+     "returns": "{ algorithm, bits, privateKey, publicKey }",
+     "doc": "A new key pair as PEM text (private: PKCS#8, public: SPKI — what OpenSSL, JWT libraries and `fogu:tls` read). Algorithms: `ed25519`, `p256` (ECDSA, also `es256`), `p384` (`es384`) and `rsa` with `bits` 2048 (default), 3072 or 4096 (also written `\"rsa-4096\"`; big RSA keys take a moment). Certificates: `tls.selfSigned`.",
+     "kind": "function"
+    },
+    {
+     "name": "randomInt",
+     "signature": "crypto.randomInt(min, max)",
+     "returns": "int",
+     "doc": "Inclusive, unbiased.",
+     "kind": "function"
+    },
+    {
+     "name": "uuid",
+     "signature": "crypto.uuid(version = 4, namespace?, name?)",
+     "returns": "str",
+     "doc": "`uuid()` / `uuid(4)` random, `uuid(7)` time-ordered, `uuid(5, namespace, name)` name-based.",
+     "kind": "function"
+    },
+    {
+     "name": "uuidv4",
+     "signature": "crypto.uuidv4()",
+     "returns": "str",
+     "doc": "v4: random. v7: the creation time in milliseconds followed by random bits — sorts by creation time (also within the same millisecond), good for database keys.",
+     "kind": "function"
+    },
+    {
+     "name": "uuidv7",
+     "signature": "crypto.uuidv7()",
+     "returns": "str",
+     "doc": "v4: random. v7: the creation time in milliseconds followed by random bits — sorts by creation time (also within the same millisecond), good for database keys.",
+     "kind": "function"
+    },
+    {
+     "name": "uuidv5",
+     "signature": "crypto.uuidv5(namespace, name)",
+     "returns": "str",
+     "doc": "SHA-1 of a namespace and a name: the same inputs always give the same UUID. `namespace`: `\"dns\"`, `\"url\"`, `\"oid\"`, `\"x500\"` or a UUID; `name`: str or bytes.",
+     "kind": "function"
+    },
+    {
+     "name": "uuidInfo",
+     "signature": "crypto.uuidInfo(text)",
+     "returns": "map · error",
+     "doc": "`{ version, variant, time }`; `time` is the creation time in ms since the epoch for v1/v6/v7, else nil. Text that is not a UUID → error value.",
+     "kind": "function"
+    },
+    {
+     "name": "base64",
+     "signature": "crypto.base64(data, { url })",
+     "returns": "str",
+     "doc": "`data`: str or list of bytes.",
+     "kind": "function"
+    },
+    {
+     "name": "fromBase64",
+     "signature": "crypto.fromBase64(text, { bytes })",
+     "returns": "str",
+     "doc": "`data`: str or list of bytes.",
+     "kind": "function"
+    },
+    {
+     "name": "hex",
+     "signature": "crypto.hex(data)",
+     "returns": "str",
+     "kind": "function"
+    },
+    {
+     "name": "fromHex",
+     "signature": "crypto.fromHex(text, { bytes })",
+     "returns": "str",
+     "kind": "function"
+    },
+    {
+     "name": "equal",
+     "signature": "crypto.equal(a, b)",
+     "returns": "bool",
+     "doc": "Constant-time comparison.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "password",
+   "alias": "password",
+   "summary": "Password storage. `hash` and `verify` are slow on purpose and run off the interpreter thread, so other `fg` tasks keep running. The salt is always random (16 bytes). Defaults follow the OWASP Password Storage Cheat Sheet: argon2id m=19456 KiB t=2 p=1 · bcrypt cost 12 · scrypt N=2 17 r=8 p=1 · PBKDF2-SHA256 600 000 / PBKDF2-SHA512 210 000 iterations.",
+   "members": [
+    {
+     "name": "hash",
+     "signature": "password.hash(pw, { algorithm, memory, time, parallelism, cost, n, r, p, iterations, pepper })",
+     "returns": "str · error",
+     "doc": "`algorithm`: `argon2id` (default), `argon2i`, `argon2d`, `bcrypt`, `scrypt`, `pbkdf2-sha256`, `pbkdf2-sha512`. argon2: `memory` (KiB), `time`, `parallelism`; bcrypt: `cost` 4..20; scrypt: `n` (power of two), `r`, `p`; PBKDF2: `iterations`. Costs beyond any recommended setting are refused, for new and stored hashes alike: argon2 memory above 2 GiB or memory × time above 8 GiB, scrypt above 2 GiB of memory or 8 GiB of work, bcrypt cost above 20, more than 20 000 000 PBKDF2 iterations. Returns a PHC string (`$argon2id$…`, `$scrypt$…`, `$pbkdf2-sha256$…`) or bcrypt's `$2b$…`. Unknown options stop the program.",
+     "kind": "function"
+    },
+    {
+     "name": "verify",
+     "signature": "password.verify(pw, hash, { pepper })",
+     "returns": "bool · error",
+     "doc": "Detects the algorithm from the hash (`$argon2id$`, `$2a$`/`$2b$`/`$2y$`, `$scrypt$`, `$pbkdf2-sha256$`…); constant-time comparison. A malformed or unsupported hash, or one whose parameters are too large (a hash with `m=4294967295` would abort the process) → error value. Accepts the same options map as `hash`.",
+     "kind": "function"
+    },
+    {
+     "name": "needsRehash",
+     "signature": "password.needsRehash(hash, options?)",
+     "returns": "bool · error",
+     "doc": "True when the hash uses another algorithm or weaker parameters than `options` (default: argon2id with the defaults), or bcrypt `$2a$`. Check it after a successful login and store a new hash.",
+     "kind": "function"
+    },
+    {
+     "name": "info",
+     "signature": "password.info(hash)",
+     "returns": "map · error",
+     "doc": "`{ algorithm, version, … }` without salt or hash: argon2 `memory time parallelism length`, bcrypt `cost`, scrypt `n r p length`, PBKDF2 `iterations length`.",
+     "kind": "function"
+    },
+    {
+     "name": "generate",
+     "signature": "password.generate(length = 16, { upper, lower, digits, symbols, excludeAmbiguous })",
+     "returns": "str",
+     "doc": "From the OS CSPRNG, unbiased, with at least one character of every class chosen (all on by default). `symbols`: a bool or the set of symbols to use; `excludeAmbiguous` drops `Il1O0o`.",
+     "kind": "function"
+    },
+    {
+     "name": "passphrase",
+     "signature": "password.passphrase(words = 5, sep = \"-\")",
+     "returns": "str",
+     "doc": "Words from a built-in list of ~1150 (≈10 bits each: 5 words ≈ 50 bits).",
+     "kind": "function"
+    },
+    {
+     "name": "strength",
+     "signature": "password.strength(pw, [user inputs])",
+     "returns": "map",
+     "doc": "`{ score 0..4, guesses, bits, crackTime, crackTimeOnline, warning, suggestions, estimator }`: zxcvbn when built with the `network` feature, else an entropy estimate on the same scale (`estimator` says which). Same as `security.passwordStrength`.",
+     "kind": "function"
+    },
+    {
+     "name": "algorithms",
+     "signature": "password.algorithms",
+     "returns": "list",
+     "doc": "The algorithm names `hash` accepts.",
+     "kind": "property"
+    }
+   ]
+  },
+  {
+   "name": "csv",
+   "alias": "csv",
+   "summary": "Rows with a header become maps; cells are typed (`42` → int, `3.5` → float, `true` → bool, empty → nil; codes like `007` stay text). The delimiter is guessed (`, ; tab |`).",
+   "members": [
+    {
+     "name": "parse",
+     "signature": "csv.parse(text, { header = true, delimiter, types = true, trim })",
+     "returns": "list · error",
+     "doc": "Maps (or lists without header).",
+     "kind": "function"
+    },
+    {
+     "name": "stringify",
+     "signature": "csv.stringify(rows, { header = true, delimiter = \",\", columns })",
+     "returns": "str",
+     "doc": "Rows: maps (a header line is written) or lists.",
+     "kind": "function"
+    },
+    {
+     "name": "read",
+     "signature": "csv.read(path, options?)",
+     "returns": "list · nil",
+     "doc": "The same, from/to a file.",
+     "kind": "function"
+    },
+    {
+     "name": "write",
+     "signature": "csv.write(path, rows, options?)",
+     "returns": "list · nil",
+     "doc": "The same, from/to a file.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "excel",
+   "alias": "excel",
+   "summary": "Reads `.xlsx .xlsm .xls .xlsb .ods`; writes `.xlsx` (bold, frozen header row, column widths fitted). Dates become ISO text.",
+   "members": [
+    {
+     "name": "read",
+     "signature": "excel.read(path, { sheet, header = true })",
+     "returns": "list · map · error",
+     "doc": "The first sheet (or `sheet`: name or index) as rows; `sheet: \"*\"` → `{ name: rows }`.",
+     "kind": "function"
+    },
+    {
+     "name": "sheets",
+     "signature": "excel.sheets(path)",
+     "returns": "list · error",
+     "doc": "Sheet names.",
+     "kind": "function"
+    },
+    {
+     "name": "write",
+     "signature": "excel.write(path, rows | { Sheet: rows }, { header = true, columns })",
+     "returns": "nil · error",
+     "doc": "One sheet per map key, in the alphabetical order of the keys (the first sheet is the first key); the parent folders are created. NaN, ±inf and buffers are an error value; an int beyond 2^53 is written as text (an Excel number is a double).",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "yaml",
+   "alias": "yaml",
+   "summary": "const cfg = yaml.parse(\"server:\\n  host: 0.0.0.0\\n  ports: [80, 443]\\ndebug: false\\n\")?",
+   "members": [
+    {
+     "name": "parse",
+     "signature": "yaml.parse(text)",
+     "returns": "value · error",
+     "kind": "function"
+    },
+    {
+     "name": "parseAll",
+     "signature": "yaml.parseAll(text)",
+     "returns": "list · error",
+     "doc": "Every document of a `---` stream.",
+     "kind": "function"
+    },
+    {
+     "name": "stringify",
+     "signature": "yaml.stringify(value)",
+     "returns": "str",
+     "kind": "function"
+    },
+    {
+     "name": "read",
+     "signature": "yaml.read(path)",
+     "returns": "value · nil",
+     "kind": "function"
+    },
+    {
+     "name": "write",
+     "signature": "yaml.write(path, value)",
+     "returns": "value · nil",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "toml",
+   "alias": "toml",
+   "summary": "Dates become text. TOML has no null: `nil` values are left out when writing; the top level must be a map.",
+   "members": [
+    {
+     "name": "parse",
+     "signature": "toml.parse(text)",
+     "returns": "map · error",
+     "kind": "function"
+    },
+    {
+     "name": "stringify",
+     "signature": "toml.stringify(map)",
+     "returns": "str",
+     "kind": "function"
+    },
+    {
+     "name": "read",
+     "signature": "toml.read(path)",
+     "returns": "map · nil",
+     "kind": "function"
+    },
+    {
+     "name": "write",
+     "signature": "toml.write(path, map)",
+     "returns": "map · nil",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "xml",
+   "alias": "xml",
+   "summary": "An element is `{ name, attrs, children, text }`; `children` holds elements (maps) and text (str); `text` joins the element's own text.",
+   "members": [
+    {
+     "name": "parse",
+     "signature": "xml.parse(text, { whitespace })",
+     "returns": "map · error",
+     "doc": "The root element.",
+     "kind": "function"
+    },
+    {
+     "name": "stringify",
+     "signature": "xml.stringify(element, { pretty = true, declaration = true })",
+     "returns": "str",
+     "kind": "function"
+    },
+    {
+     "name": "read",
+     "signature": "xml.read(path)",
+     "returns": "map · nil",
+     "kind": "function"
+    },
+    {
+     "name": "write",
+     "signature": "xml.write(path, element, options?)",
+     "returns": "map · nil",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "json5",
+   "alias": "json5",
+   "summary": "[JSON5](https://json5.org), JSON for humans: `//` and `/* */` comments, trailing commas, unquoted keys, single-quoted and multi-line strings (`\\` at the end of a line), hex numbers, `.5` / `5.` / `+1`, `Infinity` and `NaN`. Invalid input is an error value whose message has the `line:column`. Map keys are written sorted.",
+   "members": [
+    {
+     "name": "parse",
+     "signature": "json5.parse(text)",
+     "returns": "value · error",
+     "doc": "JSON5 (or plain JSON) → maps, lists, str, int, float, bool, nil.",
+     "kind": "function"
+    },
+    {
+     "name": "stringify",
+     "signature": "json5.stringify(value, indent?)",
+     "returns": "str",
+     "doc": "JSON5: identifier keys unquoted, `NaN`/`Infinity` kept; `indent` is a number of spaces or a string (compact without it).",
+     "kind": "function"
+    },
+    {
+     "name": "read",
+     "signature": "json5.read(path)",
+     "returns": "value · nil",
+     "doc": "The same, from/to a file.",
+     "kind": "function"
+    },
+    {
+     "name": "write",
+     "signature": "json5.write(path, value, indent = 2)",
+     "returns": "value · nil",
+     "doc": "The same, from/to a file.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "markdown",
+   "alias": "markdown",
+   "summary": "CommonMark plus the GitHub extensions (tables, strikethrough, task lists, footnotes, `> [!NOTE]` alerts), with pulldown-cmark. Front matter (`---` YAML or `+++` TOML on the first line) is skipped by every function; `frontmatter` returns it.",
+   "members": [
+    {
+     "name": "toHtml",
+     "signature": "markdown.toHtml(text, { gfm = true, sanitize = false, headingIds = false, smart = false })",
+     "returns": "str",
+     "doc": "HTML. `sanitize` escapes raw HTML and turns `javascript:`/`vbscript:`/`file:`/non-image `data:` links into `#` (for untrusted text); `headingIds` gives headings their slug as `id`; `smart`: curly quotes and dashes.",
+     "kind": "function"
+    },
+    {
+     "name": "toText",
+     "signature": "markdown.toText(text)",
+     "returns": "str",
+     "doc": "Plain text: no markup, blocks separated by blank lines, list items with `- ` / `1. `, table cells joined by ` | `.",
+     "kind": "function"
+    },
+    {
+     "name": "parse",
+     "signature": "markdown.parse(text)",
+     "returns": "list",
+     "doc": "The block nodes as maps `{ type, … }`: `heading` (level, id), `paragraph`, `list` (ordered, start) of `item` (checked), `codeBlock` (lang, text), `blockquote` (kind), `table` (align) of `row` (header) of `cell`, `html`, `rule`, `footnote` (label); inline: `text`, `code`, `emphasis`, `strong`, `strikethrough`, `link` (url, title), `image` (url, title, alt), `footnoteRef`, `break`. Containers have `children`.",
+     "kind": "function"
+    },
+    {
+     "name": "headings",
+     "signature": "markdown.headings(text)",
+     "returns": "list",
+     "doc": "`{ level, text, id }` for every heading; `id` is a unique GitHub-style slug.",
+     "kind": "function"
+    },
+    {
+     "name": "toc",
+     "signature": "markdown.toc(text, { minLevel = 1, maxLevel = 6 })",
+     "returns": "str",
+     "doc": "A table of contents: a nested Markdown list of links to the headings.",
+     "kind": "function"
+    },
+    {
+     "name": "slug",
+     "signature": "markdown.slug(text)",
+     "returns": "str",
+     "doc": "GitHub-style anchor: `\"Hello, World!\"` → `hello-world`.",
+     "kind": "function"
+    },
+    {
+     "name": "frontmatter",
+     "signature": "markdown.frontmatter(text)",
+     "returns": "tuple · error",
+     "doc": "`[meta, body]`; `meta` is `{}` without front matter. Invalid YAML/TOML is an error value.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "kv",
+   "alias": "kv",
+   "summary": "An embedded key-value store in a single file (redb, ACID). Values are nil, bools, numbers, strs, buffers, durations, lists and maps (stored as JSON); they read back with their type.",
+   "members": [
+    {
+     "name": "open",
+     "signature": "kv.open(path)",
+     "returns": "Store · error",
+     "doc": "Creates the file if needed.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "sql",
+   "alias": "sql",
+   "summary": "SQLite, PostgreSQL and MySQL/MariaDB by URL: `sqlite://app.db`, `sqlite::memory:`, `postgres://user:pass@host/db`, `mysql://user:pass@host/db`. Parameters: `?` (SQLite/MySQL) or `$1` (PostgreSQL).",
+   "members": [
+    {
+     "name": "open",
+     "signature": "sql.open(url)",
+     "returns": "Database · error",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "orm",
+   "alias": "",
+   "summary": "A Prisma-style ORM for SQLite, PostgreSQL and MySQL. Models are described in a map; `migrate: \"auto\"` creates tables (with foreign keys) and adds new columns. Each model is reached as `db. `. Relations load with one query per level.",
+   "members": [
+    {
+     "name": "create_client",
+     "signature": "create_client({ schema, migrate, log })",
+     "returns": "Client · error",
+     "doc": "`schema: { provider, url, models }`; `log: true` prints every SQL statement.",
+     "kind": "function"
+    },
+    {
+     "name": "field",
+     "signature": "field: { type, primary, autoincrement, required, unique, defaultValue }",
+     "doc": "Types `Int BigInt String Bool Float DateTime Json`; defaults `\"now\"`, `\"uuid\"` or a value.",
+     "kind": "property"
+    },
+    {
+     "name": "relation",
+     "signature": "relation: { model, kind, foreignKey, references }",
+     "doc": "`one-to-many`, `many-to-one`, `one-to-one`.",
+     "kind": "property"
+    },
+    {
+     "name": "db",
+     "signature": "db",
+     "doc": "`db.query(sql, params?)` → list · int — Raw SQL. · `db.execute(sql, params?)` → list · int\n\n`db.begin()`\n\n`db.commit()`\n\n`db.rollback()`\n\n`db.migrate()`\n\n`db.disconnect()`",
+     "kind": "property"
+    },
+    {
+     "name": "create",
+     "signature": "create({ data, include, select })",
+     "returns": "map",
+     "doc": "Missing required fields stop the program; a duplicate is an error value.",
+     "kind": "function"
+    },
+    {
+     "name": "createMany",
+     "signature": "createMany({ data: [...] })",
+     "returns": "{ count }",
+     "kind": "function"
+    },
+    {
+     "name": "findMany",
+     "signature": "findMany({ where, select, include, orderBy, take, skip })",
+     "returns": "list",
+     "kind": "function"
+    },
+    {
+     "name": "findFirst",
+     "signature": "findFirst(opts)",
+     "returns": "map · nil",
+     "kind": "function"
+    },
+    {
+     "name": "findUnique",
+     "signature": "findUnique(opts)",
+     "returns": "map · nil",
+     "kind": "function"
+    },
+    {
+     "name": "update",
+     "signature": "update({ where, data })",
+     "returns": "map · error",
+     "doc": "`data` values may be `{ increment, decrement, multiply, divide, set }`.",
+     "kind": "function"
+    },
+    {
+     "name": "updateMany",
+     "signature": "updateMany({ where, data })",
+     "returns": "{ count }",
+     "kind": "function"
+    },
+    {
+     "name": "deleteMany",
+     "signature": "deleteMany({ where })",
+     "returns": "{ count }",
+     "kind": "function"
+    },
+    {
+     "name": "upsert",
+     "signature": "upsert({ where, create, update })",
+     "returns": "map",
+     "kind": "function"
+    },
+    {
+     "name": "delete",
+     "signature": "delete({ where })",
+     "returns": "map · error",
+     "doc": "The deleted record.",
+     "kind": "function"
+    },
+    {
+     "name": "count",
+     "signature": "count({ where })",
+     "returns": "int",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "surrealkv",
+   "alias": "surrealkv",
+   "summary": "SurrealKV: an embedded, versioned LSM key-value store in a folder, with MVCC transactions (snapshot isolation, write conflicts as error values), the history of every key, checkpoints and encryption at rest (AES-256-GCM). Keys are strings, values any Fogu value (stored as JSON); times are ms since the epoch, like `time.now()`. Stores left open are flushed when the program exits.",
+   "members": [
+    {
+     "name": "open",
+     "signature": "surrealkv.open(dir, { versions, retention, sync, key, keyFile, vlog })",
+     "returns": "SurrealKV · error",
+     "doc": "`versions` keeps every version (for `retention`, a duration; 0 = forever); `sync` waits for fsync on each commit; `key` (64 hex digits) or `keyFile` encrypt the store. A folder already open is an error.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "redis",
+   "alias": "redis",
+   "summary": "Redis, Valkey and KeyDB. **Every Redis command is a method** (`r.lpush(…)`, `r.xadd(…)`) or goes through `r.command(\"CMD\", …)`; maps become `field value` pairs. Redis errors (`WRONGTYPE`, `NOAUTH`) are error values.",
+   "members": [
+    {
+     "name": "connect",
+     "signature": "redis.connect(url | { host, port, username, password, db, tls, timeout, name })",
+     "returns": "Redis · error",
+     "doc": "`redis://[user:pass@]host[:port][/db]`, `rediss://` for TLS, default `$REDIS_URL`.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "s3",
+   "alias": "s3",
+   "summary": "AWS S3 and compatible storage (MinIO, Cloudflare R2, Backblaze B2, DigitalOcean Spaces, Wasabi) with AWS Signature V4. Credentials default to `$AWS_ACCESS_KEY_ID`, `$AWS_SECRET_ACCESS_KEY`, `$AWS_REGION`, `$AWS_ENDPOINT_URL`.",
+   "members": [
+    {
+     "name": "connect",
+     "signature": "s3.connect({ endpoint, region, accessKey, secretKey, sessionToken, bucket, pathStyle, timeout })",
+     "returns": "S3",
+     "doc": "Path-style URLs when an `endpoint` is given.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "scylla",
+   "alias": "scylla",
+   "summary": "ScyllaDB and Apache Cassandra (CQL). Statements with parameters are prepared once and cached; parameters are converted to the column types (collections, UDTs, uuid, timestamp…).",
+   "members": [
+    {
+     "name": "connect",
+     "signature": "scylla.connect(\"host:port\" | { hosts, keyspace, user, password, singleNode, addressMap })",
+     "returns": "Scylla · error",
+     "doc": "`addressMap` translates addresses of nodes behind Docker/NAT.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "surrealdb",
+   "alias": "surrealdb",
+   "summary": "A SurrealDB client written on the runtime's networking (no SurrealDB crate): its JSON-RPC protocol over WebSocket (`ws://`, `wss://`: a session, live queries) or HTTP (`http://`, `https://`: `POST /rpc`, the session kept by the client). Tested with SurrealDB 3.3. Record ids are strings (`\"person:ana\"`); dates come back as ISO strings.",
+   "members": [
+    {
+     "name": "connect",
+     "signature": "surrealdb.connect(url?, { namespace, database, user, pass, auth, token, define, timeout = 10s })",
+     "returns": "SurrealDB · error",
+     "doc": "Default `$SURREAL_URL` or `ws://127.0.0.1:8000` (`/rpc` is added); also `$SURREAL_NS $SURREAL_DB $SURREAL_USER $SURREAL_PASS`. `user`/`pass` sign in as a root user; `auth` is passed to `signin` as it is (`{ ns, db, ac, … }` for other levels and record access). `define: true` creates the namespace and database if needed (SurrealDB 3).",
+     "kind": "function"
+    },
+    {
+     "name": "create",
+     "signature": "surrealdb.create(thing, data?)",
+     "returns": "value · error",
+     "doc": "`thing`: a table (`\"person\"`) or a record (`\"person:ana\"`).",
+     "kind": "function"
+    },
+    {
+     "name": "insert",
+     "signature": "surrealdb.insert(table, data)",
+     "returns": "value · error",
+     "doc": "`thing`: a table (`\"person\"`) or a record (`\"person:ana\"`).",
+     "kind": "function"
+    },
+    {
+     "name": "insertRelation",
+     "signature": "surrealdb.insertRelation(table, data)",
+     "returns": "value · error",
+     "doc": "`thing`: a table (`\"person\"`) or a record (`\"person:ana\"`).",
+     "kind": "function"
+    },
+    {
+     "name": "update",
+     "signature": "surrealdb.update(thing, data?)",
+     "returns": "value · error",
+     "doc": "`thing`: a table (`\"person\"`) or a record (`\"person:ana\"`).",
+     "kind": "function"
+    },
+    {
+     "name": "upsert",
+     "signature": "surrealdb.upsert(thing, data?)",
+     "returns": "value · error",
+     "doc": "`thing`: a table (`\"person\"`) or a record (`\"person:ana\"`).",
+     "kind": "function"
+    },
+    {
+     "name": "merge",
+     "signature": "surrealdb.merge(thing, data)",
+     "returns": "value · error",
+     "doc": "`thing`: a table (`\"person\"`) or a record (`\"person:ana\"`).",
+     "kind": "function"
+    },
+    {
+     "name": "patch",
+     "signature": "surrealdb.patch(thing, ops, diff?)",
+     "returns": "value · error",
+     "doc": "`thing`: a table (`\"person\"`) or a record (`\"person:ana\"`).",
+     "kind": "function"
+    },
+    {
+     "name": "delete",
+     "signature": "surrealdb.delete(thing)",
+     "returns": "value · error",
+     "doc": "`thing`: a table (`\"person\"`) or a record (`\"person:ana\"`).",
+     "kind": "function"
+    },
+    {
+     "name": "signin",
+     "signature": "surrealdb.signin(params)",
+     "doc": "`signin`/`signup` return the token and use it from then on; `set` defines a `$name` session variable.",
+     "kind": "function"
+    },
+    {
+     "name": "signup",
+     "signature": "surrealdb.signup(params)",
+     "doc": "`signin`/`signup` return the token and use it from then on; `set` defines a `$name` session variable.",
+     "kind": "function"
+    },
+    {
+     "name": "authenticate",
+     "signature": "surrealdb.authenticate(token)",
+     "doc": "`signin`/`signup` return the token and use it from then on; `set` defines a `$name` session variable.",
+     "kind": "function"
+    },
+    {
+     "name": "invalidate",
+     "signature": "surrealdb.invalidate()",
+     "doc": "`signin`/`signup` return the token and use it from then on; `set` defines a `$name` session variable.",
+     "kind": "function"
+    },
+    {
+     "name": "set",
+     "signature": "surrealdb.set(name, value)",
+     "doc": "`signin`/`signup` return the token and use it from then on; `set` defines a `$name` session variable.",
+     "kind": "function"
+    },
+    {
+     "name": "unset",
+     "signature": "surrealdb.unset(name)",
+     "doc": "`signin`/`signup` return the token and use it from then on; `set` defines a `$name` session variable.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "etcd",
+   "alias": "etcd",
+   "summary": "etcd v3 over gRPC (the official protos, no code generation): keys, ranges by prefix, leases, transactions, watches and cluster status. Calls go to every endpoint in turn; with `user` the token is renewed when it expires.",
+   "members": [
+    {
+     "name": "defaultEndpoints",
+     "signature": "etcd.defaultEndpoints()",
+     "returns": "list",
+     "doc": "The endpoints `connect()` uses without arguments (`$ETCDCTL_ENDPOINTS` or `http://127.0.0.1:2379`).",
+     "kind": "function"
+    },
+    {
+     "name": "connect",
+     "signature": "etcd.connect(url? | { endpoints, user, password, tls, timeout = 15s, connectTimeout = 5s })",
+     "returns": "Etcd · error",
+     "doc": "Default `$ETCDCTL_ENDPOINTS` or `http://127.0.0.1:2379`; `user` may be `\"name:pass\"` (also `$ETCDCTL_USER`/`$ETCDCTL_PASSWORD`).",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "http",
+   "alias": "http",
+   "summary": "A minimal HTTP server (one handler for every request) and an HTTP client. For routing, middleware, static files, uploads, SSE and WebSocket use [fogu:web](#foguweb).",
+   "members": [
+    {
+     "name": "get",
+     "signature": "http.get(url, opts?)",
+     "returns": "Response · error",
+     "doc": "Network failures are error values; HTTP 4xx/5xx are normal responses (`res.ok` is false).",
+     "kind": "function"
+    },
+    {
+     "name": "delete",
+     "signature": "http.delete(url, opts?)",
+     "returns": "Response · error",
+     "doc": "Network failures are error values; HTTP 4xx/5xx are normal responses (`res.ok` is false).",
+     "kind": "function"
+    },
+    {
+     "name": "head",
+     "signature": "http.head(url, opts?)",
+     "returns": "Response · error",
+     "doc": "Network failures are error values; HTTP 4xx/5xx are normal responses (`res.ok` is false).",
+     "kind": "function"
+    },
+    {
+     "name": "post",
+     "signature": "http.post(url, body?, opts?)",
+     "returns": "Response · error",
+     "doc": "`body`: a str (text/plain), a map or list (JSON), bytes (octet-stream).",
+     "kind": "function"
+    },
+    {
+     "name": "put",
+     "signature": "http.put(…)",
+     "returns": "Response · error",
+     "doc": "`body`: a str (text/plain), a map or list (JSON), bytes (octet-stream).",
+     "kind": "function"
+    },
+    {
+     "name": "patch",
+     "signature": "http.patch(…)",
+     "returns": "Response · error",
+     "doc": "`body`: a str (text/plain), a map or list (JSON), bytes (octet-stream).",
+     "kind": "function"
+    },
+    {
+     "name": "request",
+     "signature": "http.request({ method, url, ...opts })",
+     "returns": "Response · error",
+     "kind": "function"
+    },
+    {
+     "name": "file",
+     "signature": "http.file(path, { filename, type })",
+     "returns": "HttpFile · error",
+     "doc": "A file to upload; the type comes from the extension.",
+     "kind": "function"
+    },
+    {
+     "name": "download",
+     "signature": "http.download(url, path, opts?)",
+     "returns": "int · error",
+     "doc": "Streams the body to a file; returns the bytes written (non-2xx is an error).",
+     "kind": "function"
+    },
+    {
+     "name": "serve",
+     "signature": "http.serve(port | \"ip:port\", fn(req), { tls: { cert, key }, quiet, maxBody, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout }?)",
+     "returns": "nil",
+     "doc": "`tls` serves HTTPS (see [fogu:tls](#fogutls)). The handler returns a response (`http.text/json/html`), a str (text), any other value (JSON), nil (404) or an `error` (logged; the client gets a 500). Limits (defaults): `maxBody` (10 MB, 413), `maxHeaderBytes` (64 KB for the request line and headers, 431), `headerTimeout` (30s to send the headers; also closes idle keep-alive connections), `readTimeout` (60s for the body, 408), `handlerTimeout` (60s for the program's answer, 504; `0` = none). The request path is made canonical once, before static files, middlewares and routes see it: decoded once (`+` stays `+`), repeated slashes collapsed, `.`/`..` resolved; an encoded `/` or `\\`, a raw `\\`, a control character or a `..` above the root is a 400. A Rust panic in a handler answers that request with a 500 and the server goes on. Several servers may run in one program. Requests are answered as soon as they arrive while the program is alive — waiting in `Fogu.signal.wait()`, `time.delay`, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or `\"0.0.0.0:8080\"`, `\"[::1]:8080\"`, `\":8080\"`.",
+     "kind": "function"
+    },
+    {
+     "name": "text",
+     "signature": "http.text(body, opts?)",
+     "returns": "Response",
+     "doc": "`opts: { status, headers }`.",
+     "kind": "function"
+    },
+    {
+     "name": "json",
+     "signature": "http.json(value, opts?)",
+     "returns": "Response",
+     "doc": "`opts: { status, headers }`.",
+     "kind": "function"
+    },
+    {
+     "name": "html",
+     "signature": "http.html(body, opts?)",
+     "returns": "Response",
+     "doc": "`opts: { status, headers }`.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "web",
+   "alias": "web",
+   "summary": "A web framework: routes with parameters, middleware, static files and SPA builds, uploads, downloads, Server-Sent Events and WebSocket — on one port. Requests are served as soon as they arrive while the program waits (`Fogu.signal.wait()`, `time.delay`, a channel), each in its own task: a handler that waits on a query or an HTTP call does not hold the others.",
+   "members": [
+    {
+     "name": "app",
+     "signature": "web.app()",
+     "returns": "App",
+     "doc": "Methods return the app, so calls can be chained.",
+     "kind": "function"
+    },
+    {
+     "name": "json",
+     "signature": "web.json(body, { status, headers })",
+     "returns": "Response",
+     "kind": "function"
+    },
+    {
+     "name": "text",
+     "signature": "web.text(body, { status, headers })",
+     "returns": "Response",
+     "kind": "function"
+    },
+    {
+     "name": "html",
+     "signature": "web.html(body, { status, headers })",
+     "returns": "Response",
+     "kind": "function"
+    },
+    {
+     "name": "redirect",
+     "signature": "web.redirect(url, status = 302)",
+     "returns": "Response",
+     "kind": "function"
+    },
+    {
+     "name": "file",
+     "signature": "web.file(path, { download, contentType, status })",
+     "returns": "Response · error",
+     "doc": "Sent by the server thread (binary safe). `download: true` uses the file's name, `download: \"name\"` another (non-ASCII names as RFC 6266 `filename*`).",
+     "kind": "function"
+    },
+    {
+     "name": "sse",
+     "signature": "web.sse({ retry, headers })",
+     "returns": "SseStream",
+     "doc": "Return it from the handler; `send(data, { event, id })`, `comment(text)`, `close()`, field `open`.",
+     "kind": "function"
+    },
+    {
+     "name": "cors",
+     "signature": "web.cors({ origin, methods, headers, credentials, maxAge })",
+     "returns": "middleware",
+     "doc": "Answers preflight requests, also as a route's own middleware. With `credentials: true` and `origin: \"*\"` the request's origin is echoed (browsers refuse `*` with credentials).",
+     "kind": "function"
+    },
+    {
+     "name": "logger",
+     "signature": "web.logger()",
+     "returns": "middleware",
+     "doc": "`GET /path 200 0.4ms`.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "topcoat",
+   "alias": "tc",
+   "summary": "Server-rendered reactive pages for [fogu:web](#foguweb), in the model of [Topcoat](https://github.com/tokio-rs/topcoat): HTML is built on the server; signals hold browser state; `@event` handlers, `:attr` bindings and live text update in the browser without a round-trip; shards re-render on the server when their inputs change and are swapped in place (keeping focus and input state); procedures are server functions called from the browser. The browser runtime (~18 KB, no build step) and the stylesheets are served by every fogu:web app under `/_tc/`. Two UI kits: `tc.ui` (the look of Topcoat UI) and `tc.shadcn` (the components of [shadcn-rs](https://github.com/hughdbrown/shadcn-rs)), plus Tailwind CSS.",
+   "members": [
+    {
+     "name": "h",
+     "signature": "tc.h(tag, attrs?, ...children)",
+     "returns": "Html",
+     "doc": "Children: strings (escaped), `Html`, lists, numbers, signals and expressions (live text); `nil`/`false` render nothing. Attributes: `true` → bare, `false`/`nil` → left out, `class` may be a list or a `{ name: on }` map, `style` a map.",
+     "kind": "function"
+    },
+    {
+     "name": "page",
+     "signature": "tc.page({ title, head, body, lang = \"en\", theme = \"light\" | \"dark\" | \"system\", ui = true | \"shadcn\" | false, tailwind, icon, bodyClass })",
+     "returns": "Html",
+     "doc": "A whole document with the runtime, the stylesheet and the Fogu favicon (`icon`: another URL, or `false`). The theme the user picked with `ui.themeToggle()` is applied before the first paint. Return an `Html` from a handler: it is sent as HTML with the page's signals.",
+     "kind": "function"
+    },
+    {
+     "name": "raw",
+     "signature": "tc.raw(html)",
+     "returns": "Html · str",
+     "kind": "function"
+    },
+    {
+     "name": "fragment",
+     "signature": "tc.fragment(...children)",
+     "returns": "Html · str",
+     "kind": "function"
+    },
+    {
+     "name": "escape",
+     "signature": "tc.escape(str)",
+     "returns": "Html · str",
+     "kind": "function"
+    },
+    {
+     "name": "script",
+     "signature": "tc.script()",
+     "returns": "Html",
+     "doc": "For documents written by hand.",
+     "kind": "function"
+    },
+    {
+     "name": "styles",
+     "signature": "tc.styles()",
+     "returns": "Html",
+     "doc": "For documents written by hand.",
+     "kind": "function"
+    },
+    {
+     "name": "tailwind",
+     "signature": "tc.tailwind(true | href)",
+     "returns": "Html",
+     "doc": "For documents written by hand.",
+     "kind": "function"
+    },
+    {
+     "name": "signal",
+     "signature": "tc.signal(ctx, name, initial)",
+     "returns": "Signal",
+     "doc": "Browser state named `name` (a JS identifier). `s.value` / `s.get()` read it on the server and make it tracked : a change in the browser renders the page (or the shard that read it) again with the new value. `s.peek()` reads without tracking. Values sent by the browser are user input: validate them.",
+     "kind": "function"
+    },
+    {
+     "name": "set",
+     "signature": "tc.set(v)",
+     "doc": "Plus `call(name, ...args)`, `navigate(url)`, `toast(title, { description, type, duration })`, `await ask(message, { title, confirm, cancel, danger })` (a confirmation dialog → bool), `copy(text, label)`, `toggleTheme()` and `tc.signals`.",
+     "kind": "function"
+    },
+    {
+     "name": "update",
+     "signature": "tc.update(f)",
+     "doc": "Plus `call(name, ...args)`, `navigate(url)`, `toast(title, { description, type, duration })`, `await ask(message, { title, confirm, cancel, danger })` (a confirmation dialog → bool), `copy(text, label)`, `toggleTheme()` and `tc.signals`.",
+     "kind": "function"
+    },
+    {
+     "name": "increment",
+     "signature": "tc.increment(n)",
+     "doc": "Plus `call(name, ...args)`, `navigate(url)`, `toast(title, { description, type, duration })`, `await ask(message, { title, confirm, cancel, danger })` (a confirmation dialog → bool), `copy(text, label)`, `toggleTheme()` and `tc.signals`.",
+     "kind": "function"
+    },
+    {
+     "name": "decrement",
+     "signature": "tc.decrement(n)",
+     "doc": "Plus `call(name, ...args)`, `navigate(url)`, `toast(title, { description, type, duration })`, `await ask(message, { title, confirm, cancel, danger })` (a confirmation dialog → bool), `copy(text, label)`, `toggleTheme()` and `tc.signals`.",
+     "kind": "function"
+    },
+    {
+     "name": "toggle",
+     "signature": "tc.toggle()",
+     "doc": "Plus `call(name, ...args)`, `navigate(url)`, `toast(title, { description, type, duration })`, `await ask(message, { title, confirm, cancel, danger })` (a confirmation dialog → bool), `copy(text, label)`, `toggleTheme()` and `tc.signals`.",
+     "kind": "function"
+    },
+    {
+     "name": "push",
+     "signature": "tc.push(x)",
+     "doc": "Plus `call(name, ...args)`, `navigate(url)`, `toast(title, { description, type, duration })`, `await ask(message, { title, confirm, cancel, danger })` (a confirmation dialog → bool), `copy(text, label)`, `toggleTheme()` and `tc.signals`.",
+     "kind": "function"
+    },
+    {
+     "name": "expr",
+     "signature": "tc.expr(js, initial?)",
+     "returns": "Expr",
+     "doc": "A browser expression: live text, an `:attr` value or a shard prop.",
+     "kind": "function"
+    },
+    {
+     "name": "shard",
+     "signature": "tc.shard(name, fn(ctx, props))",
+     "returns": "Shard · Html",
+     "doc": "Props are fixed values or signals/expressions; when one changes, `POST /_tc/s/ ` renders it again and the browser morphs it in. The first page that renders a shard registers it; `app.shard` does it up front. Check access inside the shard: page middleware scoped to a path does not run for it.",
+     "kind": "function"
+    },
+    {
+     "name": "ui",
+     "signature": "tc.ui",
+     "doc": "`tc.ui.button(children, { variant, size, href })` → Html — Topcoat UI's look (its neutral theme tokens, plain CSS: `/_tc/ui.css`). Variants `secondary outline ghost destructive link`; badges also `success warning`; sizes `sm lg icon`. Extra options become attributes (`@click`, `class`…). · `tc.ui.badge` → Html · `tc.ui.card(content, { title, description, footer, action })` → Html · `tc.ui.stat(label, value, { hint })` → Html\n\n`tc.ui.icon(name, { size = 16 })` → Html — 35 built-in stroke icons (`activity alert arrow-right check chevron-right clock copy database edit eye flame hash home key layers lock logout message moon network plus radio refresh search send server settings shield sun terminal trash users x zap`); `stat(label, value, { icon, tone, trend: [numbers], hint })` draws a trend line; tones `primary success warning destructive info`. `shell` nav items take an `icon`, and `footer` goes under the nav; `grid(children, { min })`, `table(…, { header: false })`. · `tc.ui.logo({ size, text })` → Html · `tc.ui.sparkline(values, { width, height, area })` → Html · `tc.ui.empty(title, { description, icon, action })` → Html · `tc.ui.live(text)` → Html · `tc.ui.themeToggle()` → Html\n\n`tc.ui.input` → Html\n\n`tc.ui.textarea` → Html\n\n`tc.ui.select(options, { value })` → Html\n\n`tc.ui.checkbox` → Html\n\n`tc.ui.switch` → Html\n\n`tc.ui.label` → Html\n\n`tc.ui.field(label, control, { description, error })` → Html\n\n`tc.ui.table(columns, rows, { empty, caption })` → Html — `columns`: names or `{ key, label, align }`; rows: maps or lists; cells may be `Html`. · `tc.ui.alert(title, text, { variant })` → Html · `tc.ui.progress(value)` → Html · `tc.ui.skeleton` → Html · `tc.ui.spinner` → Html · `tc.ui.separator` → Html · `tc.ui.kbd` → Html · `tc.ui.tabs` → Html · `tc.ui.link` → Html · `tc.ui.shell({ brand, nav, title, actions }, content)` → Html · `tc.ui.row` → Html · `tc.ui.stack` → Html · `tc.ui.grid` → Html · `tc.ui.container` → Html",
+     "kind": "property"
+    },
+    {
+     "name": "shadcn",
+     "signature": "tc.shadcn",
+     "doc": "`tc.shadcn.button` → Html — The markup and class names of shadcn-rs, styled by its stylesheet (`page({ ui: \"shadcn\" })`). Button variants `default primary secondary destructive outline ghost link`, sizes `xs sm md lg xl`. · `tc.shadcn.badge` → Html · `tc.shadcn.card` → Html · `tc.shadcn.stat` → Html · `tc.shadcn.alert` → Html · `tc.shadcn.input` → Html · `tc.shadcn.textarea` → Html · `tc.shadcn.select` → Html · `tc.shadcn.checkbox` → Html · `tc.shadcn.switch(signal)` → Html · `tc.shadcn.label` → Html · `tc.shadcn.field` → Html · `tc.shadcn.table` → Html\n\n`tc.shadcn.tabs(signal, [{ value, label, content }])` → Html — Interactive parts run in the browser: tabs and dialogs follow a signal; `pagination` takes a signal or an `href` with `{page}`. · `tc.shadcn.dialog(signal, { title, description, footer, trigger }, content)` → Html · `tc.shadcn.accordion([{ title, content, open }], { multiple })` → Html · `tc.shadcn.dropdown(trigger, items)` → Html · `tc.shadcn.tooltip(trigger, text)` → Html · `tc.shadcn.pagination(page, pages, { href })` → Html · `tc.shadcn.progress` → Html · `tc.shadcn.skeleton` → Html · `tc.shadcn.separator` → Html · `tc.shadcn.avatar` → Html · `tc.shadcn.kbd` → Html · `tc.shadcn.breadcrumb` → Html · `tc.shadcn.shell` → Html · `tc.shadcn.toaster` → Html",
+     "kind": "property"
+    },
+    {
+     "name": "tailwindTheme",
+     "signature": "tc.tailwindTheme",
+     "doc": "`true` loads Tailwind v4's browser build (development) with the theme tokens as utilities (`bg-primary`, `text-muted-foreground`, `border-border`, `dark:`); for production build a stylesheet with the Tailwind CLI (`@import \"tailwindcss\"; @source \"./**/*.fg\";` plus `tc.tailwindTheme`) and pass its URL.",
+     "kind": "property"
+    }
+   ]
+  },
+  {
+   "name": "jwt",
+   "alias": "jwt",
+   "summary": "JSON Web Tokens with HMAC (HS256/HS384/HS512). A token that fails verification is an error value.",
+   "members": [
+    {
+     "name": "sign",
+     "signature": "jwt.sign(payload, secret, { algorithm, expiresIn, notBefore, issuer, audience, subject, jwtid, header, noTimestamp })",
+     "returns": "str",
+     "doc": "`iat` is added; durations or seconds for times.",
+     "kind": "function"
+    },
+    {
+     "name": "verify",
+     "signature": "jwt.verify(token, secret, { algorithms, issuer, audience, subject, leeway, maxAge, ignoreExpiration })",
+     "returns": "map · error",
+     "doc": "The claims.",
+     "kind": "function"
+    },
+    {
+     "name": "decode",
+     "signature": "jwt.decode(token)",
+     "returns": "map · error",
+     "doc": "`{ header, payload }` without verifying.",
+     "kind": "function"
+    },
+    {
+     "name": "middleware",
+     "signature": "jwt.middleware(secret, { property = \"user\", optional, …verify options })",
+     "returns": "middleware",
+     "doc": "For `fogu:web`: `Authorization: Bearer` → `ctx.user`, otherwise 401.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "socketio",
+   "alias": "socketio",
+   "summary": "Socket.IO (protocol v5) servers and clients, compatible with the official JavaScript, Python and Go libraries. The server is socketioxide (WebSocket and long polling); the client speaks Engine.IO v4 over WebSocket; it runs standalone or on the port of a [fogu:web](#foguweb) app. Handlers run as `fg` tasks in the order the messages arrived; keep the program alive meanwhile (`Fogu.signal.wait()`, a loop…).",
+   "members": [
+    {
+     "name": "server",
+     "signature": "socketio.server({ path = \"/socket.io\", pingInterval, pingTimeout, ackTimeout, maxPayload })",
+     "returns": "SocketIoServer",
+     "kind": "function"
+    },
+    {
+     "name": "leave",
+     "signature": "socketio.leave(room)",
+     "doc": "`to`/`broadcast` exclude the socket itself.",
+     "kind": "function"
+    },
+    {
+     "name": "to",
+     "signature": "socketio.to(room).emit(…)",
+     "doc": "`to`/`broadcast` exclude the socket itself.",
+     "kind": "function"
+    },
+    {
+     "name": "disconnect",
+     "signature": "socketio.disconnect()",
+     "doc": "`to`/`broadcast` exclude the socket itself.",
+     "kind": "function"
+    },
+    {
+     "name": "connect",
+     "signature": "socketio.connect(url, { namespace, auth, headers, path = \"/socket.io\", reconnect = true, timeout = 10s })",
+     "returns": "SocketIoClient · error",
+     "doc": "Returns once connected. Like the JavaScript client, the url's path is the namespace (`http://host:3000/admin`). A refused connection (auth middleware) is an error value.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "grpc",
+   "alias": "grpc",
+   "summary": "gRPC servers and clients without code generation: the messages are described by a [fogu:protobuf](#foguprotobuf) schema (`.proto` compiled at run time) and travel as maps. Unary, server streaming, client streaming and bidirectional methods (the requests of a bidirectional call are all received before the handler runs). Each request runs as its own `fg` task.",
+   "members": [
+    {
+     "name": "server",
+     "signature": "grpc.server(schema)",
+     "returns": "GrpcServer",
+     "kind": "function"
+    },
+    {
+     "name": "connect",
+     "signature": "grpc.connect(url, schema, { timeout, metadata, ca, domain })",
+     "returns": "GrpcClient",
+     "doc": "`https://` uses TLS (system roots or `ca`). Connects on the first call.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "security",
+   "alias": "security",
+   "summary": "Security and network auditing: TLS and certificates (rustls, x509-parser, rcgen), port scanning, DNS (own resolver: UDP with EDNS0, TCP fallback), HTTP security headers, password strength (zxcvbn), TOTP two-factor codes, secret scanning, Ed25519 signatures, IP ranges (ipnet) and rate limiting. Scan only hosts you are allowed to test.",
+   "members": [
+    {
+     "name": "tls",
+     "signature": "security.tls(host, { port = 443, sni, ca, alpn, timeout = 5s })",
+     "returns": "map · error",
+     "doc": "`{ valid, error, protocol, cipher, alpn, daysLeft, handshakeMs, chain }` — the chain is inspected even when it is not trusted.",
+     "kind": "function"
+    },
+    {
+     "name": "parseCert",
+     "signature": "security.parseCert(pem | der)",
+     "returns": "map · { cert, key }",
+     "doc": "`subject commonName issuer names serial notBefore notAfter daysLeft expired selfSigned ca signature keyType keyBits sha256`.",
+     "kind": "function"
+    },
+    {
+     "name": "selfSigned",
+     "signature": "security.selfSigned(names, { days = 365 })",
+     "returns": "map · { cert, key }",
+     "doc": "`subject commonName issuer names serial notBefore notAfter daysLeft expired selfSigned ca signature keyType keyBits sha256`.",
+     "kind": "function"
+    },
+    {
+     "name": "scan",
+     "signature": "security.scan(host, ports = \"common\", { timeout = 500ms, concurrency = 200, banner })",
+     "returns": "list · error",
+     "doc": "Ports: an int, a list, a range or `\"22,80,8000-8100\"`. → `[{ port, service, banner }]`.",
+     "kind": "function"
+    },
+    {
+     "name": "dns",
+     "signature": "security.dns(name, type = \"A\", { server, timeout = 3s })",
+     "returns": "list · error",
+     "doc": "`A AAAA MX TXT NS CNAME SOA CAA SRV PTR…` → `[{ type, value, ttl }]`. Servers: `server`, `$FOGU_DNS`, the system's, then 1.1.1.1/8.8.8.8.",
+     "kind": "function"
+    },
+    {
+     "name": "reverseDns",
+     "signature": "security.reverseDns(ip, opts?)",
+     "returns": "list · error",
+     "doc": "`A AAAA MX TXT NS CNAME SOA CAA SRV PTR…` → `[{ type, value, ttl }]`. Servers: `server`, `$FOGU_DNS`, the system's, then 1.1.1.1/8.8.8.8.",
+     "kind": "function"
+    },
+    {
+     "name": "headers",
+     "signature": "security.headers(url, { timeout })",
+     "returns": "map · error",
+     "doc": "HSTS, CSP, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy → `{ grade, score, present, missing, warnings }` (leaky `server`, unsafe CSP, cookies without Secure/HttpOnly/SameSite…).",
+     "kind": "function"
+    },
+    {
+     "name": "passwordStrength",
+     "signature": "security.passwordStrength(pw, [userInputs])",
+     "returns": "map",
+     "doc": "`{ score 0..4, guesses, bits, crackTime, crackTimeOnline, warning, suggestions, estimator }` (zxcvbn). The same as [`password.strength`](#fogupassword).",
+     "kind": "function"
+    },
+    {
+     "name": "totpSecret",
+     "signature": "security.totpSecret()",
+     "doc": "RFC 6238 (SHA-1, 6 digits, 30 s); the URL goes into a QR code for authenticator apps.",
+     "kind": "function"
+    },
+    {
+     "name": "totp",
+     "signature": "security.totp(secret, opts)",
+     "doc": "RFC 6238 (SHA-1, 6 digits, 30 s); the URL goes into a QR code for authenticator apps.",
+     "kind": "function"
+    },
+    {
+     "name": "verifyTotp",
+     "signature": "security.verifyTotp(secret, code, { window = 1 })",
+     "doc": "RFC 6238 (SHA-1, 6 digits, 30 s); the URL goes into a QR code for authenticator apps.",
+     "kind": "function"
+    },
+    {
+     "name": "otpauthUrl",
+     "signature": "security.otpauthUrl(secret, account, { issuer })",
+     "doc": "RFC 6238 (SHA-1, 6 digits, 30 s); the URL goes into a QR code for authenticator apps.",
+     "kind": "function"
+    },
+    {
+     "name": "scanSecrets",
+     "signature": "security.scanSecrets(text)",
+     "returns": "list",
+     "doc": "AWS keys, GitHub/GitLab/Slack/Stripe/OpenAI/Anthropic tokens, private keys, JWTs, passwords in URLs, `password = \"…\"` → `[{ file?, rule, line, column, match }]` (redacted).",
+     "kind": "function"
+    },
+    {
+     "name": "scanFiles",
+     "signature": "security.scanFiles(path)",
+     "returns": "list",
+     "doc": "AWS keys, GitHub/GitLab/Slack/Stripe/OpenAI/Anthropic tokens, private keys, JWTs, passwords in URLs, `password = \"…\"` → `[{ file?, rule, line, column, match }]` (redacted).",
+     "kind": "function"
+    },
+    {
+     "name": "keypair",
+     "signature": "security.keypair()",
+     "doc": "Ed25519, base64 keys and signatures.",
+     "kind": "function"
+    },
+    {
+     "name": "sign",
+     "signature": "security.sign(privateKey, msg)",
+     "doc": "Ed25519, base64 keys and signatures.",
+     "kind": "function"
+    },
+    {
+     "name": "verify",
+     "signature": "security.verify(publicKey, msg, sig)",
+     "doc": "Ed25519, base64 keys and signatures.",
+     "kind": "function"
+    },
+    {
+     "name": "constantTimeEq",
+     "signature": "security.constantTimeEq(a, b)",
+     "returns": "bool",
+     "kind": "function"
+    },
+    {
+     "name": "cidr",
+     "signature": "security.cidr(c)",
+     "kind": "function"
+    },
+    {
+     "name": "inCidr",
+     "signature": "security.inCidr(ip, c | [c])",
+     "kind": "function"
+    },
+    {
+     "name": "isPrivate",
+     "signature": "security.isPrivate(ip)",
+     "kind": "function"
+    },
+    {
+     "name": "hosts",
+     "signature": "security.hosts(c, { limit })",
+     "kind": "function"
+    },
+    {
+     "name": "rateLimiter",
+     "signature": "security.rateLimiter(ratePerSecond, burst) → allow(key?, cost?)",
+     "returns": "RateLimiter",
+     "doc": "A token bucket per key (e.g. the client IP).",
+     "kind": "function"
+    },
+    {
+     "name": "remaining",
+     "signature": "security.remaining(key)",
+     "returns": "RateLimiter",
+     "doc": "A token bucket per key (e.g. the client IP).",
+     "kind": "function"
+    },
+    {
+     "name": "reset",
+     "signature": "security.reset(key?)",
+     "returns": "RateLimiter",
+     "doc": "A token bucket per key (e.g. the client IP).",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "websocket",
+   "alias": "websocket",
+   "summary": "WebSocket client (`ws://`, `wss://`) and a standalone server. The same connection object is used by `app.ws` in `fogu:web`. Each connection runs on the shared runtime (no thread per connection): `next` and `accept` wait cooperatively and wake up when a message or a client arrives.",
+   "members": [
+    {
+     "name": "connect",
+     "signature": "websocket.connect(url, { headers, protocols, timeout })",
+     "returns": "WebSocket · error",
+     "doc": "A rejected handshake (401, 404…) is an error value.",
+     "kind": "function"
+    },
+    {
+     "name": "listen",
+     "signature": "websocket.listen(port, { host })",
+     "returns": "Server · error",
+     "doc": "`port 0` picks a free port; `server.accept(timeout?)` → WebSocket, fields `port url`.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "webrtc",
+   "alias": "webrtc",
+   "summary": "Peer-to-peer data channels (WebRTC) with other Fogu programs and with browsers, built on [str0m](https://github.com/algesten/str0m) (ICE, DTLS, SCTP; no media tracks). Each peer is a task on the shared runtime with one UDP socket per local address; `recv`, `accept` and `wait` wait cooperatively. Candidates are gathered before an offer or answer is made (host addresses, plus a STUN server-reflexive one), so one offer/answer exchange is enough; trickling with `on(\"candidate\")` / `addCandidate` works too. Signaling goes over [fogu:web](#foguweb) / [fogu:websocket](#foguwebsocket) (rooms) or one HTTP POST. Not available on WebAssembly.",
+   "members": [
+    {
+     "name": "peer",
+     "signature": "webrtc.peer({ iceServers, hosts, port, disconnectTimeout = 15s })",
+     "returns": "Peer · error",
+     "doc": "`iceServers: [{ urls, username?, credential? }]` (default `stun:stun.l.google.com:19302`; `[]` for none — offline; TURN relays are not supported). `hosts`: local IPs to use (default: the default-route address and 127.0.0.1).",
+     "kind": "function"
+    },
+    {
+     "name": "signaling",
+     "signature": "webrtc.signaling(app, path = \"/rtc\")",
+     "returns": "App",
+     "doc": "A room-based signaling endpoint on a `fogu:web` app: a WebSocket at `path` relaying JSON `offer`/`answer`/`candidate` messages between the members of a room, and the browser client at `path/client.js`.",
+     "kind": "function"
+    },
+    {
+     "name": "signalingServer",
+     "signature": "webrtc.signalingServer(port, { host, path })",
+     "returns": "App · error",
+     "doc": "The same on its own app and port.",
+     "kind": "function"
+    },
+    {
+     "name": "connect",
+     "signature": "webrtc.connect(signalUrl, room, opts?)",
+     "returns": "Peer · error",
+     "doc": "Joins the room and returns a connected peer whose first channel (`opts.label`, default `\"data\"`) is open: `peer.channel(\"data\")`. The first peer in a room waits (`opts.timeout`, default forever), the second calls. Also takes the `webrtc.peer` options, `channel` and `connectTimeout`.",
+     "kind": "function"
+    },
+    {
+     "name": "serveHttp",
+     "signature": "webrtc.serveHttp(app, path, fn(peer), opts?)",
+     "returns": "App · Peer",
+     "doc": "Signaling with one HTTP POST (offer in, answer out, `application/sdp`), like WHIP.",
+     "kind": "function"
+    },
+    {
+     "name": "connectHttp",
+     "signature": "webrtc.connectHttp(url, opts?)",
+     "returns": "App · Peer",
+     "doc": "Signaling with one HTTP POST (offer in, answer out, `application/sdp`), like WHIP.",
+     "kind": "function"
+    },
+    {
+     "name": "clientJs",
+     "signature": "webrtc.clientJs",
+     "returns": "str",
+     "doc": "The browser client: `FoguRTC.connect(url, room, { label, iceServers, channel })` and `FoguRTC.connectHttp(url)` resolve to `{ pc, channel, send, close }`.",
+     "kind": "property"
+    }
+   ]
+  },
+  {
+   "name": "net",
+   "alias": "net",
+   "summary": "TCP and UDP sockets on the shared runtime: an operation that waits (`accept`, reads, writes, `recv`, `tcpConnect`) lets the other `fg` tasks run. Data is read as a [buffer](#values) (`read readExact readAll recv`) or as text (`readLine readText`); writes take a str, a buffer or a list of byte ints. Network failures are error values. Timeouts are durations or int milliseconds.",
+   "members": [
+    {
+     "name": "tcpListen",
+     "signature": "net.tcpListen(\"host:port\", opts?)",
+     "returns": "TcpListener · error",
+     "doc": "Port 0 picks a free one. Options: `reusePort: true` (Linux, macOS, BSD) lets several listeners share the port — one per `sync.Worker` for a server on several cores, the kernel spreads the connections; `backlog` (default 1024). `accept(timeout?)` → TcpStream, `for conn in listener`, `setTimeout(d)`, `close()`; fields `addr localAddr port`.",
+     "kind": "function"
+    },
+    {
+     "name": "tcpConnect",
+     "signature": "net.tcpConnect(\"host:port\", timeout?)",
+     "returns": "TcpStream · error",
+     "kind": "function"
+    },
+    {
+     "name": "udpBind",
+     "signature": "net.udpBind(\"host:port\")",
+     "returns": "UdpSocket · error",
+     "doc": "`sendTo(addr, data)`, `recvFrom(n?)` → `{ data, text, from, len }` (`data` is a buffer), `connect(addr)`, `send(data)`, `recv(n?)` → buffer, `setTimeout(d)`, `close()`; field `addr`.",
+     "kind": "function"
+    },
+    {
+     "name": "resolve",
+     "signature": "net.resolve(host)",
+     "returns": "list · error",
+     "doc": "IP addresses.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "tls",
+   "alias": "tls",
+   "summary": "TLS over TCP (rustls): encrypted clients and servers with the same API as [fogu:net](#fogunet) — a `TlsStream` has every method of a `TcpStream` and a `TlsListener` works like a `TcpListener` (including `for conn in listener`). Certificates and keys are PEM text, a buffer or the path of a PEM file. HTTPS servers take the same `{ cert, key }` as the `tls` option of `app.listen` / `http.serve`.",
+   "members": [
+    {
+     "name": "connect",
+     "signature": "tls.connect(\"host:port\", { verify = true, ca, serverName, cert, key, alpn, timeout = 30s })",
+     "returns": "TlsStream · error",
+     "doc": "`ca`: the trusted certificates (default: the system's); `verify: false` accepts any (development only); `serverName` (alias `sni`): the name sent and checked (default: the host); `cert` + `key`: a client certificate (mutual TLS); `alpn`: a str or a list.",
+     "kind": "function"
+    },
+    {
+     "name": "listen",
+     "signature": "tls.listen(\"host:port\", { cert, key, ca, clientAuth = \"require\", alpn, timeout = 10s })",
+     "returns": "TlsListener · error",
+     "doc": "`ca` asks clients for a certificate signed by it (`clientAuth: \"optional\"` lets clients without one in). Handshakes run in the background (bounded by `timeout`): `accept(timeout?)` returns finished connections only; fields `addr port failedHandshakes lastError`.",
+     "kind": "function"
+    },
+    {
+     "name": "upgrade",
+     "signature": "tls.upgrade(conn, clientOptions?)",
+     "returns": "TlsStream · error",
+     "doc": "STARTTLS: starts TLS on a plain `TcpStream` (which is closed afterwards); data received but not read yet is an error.",
+     "kind": "function"
+    },
+    {
+     "name": "upgradeServer",
+     "signature": "tls.upgradeServer(conn, { cert, key, ... })",
+     "returns": "TlsStream · error",
+     "doc": "STARTTLS: starts TLS on a plain `TcpStream` (which is closed afterwards); data received but not read yet is an error.",
+     "kind": "function"
+    },
+    {
+     "name": "selfSigned",
+     "signature": "tls.selfSigned(names, { days = 365 })",
+     "returns": "{ cert, key } · error",
+     "doc": "A self-signed certificate (PEM) for development; names are DNS names or IPs.",
+     "kind": "function"
+    },
+    {
+     "name": "parseCert",
+     "signature": "tls.parseCert(pem | der)",
+     "returns": "map · error",
+     "doc": "`subject commonName issuer names serial notBefore notAfter daysLeft expired selfSigned ca signature keyType keyBits sha256`.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "events",
+   "alias": "events",
+   "summary": "const bus = events.EventEmitter()",
+   "members": [
+    {
+     "name": "EventEmitter",
+     "signature": "events.EventEmitter()",
+     "returns": "Emitter",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "cron",
+   "alias": "cron",
+   "summary": "Jobs run when the program calls `cron.tick()` (typically in its main loop).",
+   "members": [
+    {
+     "name": "every",
+     "signature": "cron.every(interval, fn)",
+     "returns": "nil",
+     "doc": "A job every `interval` (duration, ms or a str like `\"2s\"`; at least 1 ms).",
+     "kind": "function"
+    },
+    {
+     "name": "schedule",
+     "signature": "cron.schedule(expression, fn)",
+     "returns": "nil",
+     "doc": "5-field cron expression (`\"*/5 * * * *\"`), evaluated in UTC : each field is a list of `*`, `n` or `a-b`, each with an optional `/step`; month and weekday names (`JAN`, `MON-FRI`); weekday 7 is Sunday; the macros `@yearly @monthly @weekly @daily @hourly`. When both day of month and day of week are restricted, a day matches either (as in Vixie cron). An invalid expression, one that never matches a date (`0 0 31 2 *`) or `L W # ?` stops the program.",
+     "kind": "function"
+    },
+    {
+     "name": "tick",
+     "signature": "cron.tick()",
+     "returns": "int",
+     "doc": "Runs the jobs that are due; returns how many ran.",
+     "kind": "function"
+    },
+    {
+     "name": "list",
+     "signature": "cron.list()",
+     "returns": "list",
+     "doc": "Job names (`every(10ms)`, the cron expression…).",
+     "kind": "function"
+    },
+    {
+     "name": "clear",
+     "signature": "cron.clear()",
+     "returns": "nil",
+     "doc": "Removes every job.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "nats",
+   "alias": "nats",
+   "summary": "NATS core protocol plus JetStream (streams, acknowledged publishing, pull consumers).",
+   "members": [
+    {
+     "name": "connect",
+     "signature": "nats.connect(url | { url, user, pass, token, name, timeout })",
+     "returns": "Nats · error",
+     "doc": "`nats://[user:pass@|token@]host:4222`, default `$NATS_URL`.",
+     "kind": "function"
+    },
+    {
+     "name": "fogu",
+     "signature": "nats.fogu(url | config)",
+     "returns": "NatsFogu · error",
+     "doc": "Connects (or wraps an open connection).",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "rabbitmq",
+   "alias": "rabbitmq",
+   "summary": "RabbitMQ (AMQP 0-9-1, own client on the runtime's networking; `amqps://` uses TLS). Publishing waits for the broker's confirmation. A channel closed by an error (for example declaring a queue with other options) is reopened on the next call.",
+   "members": [
+    {
+     "name": "connect",
+     "signature": "rabbitmq.connect(url?)",
+     "returns": "RabbitMQ · error",
+     "doc": "`amqp://user:pass@host:5672/vhost`, default `$AMQP_URL`.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "mqtt",
+   "alias": "mqtt",
+   "summary": "MQTT 3.1.1 and 5 (own client on the runtime's networking) with automatic reconnection (subscriptions are restored). QoS 0/1/2, retained messages, wills; with `version: 5` also message properties, subscription options and reason codes.",
+   "members": [
+    {
+     "name": "connect",
+     "signature": "mqtt.connect(url?, { clientId, username, password, keepAlive, clean = true, will, timeout, version = 3, sessionExpiry })",
+     "returns": "Mqtt · error",
+     "doc": "`mqtt://` or `mqtts://`; `will: { topic, payload, qos, retain }`; `version: 5` speaks MQTT 5. A refused connection is an error with the broker's reason.",
+     "kind": "function"
+    },
+    {
+     "name": "matches",
+     "signature": "mqtt.matches(filter, topic)",
+     "returns": "bool",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "broker",
+   "alias": "broker",
+   "summary": "The Fogu broker inside the runtime: key/value store with TTLs, channels, pub/sub with wildcard topics (`chat.*`, `chat.**`), RPC (`act`/`call`), API keys with scoped permissions, persistence (SurrealKV), clusters and a web management UI (`b.admin`). It speaks the FoguMQ wire protocol, so the Bun, Go, Rust and Python clients (`fogu/client/`) and [fogu:fogumq](#fogufogumq) talk to it. The inline client has the same API as a fogumq client, over an in-memory pipe.",
+   "members": [
+    {
+     "name": "start",
+     "signature": "broker.start(addr = \"127.0.0.1:7222\", { token, db, node, peers, secret, log, purgeEvery = 60s })",
+     "returns": "Broker · error",
+     "doc": "`token`: the root token (default `$FOGU_ROOT_TOKEN` or a random one). `db`: a SurrealKV folder (KV and API keys survive restarts, written in order by a background writer); in memory without it. A redb file of an earlier version is converted (kept as ` .redb.bak`). Also `broker.broker(…)` / `mq.broker(…)`.",
+     "kind": "function"
+    },
+    {
+     "name": "connect",
+     "signature": "broker.connect(url, opts)",
+     "returns": "FoguMQ · error",
+     "doc": "A remote broker (same as `fogumq.connect`).",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "kafka",
+   "alias": "kafka",
+   "summary": "Apache Kafka (and Redpanda) in pure Rust (rskafka): topics, producing and consuming, compression, TLS and SASL. Values: a string is sent as UTF-8, other values as JSON; received records have `value` as text. Without a `partition`, records with a key go to `hash(key) % partitions` (same key, same order), the others round-robin. Consumers keep their own offsets — Kafka consumer groups (coordinated rebalancing, offsets stored in Kafka) are not supported.",
+   "members": [
+    {
+     "name": "connect",
+     "signature": "kafka.connect(brokers, { clientId, tls: true | { ca }, sasl: { mechanism, username, password }, timeout = 10s })",
+     "returns": "Kafka · error",
+     "doc": "`brokers`: a list or `\"h1:9092,h2:9092\"`. SASL: `PLAIN SCRAM-SHA-256 SCRAM-SHA-512`.",
+     "kind": "function"
+    },
+    {
+     "name": "json",
+     "signature": "kafka.json()",
+     "kind": "function"
+    },
+    {
+     "name": "bytes",
+     "signature": "kafka.bytes()",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "fogumq",
+   "alias": "fogumq",
+   "summary": "Client of the Fogu broker (binary protocol, JSON payloads): key/value store, channels, pub/sub, RPC and API keys. Methods that wait for the server let the other `fg` tasks run.",
+   "members": [
+    {
+     "name": "connect",
+     "signature": "fogumq.connect(\"fogu://token@host:port\", { timeout, requestTimeout })",
+     "returns": "FoguMQ · error",
+     "doc": "Fields `connected authenticated isRoot url`; `ping() close()`.",
+     "kind": "function"
+    },
+    {
+     "name": "set",
+     "signature": "fogumq.set(key, value, ttl?)",
+     "returns": "value · error",
+     "doc": "`get` gives nil for a missing key.",
+     "kind": "function"
+    },
+    {
+     "name": "del",
+     "signature": "fogumq.del(key)",
+     "returns": "value · error",
+     "doc": "`get` gives nil for a missing key.",
+     "kind": "function"
+    },
+    {
+     "name": "exists",
+     "signature": "fogumq.exists(key)",
+     "returns": "value · error",
+     "doc": "`get` gives nil for a missing key.",
+     "kind": "function"
+    },
+    {
+     "name": "incr",
+     "signature": "fogumq.incr(key, n?)",
+     "returns": "value · error",
+     "doc": "`get` gives nil for a missing key.",
+     "kind": "function"
+    },
+    {
+     "name": "decr",
+     "signature": "fogumq.decr(key, n?)",
+     "returns": "value · error",
+     "doc": "`get` gives nil for a missing key.",
+     "kind": "function"
+    },
+    {
+     "name": "delete",
+     "signature": "fogumq.delete(id)",
+     "returns": "value · error",
+     "doc": "Root token only.",
+     "kind": "function"
+    },
+    {
+     "name": "get",
+     "signature": "fogumq.get(id)",
+     "returns": "value · error",
+     "doc": "Root token only.",
+     "kind": "function"
+    },
+    {
+     "name": "list",
+     "signature": "fogumq.list()",
+     "returns": "value · error",
+     "doc": "Root token only.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "foguMQ-client",
+   "alias": "mqc",
+   "summary": "Client of the FlowMQ v6 wire protocol (length-prefixed binary frames): numbered channels, pub/sub with wildcard topics (`*` one token, `>` the rest), RPC, job queues and API keys. Each method sends exactly one protocol frame. The socket runs on the shared I/O runtime; methods that wait for the broker let the other `fg` tasks run, so one task can answer the requests another makes. Messages, requests and jobs are queued in `Subscription` / `Service` / `Worker` objects. Network and broker failures are `error` values. Payloads: a str is sent as is, any other value as JSON; received payloads are strs (use `json.parse`). `FLOWMQ_DEBUG=1` prints protocol errors to stderr.",
+   "members": [
+    {
+     "name": "connect",
+     "signature": "mqc.connect(\"flowmq://token@host:7222?namespace=…\", { timeout, requestTimeout, clientId, autoReconnect })",
+     "returns": "FoguMQClient · error",
+     "doc": "URL query: `clientId namespace requestTimeout connectTimeout reconnectBackoff` (ms) `maxFrame maxChannels autoReconnect`. Defaults: port 7222, timeouts 5s. With `autoReconnect` the client reconnects and re-opens its channels, subscriptions, services and workers.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "bullmq",
+   "alias": "bullmq",
+   "summary": "Job queues on Redis, wire-compatible with [BullMQ](https://docs.bullmq.io) for Node.js v5 (on the `bullmq-rs` crate): Fogu and Node producers and workers can share the same queues, and dashboards such as Bull Board see them. The worker owns locks, stalled-job recovery, retries with backoff, concurrency and rate limits; each job is handed to the program, which finishes it with `complete` or `fail`. Redis failures are `error` values.",
+   "members": [
+    {
+     "name": "queue",
+     "signature": "bullmq.queue(name, { connection, prefix = \"bull\" })",
+     "returns": "BullQueue · error",
+     "doc": "`connection` is a `redis://` / `rediss://` URL (default `$REDIS_URL` or `redis://127.0.0.1:6379`).",
+     "kind": "function"
+    },
+    {
+     "name": "resume",
+     "signature": "bullmq.resume()",
+     "kind": "function"
+    },
+    {
+     "name": "isPaused",
+     "signature": "bullmq.isPaused()",
+     "kind": "function"
+    },
+    {
+     "name": "drain",
+     "signature": "bullmq.drain()",
+     "kind": "function"
+    },
+    {
+     "name": "remove",
+     "signature": "bullmq.remove(id)",
+     "kind": "function"
+    },
+    {
+     "name": "clean",
+     "signature": "bullmq.clean(grace, limit, state)",
+     "kind": "function"
+    },
+    {
+     "name": "obliterate",
+     "signature": "bullmq.obliterate({ force })",
+     "kind": "function"
+    },
+    {
+     "name": "getJobLogs",
+     "signature": "bullmq.getJobLogs(id)",
+     "kind": "function"
+    },
+    {
+     "name": "worker",
+     "signature": "bullmq.worker(name, { connection, prefix, concurrency = 1, lockDuration, maxStalledCount, limiter: { max, duration } })",
+     "returns": "BullWorker · error",
+     "kind": "function"
+    },
+    {
+     "name": "events",
+     "signature": "bullmq.events(name, { connection, prefix, lastEventId })",
+     "returns": "BullEvents · error",
+     "doc": "`next(timeout?)` → `{ event, jobId, id, … }` (`added waiting active progress completed failed delayed stalled removed`).",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "mail",
+   "alias": "mail",
+   "summary": "E-mail over SMTP (presets for Gmail, Outlook, Office 365, Yahoo, iCloud, Zoho, Fastmail, AOL, GMX, Amazon SES, Mailtrap, Mailpit) or the HTTP APIs of Resend, SendGrid, Mailgun, Postmark, Brevo, MailerSend and Mailjet. The SMTP client and the MIME builder are Fogu's own (STARTTLS, implicit TLS, AUTH PLAIN/LOGIN, attachments, inline images, UTF-8 headers). The `console` provider only prints (development and tests).",
+   "members": [
+    {
+     "name": "connect",
+     "signature": "mail.connect({ provider, … } | url)",
+     "returns": "Mailer",
+     "doc": "No connection is made yet.",
+     "kind": "function"
+    },
+    {
+     "name": "providers",
+     "signature": "mail.providers",
+     "returns": "list",
+     "doc": "The names accepted by `provider`.",
+     "kind": "property"
+    }
+   ]
+  },
+  {
+   "name": "ai",
+   "alias": "ai",
+   "summary": "LLMs over HTTP: OpenAI-compatible APIs (OpenAI, Groq, OpenRouter, DeepSeek, Mistral, xAI, Together, Fireworks, Perplexity, Ollama, LM Studio), Anthropic and Google Gemini — chat, streaming, tools, agents, embeddings, and MCP: serve tools, resources and prompts to Claude and other clients, or use any MCP server's tools in an agent. Keys default to `$OPENAI_API_KEY`, `$ANTHROPIC_API_KEY`, `$GEMINI_API_KEY`…",
+   "members": [
+    {
+     "name": "client",
+     "signature": "ai.client({ provider, model, apiKey, baseUrl, timeout, headers, maxTokens } | \"provider/model\")",
+     "returns": "AiClient",
+     "doc": "Provider `compatible` + `baseUrl` for any OpenAI-style server.",
+     "kind": "function"
+    },
+    {
+     "name": "providers",
+     "signature": "ai.providers",
+     "returns": "list",
+     "doc": "The names accepted by `provider`.",
+     "kind": "property"
+    },
+    {
+     "name": "tool",
+     "signature": "ai.tool(name, description, parameters, run?)",
+     "returns": "map",
+     "doc": "`parameters` is a JSON schema; also a plain map `{ name, description, parameters, run }`.",
+     "kind": "function"
+    },
+    {
+     "name": "agent",
+     "signature": "ai.agent({ client, model, instructions, tools, maxSteps = 10, temperature, maxTokens, memory, onStep })",
+     "returns": "Agent",
+     "doc": "Tools need `run(args)`.",
+     "kind": "function"
+    },
+    {
+     "name": "mcpServer",
+     "signature": "ai.mcpServer({ name, version, title, instructions })",
+     "returns": "McpServer",
+     "doc": "A [Model Context Protocol](https://modelcontextprotocol.io) server (protocol 2025-06-18, also 2025-03-26 and 2024-11-05) that Claude Desktop, Claude Code, IDEs and agents can use.",
+     "kind": "function"
+    },
+    {
+     "name": "mcpClient",
+     "signature": "ai.mcpClient({ command, args, env, cwd, stderr } | { url, headers }, { timeout = 30s })",
+     "returns": "McpClient · error",
+     "doc": "Starts a local server (stdio) or connects to a remote one (Streamable HTTP, JSON or SSE answers); fields `serverInfo protocolVersion capabilities instructions closed`.",
+     "kind": "function"
+    },
+    {
+     "name": "callTool",
+     "signature": "ai.callTool(name, args)",
+     "doc": "`callTool` → the structured result, else the text; a tool's `isError` is an error value.",
+     "kind": "function"
+    },
+    {
+     "name": "listResources",
+     "signature": "ai.listResources()",
+     "doc": "`callTool` → the structured result, else the text; a tool's `isError` is an error value.",
+     "kind": "function"
+    },
+    {
+     "name": "readResource",
+     "signature": "ai.readResource(uri)",
+     "doc": "`callTool` → the structured result, else the text; a tool's `isError` is an error value.",
+     "kind": "function"
+    },
+    {
+     "name": "listPrompts",
+     "signature": "ai.listPrompts()",
+     "doc": "`callTool` → the structured result, else the text; a tool's `isError` is an error value.",
+     "kind": "function"
+    },
+    {
+     "name": "getPrompt",
+     "signature": "ai.getPrompt(name, args)",
+     "doc": "`callTool` → the structured result, else the text; a tool's `isError` is an error value.",
+     "kind": "function"
+    },
+    {
+     "name": "ping",
+     "signature": "ai.ping()",
+     "doc": "`callTool` → the structured result, else the text; a tool's `isError` is an error value.",
+     "kind": "function"
+    },
+    {
+     "name": "close",
+     "signature": "ai.close()",
+     "doc": "`callTool` → the structured result, else the text; a tool's `isError` is an error value.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "ssh",
+   "alias": "ssh",
+   "summary": "Commands, file copies and tunnels over the system's OpenSSH client (key or password).",
+   "members": [
+    {
+     "name": "connect",
+     "signature": "ssh.connect(\"user@host:port\" | { host, user, port, key, password, strictHostKey, knownHosts, timeout, options, jump })",
+     "returns": "Ssh · error",
+     "doc": "Checks the connection; `strictHostKey` defaults to `accept-new`; `jump` (another connection or `\"user@host\"`) goes through a bastion with that connection's key and settings.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "shell",
+   "alias": "shell",
+   "summary": "A small POSIX-style shell: pipes, `&&` `||` `;`, redirections (`> >> 2>&1 &>`), `$VAR`, `$(…)`, quotes, globs and `~`. The usual Linux commands are built in, so scripts behave the same on Windows: `echo cat ls pwd cd mkdir rm cp mv touch grep head tail wc sort uniq cut tr tee basename dirname which env export true false exit sleep seq`. Other commands run as programs.",
+   "members": [
+    {
+     "name": "run",
+     "signature": "shell.run(command, { cwd, env, input, native = true })",
+     "returns": "{ ok, code, stdout, stderr }",
+     "doc": "A non-zero exit is not an error; `native: false` uses system programs only.",
+     "kind": "function"
+    },
+    {
+     "name": "exec",
+     "signature": "shell.exec(command, opts?)",
+     "returns": "same",
+     "doc": "Output goes to the terminal as it happens.",
+     "kind": "function"
+    },
+    {
+     "name": "text",
+     "signature": "shell.text(command, opts?)",
+     "returns": "str · error",
+     "doc": "stdout without the final newline; a failure is an error value.",
+     "kind": "function"
+    },
+    {
+     "name": "lines",
+     "signature": "shell.lines(command, opts?)",
+     "returns": "list · value",
+     "kind": "function"
+    },
+    {
+     "name": "json",
+     "signature": "shell.json(command, opts?)",
+     "returns": "list · value",
+     "kind": "function"
+    },
+    {
+     "name": "quote",
+     "signature": "shell.quote(text)",
+     "returns": "str",
+     "doc": "Safe to interpolate into a command.",
+     "kind": "function"
+    },
+    {
+     "name": "cd",
+     "signature": "shell.cd(dir)",
+     "returns": "nil · str",
+     "doc": "The shell's own working folder.",
+     "kind": "function"
+    },
+    {
+     "name": "cwd",
+     "signature": "shell.cwd()",
+     "returns": "nil · str",
+     "doc": "The shell's own working folder.",
+     "kind": "function"
+    },
+    {
+     "name": "which",
+     "signature": "shell.which(program)",
+     "returns": "str · list",
+     "kind": "function"
+    },
+    {
+     "name": "builtins",
+     "signature": "shell.builtins",
+     "returns": "str · list",
+     "kind": "property"
+    }
+   ]
+  },
+  {
+   "name": "ffi",
+   "alias": "ffi",
+   "summary": "Calls functions of native libraries (C ABI): `.dll`, `.so`, `.dylib`, and lets C call Fogu functions back. **Unsafe by nature**: a wrong signature can crash the program. Each signature gets a native stub generated with Cranelift: any number of arguments mixing integers, pointers, `f64` and `f32` (`ffi.native` is `true`). On 32-bit ARM, which has no Cranelift backend, a precompiled table is used instead (up to 4 arguments mixing integers and floats, or up to 8 integers; no `f32` arguments, no callbacks).",
+   "members": [
+    {
+     "name": "open",
+     "signature": "ffi.open(name)",
+     "returns": "Library · error",
+     "doc": "A path or a name; `\"c\"` and `\"m\"` are the C runtime and the math library. The same name works on every platform: without an extension it gets the platform's prefix and suffix (`\"native/mylib\"` → `native/libmylib.so` on Linux, `native/libmylib.dylib` on macOS, `native/mylib.dll` on Windows), and another platform's extension is mapped to the native one (`\"mylib.dll\"` on Linux also tries `libmylib.so`). The error lists every file tried.",
+     "kind": "function"
+    },
+    {
+     "name": "alloc",
+     "signature": "ffi.alloc(size)",
+     "returns": "Buffer",
+     "doc": "Memory for out-parameters and structs (zeroed), or a NUL-terminated copy of a text. Methods: `get(type, offset = 0)`, `set(type, offset, value)`, `ptr(offset = 0)`, `text()`, `bytes(start?, len?)`, `write(offset, str | bytes | buffer)`, `toBuffer()`, `i8 u8 i16 u16 i32 u32 i64 u64 f32 f64(offset)`; fields `size address`. Little-endian.",
+     "kind": "function"
+    },
+    {
+     "name": "cstring",
+     "signature": "ffi.cstring(text)",
+     "returns": "Buffer",
+     "doc": "Memory for out-parameters and structs (zeroed), or a NUL-terminated copy of a text. Methods: `get(type, offset = 0)`, `set(type, offset, value)`, `ptr(offset = 0)`, `text()`, `bytes(start?, len?)`, `write(offset, str | bytes | buffer)`, `toBuffer()`, `i8 u8 i16 u16 i32 u32 i64 u64 f32 f64(offset)`; fields `size address`. Little-endian.",
+     "kind": "function"
+    },
+    {
+     "name": "callback",
+     "signature": "ffi.callback(fn, [argTypes], returnType = \"void\")",
+     "returns": "Callback",
+     "doc": "A C function pointer that runs `fn`: pass it as a `ptr` argument (`qsort`, `EnumWindows`, event loops…). Field `address`; `close()` releases the function (later calls return 0). Callbacks run on the interpreter's thread while a C function called through `fogu:ffi` is running; a call from another thread returns 0 and is reported on stderr. An error inside a callback makes the C call that ran it fail with that error.",
+     "kind": "function"
+    },
+    {
+     "name": "read",
+     "signature": "ffi.read(ptr, type, offset = 0)",
+     "returns": "value · nil",
+     "doc": "Raw memory at an address (or a Buffer).",
+     "kind": "function"
+    },
+    {
+     "name": "write",
+     "signature": "ffi.write(ptr, type, value, offset = 0)",
+     "returns": "value · nil",
+     "doc": "Raw memory at an address (or a Buffer).",
+     "kind": "function"
+    },
+    {
+     "name": "string",
+     "signature": "ffi.string(ptr, len?)",
+     "returns": "str · buffer",
+     "doc": "A C string (`nil` for NULL), or a copy of `len` bytes.",
+     "kind": "function"
+    },
+    {
+     "name": "bytes",
+     "signature": "ffi.bytes(ptr, len)",
+     "returns": "str · buffer",
+     "doc": "A C string (`nil` for NULL), or a copy of `len` bytes.",
+     "kind": "function"
+    },
+    {
+     "name": "sizeof",
+     "signature": "ffi.sizeof(type)",
+     "returns": "int",
+     "doc": "`lastError`: `errno` (`GetLastError` on Windows) right after the last ffi call.",
+     "kind": "function"
+    },
+    {
+     "name": "NULL",
+     "signature": "ffi.NULL",
+     "returns": "int",
+     "doc": "`lastError`: `errno` (`GetLastError` on Windows) right after the last ffi call.",
+     "kind": "property"
+    },
+    {
+     "name": "lastError",
+     "signature": "ffi.lastError()",
+     "returns": "int",
+     "doc": "`lastError`: `errno` (`GetLastError` on Windows) right after the last ffi call.",
+     "kind": "function"
+    },
+    {
+     "name": "types",
+     "signature": "ffi.types",
+     "returns": "list · str · bool",
+     "kind": "property"
+    },
+    {
+     "name": "suffix",
+     "signature": "ffi.suffix",
+     "returns": "list · str · bool",
+     "kind": "property"
+    },
+    {
+     "name": "native",
+     "signature": "ffi.native",
+     "returns": "list · str · bool",
+     "kind": "property"
+    }
+   ]
+  },
+  {
+   "name": "playbook",
+   "alias": "playbook",
+   "summary": "Configuration management in the style of Ansible: an **inventory** of hosts and **playbooks** of idempotent tasks, run over SSH (the system's OpenSSH client) or on the local machine (through [fogu:shell](#fogushell), so it also works on Windows). Hosts run in parallel; the output and the `PLAY RECAP` follow Ansible's. From the command line: `fogu play site.yml -i inventory.yml [--check] [-l hosts] [-t tags] [--skip-tags t] [-e key=value] [-f forks] [-v]` (exit code 2 when a host failed or was unreachable).",
+   "members": [
+    {
+     "name": "run",
+     "signature": "playbook.run(plays | path, { inventory, vars, check, limit, tags, skipTags, forks, verbose, quiet })",
+     "returns": "map · error",
+     "doc": "`{ ok, failed: [hosts], recap: { host: { ok, changed, unreachable, failed, skipped, ignored } } }`.",
+     "kind": "function"
+    },
+    {
+     "name": "inventory",
+     "signature": "playbook.inventory(path | map)",
+     "returns": "map",
+     "doc": "The hosts and groups it describes.",
+     "kind": "function"
+    },
+    {
+     "name": "render",
+     "signature": "playbook.render(text, vars)",
+     "returns": "str · error",
+     "doc": "The template engine on its own.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "vm",
+   "alias": "vm",
+   "summary": "Runs Fogu source code at run time, in the style of Node's `node:vm`. The code runs on the same interpreter, so its functions can be called from the program and vice versa. A new context only sees the global natives plus the keys of its sandbox map (it may still `import` modules); like `node:vm`, it is **not a security boundary**. The value of the last expression is returned; syntax, name, runtime and timeout errors come back as `error` values.",
+   "members": [
+    {
+     "name": "runInNewContext",
+     "signature": "vm.runInNewContext(code, sandbox?, options?)",
+     "returns": "value · error",
+     "doc": "Options: `{ filename = \" \", timeout }` or a filename. Variables the code declares are copied into the sandbox map.",
+     "kind": "function"
+    },
+    {
+     "name": "createContext",
+     "signature": "vm.createContext(sandbox?)",
+     "returns": "VmContext · bool",
+     "doc": "A context keeps its variables between runs: `ctx.sandbox`, `ctx.name` reads a variable, `ctx.run(code, options?)`.",
+     "kind": "function"
+    },
+    {
+     "name": "isContext",
+     "signature": "vm.isContext(x)",
+     "returns": "VmContext · bool",
+     "doc": "A context keeps its variables between runs: `ctx.sandbox`, `ctx.name` reads a variable, `ctx.run(code, options?)`.",
+     "kind": "function"
+    },
+    {
+     "name": "runInContext",
+     "signature": "vm.runInContext(code, ctx, options?)",
+     "returns": "value · error",
+     "doc": "Changes to the sandbox map are seen by the next run.",
+     "kind": "function"
+    },
+    {
+     "name": "runInThisContext",
+     "signature": "vm.runInThisContext(code, options?)",
+     "returns": "value · error",
+     "doc": "Sees the program's globals; its declarations persist between calls.",
+     "kind": "function"
+    },
+    {
+     "name": "Script",
+     "signature": "vm.Script(code, options?)",
+     "returns": "VmScript · error",
+     "doc": "Parsed once: `runInContext(ctx) runInNewContext(sandbox?) runInThisContext()`, fields `source filename`.",
+     "kind": "function"
+    },
+    {
+     "name": "compileFunction",
+     "signature": "vm.compileFunction(code, params = [], { context, filename })",
+     "returns": "fn · error",
+     "doc": "A function whose body is `code`.",
+     "kind": "function"
+    },
+    {
+     "name": "spawn",
+     "signature": "vm.spawn(code, sandbox?, { timeout, filename, semaphore, context })",
+     "returns": "VmTask",
+     "doc": "Runs in its own `fg` task. `semaphore`: a [sync.Semaphore](#fogusync) limiting how many run at once.",
+     "kind": "function"
+    },
+    {
+     "name": "all",
+     "signature": "vm.all(tasks)",
+     "returns": "list · error",
+     "doc": "Their values in order; the first error if one fails.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "cli",
+   "alias": "cli",
+   "summary": "Terminal interaction: prompts (`dialoguer`), colors and terminal control (`console`), spinners and progress bars (`indicatif`), tables (`comfy-table`) and argument parsing (`clap`). Without a terminal on stdin (pipes, CI) the prompts read plain lines, so `echo Ana | fogu app.fg` works; spinners and bars draw on stderr, only on a terminal. Colors are off when stdout is not a terminal or `NO_COLOR` is set.",
+   "members": [
+    {
+     "name": "input",
+     "signature": "cli.input(prompt, { default, allowEmpty, type: \"str\" | \"int\" | \"float\" })",
+     "returns": "str | int | float · error",
+     "kind": "function"
+    },
+    {
+     "name": "password",
+     "signature": "cli.password(prompt, { confirm: \"Repeat password\", allowEmpty })",
+     "returns": "str · error",
+     "doc": "Hidden input.",
+     "kind": "function"
+    },
+    {
+     "name": "confirm",
+     "signature": "cli.confirm(prompt, { default })",
+     "returns": "bool · error",
+     "kind": "function"
+    },
+    {
+     "name": "select",
+     "signature": "cli.select(prompt, items, { default, fuzzy, index })",
+     "returns": "value | nil · error",
+     "doc": "Items are strings or `{ label, value }`; nil when cancelled with Esc; `fuzzy` filters while typing.",
+     "kind": "function"
+    },
+    {
+     "name": "multiSelect",
+     "signature": "cli.multiSelect(prompt, items, { defaults, index })",
+     "returns": "list | nil · error",
+     "doc": "Without a terminal: names or numbers separated by commas.",
+     "kind": "function"
+    },
+    {
+     "name": "style",
+     "signature": "cli.style(text, ...styles)",
+     "returns": "str",
+     "doc": "`bold dim italic underline strike inverse`, colors `red green yellow blue magenta cyan white black gray`, `brightRed`, backgrounds `bgRed`, 256 colors `\"208\"` / `\"bg208\"`.",
+     "kind": "function"
+    },
+    {
+     "name": "red",
+     "signature": "cli.red(text)",
+     "returns": "str",
+     "kind": "function"
+    },
+    {
+     "name": "colors",
+     "signature": "cli.colors(on?)",
+     "returns": "bool · str · int · str",
+     "doc": "`colors(true)` forces colors.",
+     "kind": "function"
+    },
+    {
+     "name": "stripAnsi",
+     "signature": "cli.stripAnsi(s)",
+     "returns": "bool · str · int · str",
+     "doc": "`colors(true)` forces colors.",
+     "kind": "function"
+    },
+    {
+     "name": "textWidth",
+     "signature": "cli.textWidth(s)",
+     "returns": "bool · str · int · str",
+     "doc": "`colors(true)` forces colors.",
+     "kind": "function"
+    },
+    {
+     "name": "link",
+     "signature": "cli.link(text, url)",
+     "returns": "bool · str · int · str",
+     "doc": "`colors(true)` forces colors.",
+     "kind": "function"
+    },
+    {
+     "name": "isTTY",
+     "signature": "cli.isTTY(\"stdin\" | \"stdout\" | \"stderr\")",
+     "returns": "bool · { columns, rows } | nil",
+     "kind": "function"
+    },
+    {
+     "name": "size",
+     "signature": "cli.size()",
+     "returns": "bool · { columns, rows } | nil",
+     "kind": "function"
+    },
+    {
+     "name": "clear",
+     "signature": "cli.clear()",
+     "doc": "`readKey` → a character or `Enter Escape Backspace Tab ArrowUp ArrowDown ArrowLeft ArrowRight Home End PageUp PageDown Delete`.",
+     "kind": "function"
+    },
+    {
+     "name": "clearLine",
+     "signature": "cli.clearLine()",
+     "doc": "`readKey` → a character or `Enter Escape Backspace Tab ArrowUp ArrowDown ArrowLeft ArrowRight Home End PageUp PageDown Delete`.",
+     "kind": "function"
+    },
+    {
+     "name": "hideCursor",
+     "signature": "cli.hideCursor()",
+     "doc": "`readKey` → a character or `Enter Escape Backspace Tab ArrowUp ArrowDown ArrowLeft ArrowRight Home End PageUp PageDown Delete`.",
+     "kind": "function"
+    },
+    {
+     "name": "showCursor",
+     "signature": "cli.showCursor()",
+     "doc": "`readKey` → a character or `Enter Escape Backspace Tab ArrowUp ArrowDown ArrowLeft ArrowRight Home End PageUp PageDown Delete`.",
+     "kind": "function"
+    },
+    {
+     "name": "readKey",
+     "signature": "cli.readKey()",
+     "doc": "`readKey` → a character or `Enter Escape Backspace Tab ArrowUp ArrowDown ArrowLeft ArrowRight Home End PageUp PageDown Delete`.",
+     "kind": "function"
+    },
+    {
+     "name": "spinner",
+     "signature": "cli.spinner(text, { frames })",
+     "returns": "Spinner",
+     "doc": "`text(t) succeed(msg?) fail(msg?) warn(msg?) info(msg?) stop()`.",
+     "kind": "function"
+    },
+    {
+     "name": "progress",
+     "signature": "cli.progress(total, { message, prefix, template, chars })",
+     "returns": "ProgressBar",
+     "doc": "`inc(n = 1) set(n) length(n?) message(m) println(line) finish(msg?)` (`length()` returns the total), fields `position elapsed finished`. Templates of `indicatif`.",
+     "kind": "function"
+    },
+    {
+     "name": "table",
+     "signature": "cli.table(rows, { headers, style: \"rounded\" | \"utf8\" | \"ascii\" | \"markdown\" | \"none\", align, width })",
+     "returns": "str",
+     "doc": "Rows are lists or maps; numbers are right aligned.",
+     "kind": "function"
+    },
+    {
+     "name": "parse",
+     "signature": "cli.parse(spec, argv = Fogu.args, { exit = true })",
+     "returns": "map · error",
+     "doc": "`spec`: `{ name, version, about, args: [...], commands: [{ name, about, args }], commandRequired }`. `--help` and `--version` print and exit; a usage error prints and exits with 2, or is an `error` value with `{ exit: false }`.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "html",
+   "alias": "html",
+   "summary": "Parse HTML and query it with CSS selectors (scraping), render Jinja templates (minijinja), sanitize untrusted HTML (ammonia) and convert between HTML, plain text and Markdown. An invalid selector stops the program; template errors are error values.",
+   "members": [
+    {
+     "name": "parse",
+     "signature": "html.parse(text)",
+     "returns": "HtmlDocument",
+     "doc": "A full document or a fragment.",
+     "kind": "function"
+    },
+    {
+     "name": "fragment",
+     "signature": "html.fragment(text)",
+     "returns": "HtmlDocument",
+     "doc": "A full document or a fragment.",
+     "kind": "function"
+    },
+    {
+     "name": "select",
+     "signature": "html.select(text, css)",
+     "returns": "list",
+     "doc": "Parse + select in one call.",
+     "kind": "function"
+    },
+    {
+     "name": "render",
+     "signature": "html.render(source, data)",
+     "returns": "str · error",
+     "doc": "Autoescaped; `{{ x | markdown }}` (its HTML is sanitized like `html.sanitize`: no scripts, event attributes or `javascript:` links) and `| striptags` are added to the Jinja filters. `nil` prints nothing and booleans print `true`/`false`.",
+     "kind": "function"
+    },
+    {
+     "name": "template",
+     "signature": "html.template(source, { autoescape = true })",
+     "returns": "Template",
+     "doc": "`t.render(data)`.",
+     "kind": "function"
+    },
+    {
+     "name": "templates",
+     "signature": "html.templates(folder, { autoescape })",
+     "returns": "Templates",
+     "doc": "`render(name, data)`, `renderString(source, data)`, `has(name)`; `extends`/`include`/`import` load from the folder; autoescape by extension (an inline `renderString` template counts as `.html`).",
+     "kind": "function"
+    },
+    {
+     "name": "escape",
+     "signature": "html.escape(text)",
+     "returns": "str",
+     "doc": "Entities: named, decimal and hex.",
+     "kind": "function"
+    },
+    {
+     "name": "unescape",
+     "signature": "html.unescape(text)",
+     "returns": "str",
+     "doc": "Entities: named, decimal and hex.",
+     "kind": "function"
+    },
+    {
+     "name": "sanitize",
+     "signature": "html.sanitize(text, { tags, addTags, removeTags, attributes, stripComments })",
+     "returns": "str",
+     "doc": "Removes scripts, event handlers and dangerous URLs.",
+     "kind": "function"
+    },
+    {
+     "name": "text",
+     "signature": "html.text(text)",
+     "returns": "str",
+     "doc": "Plain text with paragraphs, bullets and tab-separated cells.",
+     "kind": "function"
+    },
+    {
+     "name": "toMarkdown",
+     "signature": "html.toMarkdown(text)",
+     "returns": "str",
+     "doc": "Headings, emphasis, links, images, lists, code blocks, quotes, tables.",
+     "kind": "function"
+    },
+    {
+     "name": "fromMarkdown",
+     "signature": "html.fromMarkdown(md)",
+     "returns": "str",
+     "doc": "CommonMark + tables, strikethrough, task lists, footnotes.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "webview",
+   "alias": "webview",
+   "summary": "Drives a real browser (Chrome, Edge, Chromium or Brave) through the DevTools protocol: render JavaScript-heavy pages, click, type, run scripts, take screenshots and PDFs. The browser is found in `FOGU_CHROME`, the `path` option, the PATH or the usual install folders. Every command runs on a worker thread; the browser processes are closed when the program ends.",
+   "members": [
+    {
+     "name": "launch",
+     "signature": "webview.launch({ headless = true, path, args, width = 1280, height = 800, userAgent, timeout = 30s })",
+     "returns": "Browser · error",
+     "kind": "function"
+    },
+    {
+     "name": "render",
+     "signature": "webview.render(url, { wait, timeout })",
+     "returns": "str · error",
+     "doc": "The HTML after the page's JavaScript ran (shared headless browser).",
+     "kind": "function"
+    },
+    {
+     "name": "find",
+     "signature": "webview.find()",
+     "returns": "str | nil",
+     "doc": "The browser that would be used.",
+     "kind": "function"
+    },
+    {
+     "name": "reload",
+     "signature": "webview.reload()",
+     "returns": "nil · error",
+     "kind": "function"
+    },
+    {
+     "name": "back",
+     "signature": "webview.back()",
+     "returns": "nil · error",
+     "kind": "function"
+    },
+    {
+     "name": "forward",
+     "signature": "webview.forward()",
+     "returns": "nil · error",
+     "kind": "function"
+    },
+    {
+     "name": "url",
+     "signature": "webview.url()",
+     "returns": "str · error",
+     "kind": "function"
+    },
+    {
+     "name": "content",
+     "signature": "webview.content()",
+     "returns": "str · error",
+     "kind": "function"
+    },
+    {
+     "name": "text",
+     "signature": "webview.text(css?)",
+     "returns": "str · error",
+     "kind": "function"
+    },
+    {
+     "name": "type",
+     "signature": "webview.type(css, text)",
+     "returns": "nil · error",
+     "doc": "Real mouse/keyboard events; `press(\"Enter\")`.",
+     "kind": "function"
+    },
+    {
+     "name": "fill",
+     "signature": "webview.fill(css, value)",
+     "returns": "nil · error",
+     "doc": "Real mouse/keyboard events; `press(\"Enter\")`.",
+     "kind": "function"
+    },
+    {
+     "name": "press",
+     "signature": "webview.press(key)",
+     "returns": "nil · error",
+     "doc": "Real mouse/keyboard events; `press(\"Enter\")`.",
+     "kind": "function"
+    },
+    {
+     "name": "waitForNavigation",
+     "signature": "webview.waitForNavigation(opts)",
+     "returns": "nil · error",
+     "kind": "function"
+    },
+    {
+     "name": "setViewport",
+     "signature": "webview.setViewport(w, h)",
+     "returns": "nil · error",
+     "kind": "function"
+    },
+    {
+     "name": "setHeaders",
+     "signature": "webview.setHeaders(map)",
+     "returns": "nil · error",
+     "kind": "function"
+    },
+    {
+     "name": "setCookie",
+     "signature": "webview.setCookie({ name, value, url | domain })",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "image",
+   "alias": "image",
+   "summary": "Create, transform, draw on and encode images (PNG, JPEG, WebP, GIF, BMP, ICO, TIFF), render SVG (resvg) and HTML, and build animated GIFs. Transformations return a **new** image; drawing methods change the image in place. Colors: `\"#rgb\"`, `\"#rrggbb(aa)\"`, CSS names, `\"rgb(r,g,b)\"`, `\"rgba(r,g,b,a)\"` or `[r, g, b, a?]`. Encoded data comes back as a [buffer](#values); inputs also take a list of byte ints, base64 or a `data:` URL.",
+   "members": [
+    {
+     "name": "new",
+     "signature": "image.new(w, h, background?)",
+     "returns": "Image · error",
+     "kind": "function"
+    },
+    {
+     "name": "open",
+     "signature": "image.open(path)",
+     "returns": "Image · error",
+     "kind": "function"
+    },
+    {
+     "name": "decode",
+     "signature": "image.decode(buffer | bytes | base64 | dataUrl)",
+     "returns": "Image · error",
+     "kind": "function"
+    },
+    {
+     "name": "fromSvg",
+     "signature": "image.fromSvg(svg, { width, height, scale, background })",
+     "returns": "Image · error",
+     "doc": "Text uses the system fonts.",
+     "kind": "function"
+    },
+    {
+     "name": "fromHtml",
+     "signature": "image.fromHtml(html, { width = 800, height = 600, fullPage = true })",
+     "returns": "Image · error",
+     "doc": "Rendered by a headless Chrome/Edge ([fogu:webview](#foguwebview)).",
+     "kind": "function"
+    },
+    {
+     "name": "info",
+     "signature": "image.info(path)",
+     "returns": "{ width, height, format } · error",
+     "doc": "Without decoding the pixels.",
+     "kind": "function"
+    },
+    {
+     "name": "gif",
+     "signature": "image.gif(frames, { delay = 100ms, loop = 0, speed })",
+     "returns": "buffer · nil",
+     "doc": "Frames: images or `{ image, delay }`.",
+     "kind": "function"
+    },
+    {
+     "name": "writeGif",
+     "signature": "image.writeGif(path, frames, opts)",
+     "returns": "buffer · nil",
+     "doc": "Frames: images or `{ image, delay }`.",
+     "kind": "function"
+    },
+    {
+     "name": "frames",
+     "signature": "image.frames(path | buffer)",
+     "returns": "list · error",
+     "doc": "`[{ image, delay }]` of an animated GIF.",
+     "kind": "function"
+    },
+    {
+     "name": "color",
+     "signature": "image.color(c)",
+     "returns": "list · error",
+     "doc": "`[r, g, b, a]`; an invalid colour is an error value (elsewhere it stops the program).",
+     "kind": "function"
+    },
+    {
+     "name": "thumbnail",
+     "signature": "image.thumbnail(w, h?)",
+     "returns": "Image",
+     "doc": "One side keeps the aspect ratio.",
+     "kind": "function"
+    },
+    {
+     "name": "crop",
+     "signature": "image.crop(x, y, w, h)",
+     "returns": "Image",
+     "doc": "One side keeps the aspect ratio.",
+     "kind": "function"
+    },
+    {
+     "name": "flipH",
+     "signature": "image.flipH()",
+     "returns": "Image",
+     "doc": "Any angle; 90/180/270 are exact.",
+     "kind": "function"
+    },
+    {
+     "name": "flipV",
+     "signature": "image.flipV()",
+     "returns": "Image",
+     "doc": "Any angle; 90/180/270 are exact.",
+     "kind": "function"
+    },
+    {
+     "name": "invert",
+     "signature": "image.invert()",
+     "returns": "Image",
+     "kind": "function"
+    },
+    {
+     "name": "blur",
+     "signature": "image.blur(sigma)",
+     "returns": "Image",
+     "kind": "function"
+    },
+    {
+     "name": "sharpen",
+     "signature": "image.sharpen(sigma, threshold)",
+     "returns": "Image",
+     "kind": "function"
+    },
+    {
+     "name": "contrast",
+     "signature": "image.contrast(c)",
+     "returns": "Image",
+     "kind": "function"
+    },
+    {
+     "name": "hue",
+     "signature": "image.hue(deg)",
+     "returns": "Image",
+     "kind": "function"
+    },
+    {
+     "name": "saturate",
+     "signature": "image.saturate(f)",
+     "returns": "Image",
+     "kind": "function"
+    },
+    {
+     "name": "opacity",
+     "signature": "image.opacity(f)",
+     "returns": "Image",
+     "kind": "function"
+    },
+    {
+     "name": "setPixel",
+     "signature": "image.setPixel(x, y, c)",
+     "returns": "nil · str",
+     "kind": "function"
+    },
+    {
+     "name": "getPixel",
+     "signature": "image.getPixel(x, y)",
+     "returns": "nil · str",
+     "kind": "function"
+    },
+    {
+     "name": "circle",
+     "signature": "image.circle(cx, cy, r, opts)",
+     "returns": "nil",
+     "doc": "Anti-aliased (tiny-skia).",
+     "kind": "function"
+    },
+    {
+     "name": "ellipse",
+     "signature": "image.ellipse(cx, cy, rx, ry, opts)",
+     "returns": "nil",
+     "doc": "Anti-aliased (tiny-skia).",
+     "kind": "function"
+    },
+    {
+     "name": "polygon",
+     "signature": "image.polygon([[x, y], …], { fill, stroke, closed })",
+     "returns": "nil",
+     "kind": "function"
+    },
+    {
+     "name": "measureText",
+     "signature": "image.measureText(str, opts)",
+     "returns": "nil · { width, height }",
+     "doc": "`font`: a .ttf/.otf path or a family (`\"sans-serif\"`, `\"monospace\"`…).",
+     "kind": "function"
+    },
+    {
+     "name": "drawSvg",
+     "signature": "image.drawSvg(svg, x, y, opts)",
+     "returns": "nil",
+     "doc": "Alpha-blended.",
+     "kind": "function"
+    },
+    {
+     "name": "encode",
+     "signature": "image.encode(format)",
+     "doc": "Format from the extension; JPEG flattens alpha over white. `encode` → buffer.",
+     "kind": "function"
+    },
+    {
+     "name": "toBase64",
+     "signature": "image.toBase64(format)",
+     "doc": "Format from the extension; JPEG flattens alpha over white. `encode` → buffer.",
+     "kind": "function"
+    },
+    {
+     "name": "toDataUrl",
+     "signature": "image.toDataUrl(format)",
+     "doc": "Format from the extension; JPEG flattens alpha over white. `encode` → buffer.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "plot",
+   "alias": "plot",
+   "summary": "Charts in the style of matplotlib — line, scatter, area, bar (grouped), histogram and pie/donut — drawn as SVG and saved as SVG, PNG, JPEG or WebP. Works with lists and ranges (arrays and data frames from the `datascience` lib: pass `a.toList()` / `df.col(name)`).",
+   "members": [
+    {
+     "name": "figure",
+     "signature": "plot.figure({ title, xlabel, ylabel, width = 800, height = 450, theme = \"light\" | \"dark\", grid = true, legend = true, xmin, xmax, ymin, ymax, background })",
+     "returns": "Figure",
+     "kind": "function"
+    },
+    {
+     "name": "palette",
+     "signature": "plot.palette",
+     "returns": "list",
+     "doc": "The default series colours, in order.",
+     "kind": "property"
+    },
+    {
+     "name": "scatter",
+     "signature": "plot.scatter(…)",
+     "returns": "nil",
+     "doc": "`line(y)` uses 0, 1, 2… as x.",
+     "kind": "function"
+    },
+    {
+     "name": "area",
+     "signature": "plot.area(…)",
+     "returns": "nil",
+     "doc": "`line(y)` uses 0, 1, 2… as x.",
+     "kind": "function"
+    },
+    {
+     "name": "vline",
+     "signature": "plot.vline(x)",
+     "returns": "nil",
+     "kind": "function"
+    },
+    {
+     "name": "text",
+     "signature": "plot.text(x, y, str)",
+     "returns": "nil",
+     "kind": "function"
+    },
+    {
+     "name": "title",
+     "signature": "plot.title(t)",
+     "returns": "nil",
+     "kind": "function"
+    },
+    {
+     "name": "xlabel",
+     "signature": "plot.xlabel(t)",
+     "returns": "nil",
+     "kind": "function"
+    },
+    {
+     "name": "ylabel",
+     "signature": "plot.ylabel(t)",
+     "returns": "nil",
+     "kind": "function"
+    },
+    {
+     "name": "line",
+     "signature": "plot.line(x, y, options)",
+     "returns": "Figure",
+     "doc": "One-series shortcuts (options also take the figure options).",
+     "kind": "function"
+    },
+    {
+     "name": "bar",
+     "signature": "plot.bar",
+     "returns": "Figure",
+     "doc": "One-series shortcuts (options also take the figure options).",
+     "kind": "property"
+    },
+    {
+     "name": "hist",
+     "signature": "plot.hist",
+     "returns": "Figure",
+     "doc": "One-series shortcuts (options also take the figure options).",
+     "kind": "property"
+    },
+    {
+     "name": "pie",
+     "signature": "plot.pie",
+     "returns": "Figure",
+     "doc": "One-series shortcuts (options also take the figure options).",
+     "kind": "property"
+    }
+   ]
+  },
+  {
+   "name": "docker",
+   "alias": "docker",
+   "summary": "Control Docker or Podman (containers, images, networks, volumes, compose projects, Swarm services) and write or edit Dockerfiles and compose files. Commands use the `docker`/`podman` CLI (`FOGU_CONTAINER_ENGINE` or `docker.use(\"podman\")`); `docker.remote(ssh)` runs everything on a server through [fogu:ssh](#fogussh). A failing command is an error value with its stderr.",
+   "members": [
+    {
+     "name": "engine",
+     "signature": "docker.engine",
+     "doc": "`raw` never fails on exit codes.",
+     "kind": "property"
+    },
+    {
+     "name": "available",
+     "signature": "docker.available()",
+     "doc": "`raw` never fails on exit codes.",
+     "kind": "function"
+    },
+    {
+     "name": "version",
+     "signature": "docker.version()",
+     "doc": "`raw` never fails on exit codes.",
+     "kind": "function"
+    },
+    {
+     "name": "raw",
+     "signature": "docker.raw(args, { cwd })",
+     "doc": "`raw` never fails on exit codes.",
+     "kind": "function"
+    },
+    {
+     "name": "ps",
+     "signature": "docker.ps({ all, filter })",
+     "returns": "list · map",
+     "doc": "`status`: running, state, health, exitCode, startedAt, restarts, image.",
+     "kind": "function"
+    },
+    {
+     "name": "status",
+     "signature": "docker.status(container)",
+     "returns": "list · map",
+     "doc": "`status`: running, state, health, exitCode, startedAt, restarts, image.",
+     "kind": "function"
+    },
+    {
+     "name": "run",
+     "signature": "docker.run(image, { name, detach = true, rm, ports, env, volumes, network, restart, labels, workdir, user, entrypoint, command, args })",
+     "returns": "str · error",
+     "doc": "The container id (or the output when `detach: false`).",
+     "kind": "function"
+    },
+    {
+     "name": "start",
+     "signature": "docker.start(name)",
+     "returns": "nil · error",
+     "kind": "function"
+    },
+    {
+     "name": "rm",
+     "signature": "docker.rm(name, { force, volumes })",
+     "returns": "nil · error",
+     "kind": "function"
+    },
+    {
+     "name": "logs",
+     "signature": "docker.logs(name, { tail, since, timestamps })",
+     "kind": "function"
+    },
+    {
+     "name": "exec",
+     "signature": "docker.exec(name, command, { user, workdir, env })",
+     "kind": "function"
+    },
+    {
+     "name": "inspect",
+     "signature": "docker.inspect(name)",
+     "kind": "function"
+    },
+    {
+     "name": "stats",
+     "signature": "docker.stats()",
+     "kind": "function"
+    },
+    {
+     "name": "cp",
+     "signature": "docker.cp(from, to)",
+     "kind": "function"
+    },
+    {
+     "name": "images",
+     "signature": "docker.images()",
+     "kind": "function"
+    },
+    {
+     "name": "build",
+     "signature": "docker.build(context, { tag, file, args, target, noCache, platform })",
+     "kind": "function"
+    },
+    {
+     "name": "networks",
+     "signature": "docker.networks()",
+     "kind": "function"
+    },
+    {
+     "name": "volumes",
+     "signature": "docker.volumes()",
+     "kind": "function"
+    },
+    {
+     "name": "prune",
+     "signature": "docker.prune(what)",
+     "kind": "function"
+    },
+    {
+     "name": "compose",
+     "signature": "docker.compose(file?, { project, cwd, envFile })",
+     "returns": "ComposeProject",
+     "doc": "On a remote engine a local compose file is copied first.",
+     "kind": "function"
+    },
+    {
+     "name": "down",
+     "signature": "docker.down({ volumes, images })",
+     "kind": "function"
+    },
+    {
+     "name": "config",
+     "signature": "docker.config()",
+     "kind": "function"
+    },
+    {
+     "name": "services",
+     "signature": "docker.services({ filter })",
+     "returns": "list · SwarmService",
+     "doc": "Swarm: `status()`, `tasks()`, `restart()` (rolling), `stop()`, `start(n)`, `scale(n)`, `update({ image, replicas, env })`, `logs()`, `remove()`.",
+     "kind": "function"
+    },
+    {
+     "name": "service",
+     "signature": "docker.service(name)",
+     "returns": "list · SwarmService",
+     "doc": "Swarm: `status()`, `tasks()`, `restart()` (rolling), `stop()`, `start(n)`, `scale(n)`, `update({ image, replicas, env })`, `logs()`, `remove()`.",
+     "kind": "function"
+    },
+    {
+     "name": "readCompose",
+     "signature": "docker.readCompose(path)",
+     "doc": "Compose files as maps, written with the usual key order.",
+     "kind": "function"
+    },
+    {
+     "name": "writeCompose",
+     "signature": "docker.writeCompose(path, value)",
+     "doc": "Compose files as maps, written with the usual key order.",
+     "kind": "function"
+    },
+    {
+     "name": "composeString",
+     "signature": "docker.composeString(value)",
+     "doc": "Compose files as maps, written with the usual key order.",
+     "kind": "function"
+    },
+    {
+     "name": "dockerfile",
+     "signature": "docker.dockerfile(from?, { as, platform })",
+     "returns": "Dockerfile",
+     "kind": "function"
+    },
+    {
+     "name": "parseDockerfile",
+     "signature": "docker.parseDockerfile(text)",
+     "returns": "Dockerfile",
+     "kind": "function"
+    },
+    {
+     "name": "readDockerfile",
+     "signature": "docker.readDockerfile(path)",
+     "returns": "Dockerfile",
+     "kind": "function"
+    },
+    {
+     "name": "copy",
+     "signature": "docker.copy(src, dest, { from, chown, chmod })",
+     "returns": "nil",
+     "doc": "A list of commands becomes one `RUN` joined with `&&`.",
+     "kind": "function"
+    },
+    {
+     "name": "env",
+     "signature": "docker.env(k, v | map)",
+     "returns": "nil",
+     "doc": "A list of commands becomes one `RUN` joined with `&&`.",
+     "kind": "function"
+    },
+    {
+     "name": "expose",
+     "signature": "docker.expose(…)",
+     "returns": "nil",
+     "doc": "A list of commands becomes one `RUN` joined with `&&`.",
+     "kind": "function"
+    },
+    {
+     "name": "volume",
+     "signature": "docker.volume(…)",
+     "returns": "nil",
+     "doc": "A list of commands becomes one `RUN` joined with `&&`.",
+     "kind": "function"
+    },
+    {
+     "name": "healthcheck",
+     "signature": "docker.healthcheck(cmd, { interval, timeout, retries })",
+     "returns": "nil",
+     "doc": "A list of commands becomes one `RUN` joined with `&&`.",
+     "kind": "function"
+    },
+    {
+     "name": "find",
+     "signature": "docker.find(instr)",
+     "doc": "Edit an existing Dockerfile.",
+     "kind": "function"
+    },
+    {
+     "name": "replace",
+     "signature": "docker.replace(instr, value)",
+     "doc": "Edit an existing Dockerfile.",
+     "kind": "function"
+    },
+    {
+     "name": "insert",
+     "signature": "docker.insert(i, instr, value)",
+     "doc": "Edit an existing Dockerfile.",
+     "kind": "function"
+    },
+    {
+     "name": "remove",
+     "signature": "docker.remove(i)",
+     "doc": "Edit an existing Dockerfile.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "service",
+   "alias": "service",
+   "summary": "Linux services with systemd: generate unit files and `service.sh` management scripts, install, deploy, control and inspect them — locally or on a server with `{ ssh }`. Commands run `systemctl`/`journalctl` (with `sudo -n` when `sudo: true`).",
+   "members": [
+    {
+     "name": "define",
+     "signature": "service.define({ name, exec, args, description, user = \"root\", group, workdir, env, envFile, after = \"network.target\", type = \"simple\", restart = \"always\", restartSec = 5, limitNofile = 65535, wantedBy, extra, sudo, dir, ssh })",
+     "returns": "Service",
+     "doc": "`extra`: `{ Service: { MemoryMax: \"1G\" } }`; `ssh`: a connection or `\"user@host\"`.",
+     "kind": "function"
+    },
+    {
+     "name": "isActive",
+     "signature": "service.isActive()",
+     "kind": "function"
+    },
+    {
+     "name": "isEnabled",
+     "signature": "service.isEnabled()",
+     "kind": "function"
+    },
+    {
+     "name": "logs",
+     "signature": "service.logs({ lines, since })",
+     "kind": "function"
+    },
+    {
+     "name": "status",
+     "signature": "service.status(name, { ssh })",
+     "returns": "map · error",
+     "doc": "`{ active, sub, enabled, running, pid, memory, since, exitStatus, description }`.",
+     "kind": "function"
+    },
+    {
+     "name": "list",
+     "signature": "service.list({ all, ssh })",
+     "kind": "function"
+    },
+    {
+     "name": "start",
+     "signature": "service.start(name, { sudo, ssh })",
+     "kind": "function"
+    },
+    {
+     "name": "daemonReload",
+     "signature": "service.daemonReload()",
+     "kind": "function"
+    },
+    {
+     "name": "parseUnit",
+     "signature": "service.parseUnit(text)",
+     "doc": "Unit files as `{ Unit: {…}, Service: {…}, Install: {…} }`.",
+     "kind": "function"
+    },
+    {
+     "name": "readUnit",
+     "signature": "service.readUnit(name | path, { ssh })",
+     "doc": "Unit files as `{ Unit: {…}, Service: {…}, Install: {…} }`.",
+     "kind": "function"
+    },
+    {
+     "name": "unitString",
+     "signature": "service.unitString(map)",
+     "doc": "Unit files as `{ Unit: {…}, Service: {…}, Install: {…} }`.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "zip",
+   "alias": "zip",
+   "summary": "ZIP archives (create, extract, list, read, append; AES-256 passwords), tar and tar.gz archives and gzip data. Extraction refuses entries that would escape the target folder. Binary data comes back as a [buffer](#values) (inputs also take a str or a list of byte ints).",
+   "members": [
+    {
+     "name": "zip",
+     "signature": "zip.zip(dest, source | [sources], { level = 6, store, password })",
+     "returns": "int · error",
+     "doc": "Folders are added recursively, named like `zip -r`; returns the number of files.",
+     "kind": "function"
+    },
+    {
+     "name": "write",
+     "signature": "zip.write(dest, { \"name\": str | bytes, \"folder/\": nil }, opts)",
+     "returns": "nil · error",
+     "doc": "An archive from memory.",
+     "kind": "function"
+    },
+    {
+     "name": "add",
+     "signature": "zip.add(zipPath, name, content, opts)",
+     "returns": "nil · error",
+     "doc": "Appends to an existing archive.",
+     "kind": "function"
+    },
+    {
+     "name": "unzip",
+     "signature": "zip.unzip(src, dest = \".\", { password, only: [names] })",
+     "returns": "list · error",
+     "doc": "The extracted paths.",
+     "kind": "function"
+    },
+    {
+     "name": "list",
+     "signature": "zip.list(src)",
+     "returns": "list · str | buffer",
+     "doc": "`[{ name, size, compressedSize, isDir, encrypted, modified }]`.",
+     "kind": "function"
+    },
+    {
+     "name": "read",
+     "signature": "zip.read(src, name, { bytes, password })",
+     "returns": "list · str | buffer",
+     "doc": "`[{ name, size, compressedSize, isDir, encrypted, modified }]`.",
+     "kind": "function"
+    },
+    {
+     "name": "tar",
+     "signature": "zip.tar(dest, sources)",
+     "doc": "`.tar.gz`/`.tgz` are gzip-compressed.",
+     "kind": "function"
+    },
+    {
+     "name": "untar",
+     "signature": "zip.untar(src, dest)",
+     "doc": "`.tar.gz`/`.tgz` are gzip-compressed.",
+     "kind": "function"
+    },
+    {
+     "name": "listTar",
+     "signature": "zip.listTar(src)",
+     "doc": "`.tar.gz`/`.tgz` are gzip-compressed.",
+     "kind": "function"
+    },
+    {
+     "name": "gzip",
+     "signature": "zip.gzip(str | bytes, { level })",
+     "returns": "buffer · str | buffer",
+     "kind": "function"
+    },
+    {
+     "name": "gunzip",
+     "signature": "zip.gunzip(bytes, { bytes })",
+     "returns": "buffer · str | buffer",
+     "kind": "function"
+    },
+    {
+     "name": "gzipFile",
+     "signature": "zip.gzipFile(src, dest?)",
+     "returns": "str · error",
+     "doc": "The written path.",
+     "kind": "function"
+    },
+    {
+     "name": "gunzipFile",
+     "signature": "zip.gunzipFile(src, dest?)",
+     "returns": "str · error",
+     "doc": "The written path.",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "protobuf",
+   "alias": "protobuf",
+   "summary": "Protocol Buffers without code generation: `.proto` files are compiled at run time in pure Rust (protox — no `protoc`), messages are encoded from and decoded to Fogu maps (prost-reflect). Field names follow the proto3 JSON mapping (camelCase; `protoNames` for the original ones); 64-bit integers are ints; `bytes` fields are base64 text; well-known types (`Timestamp`, `Duration`…) use their JSON forms.",
+   "members": [
+    {
+     "name": "load",
+     "signature": "protobuf.load(path | [paths], { includes: [folders] })",
+     "returns": "ProtoSchema · error",
+     "doc": "Imports are searched in `includes` (default: the files' folders).",
+     "kind": "function"
+    },
+    {
+     "name": "parse",
+     "signature": "protobuf.parse(source, { name, imports: { \"file.proto\": source } })",
+     "returns": "ProtoSchema · error",
+     "doc": "Google's well-known types are built in.",
+     "kind": "function"
+    },
+    {
+     "name": "loadDescriptor",
+     "signature": "protobuf.loadDescriptor(path | bytes)",
+     "returns": "ProtoSchema · error",
+     "doc": "A FileDescriptorSet (`protoc --descriptor_set_out`, `buf build`).",
+     "kind": "function"
+    }
+   ]
+  }
+ ]
+}

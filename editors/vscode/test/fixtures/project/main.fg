@@ -1,0 +1,13 @@
+import Point, { circle, parse as parseInt, Shape } from "./shapes.fg"
+import * as shapes from "./shapes.fg"
+import lib from "./index.fg"
+import fs from "fogu:fs"
+
+const origin = new Point(0, 0)
+fn show(s: Shape, p: Point): str {
+    return s.name() + str(p.norm())
+}
+struct Local {
+    size = 1
+    grow(n: int) { this.size += n }
+}

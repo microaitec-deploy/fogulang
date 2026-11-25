@@ -1,0 +1,429 @@
+{
+  "name": "fogu",
+  "displayName": "Fogu",
+  "description": "Fogu language support: syntax highlighting, diagnostics (fogu check), formatting (fogu fmt), run/test commands, desktop and MCU commands, snippets, completion and hover for the standard library and the published libraries (mcu, desktop, …).",
+  "version": "0.8.2",
+  "publisher": "microaitec",
+  "author": {
+    "name": "Edmilson Soares"
+  },
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "homepage": "https://fogulang.microaitec.com",
+  "repository": {
+    "type": "git",
+    "url": "https://fogulang.microaitec.com"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets",
+    "Formatters",
+    "Linters"
+  ],
+  "keywords": [
+    "fogu",
+    "fg",
+    "scripting",
+    "language"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:fogu",
+    "workspaceContains:**/*.fg",
+    "workspaceContains:fogu.json"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Running the fogu binary (check, format, run) is disabled in untrusted workspaces."
+    },
+    "virtualWorkspaces": {
+      "supported": "limited",
+      "description": "Diagnostics and formatting need the files on disk."
+    }
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "fogu",
+        "aliases": [
+          "Fogu",
+          "fogu"
+        ],
+        "extensions": [
+          ".fg"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./images/fogu-file.svg",
+          "dark": "./images/fogu-file.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "fogu",
+        "scopeName": "source.fogu",
+        "path": "./syntaxes/fogu.tmLanguage.json"
+      },
+      {
+        "scopeName": "markdown.fogu.codeblock",
+        "path": "./syntaxes/fogu.markdown.tmLanguage.json",
+        "injectTo": [
+          "text.html.markdown"
+        ],
+        "embeddedLanguages": {
+          "meta.embedded.block.fogu": "fogu"
+        }
+      }
+    ],
+    "snippets": [
+      {
+        "language": "fogu",
+        "path": "./snippets/fogu.json"
+      }
+    ],
+    "configuration": {
+      "title": "Fogu",
+      "properties": {
+        "fogu.path": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Path of the `fogu` executable. Empty: `fogu` on the `PATH`, else `~/.fogu/bin/fogu`. `~` and `${workspaceFolder}` are expanded."
+        },
+        "fogu.checkOnSave": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Run `fogu check` when a Fogu file is opened or saved and show the errors and warnings."
+        },
+        "fogu.checkOnType": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Run `fogu check` on the unsaved text while typing (debounced, through a temporary file)."
+        },
+        "fogu.checkDelay": {
+          "type": "number",
+          "default": 400,
+          "minimum": 50,
+          "markdownDescription": "Milliseconds to wait after the last change before checking (with `#fogu.checkOnType#`)."
+        },
+        "fogu.codeLens": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show `Run`/`Check` lenses at the top of Fogu files and `Run test` above each `test(...)`."
+        },
+        "fogu.mcu.board": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Default board for `Fogu: MCU Run` / `MCU Build` (e.g. `pico`, `uno`). Empty: ask (the last choice is remembered)."
+        },
+        "fogu.mcu.port": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Serial port for `Fogu: MCU Run` / `Detect` / `Monitor` (e.g. `COM5`, `/dev/ttyUSB0`). Empty: ask (an empty answer lets `fogu mcu` pick the port whose USB id matches the board)."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "fogu.run",
+        "title": "Run File",
+        "category": "Fogu",
+        "icon": "$(play)"
+      },
+      {
+        "command": "fogu.check",
+        "title": "Check File",
+        "category": "Fogu",
+        "icon": "$(check)"
+      },
+      {
+        "command": "fogu.checkWorkspace",
+        "title": "Check Workspace",
+        "category": "Fogu"
+      },
+      {
+        "command": "fogu.test",
+        "title": "Run Tests",
+        "category": "Fogu",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "fogu.testFile",
+        "title": "Run Tests in File",
+        "category": "Fogu"
+      },
+      {
+        "command": "fogu.format",
+        "title": "Format File",
+        "category": "Fogu"
+      },
+      {
+        "command": "fogu.desktopDev",
+        "title": "Desktop: Dev (window + hot reload)",
+        "category": "Fogu"
+      },
+      {
+        "command": "fogu.desktopBuild",
+        "title": "Desktop: Build Executable",
+        "category": "Fogu"
+      },
+      {
+        "command": "fogu.desktopCi",
+        "title": "Desktop: CI Workflow (GitHub Actions)",
+        "category": "Fogu"
+      },
+      {
+        "command": "fogu.desktopKeygen",
+        "title": "Desktop: Update Keys (keygen)",
+        "category": "Fogu"
+      },
+      {
+        "command": "fogu.mcuRun",
+        "title": "MCU: Build, Flash and Monitor",
+        "category": "Fogu",
+        "icon": "$(circuit-board)"
+      },
+      {
+        "command": "fogu.mcuBuild",
+        "title": "MCU: Build Firmware",
+        "category": "Fogu"
+      },
+      {
+        "command": "fogu.mcuDetect",
+        "title": "MCU: Detect Board and Port",
+        "category": "Fogu"
+      },
+      {
+        "command": "fogu.mcuMonitor",
+        "title": "MCU: Serial Monitor",
+        "category": "Fogu"
+      },
+      {
+        "command": "fogu.showOutput",
+        "title": "Show Output",
+        "category": "Fogu"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "fogu.run",
+          "when": "resourceLangId == fogu && !fogu.fileImportsMcu",
+          "group": "navigation@0"
+        },
+        {
+          "command": "fogu.mcuRun",
+          "when": "resourceLangId == fogu && fogu.fileImportsMcu",
+          "group": "navigation@1"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "fogu.check",
+          "when": "resourceLangId == fogu",
+          "group": "navigation@50"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "fogu.run",
+          "when": "resourceLangId == fogu",
+          "group": "fogu@1"
+        },
+        {
+          "command": "fogu.check",
+          "when": "resourceLangId == fogu",
+          "group": "fogu@2"
+        },
+        {
+          "command": "fogu.testFile",
+          "when": "resourceLangId == fogu && resourceFilename =~ /\\.test\\.fg$/",
+          "group": "fogu@3"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "fogu.run",
+          "when": "resourceExtname == .fg",
+          "group": "fogu@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "fogu.run",
+          "when": "resourceLangId == fogu"
+        },
+        {
+          "command": "fogu.check",
+          "when": "resourceLangId == fogu"
+        },
+        {
+          "command": "fogu.testFile",
+          "when": "resourceLangId == fogu"
+        },
+        {
+          "command": "fogu.format",
+          "when": "resourceLangId == fogu"
+        },
+        {
+          "command": "fogu.desktopDev",
+          "when": "fogu.isDesktopProject"
+        },
+        {
+          "command": "fogu.desktopBuild",
+          "when": "fogu.isDesktopProject"
+        },
+        {
+          "command": "fogu.mcuRun",
+          "when": "fogu.fileImportsMcu || fogu.isMcuProject"
+        },
+        {
+          "command": "fogu.mcuBuild",
+          "when": "fogu.fileImportsMcu || fogu.isMcuProject"
+        },
+        {
+          "command": "fogu.desktopCi",
+          "when": "fogu.isDesktopProject"
+        },
+        {
+          "command": "fogu.desktopKeygen",
+          "when": "fogu.isDesktopProject"
+        },
+        {
+          "command": "fogu.mcuDetect",
+          "when": "fogu.fileImportsMcu || fogu.isMcuProject"
+        },
+        {
+          "command": "fogu.mcuMonitor",
+          "when": "fogu.fileImportsMcu || fogu.isMcuProject"
+        }
+      ]
+    },
+    "taskDefinitions": [
+      {
+        "type": "fogu",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The fogu subcommand: check, test, run, fmt, build, desktop, mcu, or a script of fogu.json."
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Extra arguments."
+          }
+        }
+      }
+    ],
+    "problemPatterns": [
+      {
+        "name": "fogu-error",
+        "patterns": [
+          {
+            "regexp": "^\\s*(?:\\u2717\\s+)?(error)(?:\\[(E\\d+)\\])?:\\s+(.*)$",
+            "severity": 1,
+            "code": 2,
+            "message": 3
+          },
+          {
+            "regexp": "^\\s*-->\\s+(.*?):(\\d+)(?::(\\d+))?\\s*$",
+            "file": 1,
+            "line": 2,
+            "column": 3
+          }
+        ]
+      },
+      {
+        "name": "fogu-warning",
+        "patterns": [
+          {
+            "regexp": "^\\s*(warning)(?:\\[(W\\d+)\\])?:\\s+(.*)$",
+            "severity": 1,
+            "code": 2,
+            "message": 3
+          },
+          {
+            "regexp": "^\\s*-->\\s+(.*?):(\\d+)(?::(\\d+))?\\s*$",
+            "file": 1,
+            "line": 2,
+            "column": 3
+          }
+        ]
+      },
+      {
+        "name": "fogu-warning-legacy",
+        "regexp": "^\\s*(warning):\\s+(.*?):\\s+line\\s+(\\d+)(?::(\\d+))?:\\s+(.*)$",
+        "severity": 1,
+        "file": 2,
+        "line": 3,
+        "column": 4,
+        "message": 5
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "fogu",
+        "label": "Fogu errors",
+        "owner": "fogu",
+        "source": "fogu",
+        "fileLocation": [
+          "autoDetect",
+          "${workspaceFolder}"
+        ],
+        "pattern": "$fogu-error"
+      },
+      {
+        "name": "fogu-warning",
+        "label": "Fogu warnings",
+        "owner": "fogu",
+        "source": "fogu",
+        "fileLocation": [
+          "autoDetect",
+          "${workspaceFolder}"
+        ],
+        "pattern": "$fogu-warning"
+      },
+      {
+        "name": "fogu-warning-legacy",
+        "label": "Fogu warnings (Fogu 0.7.2 and older)",
+        "owner": "fogu",
+        "source": "fogu",
+        "fileLocation": [
+          "autoDetect",
+          "${workspaceFolder}"
+        ],
+        "pattern": "$fogu-warning-legacy"
+      }
+    ]
+  },
+  "scripts": {
+    "gen": "bun scripts/gen-grammar.ts && bun scripts/gen-stdlib.ts && bun scripts/gen-libs.ts",
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node16 --minify",
+    "watch": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node16 --sourcemap --watch",
+    "typecheck": "bun ./node_modules/typescript/bin/tsc --noEmit -p .",
+    "test": "bun test",
+    "package": "bun run build && bun ./node_modules/@vscode/vsce/vsce package --no-dependencies -o fogu-vscode.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "~1.75.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.1.0"
+  }
+}

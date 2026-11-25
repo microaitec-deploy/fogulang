@@ -1,0 +1,2 @@
+const x: Foo = 1
+print(x)

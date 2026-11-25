@@ -1,0 +1,1086 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Fogu",
+  "scopeName": "source.fogu",
+  "fileTypes": [
+    "fg"
+  ],
+  "patterns": [
+    {
+      "include": "#statements"
+    }
+  ],
+  "repository": {
+    "statements": {
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#import"
+        },
+        {
+          "include": "#struct"
+        },
+        {
+          "include": "#interface"
+        },
+        {
+          "include": "#variable-declaration"
+        },
+        {
+          "include": "#expression"
+        }
+      ]
+    },
+    "expression": {
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "include": "#numbers"
+        },
+        {
+          "include": "#function"
+        },
+        {
+          "include": "#keywords"
+        },
+        {
+          "include": "#new-expression"
+        },
+        {
+          "include": "#constants"
+        },
+        {
+          "include": "#builtins"
+        },
+        {
+          "include": "#fogu-object"
+        },
+        {
+          "include": "#function-call"
+        },
+        {
+          "include": "#property"
+        },
+        {
+          "include": "#operators"
+        },
+        {
+          "include": "#block"
+        },
+        {
+          "include": "#brackets"
+        },
+        {
+          "include": "#parens"
+        },
+        {
+          "include": "#punctuation"
+        },
+        {
+          "include": "#identifiers"
+        }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.documentation.fogu",
+          "begin": "/\\*\\*(?!/)",
+          "end": "\\*/",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.begin.fogu"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.end.fogu"
+            }
+          }
+        },
+        {
+          "name": "comment.block.fogu",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.begin.fogu"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.end.fogu"
+            }
+          }
+        },
+        {
+          "begin": "(^[ \\t]+)?(?=//)",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.whitespace.comment.leading.fogu"
+            }
+          },
+          "end": "(?!\\G)",
+          "patterns": [
+            {
+              "name": "comment.line.double-slash.fogu",
+              "begin": "//",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.definition.comment.fogu"
+                }
+              },
+              "end": "(?=$)"
+            }
+          ]
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "include": "#module-specifier"
+        },
+        {
+          "include": "#string-double"
+        },
+        {
+          "include": "#string-single"
+        },
+        {
+          "include": "#template"
+        }
+      ]
+    },
+    "module-specifier": {
+      "comment": "Standard library module in an import: \"fogu:http\"",
+      "match": "([\"'])(fogu)(:)([A-Za-z0-9_\\-]+)(\\1)",
+      "name": "string.quoted.module.fogu",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.string.begin.fogu"
+        },
+        "2": {
+          "name": "support.type.module.namespace.fogu"
+        },
+        "3": {
+          "name": "punctuation.separator.module.fogu"
+        },
+        "4": {
+          "name": "support.module.fogu entity.name.type.module.fogu"
+        },
+        "5": {
+          "name": "punctuation.definition.string.end.fogu"
+        }
+      }
+    },
+    "string-double": {
+      "name": "string.quoted.double.fogu",
+      "begin": "\"",
+      "end": "\"|(?=$)",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.fogu"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.fogu"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#string-escape"
+        }
+      ]
+    },
+    "string-single": {
+      "name": "string.quoted.single.fogu",
+      "begin": "'",
+      "end": "'|(?=$)",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.fogu"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.fogu"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#string-escape"
+        }
+      ]
+    },
+    "string-escape": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.fogu",
+          "match": "\\\\[ntr0\\\\'\"]"
+        },
+        {
+          "name": "invalid.illegal.escape.fogu",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "template": {
+      "name": "string.template.fogu",
+      "begin": "`",
+      "end": "`",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.template.begin.fogu"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.template.end.fogu"
+        }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.fogu",
+          "match": "\\\\[ntr0\\\\`$'\"]"
+        },
+        {
+          "name": "invalid.illegal.escape.fogu",
+          "match": "\\\\."
+        },
+        {
+          "include": "#template-substitution"
+        }
+      ]
+    },
+    "template-substitution": {
+      "name": "meta.template.expression.fogu",
+      "begin": "\\$\\{",
+      "end": "\\}",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.template-expression.begin.fogu"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.template-expression.end.fogu"
+        }
+      },
+      "contentName": "meta.embedded.line.fogu",
+      "patterns": [
+        {
+          "include": "#expression"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.fogu",
+          "match": "\\b(0[xX])[0-9a-fA-F_]+\\b",
+          "captures": {
+            "1": {
+              "name": "storage.type.numeric.hex.fogu"
+            }
+          }
+        },
+        {
+          "name": "constant.numeric.binary.fogu",
+          "match": "\\b(0[bB])[01_]+\\b",
+          "captures": {
+            "1": {
+              "name": "storage.type.numeric.binary.fogu"
+            }
+          }
+        },
+        {
+          "comment": "Duration literal: 500ms 2s 1.5h 1d (ns us µs ms s m h d)",
+          "name": "constant.numeric.duration.fogu",
+          "match": "\\b[0-9][0-9_]*(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?(ns|us|\\u00B5s|ms|s|m|h|d)(?![A-Za-z0-9_])",
+          "captures": {
+            "1": {
+              "name": "keyword.other.unit.duration.fogu"
+            }
+          }
+        },
+        {
+          "name": "constant.numeric.float.fogu",
+          "match": "\\b[0-9][0-9_]*(?:\\.[0-9]+(?:[eE][+-]?[0-9]+)?|[eE][+-]?[0-9]+)\\b"
+        },
+        {
+          "name": "constant.numeric.integer.fogu",
+          "match": "\\b[0-9][0-9_]*\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.loop.fogu",
+          "match": "\\bloop\\b(?=\\s*\\{)"
+        },
+        {
+          "name": "keyword.control.flow.fogu",
+          "match": "\\b(?:return|break|continue)\\b"
+        },
+        {
+          "name": "keyword.control.conditional.fogu",
+          "match": "\\b(?:if|else|match|case|default|select)\\b"
+        },
+        {
+          "name": "keyword.control.loop.fogu",
+          "match": "\\b(?:while|for|in)\\b"
+        },
+        {
+          "name": "keyword.control.concurrency.fogu",
+          "match": "\\bfg\\b"
+        },
+        {
+          "name": "keyword.control.import.fogu",
+          "match": "\\b(?:import|export|from|as)\\b"
+        },
+        {
+          "name": "storage.type.chan.fogu",
+          "match": "\\bchan\\b"
+        },
+        {
+          "name": "storage.type.fogu",
+          "match": "\\b(?:let|const)\\b"
+        },
+        {
+          "name": "storage.type.struct.fogu",
+          "match": "\\b(?:struct|interface)\\b"
+        },
+        {
+          "name": "storage.modifier.embed.fogu",
+          "match": "\\bembed\\b"
+        },
+        {
+          "name": "variable.language.this.fogu",
+          "match": "\\bthis\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.fogu",
+          "match": "\\b(?:true|false)\\b"
+        },
+        {
+          "name": "constant.language.nil.fogu",
+          "match": "\\bnil\\b"
+        },
+        {
+          "name": "variable.language.wildcard.fogu",
+          "match": "\\b_\\b"
+        },
+        {
+          "name": "variable.other.constant.fogu",
+          "match": "\\b[A-Z][A-Z0-9_]*[A-Z0-9]\\b(?!\\s*\\()"
+        }
+      ]
+    },
+    "builtins": {
+      "name": "support.function.builtin.fogu",
+      "match": "\\b(?:print|len|typeof|str|int|float|bytes|clock|close|timeout|error|panic)\\b(?=\\s*\\()"
+    },
+    "fogu-object": {
+      "patterns": [
+        {
+          "match": "\\b(Fogu)\\s*(\\.)\\s*([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()",
+          "captures": {
+            "1": {
+              "name": "support.class.fogu"
+            },
+            "2": {
+              "name": "punctuation.accessor.fogu"
+            },
+            "3": {
+              "name": "support.function.fogu"
+            }
+          }
+        },
+        {
+          "match": "\\b(Fogu)\\s*(\\.)\\s*([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "support.class.fogu"
+            },
+            "2": {
+              "name": "punctuation.accessor.fogu"
+            },
+            "3": {
+              "name": "support.variable.property.fogu"
+            }
+          }
+        },
+        {
+          "name": "support.class.fogu",
+          "match": "\\bFogu\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.spread.fogu",
+          "match": "\\.\\.\\."
+        },
+        {
+          "name": "keyword.operator.range.fogu",
+          "match": "\\.\\."
+        },
+        {
+          "name": "keyword.operator.optional-chain.fogu",
+          "match": "\\?\\.(?!\\.)"
+        },
+        {
+          "name": "keyword.operator.nullish.fogu",
+          "match": "\\?\\?"
+        },
+        {
+          "name": "storage.type.function.arrow.fogu",
+          "match": "=>"
+        },
+        {
+          "name": "keyword.operator.pipe.fogu",
+          "match": "->"
+        },
+        {
+          "name": "keyword.operator.channel.fogu",
+          "match": "<-"
+        },
+        {
+          "name": "keyword.operator.assignment.compound.fogu",
+          "match": "\\+=|-=|\\*=|/=|%="
+        },
+        {
+          "name": "keyword.operator.comparison.fogu",
+          "match": "==|!="
+        },
+        {
+          "name": "keyword.operator.relational.fogu",
+          "match": "<=|>=|<|>"
+        },
+        {
+          "name": "keyword.operator.logical.fogu",
+          "match": "&&|\\|\\||!"
+        },
+        {
+          "name": "keyword.operator.assignment.fogu",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.arithmetic.fogu",
+          "match": "\\*\\*|[+\\-*/%]"
+        },
+        {
+          "name": "keyword.operator.error-propagation.fogu",
+          "match": "\\?"
+        },
+        {
+          "name": "keyword.operator.alternative.fogu",
+          "match": "\\|"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.comma.fogu",
+          "match": ","
+        },
+        {
+          "name": "punctuation.terminator.statement.fogu",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.separator.key-value.fogu",
+          "match": ":"
+        },
+        {
+          "name": "punctuation.accessor.fogu",
+          "match": "\\."
+        }
+      ]
+    },
+    "block": {
+      "begin": "\\{",
+      "end": "\\}",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.begin.fogu"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.end.fogu"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#map-key"
+        },
+        {
+          "include": "#statements"
+        }
+      ]
+    },
+    "map-key": {
+      "comment": "Key of a map literal or struct field: `name:` at the start of an entry",
+      "match": "(?<=[{,]|^)\\s*(?!(?:case|default)\\b)([A-Za-z_][A-Za-z0-9_]*)\\s*(:)(?!:)",
+      "captures": {
+        "1": {
+          "name": "meta.object-literal.key.fogu variable.other.property.fogu"
+        },
+        "2": {
+          "name": "punctuation.separator.key-value.fogu"
+        }
+      }
+    },
+    "brackets": {
+      "begin": "\\[",
+      "end": "\\]",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.brackets.begin.fogu"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.brackets.end.fogu"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#expression"
+        }
+      ]
+    },
+    "parens": {
+      "begin": "\\(",
+      "end": "\\)",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.parens.begin.fogu"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.parens.end.fogu"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#expression"
+        }
+      ]
+    },
+    "import": {
+      "name": "meta.import.fogu",
+      "begin": "\\b(import)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.import.fogu"
+        }
+      },
+      "end": "(?<=[\"'])|(?=;|$)",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "name": "keyword.control.import.fogu",
+          "match": "\\b(?:from|as)\\b"
+        },
+        {
+          "name": "keyword.operator.wildcard.fogu",
+          "match": "\\*"
+        },
+        {
+          "begin": "\\{",
+          "end": "\\}",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.block.begin.fogu"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.block.end.fogu"
+            }
+          },
+          "patterns": [
+            {
+              "name": "keyword.control.import.fogu",
+              "match": "\\bas\\b"
+            },
+            {
+              "name": "variable.other.readwrite.alias.fogu",
+              "match": "[A-Za-z_][A-Za-z0-9_]*"
+            },
+            {
+              "name": "punctuation.separator.comma.fogu",
+              "match": ","
+            }
+          ]
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "name": "variable.other.readwrite.alias.fogu",
+          "match": "[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+    "variable-declaration": {
+      "patterns": [
+        {
+          "comment": "let x: type = …",
+          "begin": "\\b(let|const)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.fogu"
+            },
+            "2": {
+              "name": "variable.other.declaration.fogu"
+            },
+            "3": {
+              "name": "punctuation.separator.type.fogu"
+            }
+          },
+          "end": "(?==|;|$)",
+          "patterns": [
+            {
+              "include": "#type"
+            }
+          ]
+        },
+        {
+          "match": "\\b(let|const)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.fogu"
+            },
+            "2": {
+              "name": "variable.other.declaration.fogu"
+            }
+          }
+        }
+      ]
+    },
+    "function": {
+      "comment": "fn name<T>(params): type — also anonymous functions and fn types",
+      "name": "meta.function.fogu",
+      "begin": "\\b(fn)\\b(?:\\s*([A-Za-z_][A-Za-z0-9_]*))?\\s*(<[^<>()]*>)?",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.function.fogu"
+        },
+        "2": {
+          "name": "entity.name.function.fogu"
+        },
+        "3": {
+          "patterns": [
+            {
+              "include": "#type-parameters"
+            }
+          ]
+        }
+      },
+      "end": "(?=[{},;\\]=)])|(?<=\\))(?!\\s*:)|$",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#parameters"
+        },
+        {
+          "include": "#return-type"
+        }
+      ]
+    },
+    "type-parameters": {
+      "patterns": [
+        {
+          "name": "punctuation.definition.typeparameters.fogu",
+          "match": "[<>]"
+        },
+        {
+          "name": "punctuation.separator.comma.fogu",
+          "match": ","
+        },
+        {
+          "name": "punctuation.separator.type.fogu",
+          "match": ":"
+        },
+        {
+          "name": "entity.name.type.parameter.fogu",
+          "match": "[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+    "parameters": {
+      "name": "meta.parameters.fogu",
+      "begin": "\\(",
+      "end": "\\)",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.parameters.begin.fogu"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.parameters.end.fogu"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "comment": "name: type",
+          "begin": "(\\.\\.\\.)?([A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.operator.spread.fogu"
+            },
+            "2": {
+              "name": "variable.parameter.fogu"
+            },
+            "3": {
+              "name": "punctuation.separator.type.fogu"
+            }
+          },
+          "end": "(?=[,=)])",
+          "patterns": [
+            {
+              "include": "#type"
+            }
+          ]
+        },
+        {
+          "comment": "= default value",
+          "begin": "=",
+          "beginCaptures": {
+            "0": {
+              "name": "keyword.operator.assignment.fogu"
+            }
+          },
+          "end": "(?=[,)])",
+          "patterns": [
+            {
+              "include": "#expression"
+            }
+          ]
+        },
+        {
+          "match": "(\\.\\.\\.)?([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.spread.fogu"
+            },
+            "2": {
+              "name": "variable.parameter.fogu"
+            }
+          }
+        },
+        {
+          "name": "punctuation.separator.comma.fogu",
+          "match": ","
+        }
+      ]
+    },
+    "return-type": {
+      "begin": "(?<=\\))\\s*(:)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.separator.type.fogu"
+        }
+      },
+      "end": "(?=[{},;\\]=)])|$",
+      "patterns": [
+        {
+          "include": "#type"
+        }
+      ]
+    },
+    "type": {
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#function"
+        },
+        {
+          "name": "support.type.primitive.fogu",
+          "match": "\\b(?:int|float|str|string|bool|void|duration|list|map|tuple|range|chan|error|struct|object|any|buffer|nil|char|i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|int8|int16|int32|int64|uint8|uint16|uint32|uint64|uint|float32|float64|byte|rune)\\b"
+        },
+        {
+          "begin": "<",
+          "end": ">",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.typeparameters.begin.fogu"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.typeparameters.end.fogu"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#type"
+            },
+            {
+              "name": "punctuation.separator.comma.fogu",
+              "match": ","
+            }
+          ]
+        },
+        {
+          "begin": "\\(",
+          "end": "\\)",
+          "beginCaptures": {
+            "0": {
+              "name": "meta.brace.round.fogu"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "meta.brace.round.fogu"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#type"
+            },
+            {
+              "name": "punctuation.separator.comma.fogu",
+              "match": ","
+            }
+          ]
+        },
+        {
+          "name": "keyword.operator.type.fogu",
+          "match": "\\|\\||[|?]"
+        },
+        {
+          "name": "entity.name.type.fogu",
+          "match": "[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+    "struct": {
+      "name": "meta.struct.fogu",
+      "begin": "\\b(export\\s+)?(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(<[^<>]*>)?\\s*",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.export.fogu"
+        },
+        "2": {
+          "name": "storage.type.struct.fogu"
+        },
+        "3": {
+          "name": "entity.name.type.struct.fogu"
+        },
+        "4": {
+          "patterns": [
+            {
+              "include": "#type-parameters"
+            }
+          ]
+        }
+      },
+      "end": "(?<=\\})",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#struct-body"
+        }
+      ]
+    },
+    "interface": {
+      "name": "meta.interface.fogu",
+      "begin": "\\b(export\\s+)?(interface)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(<[^<>]*>)?\\s*",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.export.fogu"
+        },
+        "2": {
+          "name": "storage.type.interface.fogu"
+        },
+        "3": {
+          "name": "entity.name.type.interface.fogu"
+        },
+        "4": {
+          "patterns": [
+            {
+              "include": "#type-parameters"
+            }
+          ]
+        }
+      },
+      "end": "(?<=\\})",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#struct-body"
+        }
+      ]
+    },
+    "struct-body": {
+      "begin": "\\{",
+      "end": "\\}",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.begin.fogu"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.end.fogu"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "match": "\\b(embed)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.embed.fogu"
+            },
+            "2": {
+              "name": "entity.name.type.fogu"
+            }
+          }
+        },
+        {
+          "comment": "constructor new(...) { }",
+          "begin": "(?<![.\\w])(new)\\s*(?=\\()",
+          "beginCaptures": {
+            "1": {
+              "name": "entity.name.function.constructor.fogu"
+            }
+          },
+          "end": "(?=\\{)|(?<=\\))(?!\\s*:)|$",
+          "patterns": [
+            {
+              "include": "#parameters"
+            },
+            {
+              "include": "#return-type"
+            }
+          ]
+        },
+        {
+          "include": "#function"
+        },
+        {
+          "comment": "field: type = default",
+          "begin": "^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
+          "beginCaptures": {
+            "1": {
+              "name": "variable.other.property.fogu"
+            },
+            "2": {
+              "name": "punctuation.separator.type.fogu"
+            }
+          },
+          "end": "(?==|;|,|\\}|$)",
+          "patterns": [
+            {
+              "include": "#type"
+            }
+          ]
+        },
+        {
+          "match": "^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(?==)",
+          "captures": {
+            "1": {
+              "name": "variable.other.property.fogu"
+            }
+          }
+        },
+        {
+          "include": "#statements"
+        }
+      ]
+    },
+    "new-expression": {
+      "match": "\\b(new)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.new.fogu"
+        },
+        "2": {
+          "name": "entity.name.type.fogu"
+        }
+      }
+    },
+    "function-call": {
+      "match": "([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": {
+          "name": "entity.name.function.call.fogu"
+        }
+      }
+    },
+    "property": {
+      "patterns": [
+        {
+          "match": "(?:(\\?\\.)|(\\.))(?!\\.)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.optional-chain.fogu"
+            },
+            "2": {
+              "name": "punctuation.accessor.fogu"
+            },
+            "3": {
+              "name": "entity.name.function.method.fogu"
+            }
+          }
+        },
+        {
+          "match": "(?:(\\?\\.)|(\\.))(?!\\.)\\s*([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.optional-chain.fogu"
+            },
+            "2": {
+              "name": "punctuation.accessor.fogu"
+            },
+            "3": {
+              "name": "variable.other.property.fogu"
+            }
+          }
+        }
+      ]
+    },
+    "identifiers": {
+      "name": "variable.other.readwrite.fogu",
+      "match": "[A-Za-z_][A-Za-z0-9_]*"
+    }
+  }
+}

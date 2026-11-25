@@ -1,0 +1,11 @@
+**
+!package.json
+!README.md
+!CHANGELOG.md
+!LICENSE
+!language-configuration.json
+!dist/extension.js
+!syntaxes/*.json
+!snippets/*.json
+!images/icon.png
+!images/fogu-file.svg
