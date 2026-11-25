@@ -465,5 +465,91 @@
       "export { ${2:name} } from \"./${1:file}.fg\""
     ],
     "description": "Re-export names from another file"
+  },
+  "Describe with hooks": {
+    "prefix": "describe",
+    "body": [
+      "describe(\"${1:group}\", () => {",
+      "\tbeforeAll(() => {",
+      "\t\t${2:// once, before the tests of the group}",
+      "\t})",
+      "\tbeforeEach(() => {",
+      "\t\t${3:// before each test}",
+      "\t})",
+      "\tafterEach(() => {",
+      "\t\t${4:// after each test, also when it failed}",
+      "\t})",
+      "\tafterAll(() => {",
+      "\t\t${5:// once, after the tests of the group}",
+      "\t})",
+      "",
+      "\ttest(\"${6:does something}\", () => {",
+      "\t\texpect(${7:value}).toBe(${8:expected})$0",
+      "\t})",
+      "})"
+    ],
+    "description": "A group of tests with its hooks (fogu:test)"
+  },
+  "Test each": {
+    "prefix": "testeach",
+    "body": [
+      "test.each([",
+      "\t[${1:2}, ${2:3}, ${3:5}],",
+      "\t[${4:10}, ${5:20}, ${6:30}],",
+      "])(\"${7:add(%d, %d) = %d}\", (${8:a}, ${9:b}, ${10:expected}) => {",
+      "\texpect(${11:a + b}).toBe(${10:expected})$0",
+      "})"
+    ],
+    "description": "One test per row (fogu:test)"
+  },
+  "Read stream": {
+    "prefix": "readstream",
+    "body": [
+      "const ${1:lines} = fs.createReadStream(\"${2:file.txt}\", { lines: true })?",
+      "for ${3:line} in ${1:lines} {",
+      "\t$0",
+      "}",
+      "if ${1:lines}.error != nil { return nil, ${1:lines}.error }"
+    ],
+    "description": "Read a file a line at a time (fogu:fs)"
+  },
+  "Write stream": {
+    "prefix": "writestream",
+    "body": [
+      "const ${1:out} = fs.createWriteStream(\"${2:out.txt}\")?",
+      "${1:out}.writeLine(${3:\"text\"})?",
+      "${1:out}.close()"
+    ],
+    "description": "Write a file a piece at a time (fogu:fs)"
+  },
+  "Response stream": {
+    "prefix": "webstream",
+    "body": [
+      "app.get(\"${1:/export}\", (ctx) => {",
+      "\tconst ${2:out} = web.stream({ contentType: \"${3:text/plain}\" })",
+      "\tfg fn() {",
+      "\t\t${0:${2:out}.writeLine(\"line\")?}",
+      "\t\t${2:out}.end()",
+      "\t}()",
+      "\treturn ${2:out}",
+      "})"
+    ],
+    "description": "A response written a piece at a time, with backpressure (fogu:web)"
+  },
+  "Value stream": {
+    "prefix": "stream",
+    "body": [
+      "import stream from \"fogu:stream\"",
+      "",
+      "const ${1:s} = stream.create({ buffer: ${2:16} })",
+      "fg fn() {",
+      "\tfor ${3:i} in 0..${4:100} { ${1:s}.write(${3:i})? }",
+      "\t${1:s}.close()",
+      "}()",
+      "for ${5:v} in ${1:s}.map((x) => ${6:x * 2}).take(${7:10}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A stream written by a task and consumed lazily (fogu:stream)"
   }
 }

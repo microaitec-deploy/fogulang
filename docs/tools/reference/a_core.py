@@ -4,7 +4,7 @@ G = "Standard library"
 C = "Core modules"
 
 MODULE_TABLE = [
-    ("Core", "fogu:math fogu:json fogu:time fogu:types fogu:system fogu:fs fogu:path fogu:process fogu:sync fogu:test fogu:log fogu:regex fogu:crypto fogu:password"),
+    ("Core", "fogu:math fogu:json fogu:time fogu:types fogu:system fogu:fs fogu:path fogu:process fogu:sync fogu:stream fogu:test fogu:log fogu:regex fogu:crypto fogu:password"),
     ("Data formats", "fogu:csv fogu:excel fogu:yaml fogu:toml fogu:xml"),
     ("Storage", "fogu:kv fogu:surrealkv fogu:surrealdb fogu:sql fogu:orm fogu:redis fogu:s3 fogu:scylla fogu:etcd"),
     ("Web &amp; network", "fogu:http fogu:web fogu:jwt fogu:topcoat fogu:websocket fogu:socketio fogu:grpc fogu:net fogu:tls fogu:security"),
@@ -743,6 +743,53 @@ test.each([
                 "title": "settings.test.fg",
                 "output": "$ fogu test\nsettings.test.fg\n  ✓ settings file > starts empty (0ms)\n  ✓ add(2, 3) = 5 (0ms)\n  ✓ add(10, 20) = 30 (0ms)\n  ✓ int(123) (0ms)\n  ✓ int(0) (0ms)\n\n5 passed — 1 file(s) [0ms]",
                 "output_title": "fogu test",
+            }
+        ],
+    },
+    {
+        "id": "mod-stream",
+        "group": C,
+        "title": "fogu:stream",
+        "import": 'import stream from "fogu:stream"',
+        "intro": "Streams of values: a sequence consumed a value at a time, finite or infinite. Streams are "
+        "<strong>pulled</strong>: the operators work when the consumer asks for the next value, so a chain holds one "
+        "value per stage and the consumer sets the pace (backpressure). The only buffer is the one of "
+        "<code>stream.create</code>, where tasks push values. Design: <code>docs/architecture/value-streams.md</code>.",
+        "blocks": [
+            {
+                "api": [
+                    ("stream.create({ buffer = 16 })", "Stream", "Written by tasks, read by a consumer: <code>s.write(v)</code> → nil · error waits while <code>buffer</code> values are unread; <code>s.close()</code> ends it after the values written; <code>s.fail(err)</code> ends it with an error."),
+                    ("stream.from(list | range | str | chan | readable | stream) · stream.of(...values)", "Stream", "A readable of <code>fs</code> / <code>http</code> gives its chunks (or lines)."),
+                    ("stream.range(start, end?, step = 1) · stream.generate(fn(i)) · stream.interval(d)", "Stream", "No <code>end</code>: infinite · <code>fn(0), fn(1)…</code> until it returns <code>nil</code> · 0, 1, 2… one every <code>d</code>."),
+                    ("s.map(fn) · s.filter(fn) · s.take(n) · s.skip(n) · s.takeWhile(fn) · s.chunk(n) · s.tap(fn) · s.enumerate()", "Stream", "A new stream; nothing runs yet. <code>chunk</code>: lists of <code>n</code>; <code>enumerate</code>: <code>(index, value)</code>."),
+                    ("for v in s · s.next()", "value · nil · error", "One value at a time; <code>nil</code> at the end. An error ends a <code>for</code> and stays in <code>s.error</code>."),
+                    ("s.toList() · s.count() · s.reduce(fn, init) · s.forEach(fn) · s.first() · s.find(fn)", "value · error", "Consume the stream; an error it ended with is their error."),
+                    ("s.cancel()", "nil", "Stops the stream and everything upstream: a writer gets an error value, a file is closed. <code>take</code>, <code>takeWhile</code>, <code>first</code> and <code>find</code> cancel upstream once they are done."),
+                    ("s.done · s.cancelled · s.error · s.buffered", "", ""),
+                ],
+                "example": r'''
+import stream from "fogu:stream"
+
+// infinite, lazy: only what take(5) needs is computed
+print(stream.range(0).map((x) => x * 2).filter((x) => x > 10).take(5).toList()?)
+
+// a producer task and a consumer: at most 4 values wait in between
+const readings = stream.create({ buffer: 4 })
+fg fn() {
+    for i in 0..10 { readings.write({ sensor: "t1", value: 20 + i % 3 })? }
+    readings.close()
+}()
+const avg = readings.map((r) => r.value).chunk(5).map((b) => b.reduce((a, x) => a + x, 0) / len(b))
+for v in avg { print("average", v) }
+
+// an error value from a function ends the stream; the terminal returns it
+const [_, err] = stream.of(1, 2, 0, 4).map((x) => {
+    if x == 0 { return nil, error("division by zero") }
+    return 12 / x
+}).toList()
+print(err)
+''',
+                "run": True,
             }
         ],
     },

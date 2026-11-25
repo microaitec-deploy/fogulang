@@ -6,6 +6,8 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-11-25
+
 ### Added
 
 - **Streams in `fogu:fs`, `fogu:http` and `fogu:web`**: data read and written a piece at a
@@ -22,6 +24,16 @@ be incompatible changes (spec §75).
     off the interpreter thread, so the other `fg` tasks keep going.
   - Measured: 200 MB sent to a client reading at 50 MB/s, server peak 22 MB; 400 MB received
     with `http.stream` (chunks and `pipe`), client peak 26–30 MB.
+- **`fogu:stream`: streams of values.** A sequence consumed a value at a time, finite or infinite:
+  `stream.create({ buffer })` (written by tasks; `write` waits while the buffer is full),
+  `stream.from(list | range | str | chan | readable)`, `of`, `range` (infinite without an end),
+  `generate`, `interval`; operators `map`, `filter`, `take`, `skip`, `takeWhile`, `chunk`,
+  `tap`, `enumerate`; terminals `toList`, `count`, `reduce`, `forEach`, `first`, `find`; `for`.
+  Streams are pulled: the operators run when the consumer asks for a value, so a chain holds one
+  value per stage and needs no task per stage. Errors end a stream (`for` stops, `s.error`,
+  terminals return it); `cancel()` goes upstream (a writer gets an error value, a file is
+  closed). 2 million values through `map` and `filter`: 11 MB peak against 214 MB with lists
+  (`docs/architecture/value-streams.md`, `tests/spec/value_streams.fg`).
 - **`fogu:test`: groups, hooks and parametrized tests, as in Bun.** `describe(name, fn)`
   (nested; tests named `group > test`), `beforeAll` / `afterAll` / `beforeEach` / `afterEach`
   (scoped to their group; `beforeEach` outer first, `afterEach` inner first; cleanup runs

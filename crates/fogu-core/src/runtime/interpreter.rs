@@ -2064,6 +2064,10 @@ impl Interpreter {
     /// end, and also after an error value, which the stream keeps in its
     /// `error` field (errors are values: the loop does not raise it).
     pub(crate) fn stream_next(&self, o: &NativeObjectRef) -> Result<Option<Value>, String> {
+        // a stream of values (`fogu:stream`): pulled through its chain
+        if crate::native::vstream::is_value_stream(o) {
+            return crate::native::vstream::for_next(self, o);
+        }
         match self.call_native_method(o, "next", &[]) {
             Ok(Value::Nil) => Ok(None),
             Ok(Value::Error(e)) => {
@@ -2343,6 +2347,12 @@ impl Interpreter {
         // methods that need the interpreter (`Agent.run`, `GrpcServer.serve`)
         if let Some(r) = crate::host::get().and_then(|h| h.intercept_method(&receiver, &method, &arg_vals, self, &env)) {
             return self.native_result(r);
+        }
+        // the methods of `fogu:stream` call Fogu functions (`map`, `reduce` …)
+        if receiver.with_name(|n| n == "Stream") {
+            if let Some(r) = crate::native::vstream::method(self, &receiver, &method, &arg_vals) {
+                return self.native_result(r);
+            }
         }
         // blocking methods (`Mutex.lock`, `WaitGroup.wait`) first wait
         // cooperatively, without holding a borrow of the object
@@ -3497,7 +3507,7 @@ fn array_equal(a: &Value, b: &Value) -> bool {
 
 /// Is `o` a readable stream (`for x in o` reads it a piece at a time)?
 pub(crate) fn is_stream(o: &NativeObjectRef) -> bool {
-    matches!(o.name().as_str(), "ReadStream" | "HttpStream")
+    o.with_name(|n| matches!(n, "ReadStream" | "HttpStream" | "Stream"))
 }
 
 /// The message of a value a sized list cannot hold.

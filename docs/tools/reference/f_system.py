@@ -271,6 +271,106 @@ vm.all([0, 1, 2, 3, 4].map((i) => inc.spawn(ctx)))?
 print(ctx.sandbox.count)
 """,
                 "run": True,
+            },
+            {
+                "h3": "A complete example: plugins, in both directions",
+                "text": "The host gives each plugin an API — functions it may call, a store kept between runs, a channel to "
+                "send messages back — through the sandbox of its context. A plugin registers hooks the host calls, calls "
+                "the host back, and defines functions the host reads from the context (<code>ctx.report</code>). Each hook "
+                "runs with its own deadline: a plugin that fails or loops is stopped and reported alone, the others go on.",
+                "example": r'''
+// Plugins in fogu:vm, both ways: the host gives each plugin an API (functions,
+// a store, a channel); a plugin registers hooks the host calls, calls the host
+// back, and answers messages. A plugin that fails or loops is stopped alone.
+import vm from "fogu:vm"
+import time from "fogu:time"
+
+// ---------- the host's side ----------
+const hooks = {}                 // event → [ { plugin, fn } ]
+const logs = []
+const inbox = chan(16)           // plugins → host messages
+
+// the API one plugin sees: what it may call on the host
+fn apiFor(name) {
+    return {
+        plugin: name,
+        log: (msg) => logs.push(`[${name}] ${msg}`),
+        on: (event, f) => {                       // a plugin registers a hook
+            if !hooks.has(event) { hooks[event] = [] }
+            hooks[event].push({ plugin: name, fn: f })
+        },
+        send: (msg) => { inbox <- { from: name, msg: msg } },
+        store: {},                                // its own state, kept between runs
+    }
+}
+
+// fire an event: call every hook, each bounded by a deadline, each failure apart
+fn emit(event, data) {
+    const out = []
+    for h in hooks[event] ?? [] {
+        const [r, err] = vm.runInNewContext("hook(data)", { hook: h.fn, data: data }, { timeout: 50ms, filename: h.plugin })
+        if err != nil {
+            out.push(`${h.plugin}: failed (${err.message})`)
+        } else {
+            out.push(`${h.plugin}: ${r}`)
+        }
+    }
+    return out
+}
+
+// ---------- the plugins: code the host did not write ----------
+const sources = {
+    greeter: `
+        log("loaded")
+        on("user.created", (u) => {
+            send("welcome mail for " + u.name)
+            return "hello, " + u.name
+        })`,
+    counter: `
+        store.count = 0
+        on("user.created", (u) => {
+            store.count += 1
+            return "users so far: " + str(store.count)
+        })
+        // a function the host can call directly
+        fn report() { return { plugin: plugin, users: store.count } }`,
+    broken: `
+        on("user.created", (u) => u.missing.field)   // a bug: fails, alone
+        on("tick", (n) => { while true {} })         // a loop: stopped by the timeout`,
+}
+
+const contexts = {}
+for name, code in sources {
+    const ctx = vm.createContext(apiFor(name))
+    const [_, err] = vm.runInContext(code, ctx, { filename: name + ".fg", timeout: 100ms })
+    if err != nil { print("could not load", name, err.message) }
+    contexts[name] = ctx
+}
+
+// host → plugins: events
+for line in emit("user.created", { name: "Ana" }) { print(line) }
+for line in emit("user.created", { name: "Rui" }) { print(line) }
+for line in emit("tick", 1) { print(line) }
+
+// host → plugin: call a function the plugin defined, and read its state
+const report = contexts.counter.report
+print("report:", report())
+print("counter store:", contexts.counter.sandbox.store)
+
+// plugins → host: the messages they sent, through the channel
+while len(inbox) > 0 {
+    const m = <-inbox
+    print("inbox:", m.from, "->", m.msg)
+}
+print(logs)
+
+// a plugin compiled once and run concurrently, each run in its own task
+const scorer = vm.Script("score(x) * weight")?
+const tasks = [1, 2, 3].map((x) => scorer.spawn({ x: x, weight: 10, score: (v) => v * v }))
+print("scores:", vm.all(tasks)?)
+''',
+                "title": "plugins.fg",
+                "run": True,
             }
         ],
     },

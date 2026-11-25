@@ -2,7 +2,7 @@
   "name": "fogu",
   "displayName": "Fogu",
   "description": "Fogu language support: syntax highlighting, diagnostics (fogu check), formatting (fogu fmt), run/test commands, desktop and MCU commands, snippets, completion and hover for the standard library and the published libraries (mcu, desktop, …).",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "publisher": "microaitec",
   "author": {
     "name": "Edmilson Soares"

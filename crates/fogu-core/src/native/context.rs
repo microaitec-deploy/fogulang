@@ -108,6 +108,7 @@ impl NativeContext {
         self.define_lazy("json", crate::native::json::build);
         self.define_lazy("events", crate::native::events::build);
         self.define_lazy("test", crate::native::test::build);
+        self.define_lazy("stream", crate::native::vstream::build);
 
         self.define_global_variadic("print", 0, |args| {
             let parts: Vec<String> = args

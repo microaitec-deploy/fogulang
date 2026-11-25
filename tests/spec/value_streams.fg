@@ -1,0 +1,94 @@
+// fogu:stream: streams of values, pulled a value at a time (map, filter, take …),
+// a bounded bridge from tasks (create), errors that end a stream, cancellation.
+import stream from "fogu:stream"
+import time from "fogu:time"
+
+// the example: written, closed, read with for
+const s = stream.create()
+s.write(10)?
+s.write(20)?
+s.write(30)?
+s.close()
+for value in s { print(value) }
+print(s.done, s.error)
+
+// composition, lazily: nothing runs until a value is asked for
+const result = stream.range(0)              // infinite
+    .map((x) => x * 2)
+    .filter((x) => x > 10)
+    .take(5)
+print(result.toList()?)
+
+// a producer task and a consumer, with backpressure: at most 2 unread
+const q = stream.create({ buffer: 2 })
+const seen = []
+fg fn() {
+    for i in 0..6 {
+        q.write(i)?
+        seen.push(`w${i}:${q.buffered}`)
+    }
+    q.close()
+}()
+let total = 0
+for v in q {
+    total = total + v
+    time.delay(1ms)
+}
+print(total, seen.len(), seen.all((x) => int(x.split(":")[1]) <= 2))
+
+// terminals
+print(stream.of(1, 2, 3, 4).reduce((a, b) => a + b, 0)?, stream.from([5, 6, 7]).count()?, stream.range(1, 10).find((x) => x % 4 == 0)?)
+print(stream.range(0, 10).chunk(4).toList()?, stream.of("a", "b").enumerate().toList()?)
+print(stream.range(10, 0, -3).toList()?, stream.from("hey").skip(1).toList()?, stream.range(0).takeWhile((x) => x < 3).toList()?)
+print(stream.generate((i) => { if i < 3 { return i * i }
+    return nil }).toList()?)
+let tapped = 0
+print(stream.of(1, 2, 3).tap((x) => { tapped = tapped + x }).map((x) => -x).toList()?, tapped)
+
+// errors end a stream: the for loop stops and keeps it, terminals return it
+const bad = stream.of(1, 2, 3, 4).map((x) => {
+    if x == 3 { return nil, error("no threes") }
+    return x
+})
+const got = []
+for v in bad { got.push(v) }
+print(got, bad.error)
+const [_v, e] = stream.of(1, 0, 2).map((x) => { if x == 0 { return nil, error("zero") }
+    return 10 / x }).toList()
+print(e)
+const f = stream.create()
+f.write(1)?
+f.fail(error("disk full"))
+print(f.toList())
+
+// cancellation: the writer gets an error value instead of waiting forever
+const c = stream.create({ buffer: 1 })
+let stopped = nil
+fg fn() {
+    let i = 0
+    loop {
+        const [_, err] = c.write(i)
+        if err != nil { stopped = err.message
+            break }
+        i = i + 1
+    }
+}()
+print(c.take(3).toList()?)
+time.delay(5ms)
+print(stopped)
+
+// an interval, ended by take; a channel and a file as sources
+print(stream.interval(1ms).take(3).toList()?)
+const ch = chan(3)
+ch <- "x"
+ch <- "y"
+close(ch)
+print(stream.from(ch).map((v) => v + "!").toList()?)
+
+// a file of fogu:fs as a source
+import fs from "fogu:fs"
+const out = fs.createWriteStream("vstream.tmp.txt")?
+for i in 0..100 { out.writeLine(`${i},${i % 13 == 0}`)? }
+out.close()
+const lines = stream.from(fs.createReadStream("vstream.tmp.txt", { lines: true })?)
+print(lines.filter((l) => l.ends_with("true")).map((l) => int(l.split(",")[0])).toList()?)

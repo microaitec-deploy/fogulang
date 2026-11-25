@@ -19,7 +19,7 @@
 #
 # The site serves the same files from server/releases/<version>/:
 #
-#   gh run download <run id> -p 'fogu-*' -D /tmp/rel && cp /tmp/rel/*/* server/releases/0.8.2/
+#   gh run download <run id> -p 'fogu-*' -D /tmp/rel && cp /tmp/rel/*/* server/releases/0.8.3/
 #
 # server/publish-all.sh is no longer needed to make them.
 name: Release
@@ -30,7 +30,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Tag or branch to build (e.g. v0.8.2)"
+        description: "Tag or branch to build (e.g. v0.8.3)"
         required: true
         default: main
       publish:

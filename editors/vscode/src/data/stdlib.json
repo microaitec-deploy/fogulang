@@ -995,6 +995,20 @@
      "kind": "function"
     },
     {
+     "name": "createReadStream",
+     "signature": "fs.createReadStream(path, { start, end, lines, bufferSize })",
+     "returns": "ReadStream · error",
+     "doc": "The file read a piece at a time, in constant memory. `end` is inclusive; `lines: true` makes `for` give lines (str) instead of buffers.",
+     "kind": "function"
+    },
+    {
+     "name": "createWriteStream",
+     "signature": "fs.createWriteStream(path, { append })",
+     "returns": "WriteStream · error",
+     "doc": "`w.write(data) · w.writeLine(data)` → bytes · error (buffered, 64 KiB), `w.flush()`, `w.close()` / `w.end(data?)`, `w.bytesWritten`.",
+     "kind": "function"
+    },
+    {
      "name": "remote",
      "signature": "fs.remote(ssh | \"user@host\", { sudo })",
      "returns": "RemoteFs",
@@ -1193,90 +1207,174 @@
   },
   {
    "name": "test",
-   "alias": "",
-   "summary": "Used in `*.test.fg` files, run with `fogu test`. A test fails when an expectation fails, when it raises an error or returns an error value.",
+   "alias": "fs",
+   "summary": "Used in `*.test.fg` files, run with `fogu test`. A test fails when an expectation fails, when it raises an error or returns an error value. The API follows Bun's `bun:test`: groups, hooks and parametrized tests.",
    "members": [
     {
      "name": "test",
-     "signature": "test(name, fn)",
+     "signature": "fs.test(name, fn)",
      "returns": "nil",
      "doc": "Declares a test.",
      "kind": "function"
     },
     {
-     "name": "skip",
-     "signature": "skip(name, fn)",
+     "name": "it",
+     "signature": "fs.it(name, fn)",
      "returns": "nil",
-     "doc": "A test that is reported but not run.",
+     "doc": "Declares a test.",
+     "kind": "function"
+    },
+    {
+     "name": "describe",
+     "signature": "fs.describe(name, fn)",
+     "returns": "nil",
+     "doc": "A group: its tests are named `group > test`; groups nest.",
+     "kind": "function"
+    },
+    {
+     "name": "beforeAll",
+     "signature": "fs.beforeAll(fn)",
+     "returns": "nil",
+     "doc": "Hooks of the group they are declared in (the file at the top level). A group's `beforeAll` runs before its first test, its `afterAll` after its last; the `beforeEach` of the outer groups first, the `afterEach` of the inner groups first. Cleanup always runs: `afterEach` after a failed test or a failed `beforeEach`, `afterAll` after failures. A failing `beforeAll` fails the tests of its group.",
+     "kind": "function"
+    },
+    {
+     "name": "afterAll",
+     "signature": "fs.afterAll(fn)",
+     "returns": "nil",
+     "doc": "Hooks of the group they are declared in (the file at the top level). A group's `beforeAll` runs before its first test, its `afterAll` after its last; the `beforeEach` of the outer groups first, the `afterEach` of the inner groups first. Cleanup always runs: `afterEach` after a failed test or a failed `beforeEach`, `afterAll` after failures. A failing `beforeAll` fails the tests of its group.",
+     "kind": "function"
+    },
+    {
+     "name": "beforeEach",
+     "signature": "fs.beforeEach(fn)",
+     "returns": "nil",
+     "doc": "Hooks of the group they are declared in (the file at the top level). A group's `beforeAll` runs before its first test, its `afterAll` after its last; the `beforeEach` of the outer groups first, the `afterEach` of the inner groups first. Cleanup always runs: `afterEach` after a failed test or a failed `beforeEach`, `afterAll` after failures. A failing `beforeAll` fails the tests of its group.",
+     "kind": "function"
+    },
+    {
+     "name": "afterEach",
+     "signature": "fs.afterEach(fn)",
+     "returns": "nil",
+     "doc": "Hooks of the group they are declared in (the file at the top level). A group's `beforeAll` runs before its first test, its `afterAll` after its last; the `beforeEach` of the outer groups first, the `afterEach` of the inner groups first. Cleanup always runs: `afterEach` after a failed test or a failed `beforeEach`, `afterAll` after failures. A failing `beforeAll` fails the tests of its group.",
      "kind": "function"
     },
     {
      "name": "expect",
-     "signature": "expect(value)",
+     "signature": "fs.expect(value)",
      "returns": "Expectation",
      "doc": "Then a matcher; `.not` negates it.",
      "kind": "function"
     },
     {
      "name": "toBe",
-     "signature": "toBe(x)",
+     "signature": "fs.toBe(x)",
      "doc": "Equality (`toEqual` compares lists and maps deeply).",
      "kind": "function"
     },
     {
      "name": "toEqual",
-     "signature": "toEqual(x)",
+     "signature": "fs.toEqual(x)",
      "doc": "Equality (`toEqual` compares lists and maps deeply).",
      "kind": "function"
     },
     {
      "name": "toBeTruthy",
-     "signature": "toBeTruthy()",
+     "signature": "fs.toBeTruthy()",
      "kind": "function"
     },
     {
      "name": "toBeFalsy",
-     "signature": "toBeFalsy()",
+     "signature": "fs.toBeFalsy()",
      "kind": "function"
     },
     {
      "name": "toBeNil",
-     "signature": "toBeNil()",
+     "signature": "fs.toBeNil()",
      "kind": "function"
     },
     {
      "name": "toBeError",
-     "signature": "toBeError()",
+     "signature": "fs.toBeError()",
      "kind": "function"
     },
     {
      "name": "toBeType",
-     "signature": "toBeType(\"int\")",
+     "signature": "fs.toBeType(\"int\")",
      "kind": "function"
     },
     {
      "name": "toContain",
-     "signature": "toContain(x)",
+     "signature": "fs.toContain(x)",
      "kind": "function"
     },
     {
      "name": "toHaveLength",
-     "signature": "toHaveLength(n)",
+     "signature": "fs.toHaveLength(n)",
      "kind": "function"
     },
     {
      "name": "toBeGreaterThan",
-     "signature": "toBeGreaterThan(n)",
+     "signature": "fs.toBeGreaterThan(n)",
      "kind": "function"
     },
     {
      "name": "toBeLessThan",
-     "signature": "toBeLessThan(n)",
+     "signature": "fs.toBeLessThan(n)",
      "kind": "function"
     },
     {
      "name": "toBeCloseTo",
-     "signature": "toBeCloseTo(x, eps?)",
+     "signature": "fs.toBeCloseTo(x, eps?)",
+     "kind": "function"
+    }
+   ]
+  },
+  {
+   "name": "stream",
+   "alias": "stream",
+   "summary": "Streams of values: a sequence consumed a value at a time, finite or infinite. Streams are **pulled**: the operators work when the consumer asks for the next value, so a chain holds one value per stage and the consumer sets the pace (backpressure). The only buffer is the one of `stream.create`, where tasks push values. Design: `docs/architecture/value-streams.md`.",
+   "members": [
+    {
+     "name": "create",
+     "signature": "stream.create({ buffer = 16 })",
+     "returns": "Stream",
+     "doc": "Written by tasks, read by a consumer: `s.write(v)` → nil · error waits while `buffer` values are unread; `s.close()` ends it after the values written; `s.fail(err)` ends it with an error.",
+     "kind": "function"
+    },
+    {
+     "name": "from",
+     "signature": "stream.from(list | range | str | chan | readable | stream)",
+     "returns": "Stream",
+     "doc": "A readable of `fs` / `http` gives its chunks (or lines).",
+     "kind": "function"
+    },
+    {
+     "name": "of",
+     "signature": "stream.of(...values)",
+     "returns": "Stream",
+     "doc": "A readable of `fs` / `http` gives its chunks (or lines).",
+     "kind": "function"
+    },
+    {
+     "name": "range",
+     "signature": "stream.range(start, end?, step = 1)",
+     "returns": "Stream",
+     "doc": "No `end`: infinite · `fn(0), fn(1)…` until it returns `nil` · 0, 1, 2… one every `d`.",
+     "kind": "function"
+    },
+    {
+     "name": "generate",
+     "signature": "stream.generate(fn(i))",
+     "returns": "Stream",
+     "doc": "No `end`: infinite · `fn(0), fn(1)…` until it returns `nil` · 0, 1, 2… one every `d`.",
+     "kind": "function"
+    },
+    {
+     "name": "interval",
+     "signature": "stream.interval(d)",
+     "returns": "Stream",
+     "doc": "No `end`: infinite · `fn(0), fn(1)…` until it returns `nil` · 0, 1, 2… one every `d`.",
      "kind": "function"
     }
    ]
@@ -2289,6 +2387,13 @@
      "kind": "function"
     },
     {
+     "name": "stream",
+     "signature": "http.stream(url, { method, body, headers, lines, … })",
+     "returns": "HttpStream · error",
+     "doc": "The response with its body read a piece at a time (a stream of [fogu:fs](#fogufs): `read readLine readAll readText pipe close`, `for chunk in s`), and `s.status · s.ok · s.headers · s.url`. Any status is a stream; a network failure is an error value. `lines: true`: `for` gives lines.",
+     "kind": "function"
+    },
+    {
      "name": "serve",
      "signature": "http.serve(port | \"ip:port\", fn(req), { tls: { cert, key }, quiet, maxBody, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout }?)",
      "returns": "nil",
@@ -2358,7 +2463,14 @@
      "name": "file",
      "signature": "web.file(path, { download, contentType, status })",
      "returns": "Response · error",
-     "doc": "Sent by the server thread (binary safe). `download: true` uses the file's name, `download: \"name\"` another (non-ASCII names as RFC 6266 `filename*`).",
+     "doc": "Sent by the server thread, a chunk at a time (binary safe; a large file does not have to fit in memory). `download: true` uses the file's name, `download: \"name\"` another (non-ASCII names as RFC 6266 `filename*`).",
+     "kind": "function"
+    },
+    {
+     "name": "stream",
+     "signature": "web.stream({ status, headers, contentType, highWaterMark })",
+     "returns": "ResponseStream",
+     "doc": "Return it from the handler and write the body a piece at a time from a task: `s.write(data)` · `s.writeLine(data)` → bytes · error, `s.end(data?)` / `s.close()`. Backpressure: `write` waits while more than `highWaterMark` bytes (1 MiB) are queued for a slow client. A readable (`fs.createReadStream`, `http.stream`) returned from a handler, or `pipe`d into the stream, is sent the same way.",
      "kind": "function"
     },
     {

@@ -16,6 +16,7 @@ pub mod rt;
 #[path = "rt_wasm.rs"]
 pub mod rt;
 pub mod test;
+pub mod vstream;
 pub mod util;
 
 #[allow(unused_imports)]

@@ -19,6 +19,7 @@ value on operational failures (use `?` or `const [v, err] = …`).
 - [fogu:process](#foguprocess)
 - [fogu:sync](#fogusync)
 - [fogu:test](#fogutest)
+- [fogu:stream](#fogustream)
 - [fogu:log](#fogulog)
 - [fogu:regex](#foguregex)
 - [fogu:crypto](#fogucrypto)
@@ -80,7 +81,7 @@ value on operational failures (use `?` or `const [v, err] = …`).
 
 ## Overview
 
-Modules are imported with `import name from "fogu:name"` (or by name: `import { parse } from "fogu:json"`). Each section below lists every function with its parameters and return value, and shows an example with its **real output** (the examples are run when this page is generated). Core [`fogu:math`](#fogumath) [`fogu:json`](#fogujson) [`fogu:time`](#fogutime) [`fogu:types`](#fogutypes) [`fogu:system`](#fogusystem) [`fogu:fs`](#fogufs) [`fogu:path`](#fogupath) [`fogu:process`](#foguprocess) [`fogu:sync`](#fogusync) [`fogu:test`](#fogutest) [`fogu:log`](#fogulog) [`fogu:regex`](#foguregex) [`fogu:crypto`](#fogucrypto) [`fogu:password`](#fogupassword)
+Modules are imported with `import name from "fogu:name"` (or by name: `import { parse } from "fogu:json"`). Each section below lists every function with its parameters and return value, and shows an example with its **real output** (the examples are run when this page is generated). Core [`fogu:math`](#fogumath) [`fogu:json`](#fogujson) [`fogu:time`](#fogutime) [`fogu:types`](#fogutypes) [`fogu:system`](#fogusystem) [`fogu:fs`](#fogufs) [`fogu:path`](#fogupath) [`fogu:process`](#foguprocess) [`fogu:sync`](#fogusync) [`fogu:stream`](#fogustream) [`fogu:test`](#fogutest) [`fogu:log`](#fogulog) [`fogu:regex`](#foguregex) [`fogu:crypto`](#fogucrypto) [`fogu:password`](#fogupassword)
 Data formats [`fogu:csv`](#fogucsv) [`fogu:excel`](#foguexcel) [`fogu:yaml`](#foguyaml) [`fogu:toml`](#fogutoml) [`fogu:xml`](#foguxml)
 Storage [`fogu:kv`](#fogukv) [`fogu:surrealkv`](#fogusurrealkv) [`fogu:surrealdb`](#fogusurrealdb) [`fogu:sql`](#fogusql) [`fogu:orm`](#foguorm) [`fogu:redis`](#foguredis) [`fogu:s3`](#fogus3) [`fogu:scylla`](#foguscylla) [`fogu:etcd`](#foguetcd)
 Web & network [`fogu:http`](#foguhttp) [`fogu:web`](#foguweb) [`fogu:jwt`](#fogujwt) [`fogu:topcoat`](#fogutopcoat) [`fogu:websocket`](#foguwebsocket) [`fogu:socketio`](#fogusocketio) [`fogu:grpc`](#fogugrpc) [`fogu:net`](#fogunet) [`fogu:tls`](#fogutls) [`fogu:security`](#fogusecurity)
@@ -885,6 +886,55 @@ settings.test.fg
   ✓ int(0) (0ms)
 
 5 passed — 1 file(s) [0ms]
+```
+
+## fogu:stream
+
+```fogu
+import stream from "fogu:stream"
+```
+
+Streams of values: a sequence consumed a value at a time, finite or infinite. Streams are **pulled**: the operators work when the consumer asks for the next value, so a chain holds one value per stage and the consumer sets the pace (backpressure). The only buffer is the one of `stream.create`, where tasks push values. Design: `docs/architecture/value-streams.md`.
+
+- `stream.create({ buffer = 16 })` → Stream — Written by tasks, read by a consumer: `s.write(v)` → nil · error waits while `buffer` values are unread; `s.close()` ends it after the values written; `s.fail(err)` ends it with an error.
+- `stream.from(list | range | str | chan | readable | stream) · stream.of(...values)` → Stream — A readable of `fs` / `http` gives its chunks (or lines).
+- `stream.range(start, end?, step = 1) · stream.generate(fn(i)) · stream.interval(d)` → Stream — No `end`: infinite · `fn(0), fn(1)…` until it returns `nil` · 0, 1, 2… one every `d`.
+- `s.map(fn) · s.filter(fn) · s.take(n) · s.skip(n) · s.takeWhile(fn) · s.chunk(n) · s.tap(fn) · s.enumerate()` → Stream — A new stream; nothing runs yet. `chunk`: lists of `n`; `enumerate`: `(index, value)`.
+- `for v in s · s.next()` → value · nil · error — One value at a time; `nil` at the end. An error ends a `for` and stays in `s.error`.
+- `s.toList() · s.count() · s.reduce(fn, init) · s.forEach(fn) · s.first() · s.find(fn)` → value · error — Consume the stream; an error it ended with is their error.
+- `s.cancel()` → nil — Stops the stream and everything upstream: a writer gets an error value, a file is closed. `take`, `takeWhile`, `first` and `find` cancel upstream once they are done.
+- `s.done · s.cancelled · s.error · s.buffered`
+
+```fogu
+import stream from "fogu:stream"
+
+// infinite, lazy: only what take(5) needs is computed
+print(stream.range(0).map((x) => x * 2).filter((x) => x > 10).take(5).toList()?)
+
+// a producer task and a consumer: at most 4 values wait in between
+const readings = stream.create({ buffer: 4 })
+fg fn() {
+    for i in 0..10 { readings.write({ sensor: "t1", value: 20 + i % 3 })? }
+    readings.close()
+}()
+const avg = readings.map((r) => r.value).chunk(5).map((b) => b.reduce((a, x) => a + x, 0) / len(b))
+for v in avg { print("average", v) }
+
+// an error value from a function ends the stream; the terminal returns it
+const [_, err] = stream.of(1, 2, 0, 4).map((x) => {
+    if x == 0 { return nil, error("division by zero") }
+    return 12 / x
+}).toList()
+print(err)
+```
+
+output:
+
+```text
+[12, 14, 16, 18, 20]
+average 20
+average 21
+error: division by zero
 ```
 
 ## fogu:log
@@ -3390,6 +3440,120 @@ output:
 [1, 4, 9, 16, 25]
 true error: loop.fg:1: runtime error: script execution cancelled
 5
+```
+
+### A complete example: plugins, in both directions
+
+The host gives each plugin an API — functions it may call, a store kept between runs, a channel to send messages back — through the sandbox of its context. A plugin registers hooks the host calls, calls the host back, and defines functions the host reads from the context (`ctx.report`). Each hook runs with its own deadline: a plugin that fails or loops is stopped and reported alone, the others go on.
+
+```fogu
+// Plugins in fogu:vm, both ways: the host gives each plugin an API (functions,
+// a store, a channel); a plugin registers hooks the host calls, calls the host
+// back, and answers messages. A plugin that fails or loops is stopped alone.
+import vm from "fogu:vm"
+import time from "fogu:time"
+
+// ---------- the host's side ----------
+const hooks = {}                 // event → [ { plugin, fn } ]
+const logs = []
+const inbox = chan(16)           // plugins → host messages
+
+// the API one plugin sees: what it may call on the host
+fn apiFor(name) {
+    return {
+        plugin: name,
+        log: (msg) => logs.push(`[${name}] ${msg}`),
+        on: (event, f) => {                       // a plugin registers a hook
+            if !hooks.has(event) { hooks[event] = [] }
+            hooks[event].push({ plugin: name, fn: f })
+        },
+        send: (msg) => { inbox <- { from: name, msg: msg } },
+        store: {},                                // its own state, kept between runs
+    }
+}
+
+// fire an event: call every hook, each bounded by a deadline, each failure apart
+fn emit(event, data) {
+    const out = []
+    for h in hooks[event] ?? [] {
+        const [r, err] = vm.runInNewContext("hook(data)", { hook: h.fn, data: data }, { timeout: 50ms, filename: h.plugin })
+        if err != nil {
+            out.push(`${h.plugin}: failed (${err.message})`)
+        } else {
+            out.push(`${h.plugin}: ${r}`)
+        }
+    }
+    return out
+}
+
+// ---------- the plugins: code the host did not write ----------
+const sources = {
+    greeter: `
+        log("loaded")
+        on("user.created", (u) => {
+            send("welcome mail for " + u.name)
+            return "hello, " + u.name
+        })`,
+    counter: `
+        store.count = 0
+        on("user.created", (u) => {
+            store.count += 1
+            return "users so far: " + str(store.count)
+        })
+        // a function the host can call directly
+        fn report() { return { plugin: plugin, users: store.count } }`,
+    broken: `
+        on("user.created", (u) => u.missing.field)   // a bug: fails, alone
+        on("tick", (n) => { while true {} })         // a loop: stopped by the timeout`,
+}
+
+const contexts = {}
+for name, code in sources {
+    const ctx = vm.createContext(apiFor(name))
+    const [_, err] = vm.runInContext(code, ctx, { filename: name + ".fg", timeout: 100ms })
+    if err != nil { print("could not load", name, err.message) }
+    contexts[name] = ctx
+}
+
+// host → plugins: events
+for line in emit("user.created", { name: "Ana" }) { print(line) }
+for line in emit("user.created", { name: "Rui" }) { print(line) }
+for line in emit("tick", 1) { print(line) }
+
+// host → plugin: call a function the plugin defined, and read its state
+const report = contexts.counter.report
+print("report:", report())
+print("counter store:", contexts.counter.sandbox.store)
+
+// plugins → host: the messages they sent, through the channel
+while len(inbox) > 0 {
+    const m = <-inbox
+    print("inbox:", m.from, "->", m.msg)
+}
+print(logs)
+
+// a plugin compiled once and run concurrently, each run in its own task
+const scorer = vm.Script("score(x) * weight")?
+const tasks = [1, 2, 3].map((x) => scorer.spawn({ x: x, weight: 10, score: (v) => v * v }))
+print("scores:", vm.all(tasks)?)
+```
+
+output:
+
+```text
+broken: failed (broken.fg:2: runtime error: access '.field' not applicable to 'nil')
+counter: users so far: 1
+greeter: hello, Ana
+broken: failed (broken.fg:2: runtime error: access '.field' not applicable to 'nil')
+counter: users so far: 2
+greeter: hello, Rui
+broken: failed (broken.fg:3: runtime error: script execution timed out after 50ms)
+report: {plugin: counter, users: 2}
+counter store: {count: 2}
+inbox: greeter -> welcome mail for Ana
+inbox: greeter -> welcome mail for Rui
+[[greeter] loaded]
+scores: [10, 40, 90]
 ```
 
 ## fogu:cli

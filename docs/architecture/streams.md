@@ -1,6 +1,6 @@
 # Design note: streams
 
-Status: implemented (unreleased, next version) · `crates/fogu-std/src/native/io/stream.rs`.
+Status: implemented (0.8.3) · `crates/fogu-std/src/native/io/stream.rs`.
 Follows `engineering-principles.md`: this note, measurements, tests on the three engines.
 
 ## Problem
