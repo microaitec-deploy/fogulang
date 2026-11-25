@@ -663,8 +663,13 @@ fn render_in_page(interp: &Interpreter, env: &Rc<RefCell<Environment>>, name: &s
     max_args(args, 2, "shard.render")?;
     let ctx = args.first().cloned().unwrap_or(Value::Nil);
     let t = ctx_state(&ctx).ok_or("shard.render: the first argument must be the request ctx")?;
-    if let Some(Value::Int(app)) = t.borrow().get("app") {
-        crate::native::web::register_shard(*app as u64, name, func.clone());
+    // (the state of a plain route is made on demand and does not name its app)
+    let app = match t.borrow().get("app") {
+        Some(Value::Int(app)) => Some(*app as u64),
+        _ => crate::native::web::app_of_ctx(&ctx),
+    };
+    if let Some(app) = app {
+        crate::native::web::register_shard(app, name, func.clone());
     }
     // props: fixed values, or signals/expressions the browser watches
     let mut spec = Vec::new();

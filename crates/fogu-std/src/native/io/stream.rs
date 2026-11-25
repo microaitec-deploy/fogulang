@@ -507,6 +507,8 @@ pub struct ResponseTx {
     tx: tokio::sync::mpsc::UnboundedSender<bytes::Bytes>,
     queued: Arc<AtomicUsize>,
     limit: usize,
+    /// tells the server a chunk is queued (dropped after `tx`: the end too)
+    ready: Arc<crate::native::http::StreamReady>,
 }
 
 /// A chunk on its way to the client; dropping it (sent, or the client left)
@@ -534,9 +536,9 @@ impl Drop for Queued {
 
 #[cfg(all(feature = "network", not(target_family = "wasm")))]
 impl ResponseTx {
-    pub fn new(limit: usize) -> (ResponseTx, tokio::sync::mpsc::UnboundedReceiver<bytes::Bytes>) {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        (ResponseTx { tx, queued: Arc::new(AtomicUsize::new(0)), limit }, rx)
+    pub fn new(limit: usize) -> (ResponseTx, crate::native::http::BodyStream) {
+        let (tx, ready, rx) = crate::native::http::body_stream();
+        (ResponseTx { tx, queued: Arc::new(AtomicUsize::new(0)), limit, ready }, rx)
     }
 
     fn full(&self) -> bool {
@@ -554,7 +556,9 @@ impl ResponseTx {
         self.queued.fetch_add(data.len(), Ordering::AcqRel);
         let chunk = bytes::Bytes::from_owner(Queued { data, queued: Arc::clone(&self.queued) });
         // a refused chunk is dropped here, which takes it off the queue
-        self.tx.send(chunk).map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "the client disconnected"))
+        self.tx.send(chunk).map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "the client disconnected"))?;
+        self.ready.signal();
+        Ok(())
     }
 }
 
@@ -565,7 +569,7 @@ impl ResponseTx {
 pub struct ResponseStreamValue {
     pub tx: ResponseTx,
     /// Taken by the server when the handler returns the stream.
-    pub rx: Option<tokio::sync::mpsc::UnboundedReceiver<bytes::Bytes>>,
+    pub rx: Option<crate::native::http::BodyStream>,
     pub status: i64,
     pub headers: ahash::AHashMap<String, String>,
     written: usize,
@@ -628,6 +632,7 @@ impl FoguObject for ResponseStreamValue {
                 // dropping the sender ends the response
                 let (tx, _) = tokio::sync::mpsc::unbounded_channel();
                 self.tx.tx = tx;
+                self.tx.ready.signal();
                 Ok(Value::Nil)
             }
             other => Err(format!("method '{}' does not exist on ResponseStream (write writeLine close end)", other)),
@@ -712,7 +717,7 @@ pub fn create_write_stream(args: &[Value]) -> Result<Value, String> {
 /// chunk at a time, waiting for the client like `ResponseStream.write` does.
 /// Returns the body and the content type the source suggests.
 #[cfg(all(feature = "network", not(target_family = "wasm")))]
-pub fn readable_body(o: &NativeObjectRef) -> Option<(tokio::sync::mpsc::UnboundedReceiver<bytes::Bytes>, Option<String>)> {
+pub fn readable_body(o: &NativeObjectRef) -> Option<(crate::native::http::BodyStream, Option<String>)> {
     let rc = o.inner();
     let inner = rc.borrow();
     let r = inner.as_any().downcast_ref::<ReadStreamValue>()?;
@@ -775,7 +780,7 @@ mod tests {
         tx.send(vec![1; 6]).unwrap();
         tx.send(vec![2; 6]).unwrap();
         assert!(tx.full());
-        let first = rx.try_recv().unwrap();
+        let first = rx.rx.try_recv().unwrap();
         assert_eq!(first.len(), 6);
         drop(first);
         assert!(!tx.full());

@@ -65,6 +65,8 @@ surrealkv = { version = "1", optional = true }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "any", "postgres", "mysql", "sqlite"], optional = true }
 hyper = { version = "1", features = ["server", "http1", "http2"], optional = true }
 http-body-util = { version = "0.1", optional = true }
+# the request parser of the HTTP server on the interpreter thread (pure Rust; hyper uses it too)
+httparse = { version = "1", optional = true }
 hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 # fogu:grpc and fogu:etcd — tonic for the gRPC framing, rustls for TLS servers
 tonic = { version = "0.14", default-features = false, features = ["transport", "codegen", "tls-ring", "tls-native-roots"], optional = true }
@@ -112,7 +114,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 # Standard library areas (src/native/<area>); `base` and `io` are always built.
 # `cargo build --release --no-default-features --features network` builds a small binary.
 default = ["network", "database", "messaging", "ops", "ai", "media", "rpc"]
-network = ["dep:ammonia", "dep:tokio-rustls", "dep:ed25519-dalek", "dep:ego-tree", "dep:engineioxide", "dep:futures-lite", "dep:futures-util", "dep:http-body-util", "dep:hyper", "dep:hyper-util", "dep:ipnet", "dep:minijinja", "dep:rcgen", "dep:rsa", "dep:scraper", "dep:socketioxide", "dep:socketioxide-core", "dep:tokio-tungstenite", "dep:x509-parser", "dep:zxcvbn", "dep:subtle", "dep:rustls", "dep:rustls-native-certs", "dep:bytes", "dep:http", "dep:str0m"]
+network = ["dep:ammonia", "dep:tokio-rustls", "dep:ed25519-dalek", "dep:ego-tree", "dep:engineioxide", "dep:futures-lite", "dep:futures-util", "dep:http-body-util", "dep:httparse", "dep:hyper", "dep:hyper-util", "dep:ipnet", "dep:minijinja", "dep:rcgen", "dep:rsa", "dep:scraper", "dep:socketioxide", "dep:socketioxide-core", "dep:tokio-tungstenite", "dep:x509-parser", "dep:zxcvbn", "dep:subtle", "dep:rustls", "dep:rustls-native-certs", "dep:bytes", "dep:http", "dep:str0m"]
 database = ["rpc", "dep:async-trait", "dep:scylla", "dep:redb", "dep:surrealkv", "dep:sqlx", "dep:tonic", "dep:tokio-stream", "dep:prost-reflect", "dep:http"]
 messaging = ["dep:bullmq-rs", "dep:redis", "dep:rskafka", "dep:redb", "dep:surrealkv", "dep:bytes", "dep:rustls", "dep:rustls-native-certs", "dep:subtle"]
 ops = []

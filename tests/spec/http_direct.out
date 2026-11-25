@@ -1,0 +1,6 @@
+pipelined 2 true true
+chunked HTTP/1.1 200 OK true
+head HTTP/1.1 200 OK true true
+sse text/event-stream; charset=utf-8 [data: {"n":0}, data: {"n":1}, data: {"n":2}]
+shared port 16
+after abandon A

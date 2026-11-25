@@ -1,1 +1,1 @@
-listen: unknown option 'maxbody' (host socketio tls quiet maxBody maxHeaderBytes headerTimeout readTimeout handlerTimeout)
+listen: unknown option 'maxbody' (host socketio tls quiet reusePort maxBody maxHeaderBytes headerTimeout readTimeout handlerTimeout)

@@ -19,6 +19,17 @@ impl Host for Std {
 
     fn intercept(&self, callee: &Value, args: &[Value], it: &Interpreter, env: &Rc<RefCell<Environment>>) -> Option<Handled> {
         let _ = env;
+        // a request of a `fogu:web` app: the hottest call of a server
+        #[cfg(all(feature = "network", not(target_family = "wasm")))]
+        if let Value::NativeFn(f) = callee {
+            if crate::native::web::is_dispatch(&f.name) {
+                let r = match args.first() {
+                    Some(first) => crate::native::web::dispatch(&f.name, first, it, env.clone()),
+                    None => Err("an app handler requires 1 argument (the request)".into()),
+                };
+                return Some(Handled::Direct(r));
+            }
+        }
         // a C function of fogu:ffi (its signature lives in the ffi module); first: calls are hot
         #[cfg(not(target_family = "wasm"))]
         if let Value::NativeFn(f) = callee {
@@ -70,14 +81,6 @@ impl Host for Std {
             return Some(Handled::Native(r));
         }
         if let Value::NativeFn(f) = callee {
-            #[cfg(all(feature = "network", not(target_family = "wasm")))]
-            if crate::native::web::is_dispatch(&f.name) {
-                let r = match args.first() {
-                    Some(first) => crate::native::web::dispatch(&f.name, first, it, env.clone()),
-                    None => Err("an app handler requires 1 argument (the request)".into()),
-                };
-                return Some(Handled::Direct(r));
-            }
             // `cron.tick()` runs the jobs that are due
             if f.name == "tick" && args.is_empty() {
                 return Some(Handled::Direct(cron_tick(it)));

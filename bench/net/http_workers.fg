@@ -1,0 +1,45 @@
+// Multi-core HTTP server: one `sync.Worker` per core, each with its own
+// interpreter and its own fogu:web app listening on the same port
+// (`reusePort: true`: the kernel spreads the connections over them).
+//
+//   fogu http_workers.fg PORT [WORKERS] [HOST]
+//
+// WORKERS: default half the logical CPUs. HOST: default 127.0.0.1 (local
+// only; 0.0.0.0 listens on every interface — expose it on purpose).
+// GET /hello answers the JSON of bench/net/http.fg.
+import sync from "fogu:sync"
+import system from "fogu:system"
+import math from "fogu:math"
+
+fn arg(i, fallback) {
+    if Fogu.args.len() > i { return Fogu.args[i] }
+    return fallback
+}
+const port = arg(0, "8001")
+const n = int(arg(1, str(math.max(1, system.info.cores / 2))))
+const host = arg(2, "127.0.0.1")
+
+const code = `
+import web from "fogu:web"
+import time from "fogu:time"
+const app = web.app()
+app.get("/hello", (ctx) => ({ message: "hello", path: ctx.path }))
+app.listen("${host}:${port}", { reusePort: true, quiet: true })?
+
+// the server answers while this worker waits here
+fn serve() {
+    loop { time.delay(1h) }
+}
+`
+const workers = []
+for i in 0..n {
+    workers.push(sync.Worker(code)?)
+}
+for w in workers {
+    fg fn(w) {
+        const [_, err] = w.call("serve")
+        if err != nil { print("worker failed: " + str(err)) }
+    }(w)
+}
+print("ready")
+Fogu.signal.wait()

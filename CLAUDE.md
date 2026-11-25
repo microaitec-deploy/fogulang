@@ -139,6 +139,13 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
   with tokio wakes an I/O thread for every packet — keep plain sockets out of it. Registration is
   edge-triggered and permanent: a reader may only wait after a receive found the socket empty.
   The built-in profiler (`FOGU_PPROF`) can crash when it samples a task's stack under load.
+- On Linux a plain HTTP server (`http.serve` / `app.listen` without TLS, static mounts or
+  Socket.IO) is served the same way (`native/network/http_direct.rs`,
+  `docs/architecture/direct-http.md`): one `fg` task per connection parses the request, calls the
+  handler inline and writes the answer; one sweeper task per thread enforces the timeouts. The
+  other servers keep the hyper path below; `FOGU_HTTP=threads` forces it for all. More cores:
+  one server per `sync.Worker` with `reusePort: true`. `fogu:web`'s dispatch is the hot part of a
+  request (a map made there costs ~0.2 µs): build per-request state lazily.
 - **Sized lists** (`Value::Array`, `runtime/array.rs`, `docs/architecture/sized-storage.md`): a list
   declared `list<u8>` … `list<f64>` stores the numbers themselves (`list<char>`: the chars, `Elem::Char`). It must behave as a list in
   every engine (the JIT reads it through tagged list slots: `ListRef`, `LoopKind::ForArray`);

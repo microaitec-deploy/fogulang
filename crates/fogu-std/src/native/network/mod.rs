@@ -4,6 +4,8 @@
 pub mod dns;
 #[cfg(not(target_family = "wasm"))]
 pub mod http;
+#[cfg(target_os = "linux")]
+pub mod http_direct;
 #[cfg(not(target_family = "wasm"))]
 pub mod http_client;
 #[cfg(not(target_family = "wasm"))]

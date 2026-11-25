@@ -62,12 +62,45 @@ pub struct PlainResponse {
     /// send this file (read by the server thread)
     pub file: Option<PathBuf>,
     /// streamed body: each item is a chunk; the response ends when the sender is dropped
-    pub stream: Option<tokio::sync::mpsc::UnboundedReceiver<Bytes>>,
+    pub stream: Option<BodyStream>,
     /// accept a WebSocket upgrade: the plain socket goes through this channel
     pub upgrade: Option<std_mpsc::Sender<crate::native::websocket::WsIo>>,
     /// the middlewares let a guarded static file through: the server thread
     /// serves it (with these headers added)
     pub serve_static: bool,
+}
+
+/// The receiving end of a streamed body. `ready` is set (see [`StreamReady`])
+/// whenever a chunk was queued or the sending end went away, so a server
+/// that sends from the interpreter thread parks behind it instead of asking
+/// the channel on every pass.
+pub struct BodyStream {
+    pub rx: tokio::sync::mpsc::UnboundedReceiver<Bytes>,
+    pub ready: sched::Gate,
+}
+
+/// The sending end's side of [`BodyStream::ready`]: `signal` after a send;
+/// dropping it (the stream ended) signals too.
+pub struct StreamReady(sched::Gate);
+
+impl StreamReady {
+    pub fn signal(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+        sched::wake();
+    }
+}
+
+impl Drop for StreamReady {
+    fn drop(&mut self) {
+        self.signal();
+    }
+}
+
+/// A channel for a streamed body.
+pub fn body_stream() -> (tokio::sync::mpsc::UnboundedSender<Bytes>, std::sync::Arc<StreamReady>, BodyStream) {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let ready = sched::Gate::default();
+    (tx, std::sync::Arc::new(StreamReady(sched::Gate::clone(&ready))), BodyStream { rx, ready })
 }
 
 impl PlainResponse {
@@ -127,6 +160,9 @@ pub struct ServerOptions {
     pub socketio: Option<crate::native::socketio::WebMount>,
     /// HTTPS: the `tls: { cert, key }` option (`fogu:tls`)
     pub tls: Option<std::sync::Arc<rustls::ServerConfig>>,
+    /// `reusePort`: several listeners share the port (one server per
+    /// `sync.Worker`); the kernel spreads the connections over them
+    pub reuse_port: bool,
 }
 
 impl Default for ServerOptions {
@@ -143,12 +179,13 @@ impl Default for ServerOptions {
             quiet: false,
             socketio: None,
             tls: None,
+            reuse_port: false,
         }
     }
 }
 
 /// The options `http.serve` and `app.listen` share.
-pub const SERVER_OPTIONS: &str = "tls quiet maxBody maxHeaderBytes headerTimeout readTimeout handlerTimeout";
+pub const SERVER_OPTIONS: &str = "tls quiet reusePort maxBody maxHeaderBytes headerTimeout readTimeout handlerTimeout";
 
 impl ServerOptions {
     /// Reads one of [`SERVER_OPTIONS`]; false for a key it does not know.
@@ -171,6 +208,10 @@ impl ServerOptions {
                 }
             }
             "quiet" => self.quiet = v.is_truthy(),
+            "reusePort" => match v {
+                Value::Bool(b) => self.reuse_port = *b,
+                other => return Err(format!("{}: reusePort must be a bool, got {}", what, other.to_display_string())),
+            },
             "tls" => {
                 if !matches!(v, Value::Nil) {
                     self.tls = Some(crate::native::tls::server_config(v, what, &["http/1.1"])?);
@@ -193,17 +234,17 @@ struct ServerToMain {
     reply: Reply,
 }
 
-/// Set by the server when it queues a request: the interpreter checks this
-/// flag (one atomic load) instead of draining the channel on every call.
-static WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Set by a server when it queues a request for its thread: the interpreter
+/// checks this flag (one atomic load) instead of draining the channel on
+/// every call. One per interpreter thread that has a server — a process with
+/// a server per `sync.Worker` must not have them clear each other's flag (a
+/// request would wait for the next one to be noticed).
+type Waiting = std::sync::Arc<std::sync::atomic::AtomicBool>;
 
 thread_local! {
     static PUMP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// This thread's interpreter owns the server (its request queue lives
-    /// here). Other interpreter threads — a `sync.Worker` — also see the
-    /// process-wide flag, and must leave it alone: taking it would clear it
-    /// without serving anything, and the request would wait for the next one.
-    static HAS_SERVER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// This thread's flag, once it has a server (its request queue lives here).
+    static WAITING: RefCell<Option<Waiting>> = const { RefCell::new(None) };
 }
 
 /// Marks the pump task as started; true the first time only.
@@ -214,7 +255,7 @@ pub fn start_pump() -> bool {
 /// Did the server queue requests since they were last taken?
 #[inline]
 pub fn requests_waiting() -> bool {
-    WAITING.load(std::sync::atomic::Ordering::SeqCst) && HAS_SERVER.with(|h| h.get())
+    WAITING.with(|w| w.borrow().as_ref().is_some_and(|f| f.load(std::sync::atomic::Ordering::SeqCst)))
 }
 
 // ================= MAIN THREAD GLOBAL STATE =================
@@ -231,11 +272,21 @@ thread_local! {
         const { RefCell::new(VecDeque::new()) };
 }
 
+/// The requests queued so far are about to be read: clear this thread's flag
+/// first (a request queued while they are read sets it again).
+fn clear_waiting() {
+    WAITING.with(|w| {
+        if let Some(f) = w.borrow().as_ref() {
+            f.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    });
+}
+
 // ================= API FOR THE INTERPRETER =================
 
 /// Is a request waiting for the main thread?
 pub fn has_pending_request() -> bool {
-    WAITING.swap(false, std::sync::atomic::Ordering::SeqCst);
+    clear_waiting();
     SERVER_RX.with(|r| {
         if let Some(rx) = r.borrow().as_ref() {
             while let Ok(msg) = rx.try_recv() {
@@ -249,7 +300,7 @@ pub fn has_pending_request() -> bool {
 /// Returns the next pending request (its server and the request, already as
 /// a `Value::Object(Request)`).
 pub fn take_pending_request() -> Option<(u64, Value, Reply)> {
-    WAITING.swap(false, std::sync::atomic::Ordering::SeqCst);
+    clear_waiting();
     SERVER_RX.with(|r| {
         let guard = r.borrow();
         if let Some(rx) = guard.as_ref() {
@@ -325,11 +376,15 @@ pub fn handler_of(server: u64) -> Option<Value> {
 
 /// Converts a response `Value` into a `PlainResponse` and sends it.
 pub fn send_response(resp: Value, tx: Reply) {
-    let plain = match resp {
+    let _ = tx.send(plain_of(resp));
+}
+
+/// What the server sends for a response `Value`.
+pub fn plain_of(resp: Value) -> PlainResponse {
+    match resp {
         Value::Object(o) => {
             if let Some(p) = crate::native::web::take_special(&o) {
-                let _ = tx.send(p);
-                return;
+                return p;
             }
             let status = match o.get("status") {
                 Some(Value::Int(n)) => n,
@@ -353,8 +408,7 @@ pub fn send_response(resp: Value, tx: Reply) {
             PlainResponse { status, headers, body, file: None, stream: None, upgrade: None, serve_static: false }
         }
         _ => PlainResponse::text(500, "invalid response"),
-    };
-    let _ = tx.send(plain);
+    }
 }
 
 /// Native function with 1 required argument and 1 optional one (options).
@@ -510,11 +564,42 @@ fn start_server(port: u16, handler: Value, opts: ServerOptions) -> Result<Value,
     }
     // bind here, so a busy port is reported to the program
     let addr = socket_addr(&opts.host, port)?;
-    let std_listener = std::net::TcpListener::bind(addr).map_err(|e| io_err!("http: cannot listen on {}: {}", addr, e))?;
+    let std_listener = if opts.reuse_port {
+        // one listener per worker on the same port: the kernel spreads the connections
+        #[cfg(unix)]
+        {
+            let _runtime = crate::native::rt::tokio().enter();
+            let bind = || -> std::io::Result<std::net::TcpListener> {
+                let sock = if addr.is_ipv4() { tokio::net::TcpSocket::new_v4()? } else { tokio::net::TcpSocket::new_v6()? };
+                sock.set_reuseaddr(true)?;
+                sock.set_reuseport(true)?;
+                sock.bind(addr)?;
+                sock.listen(1024)?.into_std()
+            };
+            bind().map_err(|e| io_err!("http: cannot listen on {}: {}", addr, e))?
+        }
+        #[cfg(not(unix))]
+        return Err(io_err!("http: reusePort is not available on this system"));
+    } else {
+        std::net::TcpListener::bind(addr).map_err(|e| io_err!("http: cannot listen on {}: {}", addr, e))?
+    };
     std_listener.set_nonblocking(true).map_err(|e| io_err!("http: {}", e))?;
 
     let server = NEXT_SERVER.with(|n| n.replace(n.get() + 1));
     SERVER_HANDLERS.with(|h| h.borrow_mut().insert(server, handler));
+    // plain HTTP on Linux is served by the interpreter thread itself, on its
+    // reactor (see `http_direct`): no other thread touches a request
+    #[cfg(target_os = "linux")]
+    if crate::native::http_direct::eligible(&opts) {
+        if !opts.quiet {
+            println!("[http] server listening on http://{}", addr);
+        }
+        crate::native::http_direct::queue(server, std_listener, opts);
+        // the interpreter's next call notices the flag and starts the server's task
+        let waiting: Waiting = WAITING.with(|w| std::sync::Arc::clone(w.borrow_mut().get_or_insert_with(Default::default)));
+        waiting.store(true, std::sync::atomic::Ordering::SeqCst);
+        return Ok(Value::Nil);
+    }
     // the first server creates this thread's queue; the next ones share it
     let tx_to_main = SERVER_TX.with(|t| {
         t.borrow_mut()
@@ -525,9 +610,9 @@ fn start_server(port: u16, handler: Value, opts: ServerOptions) -> Result<Value,
             })
             .clone()
     });
-    HAS_SERVER.with(|h| h.set(true));
     // the interpreter's next call notices the flag and starts the pump task
-    WAITING.store(true, std::sync::atomic::Ordering::SeqCst);
+    let waiting: Waiting = WAITING.with(|w| std::sync::Arc::clone(w.borrow_mut().get_or_insert_with(Default::default)));
+    waiting.store(true, std::sync::atomic::Ordering::SeqCst);
 
     // the server runs on the shared I/O runtime
     {
@@ -555,6 +640,7 @@ fn start_server(port: u16, handler: Value, opts: ServerOptions) -> Result<Value,
                 let tx = tx_to_main.clone();
                 let opts = std::sync::Arc::clone(&opts);
                 let tls = tls.clone();
+                let waiting = std::sync::Arc::clone(&waiting);
                 tokio::spawn(async move {
                     // slow clients (slowloris) cannot hold a connection: the
                     // headers of each request must arrive within headerTimeout
@@ -562,7 +648,8 @@ fn start_server(port: u16, handler: Value, opts: ServerOptions) -> Result<Value,
                     // they are limited to maxHeaderBytes (431)
                     let mut builder = http1::Builder::new();
                     builder.timer(hyper_util::rt::TokioTimer::new()).header_read_timeout(opts.header_timeout).max_buf_size(opts.max_header);
-                    let service = service_fn(move |req| handle_request(req, server, tx.clone(), std::sync::Arc::clone(&opts), remote));
+                    let waiting = std::sync::Arc::clone(&waiting);
+                    let service = service_fn(move |req| handle_request(req, server, tx.clone(), std::sync::Arc::clone(&opts), remote, std::sync::Arc::clone(&waiting)));
                     match tls {
                         // HTTPS: the handshake first (a client that stalls is dropped after 10s)
                         Some(acceptor) => {
@@ -671,6 +758,7 @@ async fn handle_request(
     tx: std_mpsc::Sender<ServerToMain>,
     opts: std::sync::Arc<ServerOptions>,
     remote: SocketAddr,
+    waiting: Waiting,
 ) -> Result<HyperResponse<Body>, Infallible> {
     let method = req.method().to_string();
     // one canonical path for everything below (see `canonical_path`)
@@ -715,11 +803,16 @@ async fn handle_request(
         Ok(Err(_)) => return Ok(plain_response(PlainResponse::text(413, "request body too large")).await),
         Err(_) => return Ok(plain_response(PlainResponse::text(408, "request timeout")).await),
     };
+    // what the answer may still need of the request: the headers for a static
+    // file or a WebSocket accept — kept only when the server has static
+    // mounts or the request asks for an upgrade (not one copy per request)
+    let accepts_html = method == "GET" && headers.get("accept").is_some_and(|a| a.contains("text/html"));
+    let kept = if upgrade || !opts.statics.is_empty() { headers.clone() } else { HashMap::new() };
     let plain = PlainRequest {
         method: method.clone(),
         path: path.clone(),
         query,
-        headers: headers.clone(),
+        headers,
         body,
         upgrade,
         remote: remote.to_string(),
@@ -731,7 +824,7 @@ async fn handle_request(
     }
     // SeqCst on both sides: the flag is cleared *before* the queue is read, so
     // a request queued while it is read always leaves the flag set
-    WAITING.store(true, std::sync::atomic::Ordering::SeqCst);
+    waiting.store(true, std::sync::atomic::Ordering::SeqCst);
     // a main thread idling in the scheduler (Fogu.signal.wait) serves it now
     crate::runtime::sched::wake();
     // the Fogu handler runs on the main thread; this task just awaits the reply
@@ -749,7 +842,7 @@ async fn handle_request(
 
     // a guarded static file the middlewares let through
     if resp.serve_static {
-        if let Some(mut r) = serve_static(&opts.statics, &path, &headers, method == "HEAD", false).await {
+        if let Some(mut r) = serve_static(&opts.statics, &path, &kept, method == "HEAD", false).await {
             for (k, v) in &resp.headers {
                 if let (Ok(k), Ok(v)) = (hyper::header::HeaderName::from_bytes(k.as_bytes()), hyper::header::HeaderValue::from_str(v)) {
                     r.headers_mut().insert(k, v);
@@ -763,7 +856,7 @@ async fn handle_request(
     // WebSocket: answer 101, then bridge the upgraded connection
     if let (Some(sock_tx), Some(on_upgrade)) = (resp.upgrade.as_ref().cloned(), on_upgrade) {
         if resp.status == 101 {
-            let key = headers.get("sec-websocket-key").cloned().unwrap_or_default();
+            let key = kept.get("sec-websocket-key").cloned().unwrap_or_default();
             let accept = tungstenite::handshake::derive_accept_key(key.as_bytes());
             let mut b = HyperResponse::builder()
                 .status(StatusCode::SWITCHING_PROTOCOLS)
@@ -790,8 +883,8 @@ async fn handle_request(
     }
 
     // SPA fallback: an HTML page the program does not know
-    if resp.status == 404 && method == "GET" && headers.get("accept").is_some_and(|a| a.contains("text/html")) {
-        if let Some(r) = serve_static(&opts.statics, &path, &headers, false, true).await {
+    if resp.status == 404 && accepts_html {
+        if let Some(r) = serve_static(&opts.statics, &path, &kept, false, true).await {
             return Ok(r);
         }
     }
@@ -836,8 +929,8 @@ async fn plain_response(resp: PlainResponse) -> HyperResponse<Body> {
                     .unwrap();
             }
         }
-    } else if let Some(rx) = resp.stream {
-        let stream = futures_lite::stream::unfold(rx, |mut rx| async move {
+    } else if let Some(body) = resp.stream {
+        let stream = futures_lite::stream::unfold(body.rx, |mut rx| async move {
             rx.recv().await.map(|b| (Ok::<_, Infallible>(Frame::data(b)), rx))
         });
         BodyExt::boxed(StreamBody::new(stream))
@@ -973,7 +1066,7 @@ async fn serve_static(mounts: &[StaticMount], path: &str, headers: &HashMap<Stri
 }
 
 /// RFC 7231 date (`Tue, 15 Nov 1994 08:12:31 GMT`).
-fn httpdate(secs: u64) -> String {
+pub(crate) fn httpdate(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
     let weekday = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"][(days.rem_euclid(7)) as usize];
@@ -1003,7 +1096,10 @@ pub fn serve_pending(it: &Interpreter, env: &Rc<RefCell<Environment>>) {
     // queues them (it wakes the scheduler), even while the program waits
     // in `time.delay` or on a channel. A running server is waiting for
     // work, not deadlocked.
-    if start_pump() {
+    #[cfg(target_os = "linux")]
+    crate::native::http_direct::start_queued(it, env);
+    // (only servers on the I/O threads queue requests: the others need no pump)
+    if SERVER_TX.with(|t| t.borrow().is_some()) && start_pump() {
         let env = env.clone();
         let started = it.spawn_task(Box::new(move |it| {
             let _serving = sched::IoGuard::new();
@@ -1015,6 +1111,10 @@ pub fn serve_pending(it: &Interpreter, env: &Rc<RefCell<Environment>>) {
         if let Err(e) = started {
             eprintln!("[http] cannot start the server task: {}", e);
         }
+    }
+    if !SERVER_TX.with(|t| t.borrow().is_some()) {
+        clear_waiting();
+        return;
     }
     let text = |code, msg: &str| NativeObjectRef::new(ResponseValue::text(code, msg)).to_value();
     while let Some((server, req, tx)) = take_pending_request() {
@@ -1029,49 +1129,56 @@ pub fn serve_pending(it: &Interpreter, env: &Rc<RefCell<Environment>>) {
         };
         let env = env.clone();
         let task = it.spawn_task(Box::new(move |it| {
-            let what = match &req {
-                Value::Object(o) => {
-                    let f = |k| o.get(k).map(|v| v.to_display_string()).unwrap_or_default();
-                    format!("{} {}", f("method"), f("path"))
-                }
-                _ => String::new(),
-            };
-            let resp = match call_contained(it, handler, vec![req], env) {
-                // Handler without an explicit response.
-                Ok(Value::Nil) => text(404, "route not found"),
-                // `return value, error(...)` or an `error` value: logged, never sent
-                Ok(Value::Error(e)) => {
-                    eprintln!("[http] {}: {}", what, e.message);
-                    text(500, "internal error")
-                }
-                Ok(Value::List(l)) if l.borrow().len() == 2 && matches!(l.borrow()[1], Value::Error(_)) => {
-                    let msg = match &l.borrow()[1] {
-                        Value::Error(e) => e.message.clone(),
-                        _ => String::new(),
-                    };
-                    eprintln!("[http] {}: {}", what, msg);
-                    text(500, "internal error")
-                }
-                // a str is text, other values JSON (as in fogu:web)
-                Ok(Value::Str(s)) => text(200, &s),
-                Ok(v @ Value::Object(_)) => v,
-                Ok(v) => {
-                    let mut r = ResponseValue::text(200, &crate::native::json::stringify_value(&v));
-                    r.headers.insert("content-type".into(), "application/json".into());
-                    NativeObjectRef::new(r).to_value()
-                }
-                // the message (a runtime error, a panic) may hold internal
-                // details: it goes to the log, the client gets a generic 500
-                Err(e) => {
-                    eprintln!("[http] {}: {}", what, e.strip_prefix(crate::runtime::value::ERR_VALUE_PREFIX).unwrap_or(&e));
-                    text(500, "internal error")
-                }
-            };
-            send_response(resp, tx);
+            send_response(answer(it, handler, req, env), tx);
             Ok(())
         }));
         if let Err(e) = task {
             eprintln!("[http] cannot start a handler: {}", e);
+        }
+    }
+}
+
+/// Runs a request's handler and turns what it returns into a response value.
+pub fn answer(it: &Interpreter, handler: Value, req: Value, env: Rc<RefCell<Environment>>) -> Value {
+    let text = |code, msg: &str| NativeObjectRef::new(ResponseValue::text(code, msg)).to_value();
+    // "GET /path", for the log: built only when something is logged
+    let logged = req.clone();
+    let what = move || match &logged {
+        Value::Object(o) => {
+            let f = |k| o.get(k).map(|v| v.to_display_string()).unwrap_or_default();
+            format!("{} {}", f("method"), f("path"))
+        }
+        _ => String::new(),
+    };
+    match call_contained(it, handler, vec![req], env) {
+        // Handler without an explicit response.
+        Ok(Value::Nil) => text(404, "route not found"),
+        // `return value, error(...)` or an `error` value: logged, never sent
+        Ok(Value::Error(e)) => {
+            eprintln!("[http] {}: {}", what(), e.message);
+            text(500, "internal error")
+        }
+        Ok(Value::List(l)) if l.borrow().len() == 2 && matches!(l.borrow()[1], Value::Error(_)) => {
+            let msg = match &l.borrow()[1] {
+                Value::Error(e) => e.message.clone(),
+                _ => String::new(),
+            };
+            eprintln!("[http] {}: {}", what(), msg);
+            text(500, "internal error")
+        }
+        // a str is text, other values JSON (as in fogu:web)
+        Ok(Value::Str(s)) => text(200, &s),
+        Ok(v @ Value::Object(_)) => v,
+        Ok(v) => {
+            let mut r = ResponseValue::text(200, &crate::native::json::stringify_value(&v));
+            r.headers.insert("content-type".into(), "application/json".into());
+            NativeObjectRef::new(r).to_value()
+        }
+        // the message (a runtime error, a panic) may hold internal
+        // details: it goes to the log, the client gets a generic 500
+        Err(e) => {
+            eprintln!("[http] {}: {}", what(), e.strip_prefix(crate::runtime::value::ERR_VALUE_PREFIX).unwrap_or(&e));
+            text(500, "internal error")
         }
     }
 }

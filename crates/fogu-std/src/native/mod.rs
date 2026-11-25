@@ -61,6 +61,8 @@ pub use network::dns;
 #[cfg(feature = "network")]
 #[cfg(not(target_family = "wasm"))]
 pub use network::http;
+#[cfg(all(feature = "network", target_os = "linux"))]
+pub use network::http_direct;
 #[cfg(feature = "network")]
 #[cfg(not(target_family = "wasm"))]
 pub use network::http_client;

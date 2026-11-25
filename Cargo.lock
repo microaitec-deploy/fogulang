@@ -2243,6 +2243,7 @@ dependencies = [
  "hmac 0.12.1",
  "http",
  "http-body-util",
+ "httparse",
  "hyper",
  "hyper-util",
  "iana-time-zone",

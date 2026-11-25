@@ -415,6 +415,11 @@ fn call(method: &str, args: &[Value], interp: &Interpreter, env: &Rc<RefCell<Env
                 }
             }
             start_pump(interp, env)?;
+            // a server started just before this wait (nothing was called in between)
+            #[cfg(feature = "network")]
+            if crate::native::http::requests_waiting() {
+                crate::native::http::serve_pending(interp, env);
+            }
             let from = STATE.with(|s| {
                 let s = s.borrow();
                 s.waiters.set(s.waiters.get() + 1);

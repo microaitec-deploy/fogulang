@@ -6,6 +6,38 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
+### Changed
+
+- **`fogu:http` / `fogu:web` servers run on the interpreter's own thread** (Linux; plain HTTP
+  without static mounts or Socket.IO — `native/network/http_direct.rs`,
+  `docs/architecture/direct-http.md`). A connection is one `fg` task on the thread's `epoll`
+  reactor: it parses the request (`httparse`), calls the handler inline and writes the answer —
+  one `recv` and one `send` per request, nothing crosses threads. Timeouts are enforced by one
+  sweeper task per thread instead of a timer per request. TLS, static mounts, Socket.IO and the
+  other systems keep the previous server; `FOGU_HTTP=threads` keeps it everywhere.
+  - Measured against 0.8.3 (`bench/net/http.fg`, one interpreter): 9.5k req/s on one connection
+    (was 2.4k; Go 3.7k), 46–50k on 64 (was 37–43k) with 3.7 CPU s instead of 12.9 and 16–18 MB
+    instead of 25, p99 4 ms instead of 10–13.
+  - Known cost: one interpreter is one core. With a trivial handler and many connections it is
+    behind 0.8.3, which spread the socket work over the I/O threads (`fogu:web` −15% at 1024
+    connections, `http.serve` −33% at 256). Use a server per `sync.Worker` (below).
+  - Stricter parsing: a request with both `Content-Length` and `Transfer-Encoding`, conflicting
+    or non-numeric lengths, or a transfer encoding that does not end in `chunked` is refused
+    (400); a response header that is not a valid header is not sent.
+- `fogu:web`: the dispatch of a request makes fewer maps (`fogu:topcoat`'s per-request state is
+  created when first used).
+
+### Added
+
+- `reusePort: true` in `http.serve` and `app.listen`: several servers share a port, one per
+  `sync.Worker` for a server on several cores (`bench/net/http_workers.fg`: 4 workers 113k
+  req/s, 8 workers 169k, Go 64–69k on the same machine).
+
+### Fixed
+
+- A server started right before `Fogu.signal.wait()` is served even when nothing else is
+  called in between.
+
 ## [0.8.3] - 2026-11-25
 
 ### Added

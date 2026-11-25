@@ -185,7 +185,7 @@ pub fn build() -> ModuleValue {
         "sse".into(),
         nfn_var("sse", 0, |args| {
             crate::native::util::max_args(args, 1, "sse")?;
-            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let (tx, ready, rx) = fogu_http::body_stream();
             let mut headers = HashMap::new();
             headers.insert("content-type".to_string(), "text/event-stream; charset=utf-8".to_string());
             headers.insert("cache-control".to_string(), "no-cache".to_string());
@@ -201,7 +201,7 @@ pub fn build() -> ModuleValue {
                     }
                 }
             }
-            Ok(NativeObjectRef::new(SseValue { tx, rx: Some(rx), headers, sent: 0 }).to_value())
+            Ok(NativeObjectRef::new(SseValue { tx, ready, rx: Some(rx), headers, sent: 0 }).to_value())
         }),
     );
     exports.insert(
@@ -332,6 +332,13 @@ struct AppState {
 }
 
 /// Makes a shard rendered by a page reachable at `POST /_tc/s/<name>`.
+/// The app a request's `ctx` belongs to: the one whose store it carries.
+pub fn app_of_ctx(ctx: &Value) -> Option<u64> {
+    let Value::Map(c) = ctx else { return None };
+    let Some(Value::Map(store)) = c.borrow().get("store").cloned() else { return None };
+    APPS.with(|a| a.borrow().iter().find(|(_, st)| Rc::ptr_eq(&st.borrow().store, &store)).map(|(id, _)| *id))
+}
+
 pub fn register_shard(app: u64, name: &str, func: Value) {
     if let Some(st) = APPS.with(|a| a.borrow().get(&app).cloned()) {
         st.borrow_mut().shards.insert(name.to_string(), func);
@@ -667,30 +674,59 @@ pub fn dispatch(
         .with(|a| a.borrow().get(&id).cloned())
         .ok_or("web: this app has no handler (call app.handler() or app.listen())")?;
 
-    let mut method = req_str(req, "method").unwrap_or_else(|| "GET".into()).to_uppercase();
+    // A request of the server: its fields are read once, straight from the
+    // request (no intermediate values); the header names are already lower
+    // case there. Anything else (a map given to `app.handler()` in a test
+    // that `test_request` left as it was) goes field by field.
+    let direct = match req {
+        Value::Object(o) => {
+            let rc = o.inner();
+            let b = rc.borrow();
+            b.as_any().downcast_ref::<fogu_http::RequestValue>().map(|r| {
+                let headers: HashMap<Str, Value> = r
+                    .headers
+                    .iter()
+                    .map(|(k, v)| {
+                        let key = if k.bytes().any(|c| c.is_ascii_uppercase()) { Str::from(k.to_lowercase()) } else { Str::from(k.as_str()) };
+                        (key, Value::Str(v.as_str().into()))
+                    })
+                    .collect();
+                let method = if r.method.bytes().any(|c| c.is_ascii_lowercase()) { r.method.to_uppercase() } else { r.method.clone() };
+                let body = Value::Str(String::from_utf8_lossy(&r.body).into_owned().into());
+                (method, r.path.clone(), r.query.clone(), headers, r.upgrade, r.static_guard, body)
+            })
+        }
+        _ => None,
+    };
     // canonical already (`http::canonical_path`, by the server or `test_request`):
     // the router and every middleware see this same path; a decoded `?` is
     // part of it, the query is a field of its own
-    let path = req_str(req, "path").unwrap_or_else(|| "/".into());
-    let mut query: Option<String> = None;
+    let (mut method, path, query, headers, upgrade, static_guard, body) = match direct {
+        Some(d) => d,
+        None => {
+            let headers: HashMap<Str, Value> = match req_field(req, "headers") {
+                Some(Value::Map(h)) => h.borrow().iter().map(|(k, v)| (Str::from(k.to_lowercase()), v.clone())).collect(),
+                _ => HashMap::new(),
+            };
+            (
+                req_str(req, "method").unwrap_or_else(|| "GET".into()).to_uppercase(),
+                req_str(req, "path").unwrap_or_else(|| "/".into()),
+                req_str(req, "query"),
+                headers,
+                matches!(req_field(req, "upgrade"), Some(Value::Bool(true))),
+                // a static file under a middleware's prefix: only the middlewares
+                // run, then the server thread serves the file (`StaticPass`)
+                false,
+                req_field(req, "body").unwrap_or(Value::Str(String::new().into())),
+            )
+        }
+    };
     let full_path = path.clone();
     // fogu:topcoat's browser runtime and stylesheet
     if let Some(r) = topcoat_asset(&method, &path) {
         return Ok(r);
     }
-    if let Some(q) = req_str(req, "query") {
-        query = Some(q);
-    }
-    let headers: HashMap<Str, Value> = match req_field(req, "headers") {
-        Some(Value::Map(h)) => h.borrow().iter().map(|(k, v)| (Str::from(k.to_lowercase()), v.clone())).collect(),
-        _ => HashMap::new(),
-    };
     let segments: Vec<&str> = path.trim_matches('/').split('/').filter(|s| !s.is_empty()).collect();
-    let upgrade = matches!(req_field(req, "upgrade"), Some(Value::Bool(true)));
-    // a static file under a middleware's prefix: only the middlewares run,
-    // then the server thread serves the file (`StaticPass`)
-    let static_guard = matches!(req, Value::Object(o) if o.name() == "Request"
-        && o.inner().borrow().as_any().downcast_ref::<fogu_http::RequestValue>().is_some_and(|r| r.static_guard));
 
     // fogu:topcoat: a page rerun (POST of the signals, rendered as a GET),
     // a shard or a procedure
@@ -771,24 +807,32 @@ pub fn dispatch(
         ("path", Value::Str(path.clone().into())),
         ("query", Value::Map(Rc::new(RefCell::new(query.as_deref().map(parse_query).unwrap_or_default())))),
         ("headers", Value::Map(Rc::new(RefCell::new(headers)))),
-        ("body", req_field(req, "body").unwrap_or(Value::Str(String::new().into()))),
-        ("params", map(vec![])),
+        ("body", body),
+        (
+            "params",
+            match &route {
+                Some((_, _, params)) => Value::Map(Rc::new(RefCell::new(params.clone()))),
+                None => map(vec![]),
+            },
+        ),
         ("store", Value::Map(store)),
         ("set", set.clone()),
     ]);
-    if let (Some((_, _, params)), Value::Map(c)) = (&route, &ctx) {
-        c.borrow_mut().insert("params".into(), Value::Map(Rc::new(RefCell::new(params.clone()))));
-    }
-    let tc = crate::native::topcoat::ctx_state(&ctx).expect("ctx is a map");
-    tc.borrow_mut().insert("app".into(), Value::Int(id as i64));
-    tc.borrow_mut().insert("rerun".into(), Value::Bool(rerun));
+    // fogu:topcoat's state of the request (`ctx.tc`) is made here only for
+    // its own requests; any other gets it when something first asks for it
+    // (`topcoat::ctx_state`), so a plain route does not pay for three maps
     let tc_req = if rerun || special.is_some() { tc_body() } else { Value::Nil };
-    if let Value::Map(b) = &tc_req {
-        if let Some(Value::Map(sig)) = b.borrow().get("signals") {
-            tc.borrow_mut().insert("input".into(), Value::Map(Rc::new(RefCell::new(sig.borrow().clone()))));
-        }
-        if let Some(p) = b.borrow().get("path") {
-            tc.borrow_mut().insert("page".into(), p.clone());
+    if rerun || special.is_some() {
+        let tc = crate::native::topcoat::ctx_state(&ctx).expect("ctx is a map");
+        tc.borrow_mut().insert("app".into(), Value::Int(id as i64));
+        tc.borrow_mut().insert("rerun".into(), Value::Bool(rerun));
+        if let Value::Map(b) = &tc_req {
+            if let Some(Value::Map(sig)) = b.borrow().get("signals") {
+                tc.borrow_mut().insert("input".into(), Value::Map(Rc::new(RefCell::new(sig.borrow().clone()))));
+            }
+            if let Some(p) = b.borrow().get("path") {
+                tc.borrow_mut().insert("page".into(), p.clone());
+            }
         }
     }
 
@@ -1180,7 +1224,7 @@ fn content_type_of(s: &str) -> &'static str {
 /// Any handler result → `Response` (`ctx.set.status` applies to plain values).
 fn normalize_response(v: Value, set: &Value) -> Value {
     if let Value::Object(o) = &v {
-        if is_special(o.name().as_str()) {
+        if o.with_name(is_special) {
             return v;
         }
     }
@@ -1207,7 +1251,7 @@ fn apply_set(resp: Value, set: &Value) -> Value {
     };
     let Value::Object(o) = &resp else { return resp };
     // web responses, streams and accepts are changed in place
-    if is_special(o.name().as_str()) {
+    if o.with_name(is_special) {
         let inner = o.inner();
         let mut b = inner.borrow_mut();
         let any = b.as_any_mut();
@@ -1437,15 +1481,24 @@ fn is_special(name: &str) -> bool {
 /// The payload of special responses for the server thread (see `http::send_response`).
 pub fn take_special(o: &NativeObjectRef) -> Option<fogu_http::PlainResponse> {
     // only these types can be downcast (others do not implement `as_any`)
-    if !is_special(o.name().as_str()) {
+    if !o.with_name(is_special) {
         return None;
     }
     let inner = o.inner();
     let mut b = inner.borrow_mut();
     let any = b.as_any_mut();
     if let Some(r) = any.downcast_mut::<ResponseValue>() {
-        let file = r.file.clone()?;
-        return Some(fogu_http::PlainResponse { status: r.status, headers: r.headers.clone(), body: Vec::new(), file: Some(file), stream: None, upgrade: None, serve_static: false });
+        // straight to what the server sends: no map of values built from the
+        // headers and turned back into headers
+        return Some(fogu_http::PlainResponse {
+            status: r.status,
+            headers: r.headers.clone(),
+            body: if r.file.is_some() { Vec::new() } else { r.body.as_bytes().to_vec() },
+            file: r.file.clone(),
+            stream: None,
+            upgrade: None,
+            serve_static: false,
+        });
     }
     if let Some(s) = any.downcast_mut::<SseValue>() {
         let rx = s.rx.take()?;
@@ -1473,7 +1526,9 @@ pub fn take_special(o: &NativeObjectRef) -> Option<fogu_http::PlainResponse> {
 /// `web.sse()`: `send(data, { event, id })`, `comment(text)`, `close()`, field `open`.
 pub struct SseValue {
     tx: tokio::sync::mpsc::UnboundedSender<bytes::Bytes>,
-    rx: Option<tokio::sync::mpsc::UnboundedReceiver<bytes::Bytes>>,
+    /// tells the server a chunk is queued (dropped after `tx`: the end too)
+    ready: std::sync::Arc<fogu_http::StreamReady>,
+    rx: Option<fogu_http::BodyStream>,
     headers: HashMap<String, String>,
     sent: i64,
 }
@@ -1496,6 +1551,7 @@ impl FoguObject for SseValue {
     fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
         let push = |s: &mut Self, text: String| -> Result<Value, String> {
             s.tx.send(bytes::Bytes::from(text)).map_err(|_| io_err!("sse: the client disconnected"))?;
+            s.ready.signal();
             Ok(Value::Nil)
         };
         match method {
@@ -1535,6 +1591,7 @@ impl FoguObject for SseValue {
             "close" => {
                 let (tx, _) = tokio::sync::mpsc::unbounded_channel();
                 self.tx = tx; // dropping the sender ends the response
+                self.ready.signal();
                 Ok(Value::Nil)
             }
             other => Err(format!("method '{}' does not exist on SseStream (send comment close)", other)),
