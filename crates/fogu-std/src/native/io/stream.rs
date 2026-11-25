@@ -345,7 +345,7 @@ impl FoguObject for ReadStreamValue {
 #[derive(Clone)]
 pub enum Sink {
     File(Arc<Mutex<Option<BufWriter<File>>>>),
-    #[cfg(feature = "network")]
+    #[cfg(all(feature = "network", not(target_family = "wasm")))]
     Response(ResponseTx),
 }
 
@@ -359,7 +359,7 @@ impl Sink {
         if let Some(w) = any.downcast_ref::<WriteStreamValue>() {
             return Some(Sink::File(Arc::clone(&w.file)));
         }
-        #[cfg(feature = "network")]
+        #[cfg(all(feature = "network", not(target_family = "wasm")))]
         if let Some(r) = any.downcast_ref::<ResponseStreamValue>() {
             return Some(Sink::Response(r.tx.clone()));
         }
@@ -373,7 +373,7 @@ impl Sink {
                 Some(w) => w.write_all(&data),
                 None => Err(std::io::Error::other("the stream is closed")),
             },
-            #[cfg(feature = "network")]
+            #[cfg(all(feature = "network", not(target_family = "wasm")))]
             Sink::Response(tx) => {
                 while tx.full() {
                     if tx.closed() {
@@ -392,7 +392,7 @@ impl Sink {
                 Some(w) => w.flush(),
                 None => Ok(()),
             },
-            #[cfg(feature = "network")]
+            #[cfg(all(feature = "network", not(target_family = "wasm")))]
             Sink::Response(_) => Ok(()),
         }
     }
@@ -501,7 +501,7 @@ impl FoguObject for WriteStreamValue {
 /// queued for the client: each chunk, once the server has written it to the
 /// socket, gives its size back (`Queued`), so a writer can wait while too
 /// much is queued (backpressure) instead of filling memory.
-#[cfg(feature = "network")]
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
 #[derive(Clone)]
 pub struct ResponseTx {
     tx: tokio::sync::mpsc::UnboundedSender<bytes::Bytes>,
@@ -511,20 +511,20 @@ pub struct ResponseTx {
 
 /// A chunk on its way to the client; dropping it (sent, or the client left)
 /// takes its bytes off the queue and wakes the interpreter.
-#[cfg(feature = "network")]
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
 struct Queued {
     data: Vec<u8>,
     queued: Arc<AtomicUsize>,
 }
 
-#[cfg(feature = "network")]
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
 impl AsRef<[u8]> for Queued {
     fn as_ref(&self) -> &[u8] {
         &self.data
     }
 }
 
-#[cfg(feature = "network")]
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
 impl Drop for Queued {
     fn drop(&mut self) {
         self.queued.fetch_sub(self.data.len(), Ordering::AcqRel);
@@ -532,7 +532,7 @@ impl Drop for Queued {
     }
 }
 
-#[cfg(feature = "network")]
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
 impl ResponseTx {
     pub fn new(limit: usize) -> (ResponseTx, tokio::sync::mpsc::UnboundedReceiver<bytes::Bytes>) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -561,7 +561,7 @@ impl ResponseTx {
 /// `web.stream({ status, headers, contentType, highWaterMark })`: a response
 /// whose body the handler writes a piece at a time. Return it from the
 /// handler; write to it from an `fg` task (or `pipe` a readable into it).
-#[cfg(feature = "network")]
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
 pub struct ResponseStreamValue {
     pub tx: ResponseTx,
     /// Taken by the server when the handler returns the stream.
@@ -571,7 +571,7 @@ pub struct ResponseStreamValue {
     written: usize,
 }
 
-#[cfg(feature = "network")]
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
 impl ResponseStreamValue {
     pub fn new(status: i64, headers: ahash::AHashMap<String, String>, limit: usize) -> Value {
         let (tx, rx) = ResponseTx::new(limit);
@@ -579,7 +579,7 @@ impl ResponseStreamValue {
     }
 }
 
-#[cfg(feature = "network")]
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
 impl FoguObject for ResponseStreamValue {
     fn name(&self) -> &str {
         "ResponseStream"
@@ -711,7 +711,7 @@ pub fn create_write_stream(args: &[Value]) -> Result<Value, String> {
 /// as the body of the response: a pool thread copies it into the response a
 /// chunk at a time, waiting for the client like `ResponseStream.write` does.
 /// Returns the body and the content type the source suggests.
-#[cfg(feature = "network")]
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
 pub fn readable_body(o: &NativeObjectRef) -> Option<(tokio::sync::mpsc::UnboundedReceiver<bytes::Bytes>, Option<String>)> {
     let rc = o.inner();
     let inner = rc.borrow();
@@ -768,7 +768,7 @@ mod tests {
         assert_eq!(s.all().unwrap(), b"abcdefghij");
     }
 
-    #[cfg(feature = "network")]
+    #[cfg(all(feature = "network", not(target_family = "wasm")))]
     #[test]
     fn response_queue_gives_bytes_back() {
         let (tx, mut rx) = ResponseTx::new(10);

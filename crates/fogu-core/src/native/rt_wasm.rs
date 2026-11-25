@@ -10,6 +10,11 @@ impl<T> Pending<T> {
     pub fn try_take(&self) -> Option<T> {
         self.slot.borrow_mut().take()
     }
+
+    /// What is set when the work ends: already set, the work ran inline.
+    pub fn gate(&self) -> crate::runtime::sched::Gate {
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true))
+    }
 }
 
 /// Runs `work` now.
