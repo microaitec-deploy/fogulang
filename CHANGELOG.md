@@ -6,6 +6,30 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
+### Added
+
+- **`list<int>`, `list<float>` and `list<bool>` store their elements compactly**: 8, 8 and 1
+  byte per element instead of 24. A million ints pushed: 65 MB as a plain list, 32 MB as
+  `list<int>`, 18 MB as `list<bool>` (peak RSS). **Changes for code that already wrote these
+  annotations** (until now they documented the intent and nothing was checked): storing a value
+  of another type is a type mismatch, and an int stored in a `list<float>` reads back as a
+  float (`[1, 2]` prints `[1.0, 2.0]`). No program of the tests, examples, benchmarks or
+  published libraries declared a variable this way.
+
+### Performance
+
+- **Loops over sized lists are compiled.** `xs[i]`, `len(xs)`, `xs.push(v)` and `for x in xs`
+  on `list<u8>` … `list<f64>`, `list<int>`, `list<float>` and `list<bool>` run as compiled code
+  that reads and writes the compact storage (until 0.8.2 the JIT left these loops to the
+  interpreter). A push the kind may refuse (a `u8` out of range) is checked before it is made;
+  the error and the elements pushed before it are the interpreter's. A million elements, 40
+  passes of `for x in xs`: 0.49 s on a `list<int>`, 1.10 s on a plain list; 21 passes of
+  `xs[i]`: 0.26 s (several seconds before).
+- **`xs[i]` on ordinary lists in compiled loops**: the element is read in place instead of
+  cloned first — the same 21 passes take 174 ms where they took 285 ms.
+- Measured against the build of the commit before, interleaved; the `bench/` kernels are
+  unchanged. Design: `docs/architecture/sized-storage.md`.
+
 ## [0.8.2] - 2026-11-23
 
 ### Added

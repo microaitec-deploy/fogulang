@@ -653,8 +653,10 @@ let label: str | nil = nil                      // union type
 label = "ready"</script>
       <p>Built-in type names: <code>int float str bool nil duration list map buffer tuple fn chan error any</code>, plus struct
       and interface names. <code>error</code> also accepts <code>nil</code>. Generic arguments such as <code>list&lt;int&gt;</code>
-      document the intent; only the outer kind is checked (except the <a class="underline" href="#sized-storage">sized lists</a>,
-      which store their elements with the size the annotation gives). <code>any</code> accepts every value, <code>nil</code>
+      document the intent; only the outer kind is checked — except lists of numbers, booleans and characters
+      (<code>list&lt;int&gt;</code>, <code>list&lt;float&gt;</code>, <code>list&lt;bool&gt;</code>, <code>list&lt;u8&gt;</code> …,
+      <code>list&lt;char&gt;</code>), which <a class="underline" href="#sized-storage">store their elements with the size the
+      annotation gives</a> and check what is stored. <code>any</code> accepts every value, <code>nil</code>
       included: it is the type to write when a variable, a parameter or the values of a list or map are not of one type
       (<code>let v: any</code>, <code>list&lt;any&gt;</code>, <code>map&lt;str, any&gt;</code>).</p>
       <script type="text/x-fogu" data-lang="text">add(1, "2")
@@ -732,9 +734,24 @@ pixels.push(256)                        // a type mismatch: a list<u8> holds u8<
 error[E0207]: type mismatch: a list&lt;u8&gt; holds u8, got int out of range (u8 is 0..255)</script>
       <p>The list given to the declaration is stored this way when the declaration owns it — a literal, <code>[]</code> or
       the fresh result of a call. A list that another variable still references keeps its storage and is only checked
-      (storing it apart would split it in two). Native functions receive a sized list as an ordinary list. Loops over sized
-      lists run in the interpreter (the JIT does not compile them yet): they save memory, not time. See
+      (storing it apart would split it in two). Native functions receive a sized list as an ordinary list.</p>
+      <p>The plain types pack too: <code>list&lt;int&gt;</code> and <code>list&lt;float&gt;</code> take 8 bytes per element,
+      <code>list&lt;bool&gt;</code> one (a million ints: 65 MB as a plain list, 32 MB as <code>list&lt;int&gt;</code>). An int
+      stored in a <code>list&lt;float&gt;</code> reads back as a float. Loops over all of these are compiled like the ones over
+      ordinary lists — <code>xs[i]</code>, <code>len(xs)</code>, <code>xs.push(v)</code>, <code>for x in xs</code> — and read the
+      compact storage in place, so they save memory and time: 40 passes of <code>for x in xs</code> over a million elements
+      take 0.49 s on a <code>list&lt;int&gt;</code> and 1.10 s on a plain list. See
       <code>docs/architecture/sized-storage.md</code>.</p>
+      <script type="text/x-fogu">let totals: list<int> = []               // 8 bytes per element
+let ratios: list<float> = [1, 2.5]       // the int is stored as a float
+let seen: list<bool> = [true, false]     // 1 byte per element
+for i in 0..5 { totals.push(i * i) }
+let sum = 0
+for t in totals { sum = sum + t }
+print(totals, ratios, seen, sum)
+totals.push("six")                       // a type mismatch: a list<int> holds int</script>
+      <script type="text/x-fogu" data-lang="text">[0, 1, 4, 9, 16] [1.0, 2.5] [true, false] 30
+error[E0207]: type mismatch: a list&lt;int&gt; holds int, got str</script>
     </section>
 
     <section id="strings" data-group="Language" data-title="Strings and templates" class="scroll-mt-20 mt-16">

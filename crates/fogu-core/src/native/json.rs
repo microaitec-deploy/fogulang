@@ -155,6 +155,7 @@ fn write_array(a: &crate::runtime::array::TypedArray, out: &mut String) {
             }
             Value::Float(f) if f.is_finite() => out.push_str(&crate::runtime::value::display_float(f)),
             Value::Str(s) => write_str(&s, out),
+            Value::Bool(b) => out.push_str(if b { "true" } else { "false" }),
             _ => out.push_str("null"),
         }
     }

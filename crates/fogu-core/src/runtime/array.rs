@@ -4,7 +4,9 @@
 //! instead of a 24-byte `Value` per element, and behaves as a list: an element
 //! reads as an `int` (a `float` for the float types), and storing one checks it
 //! as the annotation does. `list<char>` holds the characters themselves (4
-//! bytes each); an element reads as a one-character `str`.
+//! bytes each); an element reads as a one-character `str`. The plain types
+//! pack too: `list<int>` and `list<float>` take 8 bytes per element,
+//! `list<bool>` one.
 
 use super::ops::Sized;
 use super::value::Value;
@@ -23,22 +25,34 @@ pub enum TypedArray {
     F32(Vec<f32>),
     F64(Vec<f64>),
     Char(Vec<char>),
+    /// `list<int>`: any int.
+    Int(Vec<i64>),
+    /// `list<float>`: a float (an int is converted).
+    Float(Vec<f64>),
+    Bool(Vec<bool>),
 }
 
-/// The element type of a sized list: a sized number or a character.
+/// The element type of a sized list: a sized number, a character, or one of
+/// the plain types `int`, `float`, `bool`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Elem {
     Num(Sized),
     Char,
+    Int,
+    Float,
+    Bool,
 }
 
 impl Elem {
     /// The element type an annotation names (`u8`, `float32`, `char` …).
     pub fn from_name(name: &str) -> Option<Elem> {
-        if name == "char" {
-            return Some(Elem::Char);
+        match name {
+            "char" => Some(Elem::Char),
+            "int" => Some(Elem::Int),
+            "float" => Some(Elem::Float),
+            "bool" => Some(Elem::Bool),
+            _ => Sized::from_name(name).map(Elem::Num),
         }
-        Sized::from_name(name).map(Elem::Num)
     }
 }
 
@@ -57,6 +71,9 @@ macro_rules! each {
             TypedArray::F32($v) => $body,
             TypedArray::F64($v) => $body,
             TypedArray::Char($v) => $body,
+            TypedArray::Int($v) => $body,
+            TypedArray::Float($v) => $body,
+            TypedArray::Bool($v) => $body,
         }
     };
 }
@@ -66,6 +83,9 @@ impl TypedArray {
     pub fn with_capacity(kind: Elem, cap: usize) -> TypedArray {
         let kind = match kind {
             Elem::Char => return TypedArray::Char(Vec::with_capacity(cap)),
+            Elem::Int => return TypedArray::Int(Vec::with_capacity(cap)),
+            Elem::Float => return TypedArray::Float(Vec::with_capacity(cap)),
+            Elem::Bool => return TypedArray::Bool(Vec::with_capacity(cap)),
             Elem::Num(k) => k,
         };
         match kind {
@@ -85,6 +105,9 @@ impl TypedArray {
     pub fn kind(&self) -> Elem {
         Elem::Num(match self {
             TypedArray::Char(_) => return Elem::Char,
+            TypedArray::Int(_) => return Elem::Int,
+            TypedArray::Float(_) => return Elem::Float,
+            TypedArray::Bool(_) => return Elem::Bool,
             TypedArray::I8(_) => Sized::I8,
             TypedArray::I16(_) => Sized::I16,
             TypedArray::I32(_) => Sized::I32,
@@ -103,6 +126,9 @@ impl TypedArray {
         match self.kind() {
             Elem::Num(k) => kind_name(k),
             Elem::Char => "char",
+            Elem::Int => "int",
+            Elem::Float => "float",
+            Elem::Bool => "bool",
         }
     }
 
@@ -133,7 +159,37 @@ impl TypedArray {
             TypedArray::F32(v) => Value::Float(v[i] as f64),
             TypedArray::F64(v) => Value::Float(v[i]),
             TypedArray::Char(v) => Value::Str(v[i].into()),
+            TypedArray::Int(v) => Value::Int(v[i]),
+            TypedArray::Float(v) => Value::Float(v[i]),
+            TypedArray::Bool(v) => Value::Bool(v[i]),
         }
+    }
+
+    /// Element `i` (already in range) of an array of integers, as an int;
+    /// `None` for the other kinds. For compiled code: no `Value` is built.
+    #[inline]
+    pub fn int_at(&self, i: usize) -> Option<i64> {
+        Some(match self {
+            TypedArray::Int(v) | TypedArray::I64(v) => v[i],
+            TypedArray::U8(v) => v[i] as i64,
+            TypedArray::I32(v) => v[i] as i64,
+            TypedArray::U16(v) => v[i] as i64,
+            TypedArray::I16(v) => v[i] as i64,
+            TypedArray::U32(v) => v[i] as i64,
+            TypedArray::I8(v) => v[i] as i64,
+            TypedArray::U64(v) => v[i] as i64,
+            _ => return None,
+        })
+    }
+
+    /// Element `i` (already in range) of an array of floats; `None` for the others.
+    #[inline]
+    pub fn float_at(&self, i: usize) -> Option<f64> {
+        Some(match self {
+            TypedArray::Float(v) | TypedArray::F64(v) => v[i],
+            TypedArray::F32(v) => v[i] as f64,
+            _ => return None,
+        })
     }
 
     /// Every element as a value (an ordinary list's contents).
@@ -156,6 +212,25 @@ impl TypedArray {
                             _ => Err(format!("str of {} characters (a char is one character)", s.char_len())),
                         }
                     }
+                    other => Err(other.type_name().to_string()),
+                }
+            }
+            Elem::Int => {
+                return match v {
+                    Value::Int(n) => Ok(Num::I(*n)),
+                    other => Err(other.type_name().to_string()),
+                }
+            }
+            Elem::Float => {
+                return match v {
+                    Value::Int(n) => Ok(Num::F(*n as f64)),
+                    Value::Float(f) => Ok(Num::F(*f)),
+                    other => Err(other.type_name().to_string()),
+                }
+            }
+            Elem::Bool => {
+                return match v {
+                    Value::Bool(b) => Ok(Num::B(*b)),
                     other => Err(other.type_name().to_string()),
                 }
             }
@@ -208,6 +283,12 @@ impl TypedArray {
                 }
                 return;
             }
+            Num::B(b) => {
+                if let TypedArray::Bool(v) = self {
+                    v[i] = b;
+                }
+                return;
+            }
         };
         match self {
             TypedArray::I8(v) => v[i] = int as i8,
@@ -220,7 +301,9 @@ impl TypedArray {
             TypedArray::U64(v) => v[i] = int as u64,
             TypedArray::F32(v) => v[i] = float as f32,
             TypedArray::F64(v) => v[i] = float,
-            TypedArray::Char(_) => {}
+            TypedArray::Char(_) | TypedArray::Bool(_) => {}
+            TypedArray::Int(v) => v[i] = int,
+            TypedArray::Float(v) => v[i] = float,
         }
     }
 
@@ -262,6 +345,9 @@ impl TypedArray {
             TypedArray::U32(v) => v.sort_unstable(),
             TypedArray::U64(v) => v.sort_unstable(),
             TypedArray::Char(v) => v.sort_unstable(),
+            TypedArray::Int(v) => v.sort_unstable(),
+            TypedArray::Bool(v) => v.sort_unstable(),
+            TypedArray::Float(v) => v.sort_by(|a, b| a.total_cmp(b)),
             TypedArray::F32(v) => v.sort_by(|a, b| a.total_cmp(b)),
             TypedArray::F64(v) => v.sort_by(|a, b| a.total_cmp(b)),
         }
@@ -281,6 +367,58 @@ impl TypedArray {
             TypedArray::F32(v) => TypedArray::F32(v[start..end].to_vec()),
             TypedArray::F64(v) => TypedArray::F64(v[start..end].to_vec()),
             TypedArray::Char(v) => TypedArray::Char(v[start..end].to_vec()),
+            TypedArray::Int(v) => TypedArray::Int(v[start..end].to_vec()),
+            TypedArray::Float(v) => TypedArray::Float(v[start..end].to_vec()),
+            TypedArray::Bool(v) => TypedArray::Bool(v[start..end].to_vec()),
+        }
+    }
+
+    /// How compiled code (the JIT) may store into this array without a check
+    /// that can fail: [`STORE_INT`] any int, [`STORE_FLOAT`] any int or float,
+    /// [`STORE_BOOL`] any bool, [`STORE_NONE`] nothing (a store may be out of
+    /// range: the interpreter does it and reports).
+    pub fn store_class(&self) -> u8 {
+        match self {
+            TypedArray::Int(_) | TypedArray::I64(_) => STORE_INT,
+            TypedArray::Float(_) | TypedArray::F64(_) | TypedArray::F32(_) => STORE_FLOAT,
+            TypedArray::Bool(_) => STORE_BOOL,
+            _ => STORE_NONE,
+        }
+    }
+
+    /// Appends an int to an array of class [`STORE_INT`] or [`STORE_FLOAT`].
+    #[inline]
+    pub fn push_i64(&mut self, n: i64) {
+        match self {
+            TypedArray::Int(v) | TypedArray::I64(v) => v.push(n),
+            TypedArray::Float(v) | TypedArray::F64(v) => v.push(n as f64),
+            TypedArray::F32(v) => v.push(n as f32),
+            _ => {
+                let _ = self.push(&Value::Int(n));
+            }
+        }
+    }
+
+    /// Appends a float to an array of class [`STORE_FLOAT`].
+    #[inline]
+    pub fn push_f64(&mut self, x: f64) {
+        match self {
+            TypedArray::Float(v) | TypedArray::F64(v) => v.push(x),
+            TypedArray::F32(v) => v.push(x as f32),
+            _ => {
+                let _ = self.push(&Value::Float(x));
+            }
+        }
+    }
+
+    /// Appends a bool to an array of class [`STORE_BOOL`].
+    #[inline]
+    pub fn push_bool(&mut self, b: bool) {
+        match self {
+            TypedArray::Bool(v) => v.push(b),
+            _ => {
+                let _ = self.push(&Value::Bool(b));
+            }
         }
     }
 
@@ -295,10 +433,17 @@ impl TypedArray {
     }
 }
 
+/// See [`TypedArray::store_class`].
+pub const STORE_NONE: u8 = 0;
+pub const STORE_INT: u8 = 1;
+pub const STORE_FLOAT: u8 = 2;
+pub const STORE_BOOL: u8 = 3;
+
 enum Num {
     I(i64),
     F(f64),
     C(char),
+    B(bool),
 }
 
 /// The short name of a sized type (`u8`, `f32` …).
@@ -350,5 +495,16 @@ mod tests {
         assert!(matches!(c.get(0), Value::Str(ref s) if &**s == "a"));
         assert!(c.push(&Value::Str("ab".into())).is_err());
         assert!(c.push(&Value::Int(1)).is_err());
+        // the plain types: 8 bytes per int or float, 1 per bool
+        let mut n = TypedArray::from_values(Elem::Int, &[Value::Int(i64::MAX), Value::Int(-1)]).unwrap();
+        assert_eq!(n.byte_size(), 16);
+        assert!(n.push(&Value::Float(1.5)).is_err());
+        let fl = TypedArray::from_values(Elem::Float, &[Value::Int(2), Value::Float(0.5)]).unwrap();
+        assert!(matches!(fl.get(0), Value::Float(x) if x == 2.0));
+        let mut b = TypedArray::from_values(Elem::Bool, &[Value::Bool(true), Value::Bool(false)]).unwrap();
+        assert_eq!(b.byte_size(), 2);
+        b.sort();
+        assert!(matches!(b.get(0), Value::Bool(false)));
+        assert!(b.push(&Value::Int(1)).is_err());
     }
 }

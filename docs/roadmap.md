@@ -64,10 +64,12 @@ not live bindings. Done: chosen behaviour has a spec test and a `fogu check` war
 ## Stage 2 — Runtime & Language
 
 **#6a Sized lists at full speed** · `runtime`
-Storage sized by the annotation is done (`list<u8>` … `list<f64>`, `docs/architecture/sized-storage.md`);
-what is left: compiled loops over them (typed element reads/writes and `push` in the JIT, fast paths
-in the VM), packing for parameters and struct fields, and `fogu:ffi`/`buffer` views without copies.
-Done: a loop pushing a million `u8` as fast as on a plain list (0.22 s → ≤ 0.08 s today).
+Storage sized by the annotation is done (`list<u8>` … `list<f64>`, `list<char>`, and since 0.8.3
+`list<int>` / `list<float>` / `list<bool>`), and so are compiled loops over them (reads, `push`,
+`for … in`: `docs/architecture/sized-storage.md`). What is left: `xs[i] = v` in compiled loops (for
+ordinary lists too), packing for struct fields and parameters (a field's annotation is not kept
+today; assigning needs one rule for the three engines), and `fogu:ffi`/`buffer` views without
+copies.
 
 **#6 Value representation** · `runtime`
 `BoundMethod` / `StructBoundMethod` without inline `String`, a `size_of::<Value>()` test, typed

@@ -1146,7 +1146,30 @@ impl Interpreter {
             // a snapshot in its own (compact) storage; one element value at a time
             Value::Array(a) => {
                 let snapshot = a.borrow().clone();
-                for i in 0..snapshot.len() {
+                let mut from = 0usize;
+                // a long loop is compiled like the one over an ordinary list;
+                // the compiled code reads the elements from this snapshot
+                if let Some(deadline) = self.jit_gate().filter(|_| snapshot.len() >= self.jit_loop_threshold as usize) {
+                    let out = {
+                        let _native = NativeGuard::new(self);
+                        self.jit.borrow_mut().run_loop(
+                            id,
+                            LoopKind::ForArray { var, body, items: &snapshot },
+                            &env,
+                            deadline,
+                        )
+                    };
+                    match out {
+                        LoopOutcome::Done => return Ok(Flow::Normal),
+                        LoopOutcome::Err(e) => {
+                            self.sync_jit_line();
+                            return Err(self.jit_error(e));
+                        }
+                        LoopOutcome::Skip => {}
+                        LoopOutcome::Deopt(at) => from = at.max(0) as usize,
+                    }
+                }
+                for i in from..snapshot.len() {
                     if let Some(f) = run_body!(snapshot.get(i)) {
                         return Ok(f);
                     }

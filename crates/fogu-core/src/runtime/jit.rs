@@ -316,20 +316,69 @@ extern "C" fn h_print_str(p: *const u8, n: i64) {
 extern "C" fn h_print_sep() {
     print!(" ");
 }
-/// `xs.push(v)` from native loop code; `list` comes from a loop slot.
-extern "C" fn h_list_push_i64(list: i64, v: i64) {
+/// A list a loop slot points to: an ordinary list, or a sized one
+/// (`list<int>`, `list<u8>` … — `runtime/array.rs`). The slot holds the
+/// address of the list's `RefCell`; bit 0 (free: the cell is 8-aligned) says
+/// which of the two it is, so the code the JIT generates is the same for both
+/// and only these helpers tell them apart.
+enum ListRef<'a> {
+    Plain(&'a RefCell<Vec<Value>>),
+    Packed(&'a RefCell<super::array::TypedArray>),
+}
+const PACKED_TAG: i64 = 1;
+#[inline]
+fn list_ref<'a>(list: i64) -> ListRef<'a> {
     // SAFETY: the pointer was taken from a list the environment keeps alive
     // for the whole loop, and native code holds no borrow of it
-    let l = unsafe { &*(list as *const RefCell<Vec<Value>>) };
-    l.borrow_mut().push(Value::Int(v));
+    if list & PACKED_TAG != 0 {
+        ListRef::Packed(unsafe { &*((list & !PACKED_TAG) as *const RefCell<super::array::TypedArray>) })
+    } else {
+        ListRef::Plain(unsafe { &*(list as *const RefCell<Vec<Value>>) })
+    }
+}
+/// `xs.push(v)` from native loop code; `list` comes from a loop slot. A sized
+/// list only gets here with a value its kind always holds (`list_push`
+/// refuses to compile the others).
+extern "C" fn h_list_push_i64(list: i64, v: i64) {
+    match list_ref(list) {
+        ListRef::Plain(l) => l.borrow_mut().push(Value::Int(v)),
+        ListRef::Packed(a) => a.borrow_mut().push_i64(v),
+    }
 }
 extern "C" fn h_list_push_f64(list: i64, v: f64) {
-    let l = unsafe { &*(list as *const RefCell<Vec<Value>>) };
-    l.borrow_mut().push(Value::Float(v));
+    match list_ref(list) {
+        ListRef::Plain(l) => l.borrow_mut().push(Value::Float(v)),
+        ListRef::Packed(a) => a.borrow_mut().push_f64(v),
+    }
+}
+/// A push to a sized list that its kind may refuse (an int out of the range
+/// of a `u8`, a float into a list of ints): nothing is pushed then, and the
+/// loop leaves so that the interpreter redoes the iteration and reports it.
+extern "C" fn h_list_push_chk_i64(ctx: *mut JitCtx, list: i64, v: i64) {
+    match list_ref(list) {
+        ListRef::Plain(l) => l.borrow_mut().push(Value::Int(v)),
+        ListRef::Packed(a) => {
+            if a.borrow_mut().push(&Value::Int(v)).is_err() {
+                deopt(ctx);
+            }
+        }
+    }
+}
+extern "C" fn h_list_push_chk_f64(ctx: *mut JitCtx, list: i64, v: f64) {
+    match list_ref(list) {
+        ListRef::Plain(l) => l.borrow_mut().push(Value::Float(v)),
+        ListRef::Packed(a) => {
+            if a.borrow_mut().push(&Value::Float(v)).is_err() {
+                deopt(ctx);
+            }
+        }
+    }
 }
 extern "C" fn h_list_push_bool(list: i64, v: i64) {
-    let l = unsafe { &*(list as *const RefCell<Vec<Value>>) };
-    l.borrow_mut().push(Value::Bool(v & 0xff != 0));
+    match list_ref(list) {
+        ListRef::Plain(l) => l.borrow_mut().push(Value::Bool(v & 0xff != 0)),
+        ListRef::Packed(a) => a.borrow_mut().push_bool(v & 0xff != 0),
+    }
 }
 // Text built by native code for `xs.push(<string expression>)`: a `String`
 // behind a raw pointer, created by `h_sb_new` and consumed by `h_list_push_sb`.
@@ -358,8 +407,10 @@ extern "C" fn h_sb_bool(b: i64, v: i64) {
 extern "C" fn h_list_push_sb(list: i64, b: i64) {
     // SAFETY: `b` comes from `h_sb_new` and is consumed exactly once here
     let text = unsafe { Box::from_raw(b as *mut String) };
-    let l = unsafe { &*(list as *const RefCell<Vec<Value>>) };
-    l.borrow_mut().push(Value::Str((*text).into()));
+    // never a sized list: `list_push` does not compile a text pushed to one
+    if let ListRef::Plain(l) = list_ref(list) {
+        l.borrow_mut().push(Value::Str((*text).into()));
+    }
 }
 // Values built by native code for `xs.push({ … })` / `xs.push([ … ])`: each one
 // is a boxed `Value` (raw pointer) handed to exactly one consumer, which takes it.
@@ -405,8 +456,11 @@ extern "C" fn h_v_map_set(m: i64, kp: i64, kn: i64, v: i64) {
     }
 }
 extern "C" fn h_list_push_v(list: i64, v: i64) {
-    let l = unsafe { &*(list as *const RefCell<Vec<Value>>) };
-    l.borrow_mut().push(vtake(v));
+    let v = vtake(v);
+    // never a sized list: `list_push` does not compile a list or map pushed to one
+    if let ListRef::Plain(l) = list_ref(list) {
+        l.borrow_mut().push(v);
+    }
 }
 extern "C" fn h_print_nl() {
     println!();
@@ -443,8 +497,10 @@ extern "C" fn h_str_len(p: i64) -> i64 {
     }
 }
 extern "C" fn h_list_len(list: i64) -> i64 {
-    let l = unsafe { &*(list as *const RefCell<Vec<Value>>) };
-    l.borrow().len() as i64
+    match list_ref(list) {
+        ListRef::Plain(l) => l.borrow().len() as i64,
+        ListRef::Packed(a) => a.borrow().len() as i64,
+    }
 }
 extern "C" fn h_map_len(ctx: *mut JitCtx, map: i64) -> i64 {
     let m = unsafe { &*(map as *const RefCell<HashMap<Str, Value>>) };
@@ -487,6 +543,40 @@ extern "C" fn h_elem_bool(ctx: *mut JitCtx, items: i64, idx: i64) -> i64 {
         }
     }
 }
+/// The snapshot of a sized list a `for` walks (`LoopKind::ForArray`): the
+/// loop is compiled with these helpers instead of the ones above.
+#[inline]
+fn packed_items<'a>(items: i64) -> &'a super::array::TypedArray {
+    // SAFETY: the loop runs 0..len over a snapshot the caller keeps alive
+    unsafe { &*(items as *const super::array::TypedArray) }
+}
+extern "C" fn h_elem_pk_i64(ctx: *mut JitCtx, items: i64, idx: i64) -> i64 {
+    match packed_items(items).int_at(idx as usize) {
+        Some(n) => n,
+        None => {
+            deopt(ctx);
+            0
+        }
+    }
+}
+extern "C" fn h_elem_pk_f64(ctx: *mut JitCtx, items: i64, idx: i64) -> f64 {
+    match packed_items(items).float_at(idx as usize) {
+        Some(x) => x,
+        None => {
+            deopt(ctx);
+            0.0
+        }
+    }
+}
+extern "C" fn h_elem_pk_bool(ctx: *mut JitCtx, items: i64, idx: i64) -> i64 {
+    match packed_items(items).get(idx as usize) {
+        Value::Bool(b) => b as i64,
+        _ => {
+            deopt(ctx);
+            0
+        }
+    }
+}
 extern "C" fn h_elem_str(ctx: *mut JitCtx, items: i64, idx: i64) -> i64 {
     let v = elem(items, idx);
     match v {
@@ -500,6 +590,53 @@ extern "C" fn h_elem_str(ctx: *mut JitCtx, items: i64, idx: i64) -> i64 {
 /// `xs[i]` with the interpreter's index rules; anything unexpected deopts
 /// (the interpreter then raises its own error or returns the real value).
 fn list_at(list: i64, i: i64) -> Option<Value> {
+    match list_ref(list) {
+        ListRef::Plain(l) => {
+            let v = l.borrow();
+            let len = v.len() as i64;
+            let idx = if i < 0 { i + len } else { i };
+            if idx < 0 || idx >= len {
+                return None;
+            }
+            Some(v[idx as usize].clone())
+        }
+        ListRef::Packed(a) => {
+            let a = a.borrow();
+            let len = a.len() as i64;
+            let idx = if i < 0 { i + len } else { i };
+            if idx < 0 || idx >= len {
+                return None;
+            }
+            Some(a.get(idx as usize))
+        }
+    }
+}
+/// Element `i` of a sized list as an int, without building a `Value`.
+#[inline]
+fn packed_i64(a: &RefCell<super::array::TypedArray>, i: i64) -> Option<i64> {
+    let a = a.borrow();
+    let len = a.len() as i64;
+    let idx = if i < 0 { i + len } else { i };
+    if idx < 0 || idx >= len {
+        return None;
+    }
+    a.int_at(idx as usize)
+}
+#[inline]
+fn packed_f64(a: &RefCell<super::array::TypedArray>, i: i64) -> Option<f64> {
+    let a = a.borrow();
+    let len = a.len() as i64;
+    let idx = if i < 0 { i + len } else { i };
+    if idx < 0 || idx >= len {
+        return None;
+    }
+    a.float_at(idx as usize)
+}
+/// Element `i` of an ordinary list (the hot case, kept apart from the sized
+/// one): the interpreter's index rules, the element read in place.
+#[inline(always)]
+fn plain_at<T>(list: i64, i: i64, pick: impl FnOnce(&Value) -> Option<T>) -> Option<T> {
+    // SAFETY: see `list_ref`; the tag bit is clear
     let l = unsafe { &*(list as *const RefCell<Vec<Value>>) };
     let v = l.borrow();
     let len = v.len() as i64;
@@ -507,30 +644,59 @@ fn list_at(list: i64, i: i64) -> Option<Value> {
     if idx < 0 || idx >= len {
         return None;
     }
-    Some(v[idx as usize].clone())
+    pick(&v[idx as usize])
 }
 extern "C" fn h_list_get_i64(ctx: *mut JitCtx, list: i64, i: i64) -> i64 {
-    match list_at(list, i) {
-        Some(Value::Int(n)) => n,
-        _ => {
+    let got = if list & PACKED_TAG == 0 {
+        plain_at(list, i, |v| match v {
+            Value::Int(n) => Some(*n),
+            _ => None,
+        })
+    } else {
+        // SAFETY: see `list_ref`
+        packed_i64(unsafe { &*((list & !PACKED_TAG) as *const RefCell<super::array::TypedArray>) }, i)
+    };
+    match got {
+        Some(n) => n,
+        None => {
             deopt(ctx);
             0
         }
     }
 }
 extern "C" fn h_list_get_f64(ctx: *mut JitCtx, list: i64, i: i64) -> f64 {
-    match list_at(list, i) {
-        Some(Value::Float(x)) => x,
-        _ => {
+    let got = if list & PACKED_TAG == 0 {
+        plain_at(list, i, |v| match v {
+            Value::Float(x) => Some(*x),
+            _ => None,
+        })
+    } else {
+        // SAFETY: see `list_ref`
+        packed_f64(unsafe { &*((list & !PACKED_TAG) as *const RefCell<super::array::TypedArray>) }, i)
+    };
+    match got {
+        Some(x) => x,
+        None => {
             deopt(ctx);
             0.0
         }
     }
 }
 extern "C" fn h_list_get_bool(ctx: *mut JitCtx, list: i64, i: i64) -> i64 {
-    match list_at(list, i) {
-        Some(Value::Bool(b)) => b as i64,
-        _ => {
+    let got = if list & PACKED_TAG == 0 {
+        plain_at(list, i, |v| match v {
+            Value::Bool(b) => Some(*b as i64),
+            _ => None,
+        })
+    } else {
+        match list_at(list, i) {
+            Some(Value::Bool(b)) => Some(b as i64),
+            _ => None,
+        }
+    };
+    match got {
+        Some(b) => b,
+        None => {
             deopt(ctx);
             0
         }
@@ -610,6 +776,8 @@ enum Helper {
     ListPushI64,
     ListPushF64,
     ListPushBool,
+    ListPushChkI64,
+    ListPushChkF64,
     SbNew,
     SbBytes,
     SbI64,
@@ -633,6 +801,9 @@ enum Helper {
     ElemI64,
     ElemF64,
     ElemBool,
+    ElemPkI64,
+    ElemPkF64,
+    ElemPkBool,
     ElemStr,
     ListGetI64,
     ListGetF64,
@@ -661,6 +832,8 @@ impl Helper {
         Helper::ListPushI64,
         Helper::ListPushF64,
         Helper::ListPushBool,
+        Helper::ListPushChkI64,
+        Helper::ListPushChkF64,
         Helper::SbNew,
         Helper::SbBytes,
         Helper::SbI64,
@@ -684,6 +857,9 @@ impl Helper {
         Helper::ElemI64,
         Helper::ElemF64,
         Helper::ElemBool,
+        Helper::ElemPkI64,
+        Helper::ElemPkF64,
+        Helper::ElemPkBool,
         Helper::ElemStr,
         Helper::ListGetI64,
         Helper::ListGetF64,
@@ -711,6 +887,8 @@ impl Helper {
             Helper::ListPushI64 => "fogu_list_push_i64",
             Helper::ListPushF64 => "fogu_list_push_f64",
             Helper::ListPushBool => "fogu_list_push_bool",
+            Helper::ListPushChkI64 => "fogu_list_push_chk_i64",
+            Helper::ListPushChkF64 => "fogu_list_push_chk_f64",
             Helper::SbNew => "fogu_sb_new",
             Helper::SbBytes => "fogu_sb_bytes",
             Helper::SbI64 => "fogu_sb_i64",
@@ -734,6 +912,9 @@ impl Helper {
             Helper::ElemI64 => "fogu_elem_i64",
             Helper::ElemF64 => "fogu_elem_f64",
             Helper::ElemBool => "fogu_elem_bool",
+            Helper::ElemPkI64 => "fogu_elem_pk_i64",
+            Helper::ElemPkF64 => "fogu_elem_pk_f64",
+            Helper::ElemPkBool => "fogu_elem_pk_bool",
             Helper::ElemStr => "fogu_elem_str",
             Helper::ListGetI64 => "fogu_list_get_i64",
             Helper::ListGetF64 => "fogu_list_get_f64",
@@ -762,6 +943,8 @@ impl Helper {
             Helper::ListPushI64 => h_list_push_i64 as *const u8,
             Helper::ListPushF64 => h_list_push_f64 as *const u8,
             Helper::ListPushBool => h_list_push_bool as *const u8,
+            Helper::ListPushChkI64 => h_list_push_chk_i64 as *const u8,
+            Helper::ListPushChkF64 => h_list_push_chk_f64 as *const u8,
             Helper::SbNew => h_sb_new as *const u8,
             Helper::SbBytes => h_sb_bytes as *const u8,
             Helper::SbI64 => h_sb_i64 as *const u8,
@@ -785,6 +968,9 @@ impl Helper {
             Helper::ElemI64 => h_elem_i64 as *const u8,
             Helper::ElemF64 => h_elem_f64 as *const u8,
             Helper::ElemBool => h_elem_bool as *const u8,
+            Helper::ElemPkI64 => h_elem_pk_i64 as *const u8,
+            Helper::ElemPkF64 => h_elem_pk_f64 as *const u8,
+            Helper::ElemPkBool => h_elem_pk_bool as *const u8,
             Helper::ElemStr => h_elem_str as *const u8,
             Helper::ListGetI64 => h_list_get_i64 as *const u8,
             Helper::ListGetF64 => h_list_get_f64 as *const u8,
@@ -809,6 +995,8 @@ impl Helper {
             Helper::PrintStr => (vec![I64, I64], None),
             Helper::PrintSep | Helper::PrintNl => (vec![], None),
             Helper::ListPushI64 | Helper::ListPushBool => (vec![I64, I64], None),
+            Helper::ListPushChkI64 => (vec![I64, I64, I64], None),
+            Helper::ListPushChkF64 => (vec![I64, I64, F64], None),
             Helper::ListPushF64 => (vec![I64, F64], None),
             Helper::SbNew => (vec![], Some(I64)),
             Helper::SbBytes => (vec![I64, I64, I64], None),
@@ -822,8 +1010,8 @@ impl Helper {
             Helper::PrintSv => (vec![I64], None),
             Helper::StrLen | Helper::ListLen => (vec![I64], Some(I64)),
             Helper::MapLen => (vec![I64, I64], Some(I64)),
-            Helper::ElemI64 | Helper::ElemBool | Helper::ElemStr => (vec![I64, I64, I64], Some(I64)),
-            Helper::ElemF64 => (vec![I64, I64, I64], Some(F64)),
+            Helper::ElemI64 | Helper::ElemBool | Helper::ElemStr | Helper::ElemPkI64 | Helper::ElemPkBool => (vec![I64, I64, I64], Some(I64)),
+            Helper::ElemF64 | Helper::ElemPkF64 => (vec![I64, I64, I64], Some(F64)),
             Helper::ListGetI64 | Helper::ListGetBool | Helper::MapGetI64 | Helper::MapGetBool => (vec![I64, I64, I64], Some(I64)),
             Helper::ListGetF64 | Helper::MapGetF64 => (vec![I64, I64, I64], Some(F64)),
             Helper::MapSetI64 | Helper::MapSetBool | Helper::MapSetSb | Helper::MapSetV => (vec![I64, I64, I64], None),
@@ -1014,8 +1202,14 @@ struct LoopKey {
     slots: Vec<(String, Ty, bool)>,
     /// Speculated element type of each list slot / value type of each map slot.
     spec: Vec<(String, Ty)>,
+    /// The list slots that hold a sized list, with what compiled code may
+    /// store into each (`TypedArray::store_class`).
+    packed: Vec<(String, u8)>,
     /// Speculated element type of the list a `for x in list` loop walks.
     elem: Option<Ty>,
+    /// That list is a sized one (`LoopKind::ForArray`): its elements are read
+    /// from the compact snapshot.
+    elem_packed: bool,
     /// Compiled for a run with a deadline (see [`Watch`]).
     checked: bool,
     /// A `for a..b` whose bounds were in `0..=2^31` when it was compiled: the
@@ -1674,7 +1868,9 @@ impl Inner {
             let mut g = Gen::new(self, b, Rc::clone(env), None, None);
             g.checked = key.checked;
             g.spec = key.spec.iter().cloned().collect();
+            g.packed = key.packed.iter().cloned().collect();
             g.elem = key.elem;
+            g.elem_packed = key.elem_packed;
             let slots_ptr = g.prologue_loop(slots)?;
             match kind {
                 LoopKind::While { cond, body } => g.gen_while(cond, body)?,
@@ -1684,7 +1880,7 @@ impl Inner {
                     let hi = g.b.ins().load(types::I64, MemFlagsData::trusted(), slots_ptr, (8 * (n + 1)) as i32);
                     g.gen_for_range(var, lo, hi, body, key.small.then_some((0, SMALL_BOUND - 1)))?;
                 }
-                LoopKind::ForList { var, body, .. } => {
+                LoopKind::ForList { var, body, .. } | LoopKind::ForArray { var, body, .. } => {
                     let n = slots.len();
                     let items = g.b.ins().load(types::I64, MemFlagsData::trusted(), slots_ptr, (8 * n) as i32);
                     let len = g.b.ins().load(types::I64, MemFlagsData::trusted(), slots_ptr, (8 * (n + 1)) as i32);
@@ -1923,8 +2119,12 @@ struct Gen<'a, 'f> {
     // ---- speculation (loops only) ----
     /// Speculated element type per list slot / value type per map slot.
     spec: HashMap<String, Ty>,
+    /// See [`LoopKey::packed`].
+    packed: HashMap<String, u8>,
     /// Speculated element type of a `for x in list` loop.
     elem: Option<Ty>,
+    /// See [`LoopKey::elem_packed`].
+    elem_packed: bool,
     /// The slot array (loops).
     slots_ptr: Option<ir::Value>,
     /// Mutable slots: (slot, its variable, its value at the start of the
@@ -1977,7 +2177,9 @@ impl<'a, 'f> Gen<'a, 'f> {
             slots_assigned: Vec::new(),
             wb: None,
             spec: HashMap::new(),
+            packed: HashMap::new(),
             elem: None,
+            elem_packed: false,
             slots_ptr: None,
             commits: Vec::new(),
             resume_var: None,
@@ -2784,11 +2986,15 @@ impl<'a, 'f> Gen<'a, 'f> {
         let nested = !self.top_loop;
         let (eb, gb) = (self.effects, self.guards);
         self.iteration_start(Some(cur));
-        let h = match elem {
-            Ty::Int => Helper::ElemI64,
-            Ty::Float => Helper::ElemF64,
-            Ty::Bool => Helper::ElemBool,
-            Ty::Str => Helper::ElemStr,
+        let h = match (elem, self.elem_packed) {
+            (Ty::Int, true) => Helper::ElemPkI64,
+            (Ty::Float, true) => Helper::ElemPkF64,
+            (Ty::Bool, true) => Helper::ElemPkBool,
+            (_, true) => return bail("element type the JIT does not compile"),
+            (Ty::Int, false) => Helper::ElemI64,
+            (Ty::Float, false) => Helper::ElemF64,
+            (Ty::Bool, false) => Helper::ElemBool,
+            (Ty::Str, false) => Helper::ElemStr,
             _ => return bail("element type the JIT does not compile"),
         };
         self.guard_ok()?;
@@ -3117,7 +3323,14 @@ impl<'a, 'f> Gen<'a, 'f> {
             return Ok(false);
         }
         let list = self.b.use_var(l.var);
+        // a sized list takes only what its kind always holds; anything else
+        // (a store that may be out of range, a value of another type) is the
+        // interpreter's: it checks and reports
+        let store = self.packed.get(name.text.as_str()).copied();
         for a in args {
+            if store.is_some() && (matches!(a, Expr::List(_) | Expr::Map(_)) || self.is_stringish(a)) {
+                return bail("push of a value a sized list does not hold");
+            }
             if matches!(a, Expr::List(_) | Expr::Map(_)) {
                 let v = self.value_box(a)?;
                 let fr = self.helper(Helper::ListPushV);
@@ -3134,6 +3347,27 @@ impl<'a, 'f> Gen<'a, 'f> {
                 continue;
             }
             let (v, t) = self.expr(a)?;
+            if let Some(class) = store {
+                use super::array::{STORE_BOOL, STORE_FLOAT, STORE_INT};
+                let fits = matches!((class, t), (STORE_INT, Ty::Int) | (STORE_FLOAT, Ty::Int | Ty::Float) | (STORE_BOOL, Ty::Bool));
+                if !fits {
+                    // the kind may refuse the value (a `u8` out of range, a
+                    // float into ints): a checked push, which leaves the loop
+                    // before pushing — allowed only before the iteration's
+                    // first side effect, like every speculation
+                    let h = match t {
+                        Ty::Int => Helper::ListPushChkI64,
+                        Ty::Float => Helper::ListPushChkF64,
+                        _ => return bail("push to a sized list that the interpreter must check"),
+                    };
+                    self.guard_ok()?;
+                    let fr = self.helper(h);
+                    self.b.ins().call(fr, &[self.ctx_ptr, list, v]);
+                    self.guard_branch();
+                    self.effect();
+                    continue;
+                }
+            }
             let h = match t {
                 Ty::Int => Helper::ListPushI64,
                 Ty::Float => Helper::ListPushF64,
@@ -4107,6 +4341,10 @@ pub enum LoopKind<'a> {
     For { var: &'a str, body: &'a Stmt, lo: i64, hi: i64 },
     /// `for var in list`, over the interpreter's snapshot of the list.
     ForList { var: &'a str, body: &'a Stmt, items: &'a [Value] },
+    /// `for var in list`, over the interpreter's snapshot of a sized list
+    /// (`runtime/array.rs`): the same compiled loop, reading the elements
+    /// from the compact storage.
+    ForArray { var: &'a str, body: &'a Stmt, items: &'a super::array::TypedArray },
 }
 
 pub enum LoopOutcome {
@@ -4349,7 +4587,7 @@ impl Jit {
                         collect_names(&mut set, &tmp);
                         collect_names(&mut set, body);
                     }
-                    LoopKind::For { body, .. } | LoopKind::ForList { body, .. } => collect_names(&mut set, body),
+                    LoopKind::For { body, .. } | LoopKind::ForList { body, .. } | LoopKind::ForArray { body, .. } => collect_names(&mut set, body),
                 }
                 let mut v: Vec<String> = set.into_iter().collect();
                 v.sort();
@@ -4363,6 +4601,7 @@ impl Jit {
         let mut slots: Vec<(String, Ty, bool)> = Vec::new();
         let mut init: Vec<u64> = Vec::new();
         let mut spec: Vec<(String, Ty)> = Vec::new();
+        let mut packed: Vec<(String, u8)> = Vec::new();
         for n in names.iter() {
             if let Some(b) = env.borrow().lookup(n) {
                 // a list or map: its pointer (the environment keeps it alive); the
@@ -4372,6 +4611,27 @@ impl Jit {
                     init.push(Rc::as_ptr(l) as u64);
                     if let Some(t) = l.borrow().first().and_then(Ty::of_value) {
                         spec.push((n.clone(), t));
+                    }
+                    continue;
+                }
+                // a sized list: the same slot, its address tagged (`list_ref`);
+                // the element type is the one of its kind, not a guess
+                if let Value::Array(a) = &b.value {
+                    use super::array::Elem;
+                    let arr = a.borrow();
+                    let t = match arr.kind() {
+                        Elem::Char => None,
+                        Elem::Bool => Some(Ty::Bool),
+                        Elem::Float => Some(Ty::Float),
+                        Elem::Int => Some(Ty::Int),
+                        Elem::Num(k) => Some(if k.is_float() { Ty::Float } else { Ty::Int }),
+                    };
+                    // a list of chars has no numeric elements: not a slot
+                    if let Some(t) = t {
+                        slots.push((n.clone(), Ty::List, false));
+                        init.push(Rc::as_ptr(a) as u64 | PACKED_TAG as u64);
+                        spec.push((n.clone(), t));
+                        packed.push((n.clone(), arr.store_class()));
                     }
                     continue;
                 }
@@ -4414,6 +4674,23 @@ impl Jit {
                 init.push(items.as_ptr() as u64);
                 init.push(items.len() as u64);
             }
+            LoopKind::ForArray { items, .. } => {
+                use super::array::Elem;
+                // the element type is the one of the list's kind
+                elem = match items.kind() {
+                    Elem::Char => None,
+                    Elem::Bool => Some(Ty::Bool),
+                    Elem::Float => Some(Ty::Float),
+                    Elem::Int => Some(Ty::Int),
+                    Elem::Num(k) => Some(if k.is_float() { Ty::Float } else { Ty::Int }),
+                };
+                if elem.is_none() {
+                    return LoopOutcome::Skip;
+                }
+                // the snapshot itself: the loop is compiled with the helpers that read it
+                init.push(*items as *const super::array::TypedArray as u64);
+                init.push(items.len() as u64);
+            }
             LoopKind::While { .. } => {}
         }
 
@@ -4422,11 +4699,13 @@ impl Jit {
             kind: match kind {
                 LoopKind::While { .. } => 0,
                 LoopKind::For { .. } => 1,
-                LoopKind::ForList { .. } => 2,
+                LoopKind::ForList { .. } | LoopKind::ForArray { .. } => 2,
             },
             slots: slots.clone(),
             spec,
+            packed,
             elem,
+            elem_packed: matches!(kind, LoopKind::ForArray { .. }),
             checked: deadline.is_some(),
             small: matches!(kind, LoopKind::For { lo, hi, .. } if lo >= 0 && hi <= SMALL_BOUND),
         };

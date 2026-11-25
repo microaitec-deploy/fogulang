@@ -141,7 +141,8 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
   The built-in profiler (`FOGU_PPROF`) can crash when it samples a task's stack under load.
 - **Sized lists** (`Value::Array`, `runtime/array.rs`, `docs/architecture/sized-storage.md`): a list
   declared `list<u8>` … `list<f64>` stores the numbers themselves (`list<char>`: the chars, `Elem::Char`). It must behave as a list in
-  every engine; natives get it converted (`lists_for_natives`), except the few that read it
+  every engine (the JIT reads it through tagged list slots: `ListRef`, `LoopKind::ForArray`);
+  natives get it converted (`lists_for_natives`), except the few that read it
   directly (`len print str typeof stringify`). Keep new cases out of hot matches (a cold helper):
   an extra arm in the JSON writer cost 6–8%.
 - `Str` is 16 bytes: inline up to 15 bytes, else `Rc`. It dereferences to `str`; mutate with
