@@ -1,0 +1,17 @@
+{
+  "name": "events",
+  "version": "0.1.0",
+  "description": "fogu-desktop events both ways: Fogu pushes to the page, the page notifies Fogu",
+  "entry": "main.fg",
+  "desktop": {
+    "title": "Events",
+    "identifier": "dev.fogu.examples.events",
+    "ui": "ui",
+    "visible": false
+  },
+  "scripts": {
+    "build": "fogu desktop build",
+    "build:debug": "fogu desktop build --debug"
+  },
+  "dependencies": {}
+}

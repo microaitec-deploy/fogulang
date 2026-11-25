@@ -1,0 +1,54 @@
+// Events go both ways and need no answer (unlike commands):
+//
+//   Fogu → page:  app.emit(name, data)       →  fogu.on(name, fn(data))
+//   page → Fogu:  fogu.emit(name, data)      →  app.on(name, fn(data))
+//
+// Events emitted before the page has loaded are queued and delivered when it
+// is ready, so emitting from the top level or a task is always safe.
+//
+//   fogu desktop build --debug     → dist/events
+//   fogu main.fg                   → no window: simulates the page (see the end)
+import desktop from "desktop"
+import time from "fogu:time"
+
+const app = desktop.app({ name: "events", title: "Events", identifier: "dev.fogu.examples.events" })
+const win = app.createBrowser({ width: 560, height: 520 })
+
+const started = time.now()
+
+// page → Fogu: each handler runs in its own task
+app.on("hello", fn(info) {
+    app.log("page loaded:", info?.userAgent)
+    app.emit("notice", "Hello from Fogu! The page said hello first.")
+})
+
+app.on("set-title", fn(title) {
+    win.setTitle(str(title ?? "Events"))              // change the native window
+    app.emit("notice", `Window title set to "${title}"`)
+})
+
+// an event with no data: fn() without a parameter works too
+app.on("ping", fn() {
+    app.emit("pong", { ms: time.now() - started })
+})
+
+// Fogu → page on its own: a clock pushed every second from a background task
+if app.run() {
+    fg fn() {
+        loop {
+            time.delay(1s)
+            app.emit("clock", { uptime: (time.now() - started) / 1000 })
+        }
+    }()
+} else {
+    // No window: desktop.capture shows what would reach the page, and
+    // Fogu.signal.emit("desktop:ui:<name>", data) is what the host does for
+    // a fogu.emit(name, data) of the page (see tests/bridge.fg).
+    desktop.capture(fn(name, data) {
+        print(name, data)
+    })
+    Fogu.signal.emit("desktop:ui:hello", { userAgent: "headless" })
+    Fogu.signal.emit("desktop:ui:set-title", "My events")
+    time.delay(50ms)                     // handlers run as tasks: let them finish
+    desktop.capture(nil)
+}

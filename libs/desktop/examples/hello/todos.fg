@@ -1,0 +1,75 @@
+// The todo list itself: plain Fogu, no window (tested in todos.test.fg).
+// The state is a map { next, items: [{ id, text, done }] } saved as JSON.
+import fs from "fogu:fs"
+import json from "fogu:json"
+
+export fn empty() {
+    return { next: 1, items: [] }
+}
+
+// Reads the saved list; a missing or damaged file starts an empty one.
+export fn load(file: str) {
+    if !fs.exists(file) {
+        return empty()
+    }
+    const [text, err] = fs.readText(file)
+    if err != nil {
+        return empty()
+    }
+    const [data, perr] = json.parse(text)
+    if perr != nil || typeof(data) != "map" || typeof(data.items) != "list" || typeof(data.next) != "int" {
+        return empty()
+    }
+    return data
+}
+
+export fn save(state, file: str) {
+    return fs.writeText(file, json.stringify(state))
+}
+
+export fn add(state, text) {
+    if typeof(text) != "str" {
+        return nil, error("a todo needs some text")
+    }
+    const t = text.trim()
+    if t == "" {
+        return nil, error("a todo needs some text")
+    }
+    if len(t) > 200 {
+        return nil, error("keep it under 200 characters")
+    }
+    const item = { id: state.next, text: t, done: false }
+    state.next += 1
+    state.items.push(item)
+    return item, nil
+}
+
+export fn toggle(state, id) {
+    const item = state.items.find((i) => i.id == id)
+    if item == nil {
+        return nil, error(`no todo with id ${id}`)
+    }
+    item.done = !item.done
+    return item, nil
+}
+
+export fn remove(state, id) {
+    const before = len(state.items)
+    state.items = state.items.filter((i) => i.id != id)
+    if len(state.items) == before {
+        return nil, error(`no todo with id ${id}`)
+    }
+    return true, nil
+}
+
+// Removes the finished ones → how many were removed.
+export fn clearDone(state) {
+    const before = len(state.items)
+    state.items = state.items.filter((i) => !i.done)
+    return before - len(state.items)
+}
+
+export fn stats(state) {
+    const done = state.items.filter((i) => i.done)
+    return { total: len(state.items), done: len(done), left: len(state.items) - len(done) }
+}

@@ -1,0 +1,1191 @@
+// tools/build.fg — the build itself, shared by build.fg (the command) and
+// dev.fg. Failures are error values.
+//
+// Two ways to make an executable:
+//
+// * the default, without Rust: the *generic host* (a prebuilt one from
+//   hosts/ of the library or $FOGU_DESKTOP_HOSTS, or runtime/ compiled once
+//   with FOGU_DESKTOP_GENERIC=1; cached in $FOGU_HOME/desktop/hosts/) plus
+//   the app appended to it as a bundle by `fogu build --compile --runtime
+//   <host>` — the program, the packages it imports and the built UI
+//   (`--embed`). A Windows host first gets the app's icon and version
+//   information (tools/pe.fg); a macOS build gets an .app bundle and a Linux
+//   build a .desktop entry (tools/package.fg), which also makes the .zip and
+//   the NSIS installer;
+// * --installer: the app is staged into the Rust crate and compiled into it
+//   (`cargo tauri build`), which gives Tauri's installers (.msi, .deb, .dmg…).
+import fs from "fogu:fs"
+import http from "fogu:http"
+import json from "fogu:json"
+import path from "fogu:path"
+import process from "fogu:process"
+import regex from "fogu:regex"
+import security from "fogu:security"
+import shell from "fogu:shell"
+import system from "fogu:system"
+import crypto from "fogu:crypto"
+import zip from "fogu:zip"
+import packaging from "./package.fg"
+import pe from "./pe.fg"
+import project from "./project.fg"
+
+export const AREAS = ["network", "database", "messaging", "ops", "ai", "media", "rpc", "full"]
+
+// Whether a program is on the PATH (Windows programs seen from WSL do not count).
+export fn has(tool: str) {
+    return project.usableTool(shell.which(tool), Fogu.os)
+}
+
+// The root of this library (build.fg, runtime/, client/).
+export fn libRoot() {
+    return path.absolute(Fogu.asset(""))
+}
+
+// `bun install` (or npm…) when node_modules is missing. Returns the package manager.
+export fn installDeps(ui) {
+    const pm = project.packageManager(ui.root, has)
+    if pm == nil {
+        return nil, error("the Vite UI needs bun or npm: install bun (https://bun.sh) or Node.js")
+    }
+    if !fs.isDir(path.join(ui.root, "node_modules")) {
+        const cmd = project.installCommand(pm)
+        print("> " + cmd + "   (in " + ui.root + ")")
+        const r = shell.exec(cmd, { cwd: ui.root })
+        if !r.ok {
+            return nil, error(`${cmd} failed (exit code ${r.code})`)
+        }
+    }
+    return pm, nil
+}
+
+// Runs the Vite config through Vite itself (resolveConfig) and prints
+// `@@fogu-vite@@{ outDir, base }`: computed values (path.resolve(...),
+// process.env, a function config) come out as Vite would use them.
+const RESOLVE_JS = `const { resolveConfig } = await import("vite");
+const c = await resolveConfig({ root: process.cwd(), logLevel: "silent" }, "build", "production");
+process.stdout.write("\\n@@fogu-vite@@" + JSON.stringify({ outDir: c.build.outDir, base: c.base, root: c.root }) + "\\n");
+`
+
+// The outDir/base of a Vite UI as Vite resolves its config (after installing
+// the dependencies). fogu.json "desktop.outDir" still wins. When the config
+// cannot be run (no bun/node, an error in it), the values read from the file
+// stay, with a note.
+export fn resolveVite(ui, desk = nil) {
+    const pm = installDeps(ui)?
+    const runner = match pm {
+        "bun" => "bun"
+        _ => "node"
+    }
+    if !has(runner) {
+        return ui, nil
+    }
+    const dir = path.join(ui.root, "node_modules", ".fogu")
+    fs.mkdir(dir)?
+    // inside node_modules: `import("vite")` resolves from the UI's own packages
+    const script = path.join(dir, "vite-config.mjs")
+    fs.writeText(script, RESOLVE_JS)?
+    const [r, rerr] = process.run(runner, [script], { cwd: ui.root })
+    if rerr != nil || !r.ok || !r.stdout.contains("@@fogu-vite@@") {
+        const why = match rerr {
+            nil => (r.stderr + r.stdout).trim()
+            e => e.message
+        }
+        print(`note: could not run the Vite config (${why.split("\n")[0]}); using the outDir/base written in it`)
+        return ui, nil
+    }
+    const line = r.stdout.split("@@fogu-vite@@")[1].split("\n")[0]
+    const [c, perr] = json.parse(line)
+    if perr != nil {
+        return ui, nil
+    }
+    let outDir = (desk ?? {}).outDir ?? c.outDir ?? ui.outDir
+    let out = outDir
+    if !path.isAbsolute(out) {
+        out = path.join(c.root ?? ui.root, outDir)
+    }
+    return ui.merge({
+        outDir: outDir,
+        out: path.normalize(out),
+        base: c.base,
+        baseOverride: project.baseOverride(c.base),
+    }), nil
+}
+
+// The production build of a Vite UI: deps, `vite build` (with --base ./ when
+// the configured base would not work), then a check of outDir/index.html.
+export fn buildVite(ui) {
+    const pm = installDeps(ui)?
+    let extra = ""
+    if ui.baseOverride != nil {
+        print(`note: Vite base '${ui.base}' does not work under Tauri's protocol; building with --base ${ui.baseOverride}`)
+        extra = "--base " + ui.baseOverride
+    }
+    const cmd = project.buildCommand(pm, ui.pkg, extra)
+    print("> " + cmd + "   (in " + ui.root + ")")
+    const r = shell.exec(cmd, { cwd: ui.root })
+    if !r.ok {
+        return nil, error(`the Vite build failed (exit code ${r.code})`)
+    }
+    if !fs.isFile(path.join(ui.out, "index.html")) {
+        return nil, error(`the Vite build has no ${path.join(ui.out, "index.html")} (set "desktop.outDir" in fogu.json if the Vite build writes somewhere else)`)
+    }
+    return ui.out, nil
+}
+
+// ---------- the Fogu sources for the Rust crate ----------
+fn foguHome() {
+    return process.env("FOGU_HOME") ?? path.join(process.env("HOME") ?? process.env("USERPROFILE") ?? ".", ".fogu")
+}
+
+fn isFoguSource(dir) {
+    return fs.isFile(path.join(dir, "Cargo.toml")) && fs.isDir(path.join(dir, "crates", "fogu-std"))
+}
+
+fn foguSources() {
+    if (process.env("FOGU_SRC") ?? "") != "" {
+        if !isFoguSource(process.env("FOGU_SRC")) {
+            return nil, error(`FOGU_SRC=${process.env("FOGU_SRC")} is not a checkout of the Fogu sources (lang/)`)
+        }
+        return path.absolute(process.env("FOGU_SRC")), nil
+    }
+    const dir = path.join(foguHome(), "src", "fogu-" + Fogu.version)
+    if isFoguSource(dir) {
+        return dir, nil
+    }
+    let server = process.env("FOGU_SERVER")
+    const saved = path.join(foguHome(), "server")
+    if server == nil && fs.isFile(saved) {
+        const text = fs.readText(saved)?
+        server = text.trim()
+    }
+    if server == nil || server == "" {
+        server = "https://fogulang.microaitec.com" // the official server
+    }
+    const url = `${regex.replace(server, "/+$", "")}/download/${Fogu.version}/fogu-src.tar.gz`
+    const archive = path.join(foguHome(), "src", "fogu-" + Fogu.version + ".tar.gz")
+    fs.mkdir(path.join(foguHome(), "src"))?
+    print("downloading the Fogu sources: " + url)
+    const [_, derr] = http.download(url, archive)
+    if derr != nil {
+        return nil, error(`cannot download ${url}: ${derr.message}`)
+    }
+    // the archive holds one folder, fogu-<version>/
+    // (untar returns the extracted paths, a list: check the folder instead)
+    zip.untar(archive, path.join(foguHome(), "src"))
+    fs.remove(archive)
+    if !isFoguSource(dir) {
+        return nil, error(`${url} is not a Fogu source archive`)
+    }
+    return dir, nil
+}
+
+// $FOGU_HOME (default ~/.fogu).
+export fn home() {
+    return foguHome()
+}
+
+// The Fogu sources (lang/) the Rust crate builds against: the checkout next
+// to this library, else $FOGU_SRC or the archive from the Fogu server.
+export fn sources(lib) {
+    const local = path.join(lib, "..", "..", "lang")
+    if isFoguSource(local) {
+        return path.normalize(path.absolute(local)), nil
+    }
+    return foguSources()
+}
+
+// The Rust crate: runtime/ in a checkout of the repository; when the lib was
+// installed (`fogu add desktop`), a copy in $FOGU_HOME/desktop/<version>/
+// whose `fogu` dependency points at the sources (its target/ stays between
+// builds, so only the first build is slow).
+fn runtimeDir(lib) {
+    const runtime = path.join(lib, "runtime")
+    if isFoguSource(path.join(lib, "..", "..", "lang")) {
+        return runtime, nil
+    }
+    const src = foguSources()?
+    const [libManifest, lerr] = json.parse(fs.readText(path.join(lib, "fogu.json"))?)
+    if lerr != nil {
+        return nil, error("fogu.json of the desktop lib: " + lerr.message)
+    }
+    const work = path.join(foguHome(), "desktop", libManifest.version, "runtime")
+    fs.mkdir(work)?
+    for entry in fs.list(runtime)? {
+        if entry != "target" && entry != ".bundle" {
+            const to = path.join(work, entry)
+            if fs.exists(to) {
+                fs.removeAll(to)?
+            }
+            fs.copy(path.join(runtime, entry), to)?
+        }
+    }
+    // the crate also reads ../main.fg, ../fogu.json (vendored into the
+    // executable) and ../client/fogu.js (the page API)
+    for f in ["main.fg", "update.fg", "fogu.json", "client"] {
+        const to = path.join(work, "..", f)
+        if fs.exists(to) {
+            fs.removeAll(to)?
+        }
+        fs.copy(path.join(lib, f), to)?
+    }
+    const toml = path.join(work, "Cargo.toml")
+    const srcPath = src.replace("\\", "/")
+    const cargo = fs.readText(toml)?
+    fs.writeText(toml, cargo.replace("path = \"../../../lang\"", `path = '${srcPath}'`))?
+    return work, nil
+}
+
+// The fogu executable running this script (set by `fogu desktop …`), else the
+// one on the PATH.
+fn foguBin() {
+    const bin = process.env("FOGU_BIN")
+    if bin != nil && bin != "" && fs.isFile(bin) {
+        return bin, nil
+    }
+    const w = shell.which("fogu")
+    if w == nil {
+        return nil, error("the fogu executable was not found (run this through `fogu desktop build`, or put fogu on the PATH)")
+    }
+    return w, nil
+}
+
+// The Rust triple of a --target value (nil = this machine).
+fn targetTriple(target) {
+    if target == "windows" {
+        return match Fogu.os {
+            "windows" => nil
+            _ => "x86_64-pc-windows-gnu"
+        }
+    }
+    return target
+}
+
+// The cargo flags of the stdlib areas; `privateApi` false leaves out the macOS
+// private API (fogu.json "desktop.macOSPrivateApi": false, for the App Store).
+fn cargoFeatures(features, privateApi = true) {
+    if features == nil && privateApi {
+        return "", nil
+    }
+    const list = []
+    for f in features ?? ["network"] {
+        if !AREAS.contains(f) {
+            return nil, error(`unknown feature '${f}' (one of: ${AREAS.join(", ")})`)
+        }
+        list.push(f)
+    }
+    if privateApi {
+        list.push("macos-private-api")
+    }
+    let flags = " --no-default-features"
+    if len(list) > 0 {
+        flags += " --features " + shell.quote(list.join(","))
+    }
+    return flags, nil
+}
+
+// ---------- Fogu standard library areas ----------
+
+// The area of a `fogu:` module that is not in every host (as `fogu build`
+// maps them; modules not listed are always there).
+const MODULE_AREAS = {
+    database: ["etcd", "kv", "surrealkv", "surrealdb", "sql", "orm", "redis", "scylla"],
+    rpc: ["grpc", "protobuf"],
+    network: ["security", "tls", "socketio", "http", "web", "topcoat", "jwt", "mail", "websocket", "webrtc", "html"],
+    messaging: ["broker", "kafka", "mq", "fogumq", "foguMQ-client", "nats", "rabbitmq", "mqtt", "bullmq"],
+    ai: ["ai", "plot"],
+    ops: ["s3", "docker", "service", "playbook", "ssh"],
+    media: ["image", "webview"],
+}
+const ALL_AREAS = ["network", "database", "messaging", "ops", "ai", "media", "rpc"]
+
+// The area of a standard library module ("sql" → "database"), or nil when
+// every host has it (fs, json, path, process…).
+export fn moduleArea(module: str) {
+    for area, modules in MODULE_AREAS {
+        if modules.contains(module) {
+            return area
+        }
+    }
+    return nil
+}
+
+// The areas a feature list gives a host, sorted: nil is the default
+// (network); "full" is all of them; an area brings the ones it is built with
+// (database → rpc, ai → media and network).
+export fn hostAreas(features) {
+    const out = []
+    for f in features ?? ["network"] {
+        const add = match f {
+            "full" => ALL_AREAS
+            "database" => ["database", "rpc"]
+            "ai" => ["ai", "media", "network"]
+            _ => [f]
+        }
+        for a in add {
+            if !out.contains(a) {
+                out.push(a)
+            }
+        }
+    }
+    return out.sort()
+}
+
+// The `fogu:` modules an app imports that its host would not have:
+// [{ module, area, file }] (file: relative to the app). `features`: the host's
+// feature list (nil = the default).
+export fn missingAreas(app: str, features, skip = []) {
+    const have = hostAreas(features)
+    const skipAbs = skip.map((p) => path.normalize(path.absolute(p)))
+    const appAbs = path.normalize(path.absolute(app))
+    const out = []
+    const seen = {}
+    for f in Fogu.glob(path.join(app, "**", "*.fg")).sort() {
+        const abs = path.normalize(path.absolute(f))
+        const rel = abs.slice(len(appAbs) + 1).replace("\\", "/")
+        const parts = rel.split("/")
+        if parts.any((p) => ["node_modules", "fogu_modules", "dist", "target", ".git"].contains(p)) || rel.ends_with(".test.fg") || skipAbs.any((p) => abs.starts_with(p)) {
+            continue
+        }
+        const [text, rerr] = fs.readText(f)
+        if rerr != nil {
+            continue
+        }
+        for m in regex.findAll(text, "[\"'`]fogu:([A-Za-z0-9_-]+)[\"'`]") {
+            const module = m.groups[0]
+            const area = moduleArea(module)
+            if area != nil && !have.contains(area) && seen[module] == nil {
+                seen[module] = true
+                out.push({ module: module, area: area, file: rel })
+            }
+        }
+    }
+    return out
+}
+
+// What to tell the developer about missingAreas()'s result: one line per
+// module, then the fogu.json setting that fixes them all. [] when nothing is missing.
+export fn missingAreasReport(missing, features) {
+    if len(missing) == 0 {
+        return []
+    }
+    const lines = []
+    const wanted = (features ?? ["network"]).slice(0)
+    for m in missing {
+        lines.push(`${m.file} imports fogu:${m.module}, which is in the "${m.area}" area: the host does not have it (its areas: ${hostAreas(features).join(", ")})`)
+        if !wanted.contains(m.area) {
+            wanted.push(m.area)
+        }
+    }
+    lines.push(`add the area: "desktop": { "features": ${json.stringify(wanted)} } in fogu.json, or --features ${wanted.join(",")}`)
+    return lines
+}
+
+// ---------- the generic host ----------
+
+// The folder name of a platform's prebuilt hosts: windows-x64, linux-x64,
+// linux-arm64, macos-arm64… (`triple` nil = this machine).
+export fn hostPlatform(triple) {
+    if triple == nil {
+        const arch = match system.info.arch {
+            "aarch64" => "arm64"
+            _ => "x64"
+        }
+        return Fogu.os + "-" + arch
+    }
+    const arch = match triple.starts_with("aarch64") {
+        true => "arm64"
+        _ => "x64"
+    }
+    let os = "linux"
+    if triple.contains("windows") {
+        os = "windows"
+    } else if triple.contains("apple") {
+        os = "macos"
+    }
+    return os + "-" + arch
+}
+
+// The cache key of a feature list: "default" for nil and for the default
+// set, else the areas sorted and joined by "+".
+export fn featureKey(features) {
+    if features == nil {
+        return "default"
+    }
+    const list = []
+    for f in features {
+        if !list.contains(f) {
+            list.push(f)
+        }
+    }
+    const key = list.sort().join("+")
+    if key == "network" {
+        return "default"
+    }
+    return key
+}
+
+// The folders searched for prebuilt hosts: $FOGU_DESKTOP_HOSTS (your own
+// builds, a team share, a CI cache), then hosts/ of the library (the hosts
+// that come with the package).
+export fn prebuiltRoots(lib: str) {
+    const roots = []
+    const own = process.env("FOGU_DESKTOP_HOSTS") ?? ""
+    if own.trim() != "" {
+        roots.push(path.absolute(own.trim()))
+    }
+    roots.push(path.join(lib, "hosts"))
+    return roots
+}
+
+// The prebuilt hosts of a platform in a folder: [{ exe, areas, name }].
+// <root>/<platform>/ has the default areas (network);
+// <root>/<platform>-<area>+<area>/ those areas; <root>/<platform>-full/ all.
+export fn prebuiltHosts(root: str, platform: str, exeName: str) {
+    const out = []
+    if !fs.isDir(root) {
+        return out
+    }
+    const [names, lerr] = fs.list(root)
+    if lerr != nil {
+        return out
+    }
+    for name in names {
+        let features = nil
+        if name == platform {
+            features = nil
+        } else if name.starts_with(platform + "-") {
+            features = name.slice(len(platform) + 1).split("+")
+        } else {
+            continue
+        }
+        const exe = path.join(root, name, exeName)
+        if fs.isFile(exe) {
+            out.push({ exe: exe, areas: hostAreas(features), name: name, dir: path.join(root, name) })
+        }
+    }
+    return out
+}
+
+// The prebuilt (release) host for a platform that has every area of
+// `features`: the one with the fewest areas. nil when there is none.
+export fn findPrebuilt(lib: str, platform: str, features, exeName: str) {
+    const need = hostAreas(features)
+    let best = nil
+    for root in prebuiltRoots(lib) {
+        for h in prebuiltHosts(root, platform, exeName) {
+            if need.all((a) => h.areas.contains(a)) && (best == nil || len(h.areas) < len(best.areas)) {
+                best = h
+            }
+        }
+        if best != nil {
+            return best
+        }
+    }
+    return nil
+}
+
+// The generic host for a platform: fogu-desktop(.exe) with no app inside.
+// No Rust is needed when a host exists already; in this order:
+//
+//   1. the cache, $FOGU_HOME/desktop/hosts/<lib version>/<target>/<profile>-<features>/
+//      (hosts built here before);
+//   2. a prebuilt host: $FOGU_DESKTOP_HOSTS, then hosts/ of the library
+//      (release hosts; see prebuiltHosts for the folder names);
+//   3. cargo: runtime/ compiled with FOGU_DESKTOP_GENERIC=1, then cached (1).
+//
+// opts:
+//   target      nil, a Rust triple, or "windows"
+//   debug       a debug host (a console and the devtools); only cargo makes one
+//   features    Fogu stdlib areas (nil: the default, network)
+//   anyProfile  with debug: a release host will do when there is no debug one
+//               (`fogu desktop dev` without Rust)
+//   cargo       skip the prebuilt hosts: use the cache or compile
+//   rebuild     compile again even when a host is cached
+//   quiet       do not print where the host comes from
+//   has         fn(tool) → bool, instead of looking on the PATH (tests)
+// Returns { exe, dir, windows, profile, source: "cache" | "prebuilt" | "cargo",
+// platform, features } or an error.
+export fn host(opts) {
+    const target = targetTriple(opts.target)
+    const debug = opts.debug ?? false
+    const rebuild = opts.rebuild ?? false
+    const useCargo = opts.cargo ?? false
+    const featureFlags = cargoFeatures(opts.features)?
+    const windows = match target {
+        nil => Fogu.os == "windows"
+        t => t.contains("windows")
+    }
+    const exeSuffix = match windows {
+        true => ".exe"
+        _ => ""
+    }
+    const exeName = "fogu-desktop" + exeSuffix
+    const lib = libRoot()
+    const [libManifest, lerr] = json.parse(fs.readText(path.join(lib, "fogu.json"))?)
+    if lerr != nil {
+        return nil, error("fogu.json of the desktop lib: " + lerr.message)
+    }
+    const profile = match debug {
+        true => "debug"
+        _ => "release"
+    }
+    const featKey = featureKey(opts.features)
+    const platform = hostPlatform(target)
+    const say = fn(text) {
+        if !(opts.quiet ?? false) {
+            print(text)
+        }
+    }
+    const areas = hostAreas(opts.features).join(", ")
+    const cacheRoot = path.join(foguHome(), "desktop", "hosts", libManifest.version, target ?? "native")
+    const cached = fn(prof) {
+        // (older versions named the folder after the list as given)
+        const keys = [featKey]
+        if opts.features != nil && !keys.contains(opts.features.join("+")) {
+            keys.push(opts.features.join("+"))
+        }
+        for k in keys {
+            const d = path.join(cacheRoot, prof + "-" + k)
+            if fs.isFile(path.join(d, exeName)) {
+                return { exe: path.join(d, exeName), dir: d, windows: windows, profile: prof, source: "cache", platform: platform, features: opts.features }
+            }
+        }
+        return nil
+    }
+    const dir = path.join(cacheRoot, profile + "-" + featKey)
+    const exe = path.join(dir, exeName)
+    if !rebuild {
+        const c = cached(profile)
+        if c != nil {
+            return c, nil
+        }
+        const releaseWillDo = !debug || ((opts.anyProfile ?? false) && !useCargo)
+        if releaseWillDo && debug {
+            const c2 = cached("release")
+            if c2 != nil {
+                say(`host: the cached release host for ${platform} (areas: ${areas}); --cargo builds the debug host (console, devtools; needs Rust)`)
+                return c2, nil
+            }
+        }
+        if releaseWillDo && !useCargo {
+            const p = findPrebuilt(lib, platform, opts.features, exeName)
+            if p != nil {
+                say(`host: the prebuilt release host for ${platform} (areas: ${p.areas.join(", ")}): ${p.exe}`)
+                return { exe: p.exe, dir: p.dir, windows: windows, profile: "release", source: "prebuilt", platform: platform, features: opts.features }, nil
+            }
+        }
+    }
+
+    // ---------- cargo ----------
+    const why = match rebuild {
+        true => "--rebuild-host"
+        _ => match useCargo {
+            true => "--cargo"
+            _ => match debug && !(opts.anyProfile ?? false) {
+                true => "a debug host is always compiled"
+                _ => `no prebuilt host for ${platform} with the areas ${areas}`
+            }
+        }
+    }
+    const hasTool = opts.has ?? has
+    if !hasTool("cargo") {
+        const there = []
+        for root in prebuiltRoots(lib) {
+            for h in prebuiltHosts(root, platform, exeName) {
+                there.push(`${h.name} (${h.areas.join(", ")})`)
+            }
+        }
+        const found = match len(there) {
+            0 => `none for ${platform} in ${prebuiltRoots(lib).join(", ")}`
+            _ => there.join("; ")
+        }
+        return nil, error(`the desktop host must be compiled (${why}), which needs Rust, and cargo is not installed. Prebuilt hosts: ${found}. Use the areas of a prebuilt host ("desktop.features" in fogu.json), put a host in $FOGU_DESKTOP_HOSTS/${platform}/, or install Rust (https://rustup.rs)`)
+    }
+    say(`host: ${why}: compiling it with cargo (once; cached in ${dir})`)
+    const runtime = runtimeDir(lib)?
+    const targetFlag = match target {
+        nil => ""
+        t => " --target " + shell.quote(t)
+    }
+    const profileFlag = match debug {
+        true => ""
+        _ => " --release"
+    }
+    const cmd = "cargo build" + profileFlag + targetFlag + featureFlags + " --manifest-path " + shell.quote(path.join(runtime, "Cargo.toml"))
+    print("> " + cmd)
+    const r = shell.exec(cmd, { cwd: runtime, env: { FOGU_DESKTOP_GENERIC: "1" } })
+    if !r.ok {
+        return nil, error(`cargo build failed (exit code ${r.code})`)
+    }
+    let out = path.join(runtime, "target")
+    if target != nil {
+        out = path.join(out, target)
+    }
+    out = path.join(out, profile)
+    const built = path.join(out, exeName)
+    if !fs.isFile(built) {
+        return nil, error(`the build finished but ${built} is missing`)
+    }
+    fs.mkdir(dir)?
+    fs.copy(built, exe)?
+    if !windows {
+        shell.run("chmod +x " + shell.quote(exe))
+    }
+    return { exe: exe, dir: dir, windows: windows, profile: profile, source: "cargo", platform: platform, features: opts.features }, nil
+}
+
+// The app, ready to bundle: fogu.json checked, "desktop.beforeBuild" run, a
+// Vite UI built. Returns { manifest, desk, name, entry, ui, uiDir, skip,
+// version, identifier } or an error. Shared by build() and tools/mobile.fg.
+export fn prepare(app) {
+    const devUrl = ""
+    const manifest = project.manifest(app)?
+    const desk = manifest.desktop ?? {}
+    const name = manifest.name ?? path.basename(app)
+    if !regex.test(name, "^[A-Za-z0-9][A-Za-z0-9._-]*$") {
+        return nil, error(`the app name '${name}' must be letters, digits, '.', '_' or '-' (it names the executable)`)
+    }
+    const entry = manifest.entry ?? "main.fg"
+
+    // a step that builds the UI first (Tailwind, a custom bundler…), e.g. "bun run build"
+    if desk.beforeBuild != nil && devUrl == "" {
+        print("> " + desk.beforeBuild)
+        const r = shell.exec(desk.beforeBuild, { cwd: app })
+        if !r.ok {
+            return nil, error(`"desktop.beforeBuild" failed (exit code ${r.code})`)
+        }
+    }
+    if !fs.isFile(path.join(app, entry)) {
+        return nil, error(`the entry ${entry} does not exist in ${app}`)
+    }
+
+    // the UI: a plain folder, or a Vite project (built here; its outDir is embedded)
+    let ui = project.ui(app, desk)?
+    let uiDir = ui.dir
+    let skip = []
+    if ui.kind == "vite" && devUrl == "" {
+        ui = resolveVite(ui, desk)?
+    }
+    if ui.kind == "vite" {
+        uiDir = ui.out
+        // the Vite sources are not part of the program (node_modules and dist never are)
+        if path.normalize(ui.root) != path.normalize(app) {
+            skip.push(ui.root)
+        } else {
+            skip.push(ui.out)
+        }
+        if devUrl == "" {
+            buildVite(ui)?
+        }
+    }
+    if devUrl == "" && !fs.isFile(path.join(uiDir, "index.html")) {
+        return nil, error(`${uiDir} has no index.html (fogu.json "desktop.ui" names the UI folder)`)
+    }
+
+    let version = manifest.version ?? "0.1.0"
+    if !regex.test(version, "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?$") {
+        print(`warning: version '${version}' is not semver; using 0.1.0 for the executable`)
+        version = "0.1.0"
+    }
+    const identifier = desk.identifier ?? ("dev.fogu.app." + regex.replaceAll(name.lower(), "[^a-z0-9-]", "-"))
+    if !regex.test(identifier, "^[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$") {
+        return nil, error(`"desktop.identifier" '${identifier}' must look like com.example.app (letters, digits, '-', dots)`)
+    }
+
+    return { manifest: manifest, desk: desk, name: name, entry: entry, ui: ui, uiDir: uiDir, skip: skip, version: version, identifier: identifier }, nil
+}
+
+// The worker modules of an app (relative paths): fogu.json "desktop.workers"
+// plus every desktop.worker("<file>.fg") with a literal path in its sources.
+export fn workerFiles(app, desk, skip = []) {
+    const found = []
+    for w in (desk ?? {}).workers ?? [] {
+        found.push(str(w))
+    }
+    const skipAbs = skip.map((p) => path.normalize(path.absolute(p)))
+    for f in Fogu.glob(path.join(app, "**", "*.fg")) {
+        const abs = path.normalize(path.absolute(f))
+        if abs.contains("node_modules") || abs.contains("fogu_modules") || skipAbs.any((p) => abs.starts_with(p)) {
+            continue
+        }
+        const text = fs.readText(f)?
+        for m in regex.findAll(text, "\\.worker\\(\\s*[\"'`]([^\"'`]+\\.fg)[\"'`]") {
+            found.push(m.groups[0])
+        }
+    }
+    const out = []
+    for w in found {
+        let rel = w.replace("\\", "/")
+        while rel.starts_with("./") {
+            rel = rel.slice(2)
+        }
+        if !out.contains(rel) {
+            if !fs.isFile(path.join(app, rel)) {
+                return nil, error(`desktop.worker: ${rel} does not exist in ${app}`)
+            }
+            out.push(rel)
+        }
+    }
+    return out, nil
+}
+
+// The latest.json key of a build target: windows-x86_64, linux-aarch64, macos-aarch64…
+export fn platformKey(triple) {
+    if triple == nil {
+        return system.info.os + "-" + system.info.arch
+    }
+    const arch = triple.split("-")[0]
+    let os = "linux"
+    if triple.contains("windows") {
+        os = "windows"
+    } else if triple.contains("apple-darwin") {
+        os = "macos"
+    } else if triple.contains("apple-ios") {
+        os = "ios"
+    } else if triple.contains("android") {
+        os = "android"
+    }
+    return os + "-" + arch
+}
+
+// The update signing key: $FOGU_DESKTOP_UPDATE_KEY (the private key, base64)
+// or <app>/.fogu-update.key (fogu desktop keygen). nil when there is none.
+fn updateKey(app) {
+    const env = process.env("FOGU_DESKTOP_UPDATE_KEY") ?? ""
+    if env.trim() != "" {
+        return env.trim()
+    }
+    const f = path.join(app, ".fogu-update.key")
+    if !fs.isFile(f) {
+        return nil
+    }
+    const [k, err] = json.parse(fs.readText(f)?)
+    if err != nil || k.privateKey == nil {
+        return nil
+    }
+    return k.privateKey
+}
+
+// Signs a built executable for the updater (update.fg): its entry in
+// <dist>/latest.json (other platforms' entries of the same version stay).
+// Nothing happens without "desktop.update" in fogu.json.
+export fn signUpdate(app, desk, exePath, triple, version) {
+    const u = (desk ?? {}).update
+    if u == nil {
+        return nil, nil
+    }
+    const key = updateKey(app)
+    if key == nil {
+        print("note: desktop.update is set but there is no signing key (fogu desktop keygen, or FOGU_DESKTOP_UPDATE_KEY): latest.json not written")
+        return nil, nil
+    }
+    const sum = crypto.hashFile("sha256", exePath)?
+    const sig = security.sign(key, sum)
+    if u.pubkey != nil && !security.verify(u.pubkey, sum, sig) {
+        return nil, error("the signing key does not match desktop.update.pubkey in fogu.json (an app would refuse this update)")
+    }
+    const latest = path.join(path.dirname(exePath), "latest.json")
+    let doc = { version: version, platforms: {} }
+    if fs.isFile(latest) {
+        const [old, perr] = json.parse(fs.readText(latest)?)
+        if perr == nil && old.version == version {
+            doc = old
+        }
+    }
+    doc.version = version
+    if (process.env("FOGU_DESKTOP_UPDATE_DATE") ?? "") != "" {
+        doc.date = process.env("FOGU_DESKTOP_UPDATE_DATE")
+    }
+    const notes = process.env("FOGU_DESKTOP_UPDATE_NOTES") ?? u.notes
+    if notes != nil {
+        doc.notes = notes
+    }
+    const key2 = platformKey(triple)
+    doc.platforms[key2] = { url: path.basename(exePath), sha256: sum, signature: sig, size: fs.stat(exePath)?.size }
+    fs.writeText(latest, json.stringify(doc) + "\n")?
+    print(`update: signed for ${key2} → ${latest} (upload it with ${path.basename(exePath)} to ${u.endpoint ?? "the endpoint"})`)
+    return latest, nil
+}
+
+// Whether a file is open by a running program (Windows refuses to overwrite
+// the .exe of a running app, os error 32; Linux a running executable).
+export fn inUse(file: str) {
+    if !fs.isFile(file) {
+        return false
+    }
+    const [_r, err] = Fogu.file(file).append("")
+    return err != nil
+}
+
+// Whether a Windows program with this image name ("notas.exe") is running:
+// asked to tasklist, on Windows and from WSL (where opening the .exe of a
+// running program does not fail, only replacing it does). false elsewhere.
+export fn imageRunning(image: str) {
+    let tool = "tasklist"
+    const opts = {}
+    if Fogu.os != "windows" {
+        tool = "tasklist.exe"
+        if shell.which(tool) == nil || !fs.isDir("/mnt/c") {
+            return false
+        }
+        opts.cwd = "/mnt/c"
+    }
+    const [r, err] = process.run(tool, ["/FI", "IMAGENAME eq " + image, "/NH", "/FO", "CSV"], opts)
+    return err == nil && r.stdout.lower().contains("\"" + image.lower() + "\"")
+}
+
+// Copies a built executable to `dest`. When `dest` is in use (the app is
+// running) the old file is renamed to <dest>.old first — a running .exe can
+// be renamed, not overwritten; when even that fails the new one is written
+// next to it as <name>.new(.exe). Returns the path written.
+export fn placeExecutable(built: str, dest: str) {
+    const [_c, cerr] = fs.copy(built, dest)
+    if cerr == nil {
+        return dest, nil
+    }
+    if !fs.isFile(dest) {
+        return nil, error(`cannot write ${dest}: ${cerr.message}`)
+    }
+    const old = dest + ".old"
+    if fs.isFile(old) {
+        fs.remove(old)
+    }
+    const [_m, merr] = fs.move(dest, old)
+    if merr == nil {
+        const [_c2, cerr2] = fs.copy(built, dest)
+        if cerr2 == nil {
+            print(`note: ${dest} was in use (is the app running?): the running copy is now ${path.basename(old)}; delete it after closing the app`)
+            return dest, nil
+        }
+    }
+    const ext = path.extname(dest)
+    const alt = dest.slice(0, len(dest) - len(ext)) + ".new" + ext
+    const [_c3, cerr3] = fs.copy(built, alt)
+    if cerr3 != nil {
+        return nil, error(`cannot write ${dest}: ${cerr.message}`)
+    }
+    print(`warning: ${dest} is in use and could not be replaced (${cerr.message}): the new executable is ${alt}; close the app and rename it`)
+    return alt, nil
+}
+
+// The `cargo tauri build` command of an --installer build. `cargo tauri
+// build` has no --no-default-features of its own: what follows `--` goes to
+// cargo, so that flag goes there.
+export fn tauriBuildCommand(debug, target, featureFlags: str, config: str) {
+    const dbg = match debug {
+        true => " --debug"
+        _ => ""
+    }
+    const targetFlag = match target {
+        nil => ""
+        t => " --target " + shell.quote(t)
+    }
+    const noDefault = " --no-default-features"
+    let tail = ""
+    let flags = featureFlags
+    if flags.contains(noDefault) {
+        flags = flags.replace(noDefault, "")
+        tail = " --" + noDefault
+    }
+    return "cargo tauri build" + dbg + targetFlag + flags + " --config " + shell.quote(config) + tail
+}
+
+// A copy of a Windows host with the app's icon and version information
+// (tools/pe.fg), to append the app to. Returns the copy's path, or nil when
+// there is nothing to stamp with or stamping failed (the build goes on with
+// the host as it is, and says so).
+export fn stampHost(hostExe: str, workDir: str, p, app: str) {
+    const id = packaging.identity(p)
+    const [ico, ierr] = packaging.windowsIcon(app)
+    if ierr != nil {
+        print("note: the app icon was not applied: " + ierr.message)
+    } else if ico == nil {
+        print("note: no icons/icon.ico (or icons/icon.png): the executable keeps the host's icon")
+    }
+    fs.mkdir(workDir)?
+    const out = path.join(workDir, "fogu-desktop.exe")
+    const [r, serr] = pe.stamp(hostExe, out, { icon: ico, version: id })
+    if serr != nil {
+        print("warning: the executable keeps the host's name and icon: " + serr.message)
+        return nil, nil
+    }
+    const what = match r.icons {
+        0 => "name and version"
+        _ => "icon, name and version"
+    }
+    print(`identity: ${id.title} ${id.version} (${what} written into the executable)`)
+    return out, nil
+}
+
+// Builds an app. opts:
+//   app        the app folder (absolute)
+//   target     nil, a Rust triple, or "windows"
+//   debug      a debug build (console, devtools; the debug host is compiled with cargo)
+//   installer  compile the app into the crate and make installers with the
+//              Tauri CLI (needs Rust; the default appends the app to the
+//              generic host and needs none)
+//   features   list of Fogu stdlib areas, or nil (fogu.json "desktop.features")
+//   outName    the executable's name (default: the app name)
+//   distDir    where the result goes (default: <app>/dist)
+//   rebuildHost  build the generic host again even when it is cached
+//   cargoHost  do not use a prebuilt host: the cache, or compile one
+//   stamp      false: leave the host's icon and version information (Windows)
+//   zip        also <name>-<version>-<platform>.zip (.tar.gz on Linux)
+//   nsis       also an NSIS installer script, compiled when makensis is installed (Windows)
+// Returns { exe, dist, windows, name, files: [everything written] } or an error.
+export fn build(opts) {
+    const app = opts.app
+    const target = targetTriple(opts.target)
+    const debug = opts.debug ?? false
+    const installer = opts.installer ?? false
+    const devUrl = ""
+
+    const p = prepare(app)?
+    const desk = p.desk
+    const name = p.name
+    const entry = p.entry
+    const uiDir = p.uiDir
+    const skip = p.skip
+    const version = p.version
+    const identifier = p.identifier
+    const id = packaging.identity(p)
+
+    // what Tauri bakes into the executable (merged over runtime/tauri.conf.json)
+    const tauriConfig = { productName: desk.title ?? name, version: version, identifier: identifier }
+    if devUrl != "" {
+        // the window opens devUrl (the crate is built without Tauri's
+        // custom-protocol feature, so devUrl applies), and the page there may
+        // call the Fogu commands like the embedded one
+        tauriConfig.build = { devUrl: devUrl }
+    }
+    const icons = ["32x32.png", "128x128.png", "icon.png", "icon.ico"].map((f) => path.join(app, "icons", f))
+    if icons.all((f) => fs.isFile(f)) {
+        tauriConfig.bundle = { icon: icons }
+    } else if installer && fs.isDir(path.join(app, "icons")) {
+        print("note: icons/ needs 32x32.png, 128x128.png, icon.png and icon.ico (RGBA) for --installer; using the default icon")
+    }
+
+    const features = opts.features ?? desk.features
+    const featureFlags = cargoFeatures(features, desk.macOSPrivateApi != false)?
+    for line in missingAreasReport(missingAreas(app, features, skip), features) {
+        print("warning: " + line)
+    }
+
+    const windows = match target {
+        nil => Fogu.os == "windows"
+        t => t.contains("windows")
+    }
+    const mac = match target {
+        nil => Fogu.os == "macos"
+        t => t.contains("apple-darwin")
+    }
+    const exe = match windows {
+        true => ".exe"
+        _ => ""
+    }
+    const outName = opts.outName ?? name
+    const dist = opts.distDir ?? path.join(app, "dist")
+    fs.mkdir(dist)?
+    const dest = path.join(dist, outName + exe)
+    // said before the long part: the result cannot simply replace a running app
+    if inUse(dest) || (windows && fs.isFile(dest) && imageRunning(outName + exe)) {
+        print(`warning: ${dest} is in use (is the app running?). The build goes on: the running copy will be renamed to ${path.basename(dest)}.old. Close the app to avoid that.`)
+    }
+    let built = nil
+    let hostDir = nil
+    const files = []
+
+    if !installer {
+        // ---------- the generic host + the app as an appended bundle ----------
+        const h = host({ target: opts.target, debug: debug, features: features, rebuild: opts.rebuildHost, cargo: opts.cargoHost })?
+        hostDir = h.dir
+        const uiAbs = path.normalize(path.absolute(uiDir))
+        const appAbs = path.normalize(path.absolute(app))
+        if !uiAbs.starts_with(appAbs) {
+            return nil, error(`the UI folder ${uiAbs} must be inside the app folder ${appAbs} to be bundled`)
+        }
+        let uiRel = uiAbs.slice(len(appAbs)).replace("\\", "/")
+        while uiRel.starts_with("/") {
+            uiRel = uiRel.slice(1)
+        }
+        // the app's identity goes into a copy of the host first: changing the
+        // resources of an executable drops what is appended to it
+        let runtime = h.exe
+        const stampDir = path.join(dist, ".host")
+        if windows && opts.stamp != false {
+            const stamped = stampHost(h.exe, stampDir, p, app)?
+            if stamped != nil {
+                runtime = stamped
+            }
+        }
+        // what the host needs to know about the bundle (embedded with the program)
+        const info = path.join(app, ".fogu-desktop.json")
+        fs.writeText(info, json.stringify({ ui: uiRel, identifier: identifier, name: name, version: version }))?
+        const outTmp = path.join(dist, ".bundle")
+        if fs.isDir(outTmp) {
+            fs.removeAll(outTmp)?
+        }
+        const fogu = foguBin()?
+        const args = ["build", "--compile", entry, "--runtime", runtime, "-o", outTmp, "--embed", uiRel + "/**", "--embed", ".fogu-desktop.json"]
+        // icons/ (the app icon, tray icons: desktop.tray({ icon: "icons/tray.png" }))
+        if fs.isDir(path.join(app, "icons")) && len(fs.list(path.join(app, "icons"))?) > 0 {
+            args.push("--embed")
+            args.push("icons/**")
+        }
+        // worker modules (desktop.worker("x.fg")) are loaded at run time, not imported
+        for w in workerFiles(app, desk, skip)? {
+            args.push("--embed")
+            args.push(w)
+        }
+        const profileName = h.profile ?? "release"
+        print(`building ${name} ${version} (${identifier}): the app appended to the ${profileName} host`)
+        print("> fogu " + args.join(" ") + "   (in " + app + ")")
+        const [r, rerr] = process.run(fogu, args, { cwd: app })
+        fs.remove(info)
+        if fs.isDir(stampDir) {
+            fs.removeAll(stampDir)
+        }
+        if rerr != nil {
+            return nil, error("cannot run fogu: " + rerr.message)
+        }
+        if !r.ok {
+            return nil, error("fogu build --compile failed: " + (r.stderr + r.stdout).trim())
+        }
+        print(r.stdout.trim())
+        // fogu names the output after the app, with .exe only on a Windows machine
+        let produced = nil
+        for f in fs.list(outTmp)? {
+            if f.starts_with(name) {
+                produced = path.join(outTmp, f)
+            }
+        }
+        if produced == nil {
+            return nil, error(`fogu build --compile wrote nothing into ${outTmp}`)
+        }
+        built = produced
+    } else {
+        // ---------- cargo: the app compiled into the crate ----------
+        const runtime = runtimeDir(libRoot())?
+        const env = {
+            FOGU_DESKTOP_APP: app,
+            FOGU_DESKTOP_UI: path.absolute(uiDir),
+            FOGU_DESKTOP_SKIP: skip.map((p) => path.absolute(p)).join("\n"),
+            FOGU_DESKTOP_DEV_URL: devUrl,
+            FOGU_DESKTOP_STAMP: str(clock()),
+            TAURI_CONFIG: json.stringify(tauriConfig),
+        }
+        const targetNote = match target {
+            nil => ""
+            t => " --target " + t
+        }
+        let kind = ""
+        if debug {
+            kind = " [debug]"
+        }
+        print(`building ${name} ${version} (${identifier})${targetNote}${kind} [installer]`)
+        if !has("cargo") {
+            return nil, error("--installer compiles the app with Rust and the Tauri CLI, and cargo is not installed. Without Rust: `fogu desktop build` (the executable with the app's name and icon), `--zip` (an archive) or `--nsis` (a Windows installer made with NSIS)")
+        }
+        if !shell.run("cargo tauri --version").ok {
+            return nil, error("--installer needs the Tauri CLI: cargo install tauri-cli --version \"^2\"")
+        }
+        const cmd = tauriBuildCommand(debug, target, featureFlags, json.stringify(tauriConfig))
+        print("> " + cmd)
+        const r = shell.exec(cmd, { cwd: runtime, env: env })
+        if !r.ok {
+            return nil, error(`cargo tauri build failed (exit code ${r.code})`)
+        }
+        let out = path.join(runtime, "target")
+        if target != nil {
+            out = path.join(out, target)
+        }
+        out = path.join(out, match debug {
+            true => "debug"
+            _ => "release"
+        })
+        hostDir = out
+        built = path.join(out, "fogu-desktop" + exe)
+        if !fs.isFile(built) {
+            return nil, error(`the build finished but ${built} is missing`)
+        }
+        // the installers first: they do not depend on dist/<name>.exe being free
+        const bundleDir = path.join(hostDir, "bundle")
+        if fs.isDir(bundleDir) {
+            for kind2 in fs.list(bundleDir)? {
+                const sub = path.join(bundleDir, kind2)
+                if !fs.isDir(sub) {
+                    continue
+                }
+                for f in fs.list(sub)? {
+                    const src = path.join(sub, f)
+                    if fs.isFile(src) {
+                        const [_c, cerr] = fs.copy(src, path.join(dist, f))
+                        if cerr != nil {
+                            print(`warning: cannot copy ${src} to ${dist}: ${cerr.message}`)
+                            continue
+                        }
+                        files.push(path.join(dist, f))
+                        print("installer:  " + path.join(dist, f))
+                    }
+                }
+            }
+        }
+    }
+
+    // ---------- the result ----------
+    const placed = placeExecutable(built, dest)?
+    if !windows {
+        shell.run("chmod +x " + shell.quote(placed))
+    }
+    files.push(placed)
+    print("executable: " + placed)
+    signUpdate(app, desk, placed, target, version)?
+    // the .exe runs on its own: windows-gnu hosts embed WebView2Loader.dll and
+    // delay-load it (runtime/webview2/README.md). Remove what older versions
+    // put next to it.
+    for stale in [path.join(dist, "WebView2Loader.dll"), path.join(dist, outName + "-windows-x64.zip")] {
+        if fs.isFile(stale) {
+            fs.remove(stale)
+        }
+    }
+    if fs.isDir(path.join(dist, ".bundle")) {
+        fs.removeAll(path.join(dist, ".bundle"))
+    }
+
+    // ---------- identity and packages, without Rust ----------
+    // what an archive of this build holds (paths inside dist)
+    let pack = [placed]
+    if !installer && mac {
+        const bundle = packaging.macApp(dist, placed, id, app)?
+        files.push(bundle)
+        pack = [bundle]
+        print("app bundle: " + bundle)
+    } else if !installer && !windows {
+        const share = packaging.linuxShare(dist, id, app)?
+        for f in share {
+            files.push(f)
+        }
+        pack.push(path.join(dist, "share"))
+        print("desktop entry: " + share[0])
+    }
+    if opts.zip ?? false {
+        const archive = packaging.archive(dist, pack, id, platformKey(target))?
+        files.push(archive)
+        print("archive:    " + archive)
+    }
+    if opts.nsis ?? false {
+        if !windows {
+            print("note: --nsis makes a Windows installer: not for this target")
+        } else {
+            const n = packaging.nsis(dist, placed, id, app)?
+            files.push(n.script)
+            if n.installer == nil {
+                print(`installer script: ${n.script} (NSIS is not installed: get it from https://nsis.sourceforge.io or \`apt install nsis\`, then \`makensis ${path.basename(n.script)}\`)`)
+            } else {
+                files.push(n.installer)
+                print("installer:  " + n.installer)
+            }
+        }
+    }
+    return { exe: placed, dist: dist, windows: windows, name: name, files: files }, nil
+}

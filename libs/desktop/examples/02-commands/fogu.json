@@ -1,0 +1,17 @@
+{
+  "name": "commands",
+  "version": "0.1.0",
+  "description": "fogu-desktop commands: payloads, return values and errors",
+  "entry": "main.fg",
+  "desktop": {
+    "title": "Notes (commands)",
+    "identifier": "dev.fogu.examples.commands",
+    "ui": "ui",
+    "visible": false
+  },
+  "scripts": {
+    "build": "fogu desktop build",
+    "build:debug": "fogu desktop build --debug"
+  },
+  "dependencies": {}
+}

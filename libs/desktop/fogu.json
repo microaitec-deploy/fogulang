@@ -1,0 +1,13 @@
+{
+  "name": "desktop",
+  "version": "0.6.1",
+  "description": "Desktop (and mobile) applications in Fogu: a Rust + Tauri window whose backend is a Fogu program, a plain or Vite (React, Vue, Svelte) UI with HMR, tray icons, window control, frameless windows, and a build command that makes the executable (or an Android/iOS package)",
+  "entry": "main.fg",
+  "license": "MIT",
+  "scripts": {
+    "test": "fogu tests/run.fg",
+    "example": "fogu build.fg examples/hello",
+    "example:vite": "fogu build.fg examples/vite-react"
+  },
+  "dependencies": {}
+}

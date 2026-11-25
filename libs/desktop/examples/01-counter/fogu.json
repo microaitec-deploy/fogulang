@@ -1,0 +1,17 @@
+{
+  "name": "counter",
+  "version": "0.1.0",
+  "description": "The smallest fogu-desktop app: one command and one event",
+  "entry": "main.fg",
+  "desktop": {
+    "title": "Counter",
+    "identifier": "dev.fogu.examples.counter",
+    "ui": "ui",
+    "visible": false
+  },
+  "scripts": {
+    "build": "fogu desktop build",
+    "build:debug": "fogu desktop build --debug"
+  },
+  "dependencies": {}
+}

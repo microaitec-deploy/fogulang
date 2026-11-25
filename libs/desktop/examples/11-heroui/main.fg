@@ -1,0 +1,115 @@
+// The backend of a task list whose page is React with HeroUI and Tailwind CSS
+// (web/): commands the page runs with call(), events it receives with on().
+// The list is saved in the app's data folder.
+//
+//   fogu desktop dev        → the window on the Vite dev server (HMR)
+//   fogu desktop build      → dist/heroui  (--target windows from Linux/WSL)
+//   fogu main.fg            → no window: runs the commands once
+import desktop from "desktop"
+import fs from "fogu:fs"
+import json from "fogu:json"
+import path from "fogu:path"
+import time from "fogu:time"
+
+const app = desktop.app({ name: "heroui", title: "Fogu Tasks", identifier: "dev.fogu.examples.heroui" })
+app.createBrowser({ width: 880, height: 680, minWidth: 520, minHeight: 520 })
+
+const file = path.join(app.dataDir(), "tasks.json")
+
+fn load() {
+    const [text, err] = fs.readText(file)
+    if err != nil {
+        return { next: 1, items: [] }
+    }
+    const [data, perr] = json.parse(text)
+    if perr != nil || typeof(data) != "map" || typeof(data.items) != "list" {
+        return { next: 1, items: [] }
+    }
+    return data
+}
+
+let state = load()
+
+fn summary() {
+    const done = len(state.items.filter((t) => t.done))
+    const total = len(state.items)
+    let percent = 0
+    if total > 0 {
+        percent = done * 100 / total
+    }
+    return { items: state.items, done: done, total: total, percent: percent }
+}
+
+// every change is saved and pushed to the page (on("tasks", …))
+fn changed() {
+    fs.writeText(file, json.stringify(state))?
+    app.emit("tasks", summary())
+    return nil
+}
+
+fn find(id) {
+    for t in state.items {
+        if t.id == id {
+            return t, nil
+        }
+    }
+    return nil, error(`no task ${id}`)
+}
+
+app.command("tasks.list", fn() {
+    return summary()
+})
+
+// call("tasks.add", { title, tag }) → the new task; an error value rejects the promise
+app.command("tasks.add", fn(p) {
+    const title = str(p?.title ?? "").trim()
+    if title == "" {
+        return nil, error("write what needs to be done")
+    }
+    if len(title) > 120 {
+        return nil, error("a task has at most 120 characters")
+    }
+    const tag = match p?.tag {
+        "work" | "home" | "study" => p.tag
+        _ => "other"
+    }
+    const task = { id: state.next, title: title, tag: tag, done: false, created: time.now() }
+    state.next += 1
+    state.items.push(task)
+    changed()?
+    return task
+})
+
+app.command("tasks.toggle", fn(id) {
+    const t = find(id)?
+    t.done = !t.done
+    changed()?
+    return t
+})
+
+app.command("tasks.remove", fn(id) {
+    find(id)?
+    state.items = state.items.filter((t) => t.id != id)
+    changed()?
+    return true
+})
+
+// an event from the page: emit("tasks.clear-done")
+app.on("tasks.clear-done", fn() {
+    const before = len(state.items)
+    state.items = state.items.filter((t) => !t.done)
+    if len(state.items) != before {
+        changed()
+    }
+})
+
+if !app.run() {
+    print("commands:", desktop.commandNames())
+    const a = desktop.call("tasks.add", { title: "Try HeroUI with Fogu", tag: "study" })?
+    desktop.call("tasks.add", { title: "Ship the app", tag: "work" })?
+    desktop.call("tasks.toggle", a.id)?
+    const s = desktop.call("tasks.list")?
+    print("tasks:", s.done, "of", s.total, "done,", s.percent, "%")
+    const [_t, err] = desktop.call("tasks.add", { title: "  " })
+    print("empty title →", err.message)
+}

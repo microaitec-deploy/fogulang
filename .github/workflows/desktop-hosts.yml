@@ -1,0 +1,108 @@
+# The prebuilt macOS hosts of the desktop library (libs/desktop, a copy of
+# ../libs/desktop made by scripts/sync-desktop-lib.sh). A macOS executable can
+# only be built on a Mac, so the hosts that let `fogu desktop build` and
+# `fogu desktop dev` work on macOS without Rust are built here, on GitHub's
+# macOS runners, and downloaded from the run as artifacts:
+#
+#   gh workflow run desktop-hosts.yml
+#   gh run download <run id> -D hosts          # fogu-desktop-macos-arm64/, …-x64/
+#
+# Each artifact holds the generic host (fogu-desktop) and its SHA256SUMS.
+# server/publish-libs.sh packs them into the library (hosts/macos-arm64/,
+# hosts/macos-x64/) when they are in
+# libs/desktop/runtime/target/<triple>/release/.
+name: desktop-hosts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    name: ${{ matrix.name }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            target: aarch64-apple-darwin
+            smoke: true
+          - name: macos-x64
+            target: x86_64-apple-darwin
+            smoke: false
+    steps:
+      # the library builds against ../../../lang (the layout of the project:
+      # lang/ next to libs/), so the repository is checked out as lang/
+      - uses: actions/checkout@v4
+        with:
+          path: lang
+
+      - name: Layout
+        run: |
+          mkdir -p libs
+          cp -R lang/libs/desktop libs/desktop
+          grep -m1 '"version"' libs/desktop/fogu.json
+
+      - name: Tools
+        run: |
+          rustup show active-toolchain
+          rustup target add ${{ matrix.target }}
+          # (the oldest macOS the Fogu executables run on)
+          if [ "${{ matrix.name }}" = macos-x64 ]; then
+            echo MACOSX_DEPLOYMENT_TARGET=10.15 >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the generic host
+        working-directory: libs/desktop/runtime
+        env:
+          FOGU_DESKTOP_GENERIC: "1"
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Collect
+        run: |
+          mkdir -p out
+          cp libs/desktop/runtime/target/${{ matrix.target }}/release/fogu-desktop out/fogu-desktop
+          file out/fogu-desktop
+          ls -l out
+          codesign -dv out/fogu-desktop 2>&1 | head -n 8 || true
+          (cd out && shasum -a 256 fogu-desktop > SHA256SUMS && cat SHA256SUMS)
+
+      # Does an app made with this host (the app is appended to it, no Rust)
+      # start on this Mac? Informative: a runner without a usable window
+      # session must not fail the build of the host.
+      - name: Smoke test (an app built without Rust)
+        if: matrix.smoke
+        continue-on-error: true
+        run: |
+          (cd lang && cargo build --release --locked)
+          FOGU="$PWD/lang/target/release/fogu"
+          "$FOGU" --version
+          mkdir -p hosts/${{ matrix.name }}
+          cp out/fogu-desktop hosts/${{ matrix.name }}/fogu-desktop
+          cd libs/desktop/examples/01-counter
+          FOGU_BIN="$FOGU" FOGU_DESKTOP_HOSTS="$GITHUB_WORKSPACE/hosts" "$FOGU" ../../build.fg .
+          find dist -maxdepth 4 | head -n 30
+          exe=$(find dist -path '*.app/Contents/MacOS/*' -type f | head -n 1)
+          [ -n "$exe" ] || { echo "no app bundle in dist/"; exit 1; }
+          codesign -v "$exe" 2>&1 | head -n 3 || true
+          "$exe" > app.log 2>&1 &
+          pid=$!
+          sleep 10
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "the app is running after 10 s"
+            kill "$pid"
+          else
+            wait "$pid" && code=0 || code=$?
+            echo "the app ended early (exit code $code)"
+            cat app.log
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fogu-desktop-${{ matrix.name }}
+          path: out/
+          if-no-files-found: error

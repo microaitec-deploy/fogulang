@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>About</title>
+    <style>
+      :root { color-scheme: light dark; font: 14px/1.5 system-ui, sans-serif; }
+      body { margin: 0; padding: 20px; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <h2>Tray and windows</h2>
+    <p id="info">…</p>
+    <button id="close">Close</button>
+    <script>
+      // a second window: its own page, the same Fogu program
+      fogu.on("about", (a) => (document.getElementById("info").textContent = `Fogu ${a.fogu} on ${a.os}`));
+      document.getElementById("close").onclick = () => fogu.window.close();
+    </script>
+  </body>
+</html>

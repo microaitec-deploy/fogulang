@@ -1,0 +1,22 @@
+// A worker module (desktop.worker("primes.fg")): it runs in a Fogu runtime of
+// its own, on its own thread. Its top-level functions are what callers run.
+
+// How many primes are below `limit` (deliberately CPU-bound).
+fn count(limit) {
+    let n = 0
+    for i in 2..limit {
+        let prime = true
+        let d = 2
+        while d * d <= i {
+            if i % d == 0 {
+                prime = false
+                break
+            }
+            d += 1
+        }
+        if prime {
+            n += 1
+        }
+    }
+    return n
+}

@@ -1,0 +1,189 @@
+// update.fg — self-update for desktop apps built with `fogu desktop build`.
+//
+//   import update from "desktop/update.fg"
+//
+//   desktop.command("checkUpdate", fn() { return update.check() })     // nil · { version, current, notes, … }
+//   desktop.command("installUpdate", fn() { return update.install() }) // downloads, verifies, restarts
+//
+// fogu.json:
+//
+//   "desktop": { "update": { "endpoint": "https://example.com/myapp/latest.json",
+//                            "pubkey": "<written by fogu desktop keygen>" } }
+//
+// `fogu desktop keygen` makes the signing key pair; `fogu desktop build`
+// then signs the executable and writes dist/latest.json. Upload the
+// executable and latest.json next to each other at the endpoint (any static
+// file host: GitHub releases, S3, your own server). An update is installed
+// only when its SHA-256 matches and its Ed25519 signature verifies with the
+// public key in fogu.json; the running executable is then replaced and the
+// app restarts.
+//
+// A separate module (not part of `desktop`): it needs fogu:http and
+// fogu:security, i.e. the host's "network" area (the default).
+import crypto from "fogu:crypto"
+import fs from "fogu:fs"
+import http from "fogu:http"
+import json from "fogu:json"
+import path from "fogu:path"
+import process from "fogu:process"
+import regex from "fogu:regex"
+import security from "fogu:security"
+import system from "fogu:system"
+import desktop from "./main.fg"
+
+fn parseVersion(v: str) {
+    let t = v.trim()
+    if t.starts_with("v") {
+        t = t.slice(1)
+    }
+    const parts = t.split("+")[0].split("-")
+    const nums = parts[0].split(".").map(fn(x) {
+        if regex.test(x, "^[0-9]+$") {
+            return int(x)
+        }
+        return 0
+    })
+    return { nums: nums, pre: parts.slice(1).join("-") }
+}
+
+// 1 when a is newer than b, -1 when older, 0 when equal: "1.2.10" > "1.2.9";
+// a pre-release ("1.0.0-beta") is older than its release; "+build" is ignored.
+export fn compareVersions(a: str, b: str) {
+    const x = parseVersion(a)
+    const y = parseVersion(b)
+    for i in 0..3 {
+        const p = match i < len(x.nums) {
+            true => x.nums[i]
+            _ => 0
+        }
+        const q = match i < len(y.nums) {
+            true => y.nums[i]
+            _ => 0
+        }
+        if p != q {
+            return match p > q {
+                true => 1
+                _ => -1
+            }
+        }
+    }
+    if x.pre == y.pre {
+        return 0
+    }
+    if x.pre == "" {
+        return 1
+    }
+    if y.pre == "" {
+        return -1
+    }
+    return match x.pre > y.pre {
+        true => 1
+        _ => -1
+    }
+}
+
+// The key of this platform in latest.json: windows-x86_64, linux-x86_64, macos-aarch64…
+export fn platform() {
+    return system.info.os + "-" + system.info.arch
+}
+
+// The app's fogu.json.
+fn manifest() {
+    const dir = process.env("FOGU_DESKTOP_PROGRAM_DIR") ?? Fogu.asset("")
+    const [m, err] = json.parse(fs.readText(path.join(dir, "fogu.json"))?)
+    if err != nil {
+        return nil, error("update: fogu.json: " + err.message)
+    }
+    return m, nil
+}
+
+fn settings() {
+    const m = manifest()?
+    const u = (m.desktop ?? {}).update
+    if u == nil || u.endpoint == nil || u.pubkey == nil {
+        return nil, error(`update: set "desktop": { "update": { "endpoint", "pubkey" } } in fogu.json (fogu desktop keygen writes the key)`)
+    }
+    return { endpoint: u.endpoint, pubkey: u.pubkey, current: m.version ?? "0.0.0" }, nil
+}
+
+// A URL of latest.json relative to the endpoint.
+fn resolve(endpoint: str, url: str) {
+    if url.starts_with("http://") || url.starts_with("https://") {
+        return url
+    }
+    const segs = endpoint.split("/")
+    const base = endpoint.slice(0, len(endpoint) - len(segs[len(segs) - 1]))
+    return base + url
+}
+
+// The update for this platform, or nil when the app is up to date:
+// { version, current, notes, date, url, sha256, signature, size }.
+export fn check() {
+    const s = settings()?
+    const r = http.get(s.endpoint, { timeout: 30s })?
+    if r.status != 200 {
+        return nil, error(`update: ${s.endpoint} answered ${r.status}`)
+    }
+    const [m, perr] = json.parse(r.text)
+    if perr != nil {
+        return nil, error(`update: ${s.endpoint} is not JSON: ${perr.message}`)
+    }
+    if m.version == nil || compareVersions(str(m.version), str(s.current)) <= 0 {
+        return nil, nil
+    }
+    const p = (m.platforms ?? {})[platform()]
+    if p == nil {
+        return nil, nil
+    }
+    return {
+        version: m.version,
+        current: s.current,
+        notes: m.notes,
+        date: m.date,
+        url: resolve(s.endpoint, p.url),
+        sha256: p.sha256,
+        signature: p.signature,
+        size: p.size,
+    }, nil
+}
+
+// Downloads an update (check()'s answer, or nil to check now), verifies it
+// and installs it; the app restarts unless { restart: false }. Returns false
+// when there is nothing to install.
+export fn install(u = nil, opts = nil) {
+    const s = settings()?
+    let up = u
+    if up == nil {
+        up = check()?
+    }
+    if up == nil {
+        return false, nil
+    }
+    const file = path.join(fs.tempDir(), `fogu-update-${up.version}-${clock()}.bin`)
+    http.download(up.url, file, { timeout: 600s })?
+    const sum = crypto.hashFile("sha256", file)?
+    if sum != str(up.sha256).lower() {
+        fs.remove(file)
+        return nil, error(`update: the download of ${up.url} is corrupted (SHA-256 mismatch)`)
+    }
+    if !security.verify(s.pubkey, sum, str(up.signature)) {
+        fs.remove(file)
+        return nil, error("update: the signature does not match the public key in fogu.json: not installed")
+    }
+    desktop.log(`update: installing ${up.version} (was ${s.current})`)
+    return desktop.applyUpdate(file, (opts ?? {}).restart ?? true)
+}
+
+// ---------- the build side (fogu desktop keygen / build) ----------
+
+// A signing key pair: { publicKey, privateKey } (Ed25519, base64).
+export fn keypair() {
+    return security.keypair()
+}
+
+// The latest.json entry of an executable: { url, sha256, signature, size }.
+export fn sign(file: str, privateKey: str, url: str) {
+    const sum = crypto.hashFile("sha256", file)?
+    const st = fs.stat(file)?
+    return { url: url, sha256: sum, signature: security.sign(privateKey, sum), size: st.size }, nil
+}

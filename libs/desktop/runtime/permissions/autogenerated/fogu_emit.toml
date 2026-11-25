@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-fogu-emit"
+description = "Enables the fogu_emit command without any pre-configured scope."
+commands.allow = ["fogu_emit"]
+
+[[permission]]
+identifier = "deny-fogu-emit"
+description = "Denies the fogu_emit command without any pre-configured scope."
+commands.deny = ["fogu_emit"]

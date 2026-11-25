@@ -1,0 +1,12 @@
+[package]
+name = "fogu-desktop-embed-test"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Drives the example app through fogu::embed exactly like the fogu-desktop host does, without Tauri (runs where WebKitGTK is missing)"
+
+[dependencies]
+fogu = { path = "../../../../lang", default-features = false }
+serde_json = "1"
+
+[workspace]

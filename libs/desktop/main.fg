@@ -1,0 +1,1117 @@
+// desktop — desktop applications in Fogu. The window and the webview come
+// from the fogu-desktop host (Rust + Tauri, runtime/); this module is the Fogu
+// side of the bridge:
+//
+//   import desktop from "desktop"
+//
+//   let count = 0
+//   desktop.command("increment", fn(by) {         // await fogu.call("increment", 2) in the page
+//       count += by ?? 1
+//       desktop.emit("count", count)               // fogu.on("count", fn) in the page
+//       return count
+//   })
+//   desktop.on("reset", fn() { count = 0 })        // fogu.emit("reset") in the page
+//
+// How it talks to the host: the host fires `Fogu.signal` events in this
+// program (`desktop:call`, `desktop:ui:<name>`, `desktop:reply`,
+// `desktop:window-event`, `desktop:tray-event`) and this module answers with
+// `Fogu.host.emit` (`desktop:result`, `desktop:event`, `desktop:window`,
+// `desktop:watch`, `desktop:tray`, `desktop:request`…). Values cross as JSON.
+//
+// The program's top level must return (register commands and handlers, start
+// `fg` tasks): the host serves the window once it has run. Do not end it with
+// `Fogu.signal.wait()` or an endless loop outside a task.
+
+import vm from "fogu:vm"
+import fs from "fogu:fs"
+import crypto from "fogu:crypto"
+import json from "fogu:json"
+import process from "fogu:process"
+import regex from "fogu:regex"
+import time from "fogu:time"
+
+export const version = "0.6.0"
+
+// true inside the desktop executable; false under plain `fogu main.fg`
+export const embedded = process.env("FOGU_DESKTOP") == "1" && Fogu.host.embedded
+
+const commands = {}
+const pending = {}
+let seq = 0
+// tests: receives the messages meant for the host (see capture)
+let sink = nil
+// a command runs in its own vm call: a runtime error in it becomes an error
+// value for fogu.call instead of stopping the program
+const runner = vm.Script("__f(__p)")?
+const runner0 = vm.Script("__f()")?
+
+fn send(name, data) {
+    if sink != nil {
+        sink(name, data)
+        return true
+    }
+    return Fogu.host.emit(name, data)
+}
+
+// ---------- values on the wire ----------
+// The page boundary is JSON. Buffers cross as { "$bytes": "<base64>" }, which
+// the page turns into a Uint8Array (and a Uint8Array/ArrayBuffer back into a
+// buffer), at any depth of a value.
+
+const BYTES = "$bytes"
+
+// A value for the page: buffers → { "$bytes": base64 }.
+export fn toWire(v) {
+    const t = typeof(v)
+    if t == "buffer" {
+        const o = {}
+        o[BYTES] = crypto.base64(v)
+        return o
+    }
+    if t == "list" {
+        return v.map((x) => toWire(x))
+    }
+    if t == "map" {
+        const o = {}
+        for k in v.keys() {
+            o[k] = toWire(v[k])
+        }
+        return o
+    }
+    return v
+}
+
+// A value from the page: { "$bytes": base64 } → a buffer.
+export fn fromWire(v) {
+    const t = typeof(v)
+    if t == "list" {
+        return v.map((x) => fromWire(x))
+    }
+    if t == "map" {
+        const b = v[BYTES]
+        if b != nil && typeof(b) == "str" && len(v.keys()) == 1 {
+            return bytes(crypto.fromBase64(b, { bytes: true }))
+        }
+        const o = {}
+        for k in v.keys() {
+            o[k] = fromWire(v[k])
+        }
+        return o
+    }
+    return v
+}
+
+// f(payload) → value · error; also accepts fn() and `return value, err`
+fn invoke(f, payload) {
+    let r = runner.runInNewContext({ __f: f, __p: payload })
+    if typeof(r) == "error" && r.message.contains("expects at most 0 arguments") {
+        r = runner0.runInNewContext({ __f: f })
+    }
+    if typeof(r) == "error" {
+        return nil, r
+    }
+    // `return value, err` of the function: a tuple (a list is a value of its own)
+    if typeof(r) == "tuple" && len(r) == 2 && (r[1] == nil || typeof(r[1]) == "error") {
+        if r[1] != nil {
+            return nil, r[1]
+        }
+        return r[0], nil
+    }
+    return r, nil
+}
+
+// ---------- commands: fogu.call(name, payload) in the page ----------
+
+// Registers fn(payload) as the command `name` (nil removes it). Its return
+// value goes back to the page as JSON; `return nil, error("…")` (or a
+// runtime error) rejects the page's promise with that message.
+export fn command(name: str, f) {
+    if f == nil {
+        commands.remove(name)
+        return nil
+    }
+    if typeof(f) != "fn" {
+        panic("desktop.command: expects a function, got " + typeof(f))
+    }
+    commands[name] = f
+    return nil
+}
+
+// The registered command names, sorted.
+export fn commandNames() {
+    return commands.keys().sort()
+}
+
+// Runs a command as the page would (for tests and for code without the host).
+export fn call(name: str, payload = nil) {
+    const f = commands[name]
+    if f == nil {
+        return nil, error(`desktop: no command '${name}'`)
+    }
+    return invoke(f, payload)
+}
+
+Fogu.signal.on("desktop:call", fn(msg) {
+    const [value, err] = call(msg.name, fromWire(msg.payload))
+    if err != nil {
+        send("desktop:result", { id: msg.id, ok: false, error: err.message })
+    } else {
+        send("desktop:result", { id: msg.id, ok: true, value: toWire(value) })
+    }
+})
+
+// ---------- events ----------
+
+// Sends an event to the pages (every window): fogu.on(name, fn(data)).
+// Returns false when there is no host (plain `fogu main.fg`).
+export fn emit(name: str, data = nil) {
+    return send("desktop:event", { name: name, data: toWire(data) })
+}
+
+// Sends an event to the page of one window only.
+export fn emitTo(label: str, name: str, data = nil) {
+    return send("desktop:event", { name: name, data: toWire(data), window: label })
+}
+
+// Runs fn(data) on every fogu.emit(name, data) of a page (as an `fg` task).
+// A runtime error in it is logged; it does not stop the program.
+export fn on(name: str, f) {
+    if typeof(f) != "fn" {
+        panic("desktop.on: expects a function, got " + typeof(f))
+    }
+    Fogu.signal.on("desktop:ui:" + name, fn(data) {
+        const [_r, err] = invoke(f, fromWire(data))
+        if err != nil {
+            log(`desktop: handler of '${name}' failed: ` + err.message)
+        }
+        return nil
+    })
+    return nil
+}
+
+export fn off(name: str) {
+    Fogu.signal.off("desktop:ui:" + name)
+    return nil
+}
+
+// ---------- windows ----------
+
+// Changes a window: "main", or the one named by `window`. Options: title,
+// width, height, x, y, minWidth, minHeight, maxWidth, maxHeight, resizable,
+// fullscreen, maximized, minimized, alwaysOnTop, center, visible, focus,
+// decorations, shadow, skipTaskbar, closable, minimizable, maximizable,
+// contentProtected; `minSize: nil` / `maxSize: nil` remove a limit; `action`:
+// minimize unminimize maximize unmaximize toggleMaximize toggleFullscreen
+// center show hide focus close destroy startDragging reload. App-wide:
+// closeToTray, minimizeToTray. The initial values come from fogu.json →
+// "desktop". Needs no answer: works anywhere, also at the top level.
+export fn window(opts) {
+    // a window app.createBrowser is still creating: applied once it exists
+    const q = creating[(opts ?? {}).window ?? "main"]
+    if q != nil {
+        q.push(opts)
+        return true
+    }
+    return send("desktop:window", opts)
+}
+
+// Runs JavaScript in the page of a window ("main"; "*" = every window).
+export fn eval(js: str, label = "main") {
+    return send("desktop:eval", { js: js, window: label })
+}
+
+// Closes the application.
+export fn quit(code = 0) {
+    return send("desktop:quit", { code: code })
+}
+
+// Writes a line to the host's log (stderr and <local data dir>/fogu-desktop.log):
+// a release build on Windows has no console for print().
+export fn log(...values) {
+    const text = values.map((v) => str(v)).join(" ")
+    if !embedded && sink == nil {
+        print(text)
+        return true
+    }
+    return send("desktop:log", text)
+}
+
+// A folder for the app's own files (settings, databases): the per-user data
+// folder of the app's identifier (%APPDATA%\<id>, ~/.local/share/<id>,
+// ~/Library/Application Support/<id>); `.desktop-data` next to the program
+// without the host. It exists.
+export fn dataDir() {
+    const dir = process.env("FOGU_DESKTOP_DATA_DIR") ?? Fogu.asset(".desktop-data")
+    fs.mkdir(dir)
+    return dir
+}
+
+// window events: label → { type → [fn(event)] } ("*" = every window / type)
+const winHandlers = {}
+// windows being created by app.createBrowser: label → the changes made meanwhile
+const creating = {}
+// other names of the window events: win.on("close", fn)
+const EVENT_ALIASES = { close: "closeRequested", closed: "destroyed", resize: "resized", move: "moved" }
+// label → fn(event): decides whether the window closes
+const closeHandlers = {}
+
+fn listenWindow(label, name, f) {
+    if typeof(f) != "fn" {
+        panic("desktop: window.on expects a function, got " + typeof(f))
+    }
+    const type = EVENT_ALIASES[name] ?? name
+    if winHandlers[label] == nil {
+        winHandlers[label] = {}
+    }
+    const byType = winHandlers[label]
+    if byType[type] == nil {
+        byType[type] = []
+    }
+    byType[type].push(f)
+    send("desktop:watch", { listen: type })
+    return nil
+}
+
+fn unlistenWindow(label, name) {
+    const byType = winHandlers[label]
+    if byType != nil {
+        byType.remove(EVENT_ALIASES[name] ?? name)
+    }
+    return nil
+}
+
+fn interceptClose(label, f) {
+    if f == nil {
+        closeHandlers.remove(label)
+        send("desktop:watch", { release: label })
+        return nil
+    }
+    if typeof(f) != "fn" {
+        panic("desktop: onCloseRequested expects a function, got " + typeof(f))
+    }
+    closeHandlers[label] = f
+    send("desktop:watch", { intercept: label })
+    return nil
+}
+
+// Delivers a window event to the handlers (tests: Fogu.signal.emit it).
+Fogu.signal.on("desktop:window-event", fn(ev) {
+    if ev.type == "closeRequested" && ev.decides == "program" {
+        const f = closeHandlers[ev.window]
+        let allow = true
+        if f != nil {
+            const [r, err] = invoke(f, ev)
+            if err != nil {
+                log("desktop: onCloseRequested failed: " + err.message)
+            }
+            allow = r != false
+        }
+        if allow {
+            send("desktop:window", { window: ev.window, action: "destroy" })
+        }
+    }
+    for key in [ev.window, "*"] {
+        const byType = winHandlers[key]
+        if byType == nil {
+            continue
+        }
+        for t in [ev.type, "*"] {
+            for f in byType[t] ?? [] {
+                const [_r, err] = invoke(f, ev)
+                if err != nil {
+                    log(`desktop: window ${t} handler failed: ` + err.message)
+                }
+            }
+        }
+    }
+})
+
+fn winState(label) {
+    return request("window.get", { window: label })
+}
+
+fn winSize(label) {
+    const s = winState(label)?
+    return { width: s.width, height: s.height }, nil
+}
+
+fn winPosition(label) {
+    const s = winState(label)?
+    return { x: s.x, y: s.y }, nil
+}
+
+fn winField(label, key) {
+    const s = winState(label)?
+    return s[key], nil
+}
+
+fn winLimit(label, prefix, w, h) {
+    if w == nil && h == nil {
+        const o = { window: label }
+        o[prefix + "Size"] = nil
+        return window(o)
+    }
+    const o = { window: label }
+    o[prefix + "Width"] = w ?? 0
+    o[prefix + "Height"] = h ?? 0
+    return window(o)
+}
+
+// A handle on a window (default "main"). Setters need no answer and work
+// anywhere; getters (state, size, position, title, isMaximized) wait for the
+// host: call them from commands, handlers or fg tasks.
+//
+//   const w = desktop.getWindow()
+//   w.setSize(800, 600)
+//   w.on("resized", fn(e) { desktop.log(e.width, e.height) })
+//   w.onCloseRequested(fn(e) { return desktop.dialog.confirm("Quit?")? })
+export fn getWindow(label = "main") {
+    const set = fn(opts) { return window((opts ?? {}).merge({ window: label })) }
+    const act = fn(a) { return window({ window: label, action: a }) }
+    return {
+        label: label,
+        set: set,
+        state: fn() { return winState(label) },
+        size: fn() { return winSize(label) },
+        position: fn() { return winPosition(label) },
+        title: fn() { return winField(label, "title") },
+        isMaximized: fn() { return winField(label, "maximized") },
+        isMinimized: fn() { return winField(label, "minimized") },
+        isFullscreen: fn() { return winField(label, "fullscreen") },
+        isVisible: fn() { return winField(label, "visible") },
+        isFocused: fn() { return winField(label, "focused") },
+        setSize: fn(width, height) { return set({ width: width, height: height }) },
+        setPosition: fn(x, y) { return set({ x: x, y: y }) },
+        setMinSize: fn(width = nil, height = nil) { return winLimit(label, "min", width, height) },
+        setMaxSize: fn(width = nil, height = nil) { return winLimit(label, "max", width, height) },
+        setTitle: fn(title) { return set({ title: str(title) }) },
+        setResizable: fn(b = true) { return set({ resizable: b }) },
+        setDecorations: fn(b = true) { return set({ decorations: b }) },
+        setAlwaysOnTop: fn(b = true) { return set({ alwaysOnTop: b }) },
+        setFullscreen: fn(b = true) { return set({ fullscreen: b }) },
+        setSkipTaskbar: fn(b = true) { return set({ skipTaskbar: b }) },
+        center: fn() { return act("center") },
+        minimize: fn() { return act("minimize") },
+        unminimize: fn() { return act("unminimize") },
+        maximize: fn() { return act("maximize") },
+        unmaximize: fn() { return act("unmaximize") },
+        toggleMaximize: fn() { return act("toggleMaximize") },
+        toggleFullscreen: fn() { return act("toggleFullscreen") },
+        show: fn() { return act("show") },
+        hide: fn() { return act("hide") },
+        focus: fn() { return act("focus") },
+        close: fn() { return act("close") },
+        destroy: fn() { return act("destroy") },
+        startDragging: fn() { return act("startDragging") },
+        reload: fn() { return act("reload") },
+        eval: fn(js) { return eval(js, label) },
+        emit: fn(name, data = nil) { return emitTo(label, name, data) },
+        on: fn(type, f) { return listenWindow(label, type, f) },
+        off: fn(type) { return unlistenWindow(label, type) },
+        onCloseRequested: fn(f) { return interceptClose(label, f) },
+    }
+}
+
+// The main window's handle.
+export const mainWindow = getWindow("main")
+
+// Opens another window on a page of the app (a route of the UI:
+// "settings.html", "/settings", "#/about"; or an http(s) URL) and returns its
+// handle. opts: the window options of fogu.json "desktop" (title, width,
+// height, x, y, decorations, transparent, alwaysOnTop…). An open window with
+// that label is brought to the front. Waits for the host.
+export fn createWindow(label: str, opts = nil) {
+    request("window.create", (opts ?? {}).merge({ label: label }))?
+    return getWindow(label), nil
+}
+
+// The labels of the open windows, sorted. Waits for the host.
+export fn windows() {
+    return request("window.list", {})
+}
+
+// Window events of every window: fn(event) with { window, type, … };
+// type "*" receives them all. Types: resized { width, height }, moved
+// { x, y }, focus, blur, closeRequested, destroyed, scaleChanged, themeChanged
+// { theme }, fileDrop { paths }. Short names: close = closeRequested (the
+// window is asked to close; onCloseRequested decides), closed = destroyed,
+// resize = resized, move = moved.
+export fn onWindowEvent(type: str, f) {
+    return listenWindow("*", type, f)
+}
+
+// Decides whether the main window closes: fn(event) returning false keeps it
+// open (it may ask with a dialog first); nil restores the default.
+export fn onCloseRequested(f) {
+    return interceptClose("main", f)
+}
+
+// ---------- tray icons ----------
+
+// id → { id, items: { itemId → fn }, checked: { itemId → bool }, handlers: { type → [fn] }, onClick… }
+const trays = {}
+let itemSeq = 0
+
+// The menu without its functions (JSON for the host); records onClick and checked.
+fn trayMenu(t, items) {
+    const out = []
+    for it in items {
+        if typeof(it) == "str" {
+            out.push(it)
+            continue
+        }
+        const c = {}
+        for k in it.keys() {
+            if k != "onClick" && k != "items" {
+                c[k] = it[k]
+            }
+        }
+        if it.separator != true && it.role == nil && c.id == nil {
+            itemSeq += 1
+            c.id = it.text ?? ("item-" + str(itemSeq))
+        }
+        if it.onClick != nil {
+            t.items[c.id] = it.onClick
+        }
+        if it.checked != nil {
+            t.checked[c.id] = it.checked
+        }
+        if it.items != nil {
+            c.items = trayMenu(t, it.items)
+        }
+        out.push(c)
+    }
+    return out
+}
+
+const TRAY_FNS = ["onClick", "onDoubleClick", "onRightClick", "onMenu"]
+
+fn traySet(t, opts) {
+    const msg = { op: "set", id: t.id }
+    // Linux delivers no icon clicks: the host adds a menu item for them
+    if opts.onClick != nil {
+        msg.hasClick = true
+    }
+    for k in opts.keys() {
+        if TRAY_FNS.contains(k) {
+            t.fns[k] = opts[k]
+        } else if k == "menu" {
+            if opts.menu == nil {
+                msg.menu = nil
+            } else {
+                t.items = {}
+                t.checked = {}
+                msg.menu = trayMenu(t, opts.menu)
+            }
+        } else if k == "closeToTray" || k == "minimizeToTray" {
+            const w = {}
+            w[k] = opts[k]
+            window(w)
+        } else if k != "id" {
+            msg[k] = opts[k]
+        }
+    }
+    return send("desktop:tray", msg)
+}
+
+fn trayHandle(t) {
+    return {
+        id: t.id,
+        update: fn(opts) { return traySet(t, opts ?? {}) },
+        setMenu: fn(items) { return traySet(t, { menu: items }) },
+        setTooltip: fn(text) { return traySet(t, { tooltip: text }) },
+        setTitle: fn(text) { return traySet(t, { title: text }) },
+        setIcon: fn(path) { return traySet(t, { icon: path }) },
+        setVisible: fn(b = true) { return traySet(t, { visible: b }) },
+        isChecked: fn(itemId) { return t.checked[itemId] == true },
+        on: fn(type, f) {
+            if t.handlers[type] == nil {
+                t.handlers[type] = []
+            }
+            t.handlers[type].push(f)
+            return nil
+        },
+        off: fn(type) {
+            t.handlers.remove(type)
+            return nil
+        },
+        remove: fn() { return removeTray(t.id) },
+    }
+}
+
+// Creates a tray icon (or changes the one with that id) and returns its handle.
+// opts:
+//   id                  "main" by default (several trays need several ids)
+//   icon                a .png/.ico path (relative: the program's folder; put
+//                       it in icons/, which builds embed), default the app icon
+//   tooltip, title      hover text; title is the text next to the icon (macOS, Linux)
+//   menu                [items]: "-" is a separator; an item is { text, id,
+//                       enabled, checked (a check item), accelerator, items
+//                       (a submenu), action, onClick: fn(event) }; action =
+//                       "quit" | "show" | "hide" | "toggle" (the main window)
+//                       is done by the host without a round trip
+//   onClick, onDoubleClick, onRightClick: fn(event)   (Linux delivers no icon
+//                       clicks: onClick / clickAction add a first menu item,
+//                       linuxClickItem: "Open" by default, false: none)
+//   onMenu              fn(event) for every menu item
+//   clickAction, doubleClickAction: "show" | "toggle" | "hide" (host side)
+//   showMenuOnLeftClick false by default (the menu opens on a right click)
+//   visible             false hides it
+//   closeToTray, minimizeToTray   the main window hides instead of closing /
+//                       when minimized (while a tray exists)
+// Events (also for the page: fogu.tray.on(type, fn)): { tray, type, item, checked }.
+// Needs no answer: works anywhere, also at the top level.
+export fn tray(opts = nil) {
+    const o = opts ?? {}
+    const id = o.id ?? "main"
+    let t = trays[id]
+    if t == nil {
+        t = { id: id, items: {}, checked: {}, handlers: {}, fns: {} }
+        trays[id] = t
+    }
+    traySet(t, o)
+    return trayHandle(t)
+}
+
+// Removes a tray icon.
+export fn removeTray(id = "main") {
+    trays.remove(id)
+    return send("desktop:tray", { op: "remove", id: id })
+}
+
+fn trayCall(f, ev, what) {
+    if f == nil {
+        return nil
+    }
+    const [_r, err] = invoke(f, ev)
+    if err != nil {
+        log(`desktop: tray ${what} handler failed: ` + err.message)
+    }
+    return nil
+}
+
+// Delivers a tray event to the handlers (tests: Fogu.signal.emit it).
+Fogu.signal.on("desktop:tray-event", fn(ev) {
+    const t = trays[ev.tray]
+    if t == nil {
+        return nil
+    }
+    if ev.type == "menu" {
+        if ev.checked != nil {
+            t.checked[ev.item] = ev.checked
+        }
+        trayCall(t.items[ev.item], ev, "menu item")
+        trayCall(t.fns.onMenu, ev, "onMenu")
+    } else if ev.type == "click" {
+        trayCall(t.fns.onClick, ev, "onClick")
+    } else if ev.type == "doubleClick" {
+        trayCall(t.fns.onDoubleClick, ev, "onDoubleClick")
+    } else if ev.type == "rightClick" {
+        trayCall(t.fns.onRightClick, ev, "onRightClick")
+    }
+    for f in t.handlers[ev.type] ?? [] {
+        trayCall(f, ev, ev.type)
+    }
+    for f in t.handlers["*"] ?? [] {
+        trayCall(f, ev, "*")
+    }
+    return nil
+})
+
+// ---------- requests with an answer (call them from commands, handlers or fg tasks) ----------
+
+Fogu.signal.on("desktop:reply", fn(r) {
+    const key = str(r.id)
+    const ch = pending[key]
+    if ch != nil {
+        pending.remove(key)
+        ch <- r
+    }
+})
+
+fn request(op, args) {
+    if sink == nil && !embedded {
+        return nil, error(`desktop: ${op} needs the desktop host (build and run the app)`)
+    }
+    seq += 1
+    const id = seq
+    const ch = chan(1)
+    pending[str(id)] = ch
+    send("desktop:request", { id: id, op: op, args: args ?? {} })
+    const r = <-ch
+    if r.ok != true {
+        return nil, error(r.error ?? `desktop: ${op} failed`)
+    }
+    return r.value, nil
+}
+
+// A window's state: { label, title, width, height, x, y, maximized,
+// minimized, fullscreen, visible, focused, decorated, resizable, alwaysOnTop,
+// scaleFactor } (logical pixels).
+export fn windowState(label = "main") {
+    return request("window.get", { window: label })
+}
+
+// Native dialogs. They wait (cooperatively) for the user.
+//   open({ title, directory, filters: { Images: ["png", "jpg"] }, multiple, folder }) → path · [paths] · nil (cancelled)
+//   save({ title, directory, fileName, filters }) → path · nil
+//   message(text, { title, kind: "info" | "warning" | "error" }) → true
+//   confirm(text, { title, kind, ok, cancel }) → bool
+export const dialog = {
+    open: fn(opts = nil) { return request("dialog.open", opts ?? {}) },
+    save: fn(opts = nil) { return request("dialog.save", opts ?? {}) },
+    message: fn(text: str, opts = nil) { return request("dialog.message", (opts ?? {}).merge({ message: text })) },
+    confirm: fn(text: str, opts = nil) { return request("dialog.confirm", (opts ?? {}).merge({ message: text })) },
+}
+
+// ---------- menus ----------
+
+// menu id → { items: { itemId → fn }, checked: { itemId → bool }, onMenu }
+const menus = {}
+
+// Sets the app menu (the macOS menu bar; on Windows and Linux the menu bar of
+// every window without its own), or a window's own menu with
+// { window: "main" }. Items are the tray menu's ({ text, id, enabled,
+// checked, accelerator, items, action, onClick }, "-" a separator) plus
+// { role } for the system items: copy cut paste selectAll undo redo minimize
+// maximize fullscreen hide hideOthers showAll closeWindow quit services about.
+// On macOS the top-level items must be submenus ({ text: "File", items: [...] }).
+// nil removes the menu. opts.onMenu: fn(event) for every item. Events (also
+// for the page: fogu.menu.on(fn)): { menu, item, checked }.
+export fn menu(items, opts = nil) {
+    const o = opts ?? {}
+    const key = o.window ?? "app"
+    if items == nil {
+        menus.remove(key)
+        return send("desktop:menu", { window: o.window, menu: nil })
+    }
+    const m = { id: key, items: {}, checked: {}, onMenu: o.onMenu }
+    menus[key] = m
+    return send("desktop:menu", { window: o.window, menu: trayMenu(m, items) })
+}
+
+// Whether a check item of a menu is checked (as of its last click).
+export fn menuChecked(item: str, window = nil) {
+    const m = menus[window ?? "app"]
+    return m != nil && m.checked[item] == true
+}
+
+Fogu.signal.on("desktop:menu-event", fn(ev) {
+    const m = menus[ev.menu]
+    if m == nil {
+        return nil
+    }
+    if ev.checked != nil {
+        m.checked[ev.item] = ev.checked
+    }
+    trayCall(m.items[ev.item], ev, "menu item")
+    trayCall(m.onMenu, ev, "onMenu")
+    return nil
+})
+
+// ---------- global shortcuts ----------
+
+// accelerator → fn(event)
+const shortcuts = {}
+
+// Runs fn(event) when the key combination is pressed anywhere, also while the
+// app is in the background: "CmdOrCtrl+Shift+K", "Alt+Space", "F12"…
+// event: { shortcut, state: "pressed" | "released" } (fn gets the presses;
+// opts.released: true also the releases). Pages hear it with fogu.shortcut.on.
+// Another app may own a combination: the error goes to the log and the
+// pages' "desktop:error" event.
+export fn shortcut(accel: str, f, opts = nil) {
+    if typeof(f) != "fn" {
+        panic("desktop.shortcut: expects a function, got " + typeof(f))
+    }
+    shortcuts[accel] = { f: f, released: (opts ?? {}).released == true }
+    return send("desktop:shortcut", { op: "register", shortcut: accel })
+}
+
+// Removes a global shortcut (nil: all of them).
+export fn removeShortcut(accel = nil) {
+    if accel == nil {
+        for k in shortcuts.keys() {
+            shortcuts.remove(k)
+        }
+    } else {
+        shortcuts.remove(accel)
+    }
+    return send("desktop:shortcut", { op: "unregister", shortcut: accel })
+}
+
+Fogu.signal.on("desktop:shortcut-event", fn(ev) {
+    const s = shortcuts[ev.shortcut]
+    if s != nil && (ev.state == "pressed" || s.released) {
+        trayCall(s.f, ev, "shortcut " + ev.shortcut)
+    }
+    return nil
+})
+
+// ---------- notifications ----------
+
+// Shows a system notification: notify("Saved") · notify("Title", "Body") ·
+// notify({ title, body, icon }). Needs no answer: works anywhere.
+export fn notify(title, body = nil) {
+    if typeof(title) == "map" {
+        return send("desktop:notify", title)
+    }
+    return send("desktop:notify", { title: str(title), body: body })
+}
+
+// ---------- workers: CPU-bound work on other threads ----------
+
+// A worker runs a Fogu module in a runtime of its own (its own thread, its own
+// globals): a long computation there does not hold up the program's commands
+// and events. The module's top-level functions are what it can run:
+//
+//   // primes.fg
+//   fn count(limit) { ... return n }
+//
+//   const w = desktop.worker("primes.fg")             // { threads: 4 } → 4 runtimes, calls go round robin
+//   desktop.command("primes", fn(limit) { return w.call("count", limit) })
+//
+// Arguments and results cross as JSON (like the page boundary). A worker can
+// use desktop.emit (to the pages) and desktop.log. call() waits for the host:
+// use it in commands, handlers or fg tasks. The runtimes start on the first
+// call. Without the host (plain `fogu main.fg`), call() runs the function in
+// this program (vm), so the code can be tested.
+export fn worker(file: str, opts = nil) {
+    const o = opts ?? {}
+    const w = { file: file, id: nil, threads: o.threads ?? 1 }
+    const start = fn() {
+        if w.id == nil {
+            // relative: the host resolves it against the program's folder
+            w.id = request("worker.start", { file: file, threads: w.threads })?
+        }
+        return w.id, nil
+    }
+    return {
+        file: file,
+        start: start,
+        call: fn(name: str, ...args) {
+            if sink == nil && !embedded {
+                return localWorkerCall(file, name, args)
+            }
+            const id = start()?
+            return request("worker.call", { worker: id, fn: name, args: args })
+        },
+        stop: fn() {
+            if w.id == nil {
+                return false, nil
+            }
+            const id = w.id
+            w.id = nil
+            return request("worker.stop", { worker: id })
+        },
+    }
+}
+
+// Without the host: the module runs in this program through fogu:vm.
+const localWorkers = {}
+fn localWorkerCall(file, name, args) {
+    let ctx = localWorkers[file]
+    if ctx == nil {
+        const [code, rerr] = fs.readText(Fogu.asset(file))
+        if rerr != nil {
+            return nil, rerr
+        }
+        ctx = vm.createContext({})
+        const [_r, rerr2] = vm.runInContext(code, ctx)
+        if rerr2 != nil {
+            return nil, rerr2
+        }
+        localWorkers[file] = ctx
+    }
+    if !regex.test(name, "^[A-Za-z_][A-Za-z0-9_]*$") {
+        return nil, error(`desktop.worker: '${name}' is not a function name`)
+    }
+    const f = vm.runInContext(name, ctx)
+    if typeof(f) != "fn" {
+        return nil, error(`desktop.worker: ${file} has no function '${name}'`)
+    }
+    // the arguments as JSON values, like the host's workers get them
+    const plain = json.parse(json.stringify(args))?
+    const sandbox = { __worker_fn: f }
+    const names = []
+    for i in 0..len(plain) {
+        sandbox["__a" + str(i)] = plain[i]
+        names.push("__a" + str(i))
+    }
+    const r = vm.runInNewContext(`__worker_fn(${names.join(", ")})`, sandbox)
+    if typeof(r) == "error" {
+        return nil, r
+    }
+    if typeof(r) == "tuple" && len(r) == 2 && typeof(r[1]) == "error" {
+        return nil, r[1]
+    }
+    return json.parse(json.stringify(r))
+}
+
+// ---------- state across hot reloads ----------
+
+// `fogu desktop dev` reloads the program in place when a .fg file changes
+// (the windows stay; the page gets the event "desktop:reloaded"). The new
+// program starts from scratch, except for what the old one kept:
+//
+//   let todos = desktop.kept("todos", [])
+//   fn save() { desktop.keep("todos", todos) }       // after every change
+//
+// Values cross as JSON. Kept state lasts until the app quits (a new run
+// starts empty); in a built app keep/kept work the same, there are just no reloads.
+const keptMemory = {}
+
+fn keptFile() {
+    return process.env("FOGU_DESKTOP_KEPT")
+}
+
+fn keptAll() {
+    const f = keptFile()
+    if f == nil || !fs.isFile(f) {
+        return keptMemory
+    }
+    const [text, rerr] = fs.readText(f)
+    if rerr != nil {
+        return keptMemory
+    }
+    const [m, perr] = json.parse(text)
+    if perr != nil || typeof(m) != "map" {
+        return keptMemory
+    }
+    return m
+}
+
+export fn keep(key: str, value) {
+    const all = keptAll()
+    all[key] = json.parse(json.stringify(value))?
+    const f = keptFile()
+    if f != nil {
+        fs.writeText(f, json.stringify(all))?
+    } else {
+        keptMemory[key] = all[key]
+    }
+    return nil
+}
+
+export fn kept(key: str, fallback = nil) {
+    const v = keptAll()[key]
+    if v == nil {
+        return fallback
+    }
+    return v
+}
+
+// ---------- self-update (the host's part; see update.fg) ----------
+
+// Replaces the running executable with `file` (already verified by
+// update.fg) and restarts the app. Waits for the host.
+export fn applyUpdate(file: str, restart = true) {
+    return request("update.apply", { path: file, restart: restart })
+}
+
+// ---------- the app in code ----------
+
+// What a window can only get when it is created (not changed afterwards).
+const CREATE_ONLY = ["url", "transparent"]
+
+fn isIndexPage(url) {
+    return url == nil || url == "" || url == "/" || url == "index.html" || url == "/index.html"
+}
+
+// The identifier the host runs the app under (the name of its data folder),
+// or nil without the host.
+fn runningIdentifier() {
+    const dir = process.env("FOGU_DESKTOP_DATA_DIR")
+    if dir == nil || dir == "" {
+        return nil
+    }
+    const parts = dir.replace("\\", "/").split("/").filter((p) => p != "")
+    if len(parts) == 0 {
+        return nil
+    }
+    return parts[len(parts) - 1]
+}
+
+// The app and its windows, defined in code instead of fogu.json "desktop":
+//
+//   import desktop from "desktop"
+//
+//   const app = desktop.app({ name: "notes", title: "Notes", identifier: "com.example.notes" })
+//   const win = app.createBrowser({ width: 1100, height: 720, minWidth: 640, url: "index.html" })
+//   win.on("close", fn(e) { desktop.log("closing") })
+//   app.command("save", fn(text) { … })
+//   app.run()
+//
+// opts: name, title (the default title of the windows), identifier, version,
+// icon (the default tray icon), closeToTray, minimizeToTray.
+//
+// The handle:
+//   createBrowser(opts) → a window handle (see getWindow). The first one is
+//       the main window; opts are the window options of fogu.json "desktop"
+//       (title width height x y minWidth minHeight maxWidth maxHeight
+//       resizable fullscreen maximized decorations alwaysOnTop center visible
+//       skipTaskbar shadow closable minimizable maximizable contentProtected
+//       opacity) plus label, url and transparent. Other windows are created
+//       by the host while the program goes on: what is set on the handle
+//       meanwhile is applied when the window exists; handle.ready() waits
+//       for it (in a command, a handler or an fg task) → true · error.
+//   tray(opts) · menu(items, opts) · shortcut(accel, fn) · notify(...) ·
+//   command(name, fn) · on(name, fn) · off(name) · emit(name, data) ·
+//   getWindow(label) · windows() · dialog · log(...) · dataDir() · quit(code):
+//       the functions of this module.
+//   run() → bool: the definition is complete. Shows the main window (unless
+//       it was created with visible: false) and returns at once — the host
+//       keeps the app alive, the program's top level must end. false without
+//       the host (plain `fogu main.fg`).
+//
+// What code cannot decide, because it is needed before the program runs:
+//   * at build time (`fogu desktop build` reads fogu.json): name, version,
+//     "desktop.identifier", "desktop.title", "desktop.ui", "desktop.features",
+//     icons/ — they name the executable, its icon and version information,
+//     the .app / .desktop entry and the installer;
+//   * when the host starts: the identifier (the data folders) and the main
+//     window, which the host opens from fogu.json "desktop" (or its defaults:
+//     960x680, the app name as title) before the program's first line. The
+//     options given to createBrowser are applied to that window right after:
+//     everything but `transparent` and `url`, which the main window takes
+//     from fogu.json only. To avoid seeing the first size, put
+//     "desktop": { "visible": false } in fogu.json: run() shows the window.
+// Values given in code win over fogu.json for everything else.
+export fn app(opts = nil) {
+    const o = opts ?? {}
+    const info = { name: o.name, title: o.title ?? o.name, identifier: o.identifier, version: o.version, icon: o.icon }
+    const state = { count: 0, main: false, mainVisible: nil }
+    const flags = {}
+    for k in ["closeToTray", "minimizeToTray"] {
+        if o[k] != nil {
+            flags[k] = o[k]
+        }
+    }
+    if len(flags.keys()) > 0 {
+        window(flags)
+    }
+
+    const createBrowser = fn(wopts = nil) {
+        const w = (wopts ?? {}).merge({})
+        let label = w.label
+        if label == nil {
+            label = match state.count {
+                0 => "main"
+                n => "window-" + str(n + 1)
+            }
+        }
+        state.count += 1
+        w.remove("label")
+        if w.title == nil && info.title != nil {
+            w.title = info.title
+        }
+        if label == "main" {
+            // the host opened it before the program ran: apply what can change
+            const set = { window: "main" }
+            for k in w.keys() {
+                if !CREATE_ONLY.contains(k) {
+                    set[k] = w[k]
+                }
+            }
+            if w.transparent != nil {
+                log(`desktop: createBrowser: "transparent" of the main window is read from fogu.json "desktop" (the host opens that window before the program runs)`)
+            }
+            if !isIndexPage(w.url) {
+                log(`desktop: createBrowser: the main window opens index.html; "url" works for the other windows (or navigate in the page)`)
+            }
+            state.main = true
+            state.mainVisible = w.visible
+            if len(set.keys()) > 1 {
+                window(set)
+            }
+            const h = getWindow("main")
+            h.ready = fn() { return true, nil }
+            return h
+        }
+        const h = getWindow(label)
+        const st = { done: false, err: nil }
+        h.ready = fn() {
+            while !st.done {
+                time.delay(5ms)
+            }
+            if st.err != nil {
+                return nil, st.err
+            }
+            return true, nil
+        }
+        if sink == nil && !embedded {
+            st.done = true
+            st.err = error("desktop: createBrowser needs the desktop host (build and run the app)")
+            return h
+        }
+        creating[label] = []
+        fg fn() {
+            const [_s, err] = request("window.create", w.merge({ label: label }))
+            const queued = creating[label] ?? []
+            creating.remove(label)
+            if err != nil {
+                log(`desktop: createBrowser '${label}': ` + err.message)
+            } else {
+                for m in queued {
+                    send("desktop:window", m)
+                }
+            }
+            st.err = err
+            st.done = true
+        }()
+        return h
+    }
+
+    return {
+        name: info.name,
+        title: info.title,
+        identifier: info.identifier,
+        version: info.version,
+        createBrowser: createBrowser,
+        getWindow: getWindow,
+        windows: windows,
+        tray: fn(topts = nil) {
+            const t = (topts ?? {}).merge({})
+            if t.icon == nil && info.icon != nil {
+                t.icon = info.icon
+            }
+            if t.tooltip == nil && info.title != nil {
+                t.tooltip = info.title
+            }
+            return tray(t)
+        },
+        menu: menu,
+        shortcut: shortcut,
+        notify: notify,
+        command: command,
+        on: on,
+        off: off,
+        emit: emit,
+        dialog: dialog,
+        log: log,
+        dataDir: dataDir,
+        quit: quit,
+        run: fn() {
+            const running = runningIdentifier()
+            if embedded && info.identifier != nil && running != nil && running != info.identifier {
+                log(`desktop: app({ identifier: "${info.identifier}" }) differs from the identifier this app runs with ("${running}"): set "desktop": { "identifier": "${info.identifier}" } in fogu.json (the host and the build need it before the program runs)`)
+            }
+            if state.main && state.mainVisible != false {
+                window({ window: "main", visible: true })
+            }
+            return embedded || sink != nil
+        },
+    }
+}
+
+// ---------- testing ----------
+
+// Sends the messages meant for the host to fn(name, data) instead (nil
+// restores the host). With it, tests drive the program like the page does:
+// Fogu.signal.emit("desktop:call", { id, name, payload }) and look at the
+// "desktop:result" that comes back; answer requests with
+// Fogu.signal.emit("desktop:reply", { id, ok, value }).
+export fn capture(f) {
+    sink = f
+    return nil
+}

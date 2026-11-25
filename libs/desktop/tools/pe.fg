@@ -1,0 +1,873 @@
+// tools/pe.fg — a resource editor for Windows executables (PE files) in pure
+// Fogu: it gives the generic host the app's own icon and version information
+// (name, description, company, version) without compiling anything, on every
+// OS (a Windows app built from Linux or macOS is stamped the same way).
+//
+//   import pe from "./tools/pe.fg"
+//
+//   pe.stamp("fogu-desktop.exe", "myapp-host.exe", {
+//       icon: "icons/icon.ico",                       // an .ico file (or nil)
+//       version: { title: "My App", name: "myapp", version: "1.2.3", company: "ACME" },
+//   })?
+//   print(pe.inspect("myapp-host.exe")?)              // { strings, fileVersion, icons, sections }
+//
+// How: the resource tree (.rsrc) is read, the icon group and the version
+// resource are replaced, and the tree is written again — in place when .rsrc
+// is the last section, else as a new section at the end (the old one stays in
+// the file, unused). The headers that follow from it are fixed: the number of
+// sections, SizeOfImage, the resource data directory, the COFF symbol table
+// pointer. The checksum field is set to 0 (Windows only checks it for drivers
+// and services loaded at boot) and a code signature is dropped (it would no
+// longer match).
+//
+// Stamp the host BEFORE appending the app (`fogu build --compile --runtime
+// <stamped host>`): the app is found by a trailer at the very end of the file.
+// Data that follows the sections is kept where it is, at the end.
+import fs from "fogu:fs"
+import path from "fogu:path"
+import process from "fogu:process"
+import zip from "fogu:zip"
+
+export const RT_ICON = 3
+export const RT_GROUP_ICON = 14
+export const RT_VERSION = 16
+// the icon group Windows shows for the file (IDI_APPLICATION)
+export const APP_ICON_ID = 32512
+const LANG_EN_US = 1033
+
+let readSeq = 0
+
+// The bytes of a file as a buffer. fogu:fs reads text only, so the file goes
+// through an uncompressed zip archive in the temp folder (fogu:zip returns buffers).
+export fn readBytes(file: str) {
+    if !fs.isFile(file) {
+        return nil, error(`${file} does not exist`)
+    }
+    readSeq += 1
+    const tmp = path.join(fs.tempDir(), `fogu-desktop-read-${process.pid}-${readSeq}.zip`)
+    const [_n, zerr] = zip.zip(tmp, file, { store: true })
+    if zerr != nil {
+        return nil, error(`cannot read ${file}: ${zerr.message}`)
+    }
+    const [data, rerr] = zip.read(tmp, path.basename(file), { bytes: true })
+    fs.remove(tmp)
+    if rerr != nil {
+        return nil, error(`cannot read ${file}: ${rerr.message}`)
+    }
+    return data, nil
+}
+
+// Writes a buffer to a file.
+export fn writeBytes(file: str, data: buffer) {
+    Fogu.file(file).write(data)?
+    return nil, nil
+}
+
+fn alignUp(n, a) {
+    if a <= 1 {
+        return n
+    }
+    return (n + a - 1) / a * a
+}
+
+// ---------- text ----------
+
+// UTF-16LE, without a terminator.
+export fn utf16(s: str) {
+    const out = bytes(0)
+    for ch in s.chars() {
+        let c = ch.code()
+        if c >= 0x10000 {
+            c -= 0x10000
+            const hi = 0xD800 + (c >> 10)
+            const lo = 0xDC00 + (c & 0x3FF)
+            out.push(hi & 0xFF, hi >> 8, lo & 0xFF, lo >> 8)
+        } else {
+            out.push(c & 0xFF, c >> 8)
+        }
+    }
+    return out
+}
+
+// The text of `units` UTF-16LE code units at `off`.
+fn fromUtf16(b, off, units) {
+    let s = ""
+    let i = 0
+    while i < units {
+        let c = b.readU16(off + i * 2)
+        i += 1
+        if c >= 0xD800 && c < 0xDC00 && i < units {
+            const lo = b.readU16(off + i * 2)
+            i += 1
+            c = 0x10000 + ((c - 0xD800) << 10) + (lo - 0xDC00)
+        }
+        s += char(c)
+    }
+    return s
+}
+
+// ---------- the headers ----------
+
+// The headers of a PE file: offsets of the fields this module changes and the
+// section table. An error value when the bytes are not a PE executable.
+export fn headers(b: buffer) {
+    if len(b) < 0x40 || b.readU16(0) != 0x5A4D {
+        return nil, error("not a Windows executable (no MZ header)")
+    }
+    const sig = b.readU32(0x3C)
+    if sig + 24 > len(b) || b.readU32(sig) != 0x00004550 {
+        return nil, error("not a Windows executable (no PE header)")
+    }
+    const coff = sig + 4
+    const count = b.readU16(coff + 2)
+    const optSize = b.readU16(coff + 16)
+    const opt = coff + 20
+    const magic = b.readU16(opt)
+    if magic != 0x20B && magic != 0x10B {
+        return nil, error("not a Windows executable (unknown optional header)")
+    }
+    const plus = magic == 0x20B
+    const dirCount = b.readU32(opt + match plus {
+        true => 108
+        _ => 92
+    })
+    const dirs = opt + match plus {
+        true => 112
+        _ => 96
+    }
+    if dirCount < 3 {
+        return nil, error("this executable has no resource directory entry")
+    }
+    const table = opt + optSize
+    const sections = []
+    for i in 0..count {
+        const at = table + i * 40
+        let name = ""
+        for k in 0..8 {
+            const c = b[at + k]
+            if c == 0 {
+                break
+            }
+            name += char(c)
+        }
+        sections.push({
+            index: i,
+            at: at,
+            name: name,
+            vsize: b.readU32(at + 8),
+            va: b.readU32(at + 12),
+            rawSize: b.readU32(at + 16),
+            raw: b.readU32(at + 20),
+        })
+    }
+    return {
+        coff: coff,
+        opt: opt,
+        plus: plus,
+        machine: b.readU16(coff),
+        count: count,
+        table: table,
+        sections: sections,
+        sectionAlign: b.readU32(opt + 32),
+        fileAlign: b.readU32(opt + 36),
+        sizeOfHeaders: b.readU32(opt + 60),
+        dirs: dirs,
+        dirCount: dirCount,
+        rsrcRva: b.readU32(dirs + 16),
+        rsrcSize: b.readU32(dirs + 20),
+    }, nil
+}
+
+fn sectionOfRva(h, rva) {
+    for s in h.sections {
+        const size = match s.vsize > s.rawSize {
+            true => s.vsize
+            _ => s.rawSize
+        }
+        if rva >= s.va && rva < s.va + size {
+            return s
+        }
+    }
+    return nil
+}
+
+fn rvaToOffset(h, rva) {
+    const s = sectionOfRva(h, rva)
+    if s == nil {
+        return nil
+    }
+    return rva - s.va + s.raw
+}
+
+// ---------- the resource tree ----------
+// A directory is { entries: [entry] }; an entry is { id (an int) or name (a
+// str), and dir (a directory) or data (a buffer) + codepage }. The levels
+// are type → name → language.
+
+fn readDir(b, h, base, off, depth) {
+    if depth > 4 || base + off + 16 > len(b) {
+        return nil, error("the resource directory is damaged")
+    }
+    const at = base + off
+    const named = b.readU16(at + 12)
+    const ids = b.readU16(at + 14)
+    const entries = []
+    for i in 0..(named + ids) {
+        const e = at + 16 + i * 8
+        if e + 8 > len(b) {
+            return nil, error("the resource directory is damaged")
+        }
+        const nameField = b.readU32(e)
+        const target = b.readU32(e + 4)
+        const entry = { id: nil, name: nil, dir: nil, data: nil, codepage: 0 }
+        if nameField & 0x80000000 != 0 {
+            const s = base + (nameField & 0x7FFFFFFF)
+            entry.name = fromUtf16(b, s + 2, b.readU16(s))
+        } else {
+            entry.id = nameField
+        }
+        if target & 0x80000000 != 0 {
+            entry.dir = readDir(b, h, base, target & 0x7FFFFFFF, depth + 1)?
+        } else {
+            const d = base + target
+            const dataOff = rvaToOffset(h, b.readU32(d))
+            const size = b.readU32(d + 4)
+            if dataOff == nil || dataOff + size > len(b) {
+                return nil, error("a resource points outside the file")
+            }
+            entry.data = b.slice(dataOff, dataOff + size)
+            entry.codepage = b.readU32(d + 8)
+        }
+        entries.push(entry)
+    }
+    return { entries: entries }, nil
+}
+
+// The resource tree of an executable (an empty one when it has no resources).
+export fn resources(b: buffer, h = nil) {
+    let hd = h
+    if hd == nil {
+        hd = headers(b)?
+    }
+    if hd.rsrcRva == 0 {
+        return { entries: [] }, nil
+    }
+    const base = rvaToOffset(hd, hd.rsrcRva)
+    if base == nil {
+        return nil, error("the resource directory is outside the sections")
+    }
+    return readDir(b, hd, base, 0, 0)
+}
+
+fn sameKey(e, key) {
+    if typeof(key) == "str" {
+        return e.name != nil && e.name.upper() == key.upper()
+    }
+    return e.id == key
+}
+
+// The entry `key` (an id or a name) of a directory, or nil.
+export fn find(dir, key) {
+    if dir == nil {
+        return nil
+    }
+    for e in dir.entries {
+        if sameKey(e, key) {
+            return e
+        }
+    }
+    return nil
+}
+
+fn ensureDir(dir, key) {
+    let e = find(dir, key)
+    if e == nil {
+        e = { id: nil, name: nil, dir: { entries: [] }, data: nil, codepage: 0 }
+        if typeof(key) == "str" {
+            e.name = key
+        } else {
+            e.id = key
+        }
+        dir.entries.push(e)
+    }
+    return e.dir
+}
+
+fn removeEntry(dir, key) {
+    for i in 0..len(dir.entries) {
+        if sameKey(dir.entries[i], key) {
+            dir.entries.remove(i)
+            return true
+        }
+    }
+    return false
+}
+
+// Sets (or replaces) the resource type/name/lang.
+export fn setResource(tree, type, name, lang: int, data: buffer) {
+    const langs = ensureDir(ensureDir(tree, type), name)
+    removeEntry(langs, lang)
+    langs.entries.push({ id: lang, name: nil, dir: nil, data: data, codepage: 0 })
+    return nil
+}
+
+// Named entries first (by name, ignoring case), then ids ascending: the order Windows expects.
+fn ordered(entries) {
+    const named = entries.filter((e) => e.name != nil).sort((a, b) => match a.name.upper() < b.name.upper() {
+        true => -1
+        _ => 1
+    })
+    const ids = entries.filter((e) => e.name == nil).sort((a, b) => a.id - b.id)
+    return named.concat(ids)
+}
+
+// The .rsrc bytes of a tree placed at the address `rva`.
+export fn serialize(tree, rva: int) {
+    const dirs = []
+    const leaves = []
+    const named = []
+    let cursor = 0
+    const walk = fn(dir, self) {
+        const list = ordered(dir.entries)
+        const rec = { off: cursor, list: list }
+        cursor += 16 + 8 * len(list)
+        dirs.push(rec)
+        for e in list {
+            if e.name != nil {
+                named.push(e)
+            }
+            if e.dir != nil {
+                e.dirOff = self(e.dir, self)
+            } else {
+                leaves.push(e)
+            }
+        }
+        return rec.off
+    }
+    walk(tree, walk)
+    for e in named {
+        e.nameOff = cursor
+        cursor += 2 + len(utf16(e.name))
+    }
+    cursor = alignUp(cursor, 4)
+    for e in leaves {
+        e.entryOff = cursor
+        cursor += 16
+    }
+    const out = bytes(cursor)
+    for rec in dirs {
+        let n = 0
+        for e in rec.list {
+            if e.name != nil {
+                n += 1
+            }
+        }
+        out.writeU16(rec.off + 12, n)
+        out.writeU16(rec.off + 14, len(rec.list) - n)
+        let at = rec.off + 16
+        for e in rec.list {
+            if e.name != nil {
+                out.writeU32(at, 0x80000000 | e.nameOff)
+            } else {
+                out.writeU32(at, e.id)
+            }
+            if e.dir != nil {
+                out.writeU32(at + 4, 0x80000000 | e.dirOff)
+            } else {
+                out.writeU32(at + 4, e.entryOff)
+            }
+            at += 8
+        }
+    }
+    for e in named {
+        const text = utf16(e.name)
+        out.writeU16(e.nameOff, len(text) / 2)
+        for i in 0..len(text) {
+            out[e.nameOff + 2 + i] = text[i]
+        }
+    }
+    // the data, each resource on an 8-byte boundary
+    for e in leaves {
+        const pad = alignUp(len(out), 8) - len(out)
+        if pad > 0 {
+            out.append(bytes(pad))
+        }
+        out.writeU32(e.entryOff, rva + len(out))
+        out.writeU32(e.entryOff + 4, len(e.data))
+        out.writeU32(e.entryOff + 8, e.codepage ?? 0)
+        out.append(e.data)
+    }
+    return out
+}
+
+// ---------- icons ----------
+
+// The images of an .ico file: [{ width, height, colors, planes, bits, data }].
+export fn parseIco(ico: buffer) {
+    if len(ico) < 6 || ico.readU16(0) != 0 || ico.readU16(2) != 1 {
+        return nil, error("not an .ico file")
+    }
+    const n = ico.readU16(4)
+    if n == 0 || 6 + n * 16 > len(ico) {
+        return nil, error("the .ico file has no images")
+    }
+    const images = []
+    for i in 0..n {
+        const at = 6 + i * 16
+        const size = ico.readU32(at + 8)
+        const off = ico.readU32(at + 12)
+        if off + size > len(ico) {
+            return nil, error("the .ico file is damaged (an image is outside the file)")
+        }
+        images.push({
+            width: ico[at],
+            height: ico[at + 1],
+            colors: ico[at + 2],
+            planes: ico.readU16(at + 4),
+            bits: ico.readU16(at + 6),
+            data: ico.slice(off, off + size),
+        })
+    }
+    return images, nil
+}
+
+// The RT_ICON ids an icon group refers to.
+fn groupIds(data) {
+    const ids = []
+    if data == nil || len(data) < 6 {
+        return ids
+    }
+    const n = data.readU16(4)
+    for i in 0..n {
+        const at = 6 + i * 14
+        if at + 14 <= len(data) {
+            ids.push(data.readU16(at + 12))
+        }
+    }
+    return ids
+}
+
+// Replaces the icon Windows shows for the file (the first icon group, or a
+// new group 32512) with the images of an .ico file. Other groups stay.
+export fn setIcon(tree, ico: buffer) {
+    const images = parseIco(ico)?
+    const groups = ensureDir(tree, RT_GROUP_ICON)
+    const icons = ensureDir(tree, RT_ICON)
+    let key = APP_ICON_ID
+    let lang = LANG_EN_US
+    const existing = ordered(groups.entries)
+    if len(existing) > 0 {
+        const g = existing[0]
+        key = g.name ?? g.id
+        for l in g.dir.entries {
+            lang = l.id ?? lang
+            for id in groupIds(l.data) {
+                removeEntry(icons, id)
+            }
+        }
+        removeEntry(groups, key)
+    }
+    const used = {}
+    for e in icons.entries {
+        if e.id != nil {
+            used[str(e.id)] = true
+        }
+    }
+    const group = bytes(6)
+    group.writeU16(2, 1)
+    group.writeU16(4, len(images))
+    let next = 1
+    for img in images {
+        while used[str(next)] == true {
+            next += 1
+        }
+        used[str(next)] = true
+        setResource(tree, RT_ICON, next, lang, img.data)
+        const e = bytes(14)
+        e[0] = img.width
+        e[1] = img.height
+        e[2] = img.colors
+        e.writeU16(4, img.planes)
+        e.writeU16(6, img.bits)
+        e.writeU32(8, len(img.data))
+        e.writeU16(12, next)
+        group.append(e)
+    }
+    setResource(tree, RT_GROUP_ICON, key, lang, group)
+    return len(images), nil
+}
+
+// ---------- version information ----------
+
+fn pad4(b) {
+    const pad = alignUp(len(b), 4) - len(b)
+    if pad > 0 {
+        b.append(bytes(pad))
+    }
+    return b
+}
+
+// One block of a version resource: { wLength, wValueLength, wType, key, value, children }.
+fn block(key, value, valueLength, type, children) {
+    const b = bytes(6)
+    b.writeU16(2, valueLength)
+    b.writeU16(4, type)
+    b.append(utf16(key))
+    b.append(bytes(2))
+    pad4(b)
+    if value != nil {
+        b.append(value)
+    }
+    for c in children {
+        pad4(b)
+        b.append(c)
+    }
+    b.writeU16(0, len(b))
+    return b
+}
+
+// "1.2.3-beta+5" → [1, 2, 3, 0] (four numbers 0..65535).
+export fn versionNumbers(v: str) {
+    const nums = [0, 0, 0, 0]
+    const parts = v.trim().split("+")[0].split("-")[0].split(".")
+    for i in 0..4 {
+        if i < len(parts) {
+            let digits = ""
+            for ch in parts[i].chars() {
+                if ch >= "0" && ch <= "9" && len(digits) < 5 {
+                    digits += ch
+                } else {
+                    break
+                }
+            }
+            if digits != "" {
+                const n = int(digits)
+                nums[i] = match n > 65535 {
+                    true => 65535
+                    _ => n
+                }
+            }
+        }
+    }
+    return nums
+}
+
+// The strings of a version resource from the app's identity:
+// info: { title, name, version, company, copyright }. The title is the
+// FileDescription: what the Task Manager and the task bar show.
+export fn versionStrings(info) {
+    const name = info.name ?? "app"
+    const title = info.title ?? name
+    const version = info.version ?? "0.1.0"
+    const s = {
+        FileDescription: title,
+        ProductName: title,
+        InternalName: name,
+        OriginalFilename: name + ".exe",
+        FileVersion: version,
+        ProductVersion: version,
+    }
+    if (info.company ?? "") != "" {
+        s.CompanyName = info.company
+    }
+    if (info.copyright ?? "") != "" {
+        s.LegalCopyright = info.copyright
+    }
+    return s
+}
+
+// A VS_VERSIONINFO resource (language en-US, Unicode) with these strings.
+export fn versionResource(strings, version: str) {
+    const n = versionNumbers(version)
+    const fixed = bytes(52)
+    fixed.writeU32(0, 0xFEEF04BD)
+    fixed.writeU32(4, 0x00010000)
+    fixed.writeU32(8, (n[0] << 16) | n[1])
+    fixed.writeU32(12, (n[2] << 16) | n[3])
+    fixed.writeU32(16, (n[0] << 16) | n[1])
+    fixed.writeU32(20, (n[2] << 16) | n[3])
+    fixed.writeU32(24, 0x3F)
+    fixed.writeU32(32, 0x00040004) // VOS_NT_WINDOWS32
+    fixed.writeU32(36, 1) // VFT_APP
+    const items = []
+    for key in strings.keys() {
+        const value = utf16(str(strings[key]))
+        value.append(bytes(2))
+        items.push(block(key, value, len(value) / 2, 1, []))
+    }
+    const table = block("040904B0", nil, 0, 1, items)
+    const stringInfo = block("StringFileInfo", nil, 0, 1, [table])
+    const translation = bytes(4)
+    translation.writeU16(0, 0x0409)
+    translation.writeU16(2, 0x04B0)
+    const varInfo = block("VarFileInfo", nil, 0, 1, [block("Translation", translation, 4, 0, [])])
+    return block("VS_VERSION_INFO", fixed, 52, 0, [stringInfo, varInfo])
+}
+
+// Replaces the version resource.
+export fn setVersion(tree, info) {
+    removeEntry(tree, RT_VERSION)
+    setResource(tree, RT_VERSION, 1, LANG_EN_US, versionResource(versionStrings(info), info.version ?? "0.1.0"))
+    return nil
+}
+
+// Reads a block header at `at`: { length, valueLength, type, key, value (offset), end }.
+fn readBlock(b, at) {
+    if at + 6 > len(b) {
+        return nil
+    }
+    const length = b.readU16(at)
+    let p = at + 6
+    let units = 0
+    while p + units * 2 + 2 <= len(b) && b.readU16(p + units * 2) != 0 {
+        units += 1
+    }
+    const key = fromUtf16(b, p, units)
+    p = alignUp(p + units * 2 + 2, 4)
+    return { length: length, valueLength: b.readU16(at + 2), type: b.readU16(at + 4), key: key, value: p, end: at + length }
+}
+
+// The strings of a version resource: { FileDescription: "…", … } plus
+// fileVersion "1.2.3.0" under the key "$fileVersion".
+export fn parseVersion(data: buffer) {
+    const out = {}
+    const root = readBlock(data, 0)
+    if root == nil || root.key != "VS_VERSION_INFO" {
+        return nil, error("not a version resource")
+    }
+    if root.valueLength >= 16 && data.readU32(root.value) == 0xFEEF04BD {
+        const ms = data.readU32(root.value + 8)
+        const ls = data.readU32(root.value + 12)
+        out["$fileVersion"] = `${ms >> 16}.${ms & 0xFFFF}.${ls >> 16}.${ls & 0xFFFF}`
+    }
+    let at = alignUp(root.value + root.valueLength, 4)
+    while at + 6 <= root.end {
+        const child = readBlock(data, at)
+        if child == nil || child.length == 0 {
+            break
+        }
+        if child.key == "StringFileInfo" {
+            let t = child.value
+            while t + 6 <= child.end {
+                const table = readBlock(data, t)
+                if table == nil || table.length == 0 {
+                    break
+                }
+                let s = table.value
+                while s + 6 <= table.end {
+                    const item = readBlock(data, s)
+                    if item == nil || item.length == 0 {
+                        break
+                    }
+                    let units = item.valueLength
+                    if units > 0 && data.readU16(item.value + (units - 1) * 2) == 0 {
+                        units -= 1
+                    }
+                    out[item.key] = fromUtf16(data, item.value, units)
+                    s = alignUp(item.end, 4)
+                }
+                t = alignUp(table.end, 4)
+            }
+        }
+        at = alignUp(child.end, 4)
+    }
+    return out, nil
+}
+
+// ---------- writing the executable ----------
+
+fn writeName(b, at, name) {
+    for k in 0..8 {
+        b[at + k] = match k < len(name) {
+            true => name.chars()[k].code()
+            _ => 0
+        }
+    }
+}
+
+// The executable `b` with `tree` as its resources: a new buffer.
+export fn withResources(b: buffer, tree) {
+    const h = headers(b)?
+    if len(h.sections) == 0 {
+        return nil, error("the executable has no sections")
+    }
+    let lastVa = h.sections[0]
+    let lastRaw = nil
+    let firstRaw = len(b)
+    for s in h.sections {
+        if s.va > lastVa.va {
+            lastVa = s
+        }
+        if s.rawSize > 0 {
+            if lastRaw == nil || s.raw > lastRaw.raw {
+                lastRaw = s
+            }
+            if s.raw < firstRaw {
+                firstRaw = s.raw
+            }
+        }
+    }
+    if lastRaw == nil {
+        return nil, error("the executable has no section data")
+    }
+    const sectionsEnd = lastRaw.raw + lastRaw.rawSize
+    if sectionsEnd > len(b) {
+        return nil, error("the executable is truncated")
+    }
+    const old = match h.rsrcRva {
+        0 => nil
+        rva => sectionOfRva(h, rva)
+    }
+    // in place: .rsrc is the last section, in the file and in memory
+    const inPlace = old != nil && old.index == lastVa.index && old.index == lastRaw.index && old.va == h.rsrcRva
+    let rva = 0
+    let rawAt = 0
+    if inPlace {
+        rva = old.va
+        rawAt = old.raw
+    } else {
+        const end = h.table + h.count * 40
+        if end + 40 > firstRaw || end + 40 > h.sizeOfHeaders {
+            return nil, error("no room in the headers for one more section")
+        }
+        for i in 0..40 {
+            if b[end + i] != 0 {
+                return nil, error("no room in the headers for one more section")
+            }
+        }
+        const vsize = match lastVa.vsize {
+            0 => lastVa.rawSize
+            v => v
+        }
+        rva = alignUp(lastVa.va + vsize, h.sectionAlign)
+        rawAt = alignUp(sectionsEnd, h.fileAlign)
+    }
+    const data = serialize(tree, rva)
+    const rawSize = alignUp(len(data), h.fileAlign)
+
+    // what follows the sections (a symbol table, appended data) keeps its place at the end
+    const tail = b.slice(sectionsEnd)
+    const out = b.slice(0, match inPlace {
+        true => rawAt
+        _ => sectionsEnd
+    })
+    if len(out) < rawAt {
+        out.append(bytes(rawAt - len(out)))
+    }
+    out.append(data)
+    if rawSize > len(data) {
+        out.append(bytes(rawSize - len(data)))
+    }
+    const shift = len(out) - sectionsEnd
+    out.append(tail)
+
+    let at = 0
+    if inPlace {
+        at = old.at
+    } else {
+        at = h.table + h.count * 40
+        out.writeU16(h.coff + 2, h.count + 1)
+        writeName(out, at, ".rsrc")
+        out.writeU32(at + 12, rva)
+        out.writeU32(at + 20, rawAt)
+        out.writeU32(at + 36, 0x40000040) // initialized data, readable
+        if old != nil && old.name == ".rsrc" {
+            writeName(out, old.at, ".rsrc0")
+        }
+        // SizeOfInitializedData
+        out.writeU32(h.opt + 8, b.readU32(h.opt + 8) + rawSize)
+    }
+    out.writeU32(at + 8, len(data))
+    out.writeU32(at + 16, rawSize)
+    // SizeOfImage, the resource directory, no checksum
+    out.writeU32(h.opt + 56, alignUp(rva + len(data), h.sectionAlign))
+    out.writeU32(h.dirs + 16, rva)
+    out.writeU32(h.dirs + 20, len(data))
+    out.writeU32(h.opt + 64, 0)
+    // a COFF symbol table after the sections moved with the tail
+    const symbols = b.readU32(h.coff + 8)
+    if symbols >= sectionsEnd && shift != 0 {
+        out.writeU32(h.coff + 8, symbols + shift)
+    }
+    // a code signature no longer matches: drop its directory entry (its bytes stay unused)
+    if h.dirCount > 4 {
+        out.writeU32(h.dirs + 32, 0)
+        out.writeU32(h.dirs + 36, 0)
+    }
+    return out, nil
+}
+
+// Whether an executable ends with an app appended by `fogu build --compile`.
+export fn hasBundle(b: buffer) {
+    return len(b) >= 16 && b.slice(len(b) - 8).text("latin1") == "FOGUBND1"
+}
+
+// Copies the executable `src` to `dest` with the app's identity.
+// opts: { icon: an .ico path or buffer (nil keeps the icon),
+//         version: { title, name, version, company, copyright } (nil keeps it) }.
+// Returns { icons, size }.
+export fn stamp(src: str, dest: str, opts) {
+    const b = readBytes(src)?
+    if hasBundle(b) {
+        return nil, error(`${src} already has an app appended: stamp the host first, then append the app`)
+    }
+    const tree = resources(b)?
+    let icons = 0
+    if opts.icon != nil {
+        let ico = opts.icon
+        if typeof(ico) == "str" {
+            ico = readBytes(ico)?
+        }
+        icons = setIcon(tree, ico)?
+    }
+    if opts.version != nil {
+        setVersion(tree, opts.version)
+    }
+    const out = withResources(b, tree)?
+    writeBytes(dest, out)?
+    return { icons: icons, size: len(out) }, nil
+}
+
+// What a Windows executable says about itself:
+// { strings: { ProductName, … }, fileVersion, icons: [{ width, height, bits, size }], sections: [names], machine }.
+export fn inspect(file: str) {
+    const b = readBytes(file)?
+    const h = headers(b)?
+    const tree = resources(b, h)?
+    const info = { strings: {}, fileVersion: nil, icons: [], sections: h.sections.map((s) => s.name), machine: h.machine }
+    const v = find(tree, RT_VERSION)
+    if v != nil && len(v.dir.entries) > 0 && len(v.dir.entries[0].dir.entries) > 0 {
+        const [strings, verr] = parseVersion(v.dir.entries[0].dir.entries[0].data)
+        if verr == nil {
+            info.fileVersion = strings["$fileVersion"]
+            strings.remove("$fileVersion")
+            info.strings = strings
+        }
+    }
+    const groups = find(tree, RT_GROUP_ICON)
+    if groups != nil {
+        const list = ordered(groups.dir.entries)
+        if len(list) > 0 && len(list[0].dir.entries) > 0 {
+            const g = list[0].dir.entries[0].data
+            const iconDir = find(tree, RT_ICON)
+            for i in 0..g.readU16(4) {
+                const at = 6 + i * 14
+                const e = find(iconDir?.dir, g.readU16(at + 12))
+                info.icons.push({
+                    width: match g[at] {
+                        0 => 256
+                        w => w
+                    },
+                    height: match g[at + 1] {
+                        0 => 256
+                        hh => hh
+                    },
+                    bits: g.readU16(at + 6),
+                    size: g.readU32(at + 8),
+                    present: e != nil,
+                })
+            }
+        }
+    }
+    return info, nil
+}

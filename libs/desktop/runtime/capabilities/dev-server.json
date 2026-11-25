@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "dev-server",
+  "description": "Every window on a local dev server (fogu desktop dev: Vite on localhost). Tauri treats it as a remote origin, which needs its own capability for the bridge.",
+  "windows": ["*"],
+  "remote": { "urls": ["http://localhost:*", "http://127.0.0.1:*"] },
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "allow-fogu-call",
+    "allow-fogu-emit",
+    "allow-fogu-ready",
+    "allow-fogu-window"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "tray-windows",
+  "version": "0.1.0",
+  "description": "A tray icon with a menu, close-to-tray, window control from Fogu and from the page, and a second window",
+  "entry": "main.fg",
+  "desktop": {
+    "title": "Tray and windows",
+    "identifier": "dev.fogu.examples.tray-windows",
+    "ui": "ui",
+    "visible": false
+  },
+  "scripts": {
+    "build": "fogu desktop build",
+    "build:debug": "fogu desktop build --debug"
+  },
+  "dependencies": {}
+}

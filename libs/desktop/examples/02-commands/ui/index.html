@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Notes</title>
+    <style>
+      body { font: 15px system-ui, sans-serif; margin: 24px; }
+      .error { color: #c62828; }
+      li button { margin-left: 8px; }
+    </style>
+  </head>
+  <body>
+    <form id="add">
+      <input id="title" placeholder="Title" />
+      <input id="tags" placeholder="tags, comma separated" />
+      <button>Add</button>
+    </form>
+    <p id="error" class="error"></p>
+    <ul id="list"></ul>
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      // every fogu.call is a Promise: await it, and catch the Fogu errors
+      async function run(name, payload) {
+        $("error").textContent = "";
+        try {
+          return await fogu.call(name, payload);
+        } catch (e) {
+          $("error").textContent = e.message; // the message of error("…") in Fogu
+        }
+      }
+
+      async function refresh() {
+        const notes = (await run("notes.list")) || [];
+        $("list").replaceChildren(
+          ...notes.map((n) => {
+            const li = document.createElement("li");
+            li.textContent = `${n.title} [${n.tags.join(", ")}]`;
+            const del = document.createElement("button");
+            del.textContent = "remove";
+            del.onclick = async () => (await run("notes.remove", n.id)) && refresh();
+            li.append(del);
+            return li;
+          }),
+        );
+      }
+
+      $("add").onsubmit = async (ev) => {
+        ev.preventDefault();
+        const tags = $("tags").value.split(",").map((t) => t.trim()).filter(Boolean);
+        const note = await run("notes.add", { title: $("title").value, tags });
+        if (note) {
+          $("title").value = "";
+          refresh();
+        }
+      };
+      refresh();
+    </script>
+  </body>
+</html>

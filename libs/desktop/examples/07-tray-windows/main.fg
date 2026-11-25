@@ -1,0 +1,74 @@
+// A tray icon with a menu, close-to-tray, the window driven from Fogu and
+// from the page, and a second window.
+//
+//   fogu desktop build --debug     → dist/tray-windows
+//   fogu main.fg                   → no window: prints what it would send
+//
+// Closing the window hides it in the tray (closeToTray in desktop.app);
+// "Quit" in the tray menu ends the app. A click on the icon shows the window
+// (Windows and macOS; Linux tray icons only open their menu).
+import desktop from "desktop"
+
+const app = desktop.app({ name: "tray-windows", title: "Tray and windows", identifier: "dev.fogu.examples.tray-windows", closeToTray: true })
+const win = app.createBrowser({ width: 560, height: 460, minWidth: 420, minHeight: 360 })
+
+let paused = false
+
+const tray = app.tray({
+    tooltip: "Tray and windows",
+    // no icon: the app's own icon (or { icon: "icons/tray.png" }, or `icon` in desktop.app)
+    clickAction: "show",                       // the host shows the window, no round trip
+    menu: [
+        { text: "Show", action: "show" },
+        { text: "Hide", action: "hide" },
+        "-",
+        { id: "pause", text: "Pause updates", checked: false, onClick: fn(e) {
+            paused = e.checked
+            app.emit("paused", paused)
+        } },
+        { text: "Window", items: [
+            { text: "Center", onClick: fn() { win.center() } },
+            { text: "Always on top", checked: false, onClick: fn(e) { win.setAlwaysOnTop(e.checked) } },
+            { text: "About…", onClick: fn() { openAbout() } },
+        ] },
+        "-",
+        { text: "Quit", action: "quit" },
+    ],
+    onDoubleClick: fn() { win.maximize() },
+})
+
+// a second window: createBrowser returns its handle at once; ready() waits
+// until the host has made it
+fn openAbout() {
+    const about = app.createBrowser({ label: "about", url: "about.html", title: "About", width: 360, height: 240, resizable: false, alwaysOnTop: true })
+    const [_ok, err] = about.ready()
+    if err != nil {
+        app.log("about window: " + err.message)
+        return nil
+    }
+    about.emit("about", { fogu: Fogu.version, os: Fogu.os })
+    return nil
+}
+
+// window commands for the page (it can also call fogu.window.* itself)
+app.command("state", fn() { return win.state() })
+app.command("about", fn() { return openAbout() })
+app.command("size", fn(p) {
+    win.setSize(p.width, p.height)
+    win.center()
+    return true
+})
+app.command("tooltip", fn(text) {
+    tray.setTooltip(text)
+    return true
+})
+
+// window events, from Fogu
+win.on("resize", fn(e) { app.emit("size", { width: e.width, height: e.height }) })
+win.on("focus", fn() { app.log("focused") })
+
+if !app.run() {
+    desktop.capture(fn(name, data) { print(name, data) })
+    tray.setTooltip("updated")
+    win.setSize(800, 600)
+}

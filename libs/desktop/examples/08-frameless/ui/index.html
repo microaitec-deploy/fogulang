@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Frameless</title>
+    <style>
+      :root { color-scheme: light dark; font: 14px/1.5 system-ui, sans-serif; --bg: #fff; --bar: #f1f3f5; --line: #dee2e6; }
+      @media (prefers-color-scheme: dark) { :root { --bg: #1c1f24; --bar: #25292f; --line: #343a40; } }
+      html, body { height: 100%; margin: 0; background: transparent; overflow: hidden; }
+      .frame { height: 100vh; display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+      body.max .frame { border-radius: 0; border: 0; }
+      /* the drag region: the whole bar except its buttons */
+      .bar { height: 36px; flex: none; display: flex; align-items: center; justify-content: space-between; padding-left: 12px; background: var(--bar); border-bottom: 1px solid var(--line); user-select: none; -webkit-user-select: none; }
+      .bar b { font-size: 13px; pointer-events: none; }
+      .bar button { width: 44px; height: 36px; border: 0; background: transparent; color: inherit; font-size: 13px; }
+      .bar button:hover { background: var(--line); }
+      .bar button.close:hover { background: #e81123; color: #fff; }
+      main { padding: 20px; }
+    </style>
+  </head>
+  <body>
+    <div class="frame">
+      <!-- data-fogu-drag: drag moves the window, double click maximizes;
+           data-fogu-window: minimize | maximize | close | fullscreen | hide -->
+      <div class="bar" data-fogu-drag>
+        <b>Frameless</b>
+        <div>
+          <button data-fogu-window="minimize" title="Minimize">&#8211;</button>
+          <button data-fogu-window="maximize" title="Maximize">&#9744;</button>
+          <button class="close" data-fogu-window="close" title="Close">&#10005;</button>
+        </div>
+      </div>
+      <main>
+        <p>No system title bar: this page draws its own. Drag the bar to move the window.</p>
+        <p><button id="edit">Make a change</button> — then close: Fogu asks first.</p>
+        <p><button id="pin">Pin on top</button> <button id="fs">Fullscreen</button></p>
+      </main>
+    </div>
+    <script>
+      let pinned = false;
+      document.getElementById("edit").onclick = async () => {
+        await fogu.call("edit");
+        document.getElementById("edit").textContent = "Changed";
+      };
+      document.getElementById("pin").onclick = () => fogu.window.setAlwaysOnTop((pinned = !pinned));
+      document.getElementById("fs").onclick = () => fogu.window.toggleFullscreen();
+      fogu.window.on("resized", async () => document.body.classList.toggle("max", await fogu.window.isMaximized()));
+    </script>
+  </body>
+</html>

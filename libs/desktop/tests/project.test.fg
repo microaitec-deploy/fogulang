@@ -1,0 +1,142 @@
+// tools/project.fg: how build.fg / dev.fg read an app's UI (static folder or
+// Vite project, outDir, base) and pick the package manager and commands.
+import { test, expect } from "fogu:test"
+import fs from "fogu:fs"
+import path from "fogu:path"
+import project from "../tools/project.fg"
+
+const tmp = path.join(fs.tempDir(), "fogu-desktop-project-test-" + str(clock()))
+
+// an app folder with the given files ({ "web/package.json": "..." })
+fn app(name, files) {
+    const dir = path.join(tmp, name)
+    fs.removeAll(dir)
+    for rel, text in files {
+        fs.mkdir(path.dirname(path.join(dir, rel)))?
+        fs.writeText(path.join(dir, rel), text)?
+    }
+    fs.mkdir(dir)?
+    return dir
+}
+
+const VITE_PKG = `{ "name": "x", "scripts": { "build": "tsc && vite build" }, "devDependencies": { "vite": "^8.3.5" } }`
+
+test("outDir comes from the Vite config, else dist", () => {
+    expect(project.outDirFrom(nil)).toBe("dist")
+    expect(project.outDirFrom("export default defineConfig({ plugins: [react()] })")).toBe("dist")
+    expect(project.outDirFrom("export default { build: { outDir: 'build/ui', sourcemap: true } }")).toBe("build/ui")
+    expect(project.outDirFrom("build: {\n  outDir: \"../www\",\n}")).toBe("../www")
+    expect(project.outDirFrom("build: { outDir: `out` }")).toBe("out")
+    // not a literal: the default (fogu.json "desktop.outDir" overrides it)
+    expect(project.outDirFrom("build: { outDir: OUT }")).toBe("dist")
+})
+
+test("base is read and only a sub-path is overridden", () => {
+    expect(project.baseFrom("defineConfig({ base: './', plugins: [] })")).toBe("./")
+    expect(project.baseFrom("defineConfig({\n  base: \"/\",\n})")).toBe("/")
+    expect(project.baseFrom("defineConfig({ plugins: [] })")).toBe(nil)
+    // `database:` or `baseUrl:` are not `base:`
+    expect(project.baseFrom("const x = { database: 'a', baseUrl: '/b' }")).toBe(nil)
+    expect(project.baseOverride(nil)).toBe(nil)
+    expect(project.baseOverride("/")).toBe(nil)
+    expect(project.baseOverride("./")).toBe(nil)
+    expect(project.baseOverride("")).toBe(nil)
+    expect(project.baseOverride("/my-app/")).toBe("./")
+    expect(project.baseOverride("https://cdn.example.com/")).toBe("./")
+})
+
+test("Vite projects are detected by config or dependency", () => {
+    const a = app("detect", {
+        "cfg/vite.config.mts": "export default {}",
+        "dep/package.json": VITE_PKG,
+        "plain/index.html": "<p>hi</p>",
+        "other/package.json": `{ "dependencies": { "react": "^19" } }`,
+    })
+    expect(project.isViteProject(path.join(a, "cfg"))).toBe(true)
+    expect(project.isViteProject(path.join(a, "dep"))).toBe(true)
+    expect(project.isViteProject(path.join(a, "plain"))).toBe(false)
+    expect(project.isViteProject(path.join(a, "other"))).toBe(false)
+    expect(path.basename(project.configFile(path.join(a, "cfg")))).toBe("vite.config.mts")
+})
+
+test("ui(): a plain folder stays static (hello's layout)", () => {
+    const a = app("static", { "ui/index.html": "<p>hi</p>", "main.fg": "" })
+    const ui = project.ui(a, { ui: "ui" })?
+    expect(ui.kind).toBe("static")
+    expect(ui.dir).toBe(path.join(a, "ui"))
+    // the default folder is ui/, and a prebuilt "ui/dist" is static too
+    const byDefault = project.ui(a, nil)?
+    expect(byDefault.kind).toBe("static")
+    const prebuilt = project.ui(a, { ui: "ui/dist" })?
+    expect(prebuilt.kind).toBe("static")
+})
+
+test("ui(): a Vite project with its outDir and base", () => {
+    const a = app("vite", {
+        "web/package.json": VITE_PKG,
+        "web/vite.config.ts": "export default defineConfig({ base: '/sub/', build: { outDir: 'out' } })",
+        "main.fg": "",
+    })
+    const ui = project.ui(a, { ui: "web" })?
+    expect(ui.kind).toBe("vite")
+    expect(ui.root).toBe(path.join(a, "web"))
+    expect(ui.outDir).toBe("out")
+    expect(ui.out).toBe(path.join(a, "web", "out"))
+    expect(ui.base).toBe("/sub/")
+    expect(ui.baseOverride).toBe("./")
+    expect(ui.pkg.scripts.build).toBe("tsc && vite build")
+    // fogu.json "desktop.outDir" wins; "vite": false turns detection off
+    const custom = project.ui(a, { ui: "web", outDir: "../www" })?
+    expect(custom.out).toBe(path.join(a, "www"))
+    const off = project.ui(a, { ui: "web", vite: false })?
+    expect(off.kind).toBe("static")
+})
+
+test("ui(): vite: true without package.json is an error", () => {
+    const a = app("novite", { "web/index.html": "", "main.fg": "" })
+    const [_, err] = project.ui(a, { ui: "web", vite: true })
+    expect(err.message).toContain("has no package.json")
+})
+
+test("package manager: lockfile first, then bun, then npm", () => {
+    const all = (t) => true
+    const onlyNpm = (t) => t == "npm"
+    const none = (t) => false
+    const a = app("pm", {
+        "plain/package.json": "{}",
+        "npmlock/package-lock.json": "{}",
+        "bunlock/bun.lock": "",
+        "pnpm/pnpm-lock.yaml": "",
+    })
+    expect(project.packageManager(path.join(a, "plain"), all)).toBe("bun")
+    expect(project.packageManager(path.join(a, "plain"), onlyNpm)).toBe("npm")
+    expect(project.packageManager(path.join(a, "plain"), none)).toBe(nil)
+    expect(project.packageManager(path.join(a, "npmlock"), all)).toBe("npm")
+    expect(project.packageManager(path.join(a, "bunlock"), onlyNpm)).toBe("npm")
+    expect(project.packageManager(path.join(a, "pnpm"), all)).toBe("pnpm")
+})
+
+test("Windows programs seen from WSL do not count", () => {
+    expect(project.usableTool("/home/u/.bun/bin/bun", "linux")).toBe(true)
+    expect(project.usableTool("/mnt/c/Program Files/nodejs/npm", "linux")).toBe(false)
+    expect(project.usableTool("C:\\Program Files\\nodejs\\npm.cmd", "windows")).toBe(true)
+    expect(project.usableTool(nil, "linux")).toBe(false)
+})
+
+test("commands", () => {
+    const withScript = { scripts: { build: "vite build" } }
+    expect(project.installCommand("bun")).toBe("bun install")
+    expect(project.buildCommand("bun", withScript)).toBe("bun run build")
+    expect(project.buildCommand("bun", withScript, "--base ./")).toBe("bun run build --base ./")
+    expect(project.buildCommand("npm", withScript, "--base ./")).toBe("npm run build -- --base ./")
+    expect(project.buildCommand("npm", withScript)).toBe("npm run build")
+    expect(project.buildCommand("bun", {})).toBe("bun x vite build")
+    expect(project.buildCommand("npm", nil, "--base ./")).toBe("npx vite build --base ./")
+    expect(project.devCommand("bun", "127.0.0.1", 5173)).toBe("bun x vite --host 127.0.0.1 --port 5173 --strictPort")
+    expect(project.devCommand("npm", "127.0.0.1", 3000)).toBe("npx vite --host 127.0.0.1 --port 3000 --strictPort")
+})
+
+test("cleanup", () => {
+    fs.removeAll(tmp)
+    expect(fs.exists(tmp)).toBe(false)
+})

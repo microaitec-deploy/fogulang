@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Jobs</title>
+    <style>
+      body { font: 15px system-ui, sans-serif; margin: 24px; }
+      .job { margin: 8px 0; }
+      progress { width: 260px; }
+    </style>
+  </head>
+  <body>
+    <button id="start">Start a job</button>
+    <div id="jobs"></div>
+    <script>
+      const rows = new Map(); // job id → { bar, label, cancel }
+
+      document.getElementById("start").onclick = async () => {
+        const id = await fogu.call("job.start", { steps: 30 }); // returns at once
+        const div = document.createElement("div");
+        div.className = "job";
+        const bar = Object.assign(document.createElement("progress"), { max: 100, value: 0 });
+        const label = document.createElement("span");
+        const cancel = Object.assign(document.createElement("button"), { textContent: "Cancel" });
+        cancel.onclick = () => fogu.emit("job.cancel", id);
+        div.append(`#${id} `, bar, " ", label, " ", cancel);
+        document.getElementById("jobs").append(div);
+        rows.set(id, { bar, label, cancel });
+      };
+
+      fogu.on("job.progress", ({ id, done, total, percent }) => {
+        const r = rows.get(id);
+        if (!r) return;
+        r.bar.value = percent;
+        r.label.textContent = `${done}/${total}`;
+      });
+
+      fogu.on("job.done", ({ id, status, result }) => {
+        const r = rows.get(id);
+        if (!r) return;
+        r.label.textContent = status === "finished" ? `done: ${result}` : "cancelled";
+        r.cancel.remove();
+      });
+    </script>
+  </body>
+</html>

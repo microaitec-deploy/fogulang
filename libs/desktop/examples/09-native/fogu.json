@@ -1,0 +1,17 @@
+{
+  "name": "native",
+  "version": "0.1.0",
+  "description": "A menu bar, a global shortcut, notifications, a worker for CPU-bound work, window opacity, binary data and state kept across hot reloads",
+  "entry": "main.fg",
+  "desktop": {
+    "title": "Native features",
+    "identifier": "dev.fogu.examples.native",
+    "ui": "ui",
+    "visible": false
+  },
+  "scripts": {
+    "build": "fogu desktop build",
+    "build:debug": "fogu desktop build --debug"
+  },
+  "dependencies": {}
+}

@@ -1,0 +1,26 @@
+// The smallest fogu-desktop app: one window, one command the page calls and
+// one event Fogu pushes back.
+//
+//   fogu desktop dev               → the window, reloading on changes
+//   fogu desktop build --debug     → dist/counter (a window with devtools)
+//   fogu main.fg                   → no window: runs the command once
+import desktop from "desktop"
+
+const app = desktop.app({ name: "counter", title: "Counter", identifier: "dev.fogu.examples.counter" })
+app.createBrowser({ width: 360, height: 240 })    // the main window
+
+let count = 0
+
+// await fogu.call("increment", 1) in the page
+app.command("increment", fn(by) {
+    count += by ?? 1
+    app.emit("count", count)          // fogu.on("count", fn) in the page
+    return count                      // the value of the page's promise
+})
+
+// the definition is complete: show the window (returns at once)
+if !app.run() {
+    // without a window (plain `fogu main.fg`) there is no page: try the command here
+    print("increment(2) →", desktop.call("increment", 2)?)
+    print("increment()  →", desktop.call("increment")?)
+}

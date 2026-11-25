@@ -1,0 +1,17 @@
+{
+  "name": "background-task",
+  "version": "0.1.0",
+  "description": "fogu-desktop background jobs: start, progress events, cancel",
+  "entry": "main.fg",
+  "desktop": {
+    "title": "Jobs (background task)",
+    "identifier": "dev.fogu.examples.background-task",
+    "ui": "ui",
+    "visible": false
+  },
+  "scripts": {
+    "build": "fogu desktop build",
+    "build:debug": "fogu desktop build --debug"
+  },
+  "dependencies": {}
+}

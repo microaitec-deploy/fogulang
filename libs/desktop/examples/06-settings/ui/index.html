@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Settings</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 24px; }
+      body.dark { background: #1e1e1e; color: #eee; }
+      label { display: block; margin: 12px 0; }
+      .error { color: #e53935; }
+      code { font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <label>Theme
+      <select id="theme"><option>light</option><option>dark</option></select>
+    </label>
+    <label>Font size <input id="fontSize" type="number" min="10" max="32" /></label>
+    <p>
+      <button id="remember">Remember this window size</button>
+      <button id="reset">Reset</button>
+    </p>
+    <p id="error" class="error"></p>
+    <p>Saved in <code id="folder"></code></p>
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      function apply(s) {
+        document.body.classList.toggle("dark", s.theme === "dark");
+        document.body.style.fontSize = s.fontSize + "px";
+        $("theme").value = s.theme;
+        $("fontSize").value = s.fontSize;
+      }
+
+      async function set(changes) {
+        $("error").textContent = "";
+        try {
+          await fogu.call("settings.set", changes); // the "settings" event applies it
+        } catch (e) {
+          $("error").textContent = e.message;
+        }
+      }
+
+      fogu.on("settings", apply);
+      $("theme").onchange = () => set({ theme: $("theme").value });
+      $("fontSize").onchange = () => set({ fontSize: Number($("fontSize").value) });
+      $("remember").onclick = () => fogu.call("window.remember");
+      $("reset").onclick = () => fogu.call("settings.reset");
+
+      fogu.call("settings.get").then(apply);
+      fogu.call("data.folder").then((dir) => ($("folder").textContent = dir));
+    </script>
+  </body>
+</html>

@@ -1,0 +1,22 @@
+main resized 800x600
+any main resized
+any tool focus
+asked to close main
+any main closeRequested
+asked to close main
+any main closeRequested
+tray click
+tray double click
+open clicked
+onMenu Open
+menu Open checked=nil
+onMenu mute
+menu mute checked=true
+mute checked: true
+[{action: destroy, window: main}]
+[true]
+[new app, onMenu New, onMenu dark, run in tool]
+dark checked: true
+[{menu: [{id: File, items: [{accelerator: CmdOrCtrl+N, id: New, text: New}, -, {role: quit}], text: File}, {id: View, items: [{checked: false, id: dark, text: Dark}], text: View}], window: nil}, {menu: [{id: Tool, items: [{id: Run, text: Run}], text: Tool}], window: tool}]
+[CmdOrCtrl+Shift+K pressed, F12 released]
+[[desktop:shortcut, {op: register, shortcut: CmdOrCtrl+Shift+K}], [desktop:shortcut, {op: register, shortcut: F12}], [desktop:shortcut, {op: unregister, shortcut: F12}], [desktop:notify, {body: 3 files, title: Saved}], [desktop:notify, {icon: icons/a.png, title: T}]]

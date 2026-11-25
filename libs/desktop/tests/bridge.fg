@@ -1,0 +1,85 @@
+// The host -> program direction of the bridge, as the fogu-desktop host drives
+// it: Fogu.signal events (desktop:call, desktop:ui:<name>, desktop:reply) in,
+// captured Fogu.host.emit messages out. Expected output: bridge.out.
+import time from "fogu:time"
+import desktop from "../main.fg"
+
+const sent = []
+desktop.capture(fn(name, data) { sent.push({ name: name, data: data }) })
+
+fn waitFor(name, count) {
+    for _i in 0..400 {
+        if len(sent.filter((m) => m.name == name)) >= count {
+            break
+        }
+        time.delay(5ms)
+    }
+    return sent.filter((m) => m.name == name)
+}
+
+desktop.command("add", fn(p) { return p.a + p.b })
+desktop.command("fails", fn(p) { return nil, error("no way: " + str(p)) })
+desktop.command("slow", fn(p) {
+    time.delay(30ms)
+    return p
+})
+
+// commands: a slow one does not hold the others (each call is a task)
+Fogu.signal.emit("desktop:call", { id: 1, name: "slow", payload: "late" })
+Fogu.signal.emit("desktop:call", { id: 2, name: "add", payload: { a: 40, b: 2 } })
+Fogu.signal.emit("desktop:call", { id: 3, name: "fails", payload: "x" })
+Fogu.signal.emit("desktop:call", { id: 4, name: "nope", payload: nil })
+for m in waitFor("desktop:result", 4) {
+    print(m.data)
+}
+
+// page events
+const seen = []
+desktop.on("clicked", fn(d) { seen.push(d) })
+desktop.on("ping", fn() { seen.push("ping") })
+Fogu.signal.emit("desktop:ui:clicked", { x: 1 })
+Fogu.signal.emit("desktop:ui:ping", nil)
+Fogu.signal.emit("desktop:ui:other", { x: 2 })
+time.delay(30ms)
+print(seen)
+
+// requests: the program waits (cooperatively) for desktop:reply. A fake host
+// answers each request as it arrives: open → a path, anything else → an error.
+fg fn() {
+    for i in 0..2 {
+        const r = waitFor("desktop:request", i + 1)[i]
+        if r.data.op == "dialog.open" {
+            Fogu.signal.emit("desktop:reply", { id: r.data.id, ok: true, value: "/tmp/a.txt" })
+        } else {
+            Fogu.signal.emit("desktop:reply", { id: r.data.id, ok: false, error: "cancelled" })
+        }
+    }
+}()
+print(desktop.dialog.open({ filters: { Text: ["txt"] } }))
+print(desktop.dialog.confirm("Sure?"))
+print(sent.filter((m) => m.name == "desktop:request").map((m) => m.data))
+
+// a command that uses a dialog: the call waits for the reply, then answers
+desktop.command("pick", fn() {
+    const p = desktop.dialog.open()?
+    return "picked " + p
+})
+fg fn() {
+    const r = waitFor("desktop:request", 3)[2]
+    Fogu.signal.emit("desktop:reply", { id: r.data.id, ok: true, value: "b.png" })
+}()
+Fogu.signal.emit("desktop:call", { id: 5, name: "pick", payload: nil })
+print(waitFor("desktop:result", 5)[4].data)
+
+// bytes: { "$bytes": base64 } from the page is a buffer; a buffer goes back the same way
+desktop.command("invert", fn(p) {
+    const out = []
+    for x in p.data {
+        out.push(255 - x)
+    }
+    return { size: len(p.data), kind: typeof(p.data), data: bytes(out) }
+})
+Fogu.signal.emit("desktop:call", { id: 6, name: "invert", payload: { data: { "$bytes": "AAH/" } } })
+print(waitFor("desktop:result", 6)[5].data)
+desktop.emit("blob", [bytes("hi"), { "$bytes": "x", other: 1 }])
+print(sent.filter((m) => m.name == "desktop:event").map((m) => m.data))

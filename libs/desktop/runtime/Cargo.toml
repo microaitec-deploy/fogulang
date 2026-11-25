@@ -1,0 +1,83 @@
+[package]
+name = "fogu-desktop"
+version = "0.1.0"
+edition = "2024"
+description = "Desktop host for Fogu programs: a Tauri window whose backend is a Fogu program"
+authors = ["Edmilson Soares"]
+license = "MIT"
+build = "build.rs"
+
+# the code is a library (src/lib.rs, `run()`): the desktop executable calls it,
+# and `fogu desktop build --android/--ios` links it into the mobile app (that
+# build adds crate-type = ["staticlib", "cdylib", "rlib"] to its own copy)
+[lib]
+name = "fogu_desktop_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fogu-desktop"
+path = "src/main.rs"
+
+[dependencies]
+# the Fogu runtime (embedded: fogu::embed::Runtime); only the stdlib areas the app enables
+fogu = { path = "../../../lang", default-features = false }
+# tray-icon: desktop.tray(...); image-png/image-ico: tray icons from files
+tauri = { version = "2", features = ["tray-icon", "image-png", "image-ico"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "time"] }
+include_dir = "0.7"
+tauri-plugin-dialog = "2"
+# desktop.notify(...)
+tauri-plugin-notification = "2"
+
+# desktop.shortcut(...): global shortcuts (desktop only)
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-global-shortcut = "2"
+
+# window opacity: native calls per OS (Tauri 2 has no opacity setting)
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+sha2 = "0.10"
+serde_json = "1"
+
+[features]
+# Fogu standard library areas (see lang/Cargo.toml); `network` = fogu:http, fogu:web, fogu:websocket…
+default = ["network", "macos-private-api"]
+# transparent windows on macOS: the NSWindow private API (the App Store rejects
+# it; fogu.json "desktop.macOSPrivateApi": false leaves it out). Nothing on other OSes.
+macos-private-api = ["tauri/macos-private-api"]
+network = ["fogu/network"]
+database = ["fogu/database"]
+messaging = ["fogu/messaging"]
+ops = ["fogu/ops"]
+ai = ["fogu/ai"]
+media = ["fogu/media"]
+rpc = ["fogu/rpc"]
+full = ["network", "database", "messaging", "ops", "ai", "media", "rpc"]
+# OpenSSL compiled from source (mobile builds: Android has no system libssl for the Fogu runtime)
+vendored-openssl = ["fogu/vendored-openssl"]
+
+[profile.release]
+strip = true
+lto = "thin"
+
+# standalone: not part of the lang/ workspace
+[workspace]
+
+# debug builds (build.fg --debug, dev.fg): no debug info. The Windows/Tauri
+# crates with full debug info need several GB of RAM to compile (rustc was
+# OOM-killed on an 8 GB machine); the console and the devtools are what the
+# debug build is for.
+[profile.dev]
+debug = false
+
+[profile.dev.package."*"]
+debug = false

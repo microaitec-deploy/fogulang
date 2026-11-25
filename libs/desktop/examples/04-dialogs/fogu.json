@@ -1,0 +1,17 @@
+{
+  "name": "dialogs",
+  "version": "0.1.0",
+  "description": "fogu-desktop native dialogs: open, save as, pick a folder, message and confirm",
+  "entry": "main.fg",
+  "desktop": {
+    "title": "Text editor (dialogs)",
+    "identifier": "dev.fogu.examples.dialogs",
+    "ui": "ui",
+    "visible": false
+  },
+  "scripts": {
+    "build": "fogu desktop build",
+    "build:debug": "fogu desktop build --debug"
+  },
+  "dependencies": {}
+}

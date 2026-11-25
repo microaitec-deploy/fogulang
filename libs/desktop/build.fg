@@ -1,0 +1,170 @@
+// build.fg — makes the desktop executable of a Fogu app.
+//
+//   fogu desktop build [app-dir] [options]      (app-dir: default the current folder)
+//
+//   --target <triple>   cross-compile: a Rust target triple, or `windows`
+//                       (x86_64-pc-windows-gnu from Linux/macOS: needs mingw-w64 and
+//                       `rustup target add x86_64-pc-windows-gnu`)
+//   --debug             a debug host (has a console and devtools; compiled
+//                       with cargo: needs Rust)
+//   --zip               also dist/<name>-<version>-<platform>.zip (.tar.gz on
+//                       Linux): the executable (the .app on macOS, share/ on Linux)
+//   --nsis              also a Windows installer: dist/<name>-setup.nsi, compiled
+//                       to <name>-<version>-setup.exe when NSIS (`makensis`) is
+//                       installed — on Windows, Linux or macOS
+//   --no-stamp          leave the host's icon and version information (Windows)
+//   --features a,b      the Fogu standard library areas of the host (overrides
+//                       fogu.json "desktop.features"; default: network)
+//   --cargo             do not use a prebuilt host: compile one (needs Rust)
+//   --rebuild-host      compile the generic host again (after a Fogu update)
+//   --installer         compile the app into the Rust crate and make installers
+//                       with the Tauri CLI (`cargo tauri build`: .msi/.exe setup,
+//                       .deb/.rpm/.AppImage, .dmg); needs Rust and
+//                       `cargo install tauri-cli --version "^2"`
+//
+// Mobile (Tauri 2; see tools/mobile.fg and the README's "Mobile" section):
+//
+//   --android           an Android package (APK and AAB) in <app-dir>/dist/:
+//                       needs the Tauri CLI, a JDK 17, the Android SDK + NDK
+//                       and `rustup target add aarch64-linux-android`
+//   --ios               an iOS package (IPA): needs a Mac with Xcode and CocoaPods
+//   --apk / --aab       only that Android package
+//   --mobile-target t   aarch64 (default) · armv7 · i686 · x86_64 (Android);
+//                       aarch64 · aarch64-sim · x86_64 (iOS); comma-separated
+//   --check             only check the prerequisites (and say how to install
+//                       what is missing)
+//   --reinit            make the Gradle / Xcode project again
+//
+// The app folder has fogu.json, the entry (main.fg) and the UI folder
+// (fogu.json "desktop.ui", default "ui"): plain files with an index.html, or a
+// Vite project (vite.config.* or vite in package.json, or "desktop.vite": true),
+// which is installed if needed and built, and whose outDir is bundled. The
+// result is <app-dir>/dist/<name> (<name>.exe on Windows): one file, the Fogu
+// program and the UI are inside it — the *generic host* (prebuilt with the
+// library, or compiled once and cached in $FOGU_HOME/desktop/hosts/) with the
+// app appended as a bundle by `fogu build --compile --runtime <host>`. No
+// Rust is needed. The executable carries the app's identity from fogu.json
+// (name, version, "desktop.title", "desktop.identifier") and icons/:
+// Windows — the icon and the version information inside the .exe; macOS —
+// dist/<Title>.app (Info.plist, .icns); Linux — dist/share/ (a .desktop
+// entry and the icons). The work is done by tools/build.fg (shared with dev.fg).
+import path from "fogu:path"
+import tools from "./tools/build.fg"
+import mobile from "./tools/mobile.fg"
+
+fn usage() {
+    print("usage: fogu build.fg [app-dir] [--target <triple>|windows] [--debug] [--zip] [--nsis] [--no-stamp] [--features a,b] [--cargo] [--rebuild-host] [--installer]")
+    print("       fogu build.fg [app-dir] --android|--ios [--apk] [--aab] [--mobile-target aarch64,…] [--debug] [--check] [--reinit]")
+    Fogu.exit(2)
+}
+
+let appArg = nil
+let target = nil
+let debug = false
+let installer = false
+let featuresArg = nil
+let rebuildHost = false
+let cargoHost = false
+let zipIt = false
+let nsis = false
+let stamp = true
+let platform = nil
+let apk = false
+let aab = false
+let mobileTargets = nil
+let checkOnly = false
+let reinit = false
+let i = 0
+const args = Fogu.args
+while i < len(args) {
+    const a = args[i]
+    if a == "--target" && i + 1 < len(args) {
+        target = args[i + 1]
+        i += 1
+    } else if a == "--features" && i + 1 < len(args) {
+        featuresArg = args[i + 1].split(",").map((s) => s.trim()).filter((s) => s != "")
+        i += 1
+    } else if a == "--debug" {
+        debug = true
+    } else if a == "--installer" {
+        installer = true
+    } else if a == "--rebuild-host" {
+        rebuildHost = true
+    } else if a == "--cargo" {
+        cargoHost = true
+    } else if a == "--zip" {
+        zipIt = true
+    } else if a == "--nsis" {
+        nsis = true
+    } else if a == "--no-stamp" {
+        stamp = false
+    } else if a == "--android" || a == "--ios" {
+        platform = a.slice(2)
+    } else if a == "--apk" {
+        apk = true
+    } else if a == "--aab" {
+        aab = true
+    } else if a == "--mobile-target" && i + 1 < len(args) {
+        mobileTargets = args[i + 1].split(",").map((s) => s.trim()).filter((s) => s != "")
+        i += 1
+    } else if a == "--check" {
+        checkOnly = true
+    } else if a == "--reinit" {
+        reinit = true
+    } else if a == "-h" || a == "--help" {
+        usage()
+    } else if a.starts_with("-") || appArg != nil {
+        print("unknown argument: " + a)
+        usage()
+    } else {
+        appArg = a
+    }
+    i += 1
+}
+if appArg == nil {
+    appArg = "."
+}
+
+if platform != nil {
+    if installer || target != nil {
+        print(`desktop build: --${platform} does not combine with --installer or --target (use --mobile-target)`)
+        Fogu.exit(2)
+    }
+    const [_m, merr] = mobile.build({
+        app: path.absolute(appArg),
+        platform: platform,
+        targets: mobileTargets,
+        debug: debug,
+        apk: apk,
+        aab: aab,
+        features: featuresArg,
+        reinit: reinit,
+        checkOnly: checkOnly,
+    })
+    if merr != nil {
+        print("desktop build: " + merr.message)
+        Fogu.exit(1)
+    }
+    Fogu.exit(0)
+}
+if apk || aab || mobileTargets != nil || checkOnly || reinit {
+    print("desktop build: --apk, --aab, --mobile-target, --check and --reinit go with --android or --ios")
+    Fogu.exit(2)
+}
+
+const [_, err] = tools.build({
+    app: path.absolute(appArg),
+    target: target,
+    debug: debug,
+    installer: installer,
+    features: featuresArg,
+    rebuildHost: rebuildHost,
+    cargoHost: cargoHost,
+    zip: zipIt,
+    nsis: nsis,
+    stamp: stamp,
+})
+if err != nil {
+    print("desktop build: " + err.message)
+    Fogu.exit(1)
+}

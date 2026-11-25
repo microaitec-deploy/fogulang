@@ -1,0 +1,28 @@
+notes Notes com.example.notes
+app:
+  desktop:window {closeToTray: true}
+main [true, nil]
+main window:
+  desktop:window {height: 720, minHeight: 480, minWidth: 640, resizable: true, title: Notes, width: 1100, window: main}
+  desktop:watch {listen: closeRequested}
+  desktop:watch {listen: resized}
+  desktop:window {title: Notes — draft, window: main}
+  desktop:window {action: center, window: main}
+second window, before the host answered:
+  desktop:request {args: {height: 300, label: about, title: About, transparent: true, url: about.html, width: 400}, id: 1, op: window.create}
+  desktop:watch {listen: destroyed}
+ready: [true, nil]
+after the answer:
+  desktop:window {height: 320, width: 420, window: about}
+  desktop:window {action: hide, window: about}
+window-3
+ready: cannot open the window 'window-3'
+third window:
+  desktop:request {args: {label: window-3, title: Notes, url: #/help}, id: 2, op: window.create}
+  desktop:log desktop: createBrowser 'window-3': cannot open the window 'window-3'
+[pong, nil]
+run: true
+tray and run:
+  desktop:tray {icon: icons/tray.png, id: main, menu: [{action: quit, id: Quit, text: Quit}], op: set, tooltip: Notes}
+  desktop:window {visible: true, window: main}
+[main asked to close, main 800x600, about closed]

@@ -1,0 +1,44 @@
+// The counter of examples/01-counter with the app and its windows defined
+// here instead of fogu.json "desktop" (compare the two folders).
+//
+// fogu.json keeps what is needed before this program runs: the name and the
+// version (the build), the identifier (the build and the data folders), and
+// "visible": false, so the main window is not seen at the host's default
+// size: app.run() shows it once it is set up.
+//
+//   fogu desktop dev      → the window, reloading on changes
+//   fogu desktop build    → dist/counter-in-code
+//   fogu main.fg          → no window: runs the command once
+import desktop from "desktop"
+
+const app = desktop.app({ name: "counter-in-code", title: "Counter", identifier: "dev.fogu.examples.counter-in-code" })
+
+// the main window: what fogu.json "desktop" would say
+const win = app.createBrowser({ width: 360, height: 240, minWidth: 300, minHeight: 200, resizable: true, center: true })
+
+let count = 0
+win.on("close", fn(e) { app.log("the counter stopped at", count) })
+
+// await fogu.call("increment", 1) in the page
+app.command("increment", fn(by) {
+    count += by ?? 1
+    app.emit("count", count)
+    win.setTitle(`Counter — ${count}`)
+    return count
+})
+
+// a second window, opened from the menu
+app.menu([
+    { text: "Help", items: [
+        { text: "About", onClick: fn(e) {
+            app.createBrowser({ label: "about", title: "About", width: 320, height: 160, resizable: false, url: "about.html" })
+        } },
+    ] },
+])
+
+// the definition is complete: show the window (returns at once)
+if !app.run() {
+    // without a window (plain `fogu main.fg`) there is no page: try the command here
+    print("increment(2) →", desktop.call("increment", 2)?)
+    print("increment()  →", desktop.call("increment")?)
+}

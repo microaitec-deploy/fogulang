@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tray and windows</title>
+    <style>
+      :root { color-scheme: light dark; font: 15px/1.5 system-ui, sans-serif; }
+      body { margin: 0; padding: 20px; }
+      h1 { font-size: 20px; margin: 0 0 12px; }
+      .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+      button { padding: 7px 12px; }
+      pre { background: rgba(127, 127, 127, 0.12); padding: 10px; border-radius: 6px; min-height: 3em; }
+    </style>
+  </head>
+  <body>
+    <h1>Tray and windows</h1>
+    <p>Close this window: it goes to the tray. The tray menu brings it back, or quits.</p>
+    <div class="row">
+      <button id="min">Minimize</button>
+      <button id="max">Maximize / restore</button>
+      <button id="top">Always on top</button>
+      <button id="small">640×480 (Fogu)</button>
+      <button id="about">About window</button>
+      <button id="state">State</button>
+    </div>
+    <pre id="log"></pre>
+    <script>
+      // window.fogu is injected by the host; fogu.window is this window
+      const log = (x) => (document.getElementById("log").textContent = typeof x === "string" ? x : JSON.stringify(x, null, 2));
+      let onTop = false;
+      document.getElementById("min").onclick = () => fogu.window.minimize();
+      document.getElementById("max").onclick = () => fogu.window.toggleMaximize();
+      document.getElementById("top").onclick = () => fogu.window.setAlwaysOnTop((onTop = !onTop));
+      document.getElementById("small").onclick = () => fogu.call("size", { width: 640, height: 480 });
+      document.getElementById("about").onclick = () => fogu.call("about");
+      document.getElementById("state").onclick = async () => log(await fogu.window.state());
+      fogu.on("size", (s) => log(`resized to ${Math.round(s.width)}×${Math.round(s.height)}`));
+      fogu.on("paused", (p) => log(p ? "updates paused (tray menu)" : "updates resumed"));
+      fogu.tray.on("click", () => log("tray icon clicked"));
+      fogu.window.on("moved", (p) => (document.title = `Tray and windows (${p.x}, ${p.y})`));
+    </script>
+  </body>
+</html>

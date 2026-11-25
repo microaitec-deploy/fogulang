@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Events</title>
+    <style>
+      body { font: 15px system-ui, sans-serif; margin: 24px; }
+      #log { font: 12px ui-monospace, monospace; background: #f4f4f4; padding: 8px; height: 220px; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <p>Uptime: <b id="uptime">0</b>s</p>
+    <p id="notice"></p>
+    <p>
+      <input id="title" placeholder="Window title" />
+      <button id="set">Set title</button>
+      <button id="ping">Ping</button>
+    </p>
+    <pre id="log"></pre>
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      // Fogu → page
+      fogu.on("clock", (d) => ($("uptime").textContent = d.uptime));
+      fogu.on("notice", (text) => ($("notice").textContent = text));
+      // "*" sees every event: (name, data)
+      const stopLog = fogu.on("*", (name, data) => {
+        $("log").textContent = `${name} ${JSON.stringify(data)}\n` + $("log").textContent;
+      });
+
+      // page → Fogu (fire and forget: no return value)
+      fogu.emit("hello", { userAgent: navigator.userAgent });
+      $("set").onclick = () => fogu.emit("set-title", $("title").value);
+
+      // fogu.once: wait for the next event of a name
+      $("ping").onclick = async () => {
+        const reply = fogu.once("pong");
+        fogu.emit("ping");
+        const { ms } = await reply;
+        $("notice").textContent = `pong after ${ms} ms of uptime`;
+      };
+
+      // the events queued before the page loaded have been delivered
+      window.addEventListener("fogu:ready", () => console.log("fogu ready"));
+    </script>
+  </body>
+</html>

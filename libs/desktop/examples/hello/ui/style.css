@@ -1,0 +1,98 @@
+:root {
+  --bg: #f6f4f1;
+  --card: #ffffff;
+  --text: #1d1b19;
+  --muted: #7a736b;
+  --line: #e7e2dc;
+  --accent: #e8581c;
+  --accent-text: #ffffff;
+  --danger: #c0352b;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161412;
+    --card: #211e1b;
+    --text: #f1ece6;
+    --muted: #9b938a;
+    --line: #34302b;
+    --accent: #ff7a3d;
+    --accent-text: #1a0e07;
+    --danger: #ff8a80;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  display: flex;
+  flex-direction: column;
+}
+main {
+  flex: 1;
+  width: 100%;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 28px 20px 12px;
+}
+h1 { margin: 0; font-size: 28px; letter-spacing: -0.02em; }
+.sub { margin: 2px 0 20px; color: var(--muted); }
+.muted { color: var(--muted); }
+form { display: flex; gap: 8px; }
+input#text {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+input#text:focus { border-color: var(--accent); }
+button {
+  font: inherit;
+  cursor: pointer;
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 16px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+button.link { background: none; color: var(--muted); padding: 4px 6px; font-weight: 500; }
+button.link:hover { color: var(--text); }
+#error { color: var(--danger); margin: 8px 2px 0; }
+ul { list-style: none; margin: 18px 0 0; padding: 0; }
+li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 6px;
+}
+li label { flex: 1; display: flex; align-items: center; gap: 10px; cursor: pointer; min-width: 0; }
+li span { overflow-wrap: anywhere; }
+li.done span { text-decoration: line-through; color: var(--muted); }
+li input { accent-color: var(--accent); width: 17px; height: 17px; }
+li button { background: none; color: var(--muted); padding: 2px 6px; font-size: 18px; line-height: 1; }
+li button:hover { color: var(--danger); }
+footer { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; flex-wrap: wrap; gap: 6px; }
+#status { text-align: center; padding: 10px; font-size: 12px; }
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: 40px;
+  transform: translateX(-50%);
+  background: var(--text);
+  color: var(--bg);
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+}

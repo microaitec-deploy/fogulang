@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Counter</title>
+    <style>
+      body { font: 16px system-ui, sans-serif; display: grid; place-items: center; height: 100vh; margin: 0; }
+      output { font-size: 48px; display: block; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <output id="n">0</output>
+      <button id="plus">+1</button>
+      <button id="plus10">+10</button>
+    </main>
+    <script>
+      // window.fogu is injected by the host: no import, no <script src>.
+      const n = document.getElementById("n");
+      document.getElementById("plus").onclick = () => fogu.call("increment", 1);
+      document.getElementById("plus10").onclick = async () => {
+        const value = await fogu.call("increment", 10); // the command's return value
+        console.log("now", value);
+      };
+      fogu.on("count", (value) => (n.textContent = value)); // desktop.emit("count", …)
+    </script>
+  </body>
+</html>

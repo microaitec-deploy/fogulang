@@ -1,0 +1,19 @@
+{
+  "name": "hello",
+  "version": "0.1.0",
+  "description": "A todo list: a fogu-desktop example (Fogu backend, HTML/JS frontend)",
+  "entry": "main.fg",
+  "license": "MIT",
+  "desktop": {
+    "title": "Fogu Todo",
+    "identifier": "dev.fogu.examples.hello",
+    "ui": "ui",
+    "visible": false
+  },
+  "scripts": {
+    "build": "fogu desktop build",
+    "build:debug": "fogu desktop build --debug",
+    "test": "fogu test"
+  },
+  "dependencies": {}
+}

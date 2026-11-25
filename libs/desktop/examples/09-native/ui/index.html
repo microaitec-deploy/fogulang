@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Native features</title>
+<style>
+  :root { color-scheme: light dark; font: 15px/1.5 system-ui, sans-serif; }
+  body { margin: 0; padding: 20px 24px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.hint { margin: 0 0 16px; opacity: .7; }
+  section { display: grid; grid-template-columns: 180px 1fr; gap: 10px 14px; align-items: center; }
+  button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid #8884; background: #8881; cursor: pointer; }
+  output { font-family: ui-monospace, Consolas, monospace; }
+  #log { margin-top: 18px; font: 12px/1.4 ui-monospace, Consolas, monospace; white-space: pre-wrap; opacity: .8; }
+</style>
+</head>
+<body>
+<h1>Native features</h1>
+<p class="hint">Menu bar · Ctrl+Shift+F9 from anywhere · File → Notify me · View → See-through window</p>
+<section>
+  <button id="click">Click</button><output id="clicks">kept across hot reloads</output>
+  <button id="primes">Primes below 2,000,000</button><output id="count">runs in a worker; the UI stays responsive</output>
+  <button id="ping">Ping (fogu.call)</button><output id="pong"></output>
+  <button id="bytes">Reverse bytes</button><output id="rev"></output>
+  <button id="shrink">Shrink to 100×100</button><output id="size">clamped to the minimum size</output>
+  <button id="notify">Notify</button><output></output>
+</section>
+<div id="log"></div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const log = (t) => { $("log").textContent = t + "\n" + $("log").textContent; };
+  $("click").onclick = async () => { $("clicks").textContent = await fogu.call("click"); };
+  $("primes").onclick = async () => {
+    $("count").textContent = "counting…";
+    const t = performance.now();
+    const n = await fogu.call("primes", 2000000);
+    $("count").textContent = n + " primes in " + Math.round(performance.now() - t) + " ms";
+  };
+  $("ping").onclick = async () => {
+    const t = performance.now();
+    await fogu.call("size");
+    $("pong").textContent = "answered in " + Math.round(performance.now() - t) + " ms";
+  };
+  $("bytes").onclick = async () => {
+    const out = await fogu.call("reverse", new Uint8Array([1, 2, 3, 250]));
+    $("rev").textContent = out.constructor.name + " [" + Array.from(out) + "]";
+  };
+  $("shrink").onclick = async () => {
+    await fogu.call("shrink");
+    setTimeout(async () => { const s = await fogu.call("size"); $("size").textContent = Math.round(s.width) + "×" + Math.round(s.height); }, 300);
+  };
+  $("notify").onclick = () => fogu.call("notify", "Hello from the page");
+  fogu.on("menu", (item) => log("menu: " + item));
+  fogu.on("shortcut", (s) => log("shortcut: " + s));
+  fogu.onReload(() => log("the Fogu program was reloaded"));
+  fogu.on("desktop:error", (e) => log("error: " + e.message));
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+/* Tailwind CSS 4, then HeroUI's theme and component styles (they are
+   Tailwind layers: utility classes override them). */
+@import "tailwindcss";
+@import "@heroui/styles";
+
+/* the dark theme of HeroUI applies under .dark (set on <html> by App.tsx) */
+@custom-variant dark (&:where(.dark, .dark *));
+
+html,
+body,
+#app {
+  height: 100%;
+}

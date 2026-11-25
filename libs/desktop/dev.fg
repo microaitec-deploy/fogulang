@@ -1,0 +1,550 @@
+// dev.fg — the development loop of an app (a Vite UI, or a plain ui/ folder):
+//
+//   fogu desktop dev [app-dir] [options]        (app-dir: default the current folder)
+//
+//   --port <n>          the Vite dev server's port (default 5173)
+//   --host <ip>         its address (default 127.0.0.1)
+//   --target <t>        windows | native (default: windows under WSL, else native)
+//   --features a,b      Fogu stdlib areas of the host (overrides fogu.json
+//                       "desktop.features"; default: network)
+//   --cargo             compile the debug host with cargo (a console and the
+//                       devtools; needs Rust) instead of using a prebuilt host
+//   --no-launch         serve, but do not start the window (start the host
+//                       yourself, see the message); Ctrl+C stops Vite
+//   --no-watch          do not reload when the Fogu code changes
+//   --restart           on a Fogu change, restart the window instead of
+//                       reloading the program in place
+//   --rebuild-host      compile the generic host again (after a Fogu update)
+//
+// 1. installs the UI's packages if needed (bun, else npm);
+// 2. finds the *generic host* for the platform and the app's areas, without
+//    Rust when it can: a host cached in $FOGU_HOME/desktop/hosts/, else a
+//    prebuilt one (hosts/ of the library, $FOGU_DESKTOP_HOSTS), else — or
+//    with --cargo — a debug host compiled with cargo (once, then cached).
+//    It says which one it uses. A prebuilt host is a release build: it has
+//    no devtools, and on Windows no console (the program's log file is
+//    shown here instead);
+// 3. starts `vite` on http://<host>:<port>/ (edits to the UI → HMR); a plain
+//    UI folder needs no server: the host serves it and reloads the pages
+//    when one of its files changes;
+// 4. runs the host with FOGU_DESKTOP_PROGRAM_DIR = the app folder and
+//    FOGU_DESKTOP_DEV_URL = the dev server: the Fogu program runs in place
+//    (no copy, no build) and the window loads the dev page, where window.fogu
+//    works. A Windows host runs as a copy named <name>.exe with the app's
+//    icon and version information, so the Task Manager and the task bar's
+//    menu name the app (in $FOGU_HOME/desktop/dev/<name>/; under WSL with the Windows
+//    target in %LOCALAPPDATA%\fogu-desktop-dev\<name>\ — WSL runs .exe
+//    files; Windows reaches the dev server through WSL's localhost
+//    forwarding and reads the app over \\wsl$);
+// 5. on a change of the Fogu code (.fg files, fogu.json) the host reloads
+//    the program in place (FOGU_DESKTOP_RELOAD=1): a new Fogu runtime runs
+//    main.fg again, the window and the page stay (the page gets the event
+//    "desktop:reloaded"; desktop.keep / desktop.kept carry state across);
+//    with --restart the window is restarted instead (about a second);
+// 6. when the window closes (or on Ctrl+C) it stops Vite and ends.
+import fs from "fogu:fs"
+import http from "fogu:http"
+import path from "fogu:path"
+import process from "fogu:process"
+import regex from "fogu:regex"
+import shell from "fogu:shell"
+import time from "fogu:time"
+import packaging from "./tools/package.fg"
+import pe from "./tools/pe.fg"
+import project from "./tools/project.fg"
+import tools from "./tools/build.fg"
+
+fn fail(msg) {
+    print("desktop dev: " + msg)
+    stopVite()
+    Fogu.exit(1)
+}
+
+fn usage() {
+    print("usage: fogu dev.fg <app-dir> [--port 5173] [--host 127.0.0.1] [--target windows|native] [--features a,b] [--cargo] [--no-launch] [--no-watch] [--restart] [--rebuild-host]")
+    Fogu.exit(2)
+}
+
+// ---------- arguments ----------
+let appArg = nil
+let port = project.DEFAULT_PORT
+let host = "127.0.0.1"
+let targetArg = nil
+let featuresArg = nil
+let launch = true
+let watch = true
+let restartOnChange = false
+let rebuildHost = false
+let cargoHost = false
+let i = 0
+const args = Fogu.args
+while i < len(args) {
+    const a = args[i]
+    if a == "--port" && i + 1 < len(args) {
+        port = int(args[i + 1])
+        i += 1
+    } else if a == "--host" && i + 1 < len(args) {
+        host = args[i + 1]
+        i += 1
+    } else if a == "--target" && i + 1 < len(args) {
+        targetArg = args[i + 1]
+        i += 1
+    } else if a == "--features" && i + 1 < len(args) {
+        featuresArg = args[i + 1].split(",").map((s) => s.trim()).filter((s) => s != "")
+        i += 1
+    } else if a == "--no-launch" {
+        launch = false
+    } else if a == "--no-watch" {
+        watch = false
+    } else if a == "--restart" {
+        restartOnChange = true
+    } else if a == "--rebuild-host" {
+        rebuildHost = true
+    } else if a == "--cargo" {
+        cargoHost = true
+    } else if a == "-h" || a == "--help" {
+        usage()
+    } else if a.starts_with("-") || appArg != nil {
+        print("unknown argument: " + a)
+        usage()
+    } else {
+        appArg = a
+    }
+    i += 1
+}
+if appArg == nil {
+    usage()
+}
+
+fn isWsl() {
+    if Fogu.os != "linux" {
+        return false
+    }
+    if Fogu.env.WSL_DISTRO_NAME != nil {
+        return true
+    }
+    const [v, _] = fs.readText("/proc/version")
+    return v != nil && v.lower().contains("microsoft")
+}
+const wsl = isWsl()
+// "windows" from WSL (or Linux with mingw) cross-compiles; "native" builds for this OS
+let target = nil
+if targetArg == "windows" || (targetArg == nil && wsl) {
+    target = "windows"
+} else if targetArg != nil && targetArg != "native" {
+    target = targetArg
+}
+const windowsExe = target == "windows" || Fogu.os == "windows"
+const crossFromWsl = wsl && target == "windows"
+
+// ---------- the app ----------
+const app = path.absolute(appArg)
+const [manifest, merr] = project.manifest(app)
+if merr != nil {
+    fail(merr.message)
+}
+const name = manifest.name ?? path.basename(app)
+// the host's areas: the command line, else fogu.json "desktop.features"
+const features = featuresArg ?? (manifest.desktop ?? {}).features
+const [ui, uerr] = project.ui(app, manifest.desktop)
+if uerr != nil {
+    fail(uerr.message)
+}
+// a plain UI folder: no Vite, the host serves the folder and reloads the pages
+const plainUi = ui.kind != "vite"
+const uiRoot = match plainUi {
+    true => ui.dir
+    _ => ui.root
+}
+let pm = nil
+if !plainUi {
+    const [p, perr] = tools.installDeps(ui)
+    if perr != nil {
+        fail(perr.message)
+    }
+    pm = p
+}
+const url = `http://${host}:${port}/`
+
+// ---------- Vite (in the background; stopped at the end) ----------
+const runDir = path.join(fs.tempDir(), `fogu-desktop-dev-${name}-${process.pid}`)
+fs.mkdir(runDir)?
+const vitePid = path.join(runDir, "vite.pid")
+let viteRunning = false
+let viteExited = false
+
+fn readPid(file) {
+    if !fs.isFile(file) {
+        return nil
+    }
+    const [text, _] = fs.readText(file)
+    if text == nil || text.trim() == "" {
+        return nil
+    }
+    return text.trim()
+}
+
+fn startVite() {
+    const cmd = project.devCommand(pm, host, port)
+    print("> " + cmd + "   (in " + ui.root + ")")
+    viteRunning = true
+    fg fn() {
+        if Fogu.os == "windows" {
+            // Start-Process gives the process id (to stop the tree with taskkill)
+            const ps = `$p = Start-Process -NoNewWindow -PassThru -FilePath cmd -ArgumentList '/c', '${cmd}' -WorkingDirectory '${ui.root}'; Set-Content -Path '${vitePid}' -Value $p.Id; $p.WaitForExit()`
+            process.run("powershell", ["-NoProfile", "-Command", ps])
+        } else {
+            // its own process group (setsid) so the whole tree stops together
+            const setsid = match shell.which("setsid") {
+                nil => ""
+                _ => "setsid "
+            }
+            shell.exec(`${setsid}sh -c ${shell.quote("echo $$ > " + shell.quote(vitePid) + "; exec " + cmd)}`, { cwd: ui.root })
+        }
+        viteExited = true
+    }()
+}
+
+fn stopVite() {
+    if !viteRunning {
+        return nil
+    }
+    viteRunning = false
+    const pid = readPid(vitePid)
+    if pid == nil {
+        return nil
+    }
+    if Fogu.os == "windows" {
+        process.run("taskkill", ["/T", "/F", "/PID", pid])
+    } else {
+        // the group first (setsid), then the process itself
+        process.run("sh", ["-c", `kill -TERM -- -${pid} 2>/dev/null || kill -TERM ${pid} 2>/dev/null`])
+    }
+    fs.removeAll(runDir)
+    return nil
+}
+
+fn serverUp() {
+    const [res, err] = http.get(url, { timeout: 2s })
+    return err == nil && res.status < 500
+}
+
+// ---------- the host ----------
+// The generic host (cached, prebuilt, or compiled with cargo: tools.host says
+// which): the app is not compiled into it; it runs the app folder in place.
+fn buildDev() {
+    for line in tools.missingAreasReport(tools.missingAreas(app, features, [uiRoot]), features) {
+        print("warning: " + line)
+    }
+    return tools.host({ target: target, debug: true, anyProfile: true, features: features, cargo: cargoHost, rebuild: rebuildHost })
+}
+
+// A release host started from a Windows console has no output there: what
+// the program logs (desktop.log, runtime errors) goes to
+// %LOCALAPPDATA%\<identifier>\fogu-desktop.log, shown here as it grows.
+// (Under WSL the host's output arrives through the pipe WSL gives it.)
+let logFile = nil
+let logSeen = 0
+
+fn watchLog() {
+    const id = (manifest.desktop ?? {}).identifier ?? ("dev.fogu.app." + regex.replaceAll(name.lower(), "[^a-z0-9-]", "-"))
+    const base = process.env("LOCALAPPDATA")
+    if base == nil || base == "" {
+        return nil
+    }
+    logFile = path.join(base, id, "fogu-desktop.log")
+    if fs.isFile(logFile) {
+        const [st, serr] = fs.stat(logFile)
+        if serr == nil {
+            logSeen = st.size
+        }
+    }
+    return nil
+}
+
+fn showLog() {
+    if logFile == nil || !fs.isFile(logFile) {
+        return nil
+    }
+    const [text, rerr] = fs.readText(logFile)
+    if rerr != nil {
+        return nil
+    }
+    const data = bytes(text)
+    if len(data) < logSeen {
+        logSeen = 0
+    }
+    if len(data) > logSeen {
+        Fogu.write(data.slice(logSeen).text())
+        logSeen = len(data)
+    }
+    return nil
+}
+
+// The app folder as the host sees it (a Windows path when the host runs on Windows)
+fn programDirForHost() {
+    if !crossFromWsl {
+        return app, nil
+    }
+    const r = process.run("wslpath", ["-w", app])?
+    return r.stdout.trim(), nil
+}
+
+// What the window runs: under WSL a copy on the Windows side (a Windows exe
+// started from a \\wsl$ path works, but the copy avoids its slow file access)
+fn windowsLocalAppData() {
+    const r = process.run("cmd.exe", ["/c", "echo %LOCALAPPDATA%"], { cwd: "/mnt/c" })?
+    const win = r.stdout.trim()
+    const u = process.run("wslpath", ["-u", win])?
+    return u.stdout.trim(), nil
+}
+
+// A Windows host runs as a copy named after the app, with the app's icon and
+// version information (tools/pe.fg): the task bar's menu and the Task
+// Manager then name the app, not "Fogu Desktop". Returns the copy, or nil
+// when it cannot be made (the host then runs as it is).
+fn stampedCopy(hostExe, dir) {
+    const p = { name: name, desk: manifest.desktop ?? {}, manifest: manifest, version: manifest.version ?? "0.1.0", identifier: "" }
+    const [ico, _ierr] = packaging.windowsIcon(app)
+    const exe = path.join(dir, name + ".exe")
+    const [_r, serr] = pe.stamp(hostExe, exe, { icon: ico, version: packaging.identity(p) })
+    if serr != nil {
+        return nil
+    }
+    return exe
+}
+
+fn installForRun(built) {
+    if !windowsExe {
+        return built.exe, nil
+    }
+    let dir = path.join(tools.home(), "desktop", "dev", name)
+    if crossFromWsl {
+        const base = windowsLocalAppData()?
+        dir = path.join(base, "fogu-desktop-dev", name)
+    }
+    fs.mkdir(dir)?
+    const stamped = stampedCopy(built.exe, dir)
+    if stamped != nil {
+        return stamped, nil
+    }
+    if !crossFromWsl {
+        return built.exe, nil
+    }
+    const exe = path.join(dir, path.basename(built.exe))
+    fs.copy(built.exe, exe)?
+    return exe, nil
+}
+
+let appRunning = false
+let appExited = false
+const appPid = path.join(runDir, "app.pid")
+
+fn startApp(exe) {
+    appRunning = true
+    appExited = false
+    const [dir, derr] = programDirForHost()
+    if derr != nil {
+        fail("cannot translate the app folder for Windows: " + derr.message)
+    }
+    // WSLENV: WSL passes a variable to a Windows program only when it is listed
+    // there (the user's own list is kept)
+    const wslenv = ["FOGU_DESKTOP_PROGRAM_DIR", "FOGU_DESKTOP_DEV_URL", "FOGU_DESKTOP_RELOAD", "FOGU_DESKTOP_UI_DIR"]
+    if (Fogu.env.WSLENV ?? "") != "" {
+        wslenv.push(Fogu.env.WSLENV)
+    }
+    // the host itself watches the sources and reloads the program in place
+    const reload = match watch && !restartOnChange {
+        true => "1"
+        _ => ""
+    }
+    const env = { FOGU_DESKTOP_PROGRAM_DIR: dir, FOGU_DESKTOP_DEV_URL: url, FOGU_DESKTOP_RELOAD: reload, WSLENV: wslenv.join(":") }
+    if plainUi {
+        // no dev server: the host serves the UI folder itself
+        env.FOGU_DESKTOP_DEV_URL = ""
+        let uiDir = ui.dir
+        if crossFromWsl {
+            const r = process.run("wslpath", ["-w", ui.dir])?
+            uiDir = r.stdout.trim()
+        }
+        env.FOGU_DESKTOP_UI_DIR = uiDir
+    }
+    print("> " + exe + "   (program: " + dir + ")")
+    fg fn() {
+        if windowsExe {
+            // a debug host has a console: its log lines show here
+            shell.exec(shell.quote(exe), { cwd: path.dirname(exe), env: env })
+        } else {
+            shell.exec(`sh -c ${shell.quote("echo $$ > " + shell.quote(appPid) + "; exec " + shell.quote(exe))}`, { cwd: path.dirname(exe), env: env })
+        }
+        appRunning = false
+        appExited = true
+    }()
+}
+
+fn stopApp(exe) {
+    if !appRunning {
+        return nil
+    }
+    const image = path.basename(exe)
+    if crossFromWsl {
+        process.run("taskkill.exe", ["/F", "/T", "/IM", image], { cwd: "/mnt/c" })
+    } else if Fogu.os == "windows" {
+        process.run("taskkill", ["/F", "/T", "/IM", image])
+    } else {
+        const pid = readPid(appPid)
+        if pid != nil {
+            process.run("kill", ["-TERM", pid])
+        }
+    }
+    let waited = 0
+    while appRunning && waited < 100 {
+        time.delay(100ms)
+        waited += 1
+    }
+    return nil
+}
+
+// The Fogu side: every file of the app but the UI, dist and dependencies
+fn signature() {
+    const parts = []
+    const skip = ["node_modules", "dist", ".git", ".desktop-data", "target", ".bundle", "fogu_modules"]
+    const dirs = [app]
+    while len(dirs) > 0 {
+        const dir = dirs.pop()
+        // (fs.list returns a list: destructuring it would take its items)
+        if !fs.isDir(dir) {
+            continue
+        }
+        for n in fs.list(dir)? {
+            const p = path.join(dir, n)
+            if skip.contains(n) || path.normalize(p) == path.normalize(uiRoot) {
+                continue
+            }
+            if fs.isDir(p) {
+                dirs.push(p)
+            } else if n.ends_with(".fg") || n == "fogu.json" {
+                const st = fs.stat(p)?
+                parts.push(p + ":" + str(st.modified) + ":" + str(st.size))
+            }
+        }
+    }
+    return parts.sort().join("\n")
+}
+
+// ---------- run ----------
+Fogu.signal.on("SIGINT", fn() {
+    print("\nstopping")
+    stopVite()
+    Fogu.exit(130)
+})
+Fogu.signal.on("SIGTERM", fn() {
+    stopVite()
+    Fogu.exit(143)
+})
+
+if !plainUi && serverUp() {
+    fail(`something already answers on ${url}: stop it, or pick another port with --port`)
+}
+const [built, berr] = buildDev()
+if berr != nil {
+    fail(berr.message)
+}
+let lastSig = signature()?
+if built.profile == "release" {
+    print("note: this host is a release build: no devtools (right click → Inspect); `fogu desktop dev --cargo` compiles the debug host (needs Rust)")
+    if Fogu.os == "windows" {
+        watchLog()
+    }
+}
+
+let waited = 0
+if !plainUi {
+    startVite()
+}
+while !plainUi && !serverUp() {
+    if viteExited {
+        fail("the Vite dev server stopped (see its output above)")
+    }
+    if waited > 600 {
+        fail(`the Vite dev server did not answer on ${url} within 60s`)
+    }
+    time.delay(100ms)
+    waited += 1
+}
+if plainUi {
+    print("UI folder: " + ui.dir + " (served by the host)")
+} else {
+    print("dev server: " + url)
+}
+
+if crossFromWsl && !plainUi {
+    // the window runs on Windows: it reaches the dev server through WSL's localhost forwarding
+    const [r, cerr] = process.run("curl.exe", ["-s", "-o", "NUL", "-w", "%{http_code}", url], { cwd: "/mnt/c" })
+    if cerr == nil && r.stdout.trim() != "200" {
+        print(`warning: Windows cannot reach ${url} (got '${r.stdout.trim()}'). Enable localhost forwarding:`)
+        print("  %USERPROFILE%\\.wslconfig →  [wsl2]  localhostForwarding=true   (or networkingMode=mirrored), then `wsl --shutdown`")
+    }
+}
+
+if !launch {
+    print("")
+    print("the window is not started (--no-launch). Run the host yourself:")
+    if plainUi {
+        print(`  FOGU_DESKTOP_PROGRAM_DIR=${app} FOGU_DESKTOP_UI_DIR=${ui.dir} FOGU_DESKTOP_RELOAD=1 ${built.exe}`)
+    } else {
+        print(`  FOGU_DESKTOP_PROGRAM_DIR=${app} FOGU_DESKTOP_DEV_URL=${url} FOGU_DESKTOP_RELOAD=1 ${built.exe}`)
+    }
+    print("Ctrl+C stops the dev server")
+    while !viteExited {
+        time.delay(500ms)
+    }
+    stopVite()
+    Fogu.exit(0)
+}
+
+let [exe, ierr] = installForRun(built)
+if ierr != nil {
+    fail("cannot copy the executable to Windows: " + ierr.message)
+}
+startApp(exe)
+print(match plainUi {
+    true => "UI edits reload the page"
+    _ => "UI edits reload with HMR"
+} + match watch {
+    true => match restartOnChange {
+        true => "; Fogu edits restart the window"
+        _ => "; Fogu edits reload the program in place (the window stays)"
+    }
+    _ => ""
+} + ". Close the window or press Ctrl+C to stop.")
+
+loop {
+    time.delay(700ms)
+    showLog()
+    if appExited {
+        break
+    }
+    if viteExited {
+        print("the Vite dev server stopped; closing the app")
+        stopApp(exe)
+        break
+    }
+    if !watch {
+        continue
+    }
+    const [sig, serr] = signature()
+    if serr != nil || sig == lastSig {
+        continue
+    }
+    lastSig = sig
+    if !restartOnChange {
+        print("Fogu code changed: the program reloads in place")
+        continue
+    }
+    print("\nFogu code changed: restarting the window")
+    stopApp(exe)
+    startApp(exe)
+}
+stopVite()
+print("done")

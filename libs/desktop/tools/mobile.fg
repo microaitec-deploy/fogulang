@@ -1,0 +1,358 @@
+// tools/mobile.fg — `fogu desktop build --android` / `--ios`: the app as an
+// Android (APK/AAB) or iOS (IPA) package, made by the Tauri CLI
+// (`cargo tauri android|ios init` once, then `… build`) from a copy of
+// runtime/ in which the app is embedded the same way `--installer` embeds it
+// (runtime/build.rs stages the program and the UI; the program is extracted
+// on first run to the app's data folder). The Fogu runtime is compiled for
+// the device (aarch64-linux-android, aarch64-apple-ios…) inside the app.
+//
+// The work crate lives in $FOGU_HOME/desktop/<lib version>/mobile/<identifier>/runtime
+// and keeps gen/android and gen/apple (the Gradle and Xcode projects) and
+// target/ between builds.
+//
+// Everything that needs the machine goes through a `probe` (see probe()), so
+// the checks can be tested with a fake one (tests/mobile.fg).
+import fs from "fogu:fs"
+import json from "fogu:json"
+import path from "fogu:path"
+import regex from "fogu:regex"
+import shell from "fogu:shell"
+import project from "./project.fg"
+import tools from "./build.fg"
+
+// The Rust targets of each platform, by the names `cargo tauri … --target` takes.
+export const ANDROID_TARGETS = { aarch64: "aarch64-linux-android", armv7: "armv7-linux-androideabi", i686: "i686-linux-android", x86_64: "x86_64-linux-android" }
+export const IOS_TARGETS = { aarch64: "aarch64-apple-ios", "aarch64-sim": "aarch64-apple-ios-sim", x86_64: "x86_64-apple-ios" }
+
+// The machine as the checks see it.
+export fn probe() {
+    return {
+        os: Fogu.os,
+        env: Fogu.env,
+        which: fn(tool) {
+            const found = shell.which(tool)
+            if project.usableTool(found, Fogu.os) {
+                return found
+            }
+            return nil
+        },
+        run: fn(cmd) { return shell.run(cmd) },
+        isDir: fn(p) { return fs.isDir(p) },
+        isFile: fn(p) { return fs.isFile(p) },
+        list: fn(p) {
+            const [l, err] = fs.list(p)
+            if err != nil {
+                return []
+            }
+            return l
+        },
+    }
+}
+
+fn nonEmpty(v) {
+    return v != nil && v != ""
+}
+
+// The Android SDK folder: ANDROID_HOME, ANDROID_SDK_ROOT, else the usual places.
+fn androidSdk(m) {
+    for k in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
+        if nonEmpty(m.env[k]) && m.isDir(m.env[k]) {
+            return m.env[k]
+        }
+    }
+    const home = m.env.HOME ?? m.env.USERPROFILE ?? ""
+    for p in [path.join(home, "Android", "Sdk"), path.join(home, "Library", "Android", "sdk"), path.join(m.env.LOCALAPPDATA ?? "", "Android", "Sdk")] {
+        if home != "" && m.isDir(p) {
+            return p
+        }
+    }
+    return nil
+}
+
+// The NDK folder: NDK_HOME, else the newest <sdk>/ndk/<version>.
+fn androidNdk(m, sdk) {
+    if nonEmpty(m.env.NDK_HOME) && m.isDir(m.env.NDK_HOME) {
+        return m.env.NDK_HOME
+    }
+    if sdk != nil {
+        const versions = m.list(path.join(sdk, "ndk")).sort()
+        if len(versions) > 0 {
+            return path.join(sdk, "ndk", versions[len(versions) - 1])
+        }
+    }
+    return nil
+}
+
+// The installed Rust targets (rustup), or nil without rustup.
+fn rustTargets(m) {
+    if m.which("rustup") == nil {
+        return nil
+    }
+    const r = m.run("rustup target list --installed")
+    if !r.ok {
+        return nil
+    }
+    return r.stdout.split("\n").map((l) => l.trim()).filter((l) => l != "")
+}
+
+// What a mobile build needs, checked on this machine. platform: "android" |
+// "ios"; targets: names of ANDROID_TARGETS / IOS_TARGETS. Returns
+// { ok, found: [text], missing: [{ what, fix }], env: { JAVA_HOME, ANDROID_HOME, NDK_HOME } }.
+export fn check(platform: str, targets, m) {
+    const found = []
+    const missing = []
+    const env = {}
+    const need = fn(what, fix) { missing.push({ what: what, fix: fix }) }
+
+    if m.which("cargo") == nil {
+        need("Rust (cargo)", "install it from https://rustup.rs")
+    } else {
+        found.push("cargo")
+    }
+    const tauri = m.run("cargo tauri --version")
+    if !tauri.ok || !regex.test(tauri.stdout, "tauri-cli 2\\.") {
+        need("the Tauri CLI 2 (cargo tauri)", "cargo install tauri-cli --version \"^2\" --locked")
+    } else {
+        found.push(tauri.stdout.trim())
+    }
+    const installed = rustTargets(m)
+    const table = match platform {
+        "android" => ANDROID_TARGETS
+        _ => IOS_TARGETS
+    }
+    for t in targets {
+        const triple = table[t]
+        if triple == nil {
+            need(`the target '${t}'`, `one of: ${table.keys().join(", ")}`)
+        } else if installed == nil || !installed.contains(triple) {
+            need(`the Rust target ${triple}`, `rustup target add ${triple}`)
+        } else {
+            found.push("rust target " + triple)
+        }
+    }
+
+    if platform == "android" {
+        // a JDK (17 is what the Android Gradle plugin of Tauri 2 wants)
+        let java = nil
+        if nonEmpty(m.env.JAVA_HOME) && m.isDir(m.env.JAVA_HOME) {
+            java = m.env.JAVA_HOME
+            env.JAVA_HOME = java
+            found.push("JAVA_HOME=" + java)
+        } else if m.which("javac") != nil {
+            java = m.which("javac")
+            found.push("javac: " + java + " (set JAVA_HOME if Gradle does not find it)")
+        }
+        if java == nil {
+            need("a Java JDK 17 (JAVA_HOME)", "install a JDK 17 (e.g. Android Studio's bundled JBR, or `sudo apt install openjdk-17-jdk`) and set JAVA_HOME")
+        }
+        const sdk = androidSdk(m)
+        if sdk == nil {
+            need("the Android SDK (ANDROID_HOME)", "install Android Studio (or the command-line tools), then in the SDK Manager: Android SDK Platform, Platform-Tools, Build-Tools, Command-line Tools and NDK (Side by side); set ANDROID_HOME to the SDK folder")
+        } else {
+            env.ANDROID_HOME = sdk
+            found.push("ANDROID_HOME=" + sdk)
+            if len(m.list(path.join(sdk, "platforms"))) == 0 {
+                need("an Android SDK platform", `${path.join(sdk, "cmdline-tools", "latest", "bin", "sdkmanager")} "platforms;android-34" "build-tools;34.0.0" "platform-tools"`)
+            }
+        }
+        const ndk = androidNdk(m, sdk)
+        if ndk == nil {
+            need("the Android NDK (NDK_HOME)", "sdkmanager \"ndk;27.0.12077973\" (or SDK Manager → SDK Tools → NDK (Side by side)), then set NDK_HOME to <sdk>/ndk/<version>")
+        } else {
+            env.NDK_HOME = ndk
+            found.push("NDK_HOME=" + ndk)
+        }
+    } else {
+        if m.os != "macos" {
+            need("macOS", "iOS apps can only be built on a Mac (Xcode)")
+        }
+        if m.which("xcodebuild") == nil {
+            need("Xcode (xcodebuild)", "install Xcode from the App Store, then `xcode-select --install` and open Xcode once")
+        } else {
+            found.push("xcodebuild")
+        }
+        if m.which("pod") == nil {
+            need("CocoaPods (pod)", "brew install cocoapods")
+        } else {
+            found.push("pod")
+        }
+    }
+    return { ok: len(missing) == 0, found: found, missing: missing, env: env }, nil
+}
+
+// Prints the result of check().
+export fn report(platform, r) {
+    print(`${platform} build prerequisites:`)
+    for f in r.found {
+        print("  ok       " + f)
+    }
+    for m in r.missing {
+        print("  missing  " + m.what)
+        print("           → " + m.fix)
+    }
+    return nil
+}
+
+// The work crate for an app: a copy of runtime/ (gen/ and target/ kept),
+// Cargo.toml pointing at the Fogu sources with the library crate types the
+// mobile toolchains link, and the features of the app.
+export fn workCrate(lib, identifier, features, platform) {
+    const libManifest = json.parse(fs.readText(path.join(lib, "fogu.json"))?)?
+    const work = path.join(tools.home(), "desktop", libManifest.version, "mobile", identifier, "runtime")
+    fs.mkdir(work)?
+    const runtime = path.join(lib, "runtime")
+    for entry in fs.list(runtime)? {
+        if entry == "target" || entry == ".bundle" {
+            continue
+        }
+        const to = path.join(work, entry)
+        if entry == "gen" {
+            // keep gen/android and gen/apple (made by `cargo tauri … init`); refresh the schemas
+            fs.mkdir(to)?
+            for g in fs.list(path.join(runtime, "gen"))? {
+                const gto = path.join(to, g)
+                if fs.exists(gto) {
+                    fs.removeAll(gto)?
+                }
+                fs.copy(path.join(runtime, "gen", g), gto)?
+            }
+            continue
+        }
+        if fs.exists(to) {
+            fs.removeAll(to)?
+        }
+        fs.copy(path.join(runtime, entry), to)?
+    }
+    for f in ["main.fg", "fogu.json", "client"] {
+        const to = path.join(work, "..", f)
+        if fs.exists(to) {
+            fs.removeAll(to)?
+        }
+        fs.copy(path.join(lib, f), to)?
+    }
+    const src = tools.sources(lib)?
+    let cargo = fs.readText(path.join(work, "Cargo.toml"))?
+    cargo = cargo.replace("path = \"../../../lang\"", `path = '${src.replace("\\", "/")}'`)
+    cargo = cargo.replace("name = \"fogu_desktop_lib\"\n", "name = \"fogu_desktop_lib\"\ncrate-type = [\"staticlib\", \"cdylib\", \"rlib\"]\n")
+    // the features of the app; Android has no system OpenSSL for the Fogu runtime
+    const list = (features ?? ["network"]).map((f) => `"${f}"`)
+    if platform == "android" {
+        list.push("\"vendored-openssl\"")
+    }
+    cargo = regex.replace(cargo, "(?m)^default = \\[.*\\]$", "default = [" + list.join(", ") + "]")
+    fs.writeText(path.join(work, "Cargo.toml"), cargo)?
+    return work, nil
+}
+
+// The packages a mobile build left in the Gradle / Xcode project.
+fn outputs(work, platform) {
+    const pattern = match platform {
+        "android" => [path.join(work, "gen", "android", "app", "build", "outputs", "**", "*.apk"), path.join(work, "gen", "android", "app", "build", "outputs", "**", "*.aab")]
+        _ => [path.join(work, "gen", "apple", "build", "**", "*.ipa")]
+    }
+    let out = []
+    for p in pattern {
+        out = out.concat(Fogu.glob(p))
+    }
+    return out
+}
+
+// Builds the app for Android or iOS. opts: { app, platform: "android" | "ios",
+// targets: [..] (default ["aarch64"]), debug, apk, aab, features, reinit,
+// checkOnly, distDir }. Returns { outputs: [paths] } or an error.
+export fn build(opts) {
+    const platform = opts.platform
+    const targets = opts.targets ?? ["aarch64"]
+    const m = probe()
+    const r = check(platform, targets, m)?
+    report(platform, r)
+    if opts.checkOnly ?? false {
+        if !r.ok {
+            return nil, error(`${len(r.missing)} prerequisite(s) missing for ${platform}`)
+        }
+        return { outputs: [] }, nil
+    }
+    if !r.ok {
+        return nil, error(`cannot build for ${platform}: ${len(r.missing)} prerequisite(s) missing (see above)`)
+    }
+    const app = opts.app
+    const p = tools.prepare(app)?
+    const lib = tools.libRoot()
+    const features = opts.features ?? p.desk.features
+    const work = workCrate(lib, p.identifier, features, platform)?
+    print("work crate: " + work)
+
+    const tauriConfig = { productName: p.desk.title ?? p.name, version: p.version, identifier: p.identifier }
+    if platform == "ios" {
+        const team = p.desk.ios?.developmentTeam ?? Fogu.env.APPLE_DEVELOPMENT_TEAM
+        if team != nil {
+            tauriConfig.bundle = { iOS: { developmentTeam: team } }
+        }
+    }
+    const env = r.env.merge({
+        FOGU_DESKTOP_APP: app,
+        FOGU_DESKTOP_UI: path.absolute(p.uiDir),
+        FOGU_DESKTOP_SKIP: p.skip.map((s) => path.absolute(s)).join("\n"),
+        FOGU_DESKTOP_DEV_URL: "",
+        FOGU_DESKTOP_STAMP: str(clock()),
+    })
+    const config = " --config " + shell.quote(json.stringify(tauriConfig))
+    const genDir = match platform {
+        "android" => path.join(work, "gen", "android")
+        _ => path.join(work, "gen", "apple")
+    }
+    if (opts.reinit ?? false) && fs.isDir(genDir) {
+        fs.removeAll(genDir)?
+    }
+    if !fs.isDir(genDir) {
+        const init = `cargo tauri ${platform} init --ci` + config
+        print("> " + init + "   (in " + work + ")")
+        const ri = shell.exec(init, { cwd: work, env: env })
+        if !ri.ok {
+            return nil, error(`cargo tauri ${platform} init failed (exit code ${ri.code})`)
+        }
+    }
+    // the app's icon for the launcher (icons/icon.png, 1024×1024 is best)
+    const icon = path.join(app, "icons", "icon.png")
+    if fs.isFile(icon) {
+        const ic = "cargo tauri icon " + shell.quote(icon)
+        print("> " + ic)
+        if !shell.exec(ic, { cwd: work, env: env }).ok {
+            print("note: cargo tauri icon failed; using the default icon")
+        }
+    }
+    let cmd = `cargo tauri ${platform} build --ci` + config
+    if opts.debug ?? false {
+        cmd += " --debug"
+    }
+    if platform == "android" {
+        if opts.apk ?? false {
+            cmd += " --apk"
+        }
+        if opts.aab ?? false {
+            cmd += " --aab"
+        }
+    }
+    for t in targets {
+        cmd += " --target " + shell.quote(t)
+    }
+    print(`building ${p.name} ${p.version} (${p.identifier}) for ${platform}`)
+    print("> " + cmd + "   (in " + work + ")")
+    const rb = shell.exec(cmd, { cwd: work, env: env })
+    if !rb.ok {
+        return nil, error(`cargo tauri ${platform} build failed (exit code ${rb.code})`)
+    }
+    const dist = opts.distDir ?? path.join(app, "dist")
+    fs.mkdir(dist)?
+    const copied = []
+    for f in outputs(work, platform) {
+        const dest = path.join(dist, path.basename(f))
+        fs.copy(f, dest)?
+        copied.push(dest)
+        print("package: " + dest)
+    }
+    if len(copied) == 0 {
+        return nil, error(`the build finished but no package was found under ${genDir}`)
+    }
+    return { outputs: copied }, nil
+}

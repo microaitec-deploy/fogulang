@@ -1,0 +1,19 @@
+{
+  "name": "heroui",
+  "version": "0.1.0",
+  "description": "Fogu Tasks: a Fogu desktop app with a React UI built with HeroUI and Tailwind CSS",
+  "entry": "main.fg",
+  "desktop": {
+    "title": "Fogu Tasks",
+    "identifier": "dev.fogu.examples.heroui",
+    "ui": "web",
+    "vite": true,
+    "visible": false
+  },
+  "scripts": {
+    "dev": "fogu desktop dev",
+    "build": "fogu desktop build",
+    "build:windows": "fogu desktop build --target windows"
+  },
+  "dependencies": {}
+}

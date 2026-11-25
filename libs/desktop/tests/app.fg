@@ -1,0 +1,71 @@
+// The app defined in code (desktop.app, app.createBrowser, app.run) as the
+// fogu-desktop host sees it: captured Fogu.host.emit messages out,
+// Fogu.signal events (desktop:reply, desktop:window-event) in. A plain script
+// (see the note in desktop.test.fg). Expected output: app.out.
+import time from "fogu:time"
+import desktop from "../main.fg"
+
+const sent = []
+desktop.capture(fn(name, data) { sent.push({ name: name, data: data }) })
+const seen = []
+
+fn show(label) {
+    print(label)
+    for m in sent {
+        print("  " + m.name, m.data)
+    }
+    while len(sent) > 0 {
+        sent.pop()
+    }
+}
+
+// the app: its settings go to the host at once
+const app = desktop.app({ name: "notes", title: "Notes", identifier: "com.example.notes", icon: "icons/tray.png", closeToTray: true })
+print(app.name, app.title, app.identifier)
+show("app:")
+
+// the first browser is the main window, which the host opened already: the
+// options are applied to it (url and transparent are creation-only)
+const win = app.createBrowser({ width: 1100, height: 720, minWidth: 640, minHeight: 480, resizable: true, url: "index.html" })
+print(win.label, win.ready())
+win.on("close", fn(e) { seen.push("main asked to close") })
+win.on("resize", fn(e) { seen.push(`main ${e.width}x${e.height}`) })
+win.setTitle("Notes — draft")
+win.center()
+show("main window:")
+
+// another window: the host creates it; changes made meanwhile wait for it
+const about = app.createBrowser({ label: "about", title: "About", width: 400, height: 300, url: "about.html", transparent: true })
+about.setSize(420, 320)
+about.on("closed", fn(e) { seen.push("about closed") })
+time.delay(20ms)
+show("second window, before the host answered:")
+Fogu.signal.emit("desktop:reply", { id: 1, ok: true, value: { label: "about" } })
+time.delay(20ms)
+print("ready:", about.ready())
+about.hide()
+show("after the answer:")
+
+// a third one without a label, and a failure of the host
+const third = app.createBrowser({ url: "#/help" })
+time.delay(20ms)
+print(third.label)
+Fogu.signal.emit("desktop:reply", { id: 2, ok: false, error: "cannot open the window 'window-3'" })
+time.delay(20ms)
+const [_ok, rerr] = third.ready()
+print("ready:", rerr.message)
+show("third window:")
+
+// tray and menu through the app: the app's icon and title are the defaults
+app.tray({ menu: [{ text: "Quit", action: "quit" }] })
+app.command("ping", fn() { return "pong" })
+print(desktop.call("ping"))
+print("run:", app.run())
+show("tray and run:")
+
+// events reach the handlers under their short names
+Fogu.signal.emit("desktop:window-event", { window: "main", type: "closeRequested" })
+Fogu.signal.emit("desktop:window-event", { window: "main", type: "resized", width: 800, height: 600 })
+Fogu.signal.emit("desktop:window-event", { window: "about", type: "destroyed" })
+time.delay(30ms)
+print(seen)

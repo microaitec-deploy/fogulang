@@ -1,0 +1,15 @@
+{
+  "name": "counter-in-code",
+  "version": "0.1.0",
+  "description": "The counter with its app and windows defined in main.fg instead of fogu.json",
+  "entry": "main.fg",
+  "desktop": {
+    "title": "Counter",
+    "identifier": "dev.fogu.examples.counter-in-code",
+    "visible": false
+  },
+  "scripts": {
+    "build": "fogu desktop build"
+  },
+  "dependencies": {}
+}

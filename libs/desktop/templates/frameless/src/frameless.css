@@ -1,0 +1,43 @@
+/* The frame of a frameless, transparent window: rounded corners, a border
+   and a title bar of our own. The page background is transparent outside
+   .frame (fogu.json "transparent": true). */
+html, body { height: 100%; background: transparent; }
+body { overflow: hidden; }
+.frame {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+body.maximized .frame { border-radius: 0; border: 0; }
+.titlebar {
+  flex: none;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-left: 14px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+.app-title { font-size: 13px; font-weight: 600; color: var(--muted); pointer-events: none; }
+.controls { display: flex; height: 100%; }
+.controls button {
+  width: 46px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+}
+.controls button:hover { background: var(--border); filter: none; }
+.controls button.close:hover { background: #e81123; color: #fff; }
+.frame > main { flex: 1; overflow: auto; width: 100%; }

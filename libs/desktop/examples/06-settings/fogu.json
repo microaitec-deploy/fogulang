@@ -1,0 +1,17 @@
+{
+  "name": "settings",
+  "version": "0.1.0",
+  "description": "fogu-desktop saved data: settings as JSON in the app's data folder, the window size remembered",
+  "entry": "main.fg",
+  "desktop": {
+    "title": "Settings",
+    "identifier": "dev.fogu.examples.settings",
+    "ui": "ui",
+    "visible": false
+  },
+  "scripts": {
+    "build": "fogu desktop build",
+    "build:debug": "fogu desktop build --debug"
+  },
+  "dependencies": {}
+}

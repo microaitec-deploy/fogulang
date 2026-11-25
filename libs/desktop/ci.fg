@@ -1,0 +1,203 @@
+// ci.fg — writes a GitHub Actions workflow that builds the app on Windows,
+// macOS and Linux runners: a macOS build needs a Mac and a Linux build needs
+// the WebKitGTK dev packages, which GitHub's runners have (or install).
+//
+//   fogu desktop ci [app-dir] [options]      (app-dir: default the current folder)
+//
+//   --os a,b        windows, macos, linux, macos-intel (default: windows,macos,linux)
+//   --installer     installers (`--installer`: .msi/.exe, .dmg/.app, .deb/.AppImage)
+//                   instead of the single executable
+//   --features a,b  the Fogu standard library areas of the host
+//   --server URL    the Fogu server to install Fogu from (default: the official one)
+//   --force         overwrite an existing workflow
+//
+// The workflow goes to <repo>/.github/workflows/fogu-desktop.yml (<repo> is the
+// nearest folder with .git above the app, else the app folder). It runs on
+// every push of a tag `v*` and by hand (workflow_dispatch), and uploads
+// dist/ of each OS as a build artifact; a tag also attaches them to a GitHub
+// release. Commit the file and push.
+import fs from "fogu:fs"
+import path from "fogu:path"
+import regex from "fogu:regex"
+import project from "./tools/project.fg"
+
+fn usage() {
+    print("usage: fogu desktop ci [app-dir] [--os windows,macos,linux] [--installer] [--features a,b] [--server URL] [--force]")
+    Fogu.exit(2)
+}
+
+fn fail(msg) {
+    print("error: " + msg)
+    Fogu.exit(1)
+}
+
+const RUNNERS = {
+    windows: "windows-latest",
+    macos: "macos-latest",
+    "macos-intel": "macos-13",
+    linux: "ubuntu-22.04",
+}
+
+let appArg = nil
+let oses = ["windows", "macos", "linux"]
+let installer = false
+let features = nil
+let server = "https://fogulang.microaitec.com"
+let force = false
+const args = Fogu.args
+let i = 0
+while i < len(args) {
+    const a = args[i]
+    if a == "--os" && i + 1 < len(args) {
+        oses = args[i + 1].split(",").map((s) => s.trim()).filter((s) => s != "")
+        i += 1
+    } else if a == "--features" && i + 1 < len(args) {
+        features = args[i + 1]
+        i += 1
+    } else if a == "--server" && i + 1 < len(args) {
+        server = args[i + 1]
+        i += 1
+    } else if a == "--installer" {
+        installer = true
+    } else if a == "--force" {
+        force = true
+    } else if a == "-h" || a == "--help" {
+        usage()
+    } else if a.starts_with("-") {
+        print("unknown option " + a)
+        usage()
+    } else {
+        appArg = a
+    }
+    i += 1
+}
+for os in oses {
+    if RUNNERS[os] == nil {
+        fail(`unknown OS '${os}' (one of: ${RUNNERS.keys().join(", ")})`)
+    }
+}
+
+const app = path.normalize(path.absolute(appArg ?? "."))
+const [manifest, merr] = project.manifest(app)
+if merr != nil {
+    fail(merr.message)
+}
+const name = manifest.name ?? path.basename(app)
+
+// the repository root: the nearest .git above the app
+let repo = app
+let dir = app
+for _k in 0..64 {
+    if fs.exists(path.join(dir, ".git")) {
+        repo = dir
+        break
+    }
+    const up = path.dirname(dir)
+    if up == dir {
+        break
+    }
+    dir = up
+}
+let rel = "."
+if repo != app {
+    rel = app.slice(len(repo) + 1).replace("\\", "/")
+}
+
+const out = path.join(repo, ".github", "workflows", "fogu-desktop.yml")
+if fs.exists(out) && !force {
+    fail(`${out} exists (--force overwrites it)`)
+}
+
+export fn workflow(opts) {
+    const include = opts.oses.map((os) => `          - os: ${os}\n            runner: ${RUNNERS[os]}`).join("\n")
+    let flags = ""
+    if opts.installer {
+        flags += " --installer"
+    }
+    if opts.features != nil {
+        flags += " --features " + opts.features
+    }
+    const server = regex.replace(opts.server, "/+$", "")
+    return `# Builds the Fogu desktop app "${opts.name}" on every OS (written by fogu desktop ci).
+name: fogu-desktop
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+${include}
+    runs-on: \${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: ${opts.rel}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux packages (WebKitGTK, tray, OpenSSL)
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev libxdo-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # the generic host is built once per OS and lib version (Rust): keep it
+      - uses: actions/cache@v4
+        with:
+          path: ~/.fogu/desktop
+          key: fogu-desktop-\${{ matrix.os }}-\${{ hashFiles('**/fogu.json') }}
+          restore-keys: fogu-desktop-\${{ matrix.os }}-
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install Fogu (Unix)
+        if: runner.os != 'Windows'
+        working-directory: .
+        run: |
+          curl -fsSL ${server}/install.sh | sh
+          echo "$HOME/.fogu/bin" >> "$GITHUB_PATH"
+
+      - name: Install Fogu (Windows)
+        if: runner.os == 'Windows'
+        working-directory: .
+        shell: pwsh
+        run: |
+          iex (irm ${server}/install.ps1)
+          "$env:USERPROFILE\\.fogu\\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Tauri CLI (installers)
+        if: ${opts.installer}
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build
+        run: fogu desktop build .${flags}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${opts.name}-\${{ matrix.os }}
+          path: ${opts.rel}/dist/
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${opts.rel}/dist/**
+`
+}
+
+fs.mkdir(path.dirname(out))?
+fs.writeText(out, workflow({ name: name, rel: rel, oses: oses, installer: installer, features: features, server: server }))?
+print("wrote " + out)
+print(`builds ${name} on: ${oses.join(", ")}${match installer { true => " (installers)" _ => "" }}`)
+print("commit it and push a tag (git tag v0.1.0 && git push --tags), or run it from the Actions tab")

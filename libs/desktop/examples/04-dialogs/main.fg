@@ -1,0 +1,75 @@
+// Native dialogs, from Fogu: a tiny text editor. The dialogs wait for the
+// user (cooperatively: other commands and events keep running), so call them
+// from commands, app.on handlers or fg tasks, never from the top level.
+//
+//   app.dialog.open(opts)           → path · [paths] · nil (cancelled)
+//   app.dialog.save(opts)           → path · nil
+//   app.dialog.message(text, opts)  → true
+//   app.dialog.confirm(text, opts)  → bool (OK pressed)
+//
+//   fogu desktop build --debug     → dist/dialogs
+//   fogu main.fg                   → no window: dialogs return an error value
+import desktop from "desktop"
+import fs from "fogu:fs"
+import path from "fogu:path"
+
+const app = desktop.app({ name: "dialogs", title: "Text editor (dialogs)", identifier: "dev.fogu.examples.dialogs" })
+app.createBrowser({ width: 760, height: 560 })
+
+const textFiles = { "Text": ["txt", "md", "fg", "json"], "All files": ["*"] }
+
+// Open… → { path, name, text } or nil when cancelled
+app.command("file.open", fn() {
+    const file = app.dialog.open({ title: "Open a text file", filters: textFiles })?
+    if file == nil {
+        return nil
+    }
+    const text = fs.readText(file)?
+    return { path: file, name: path.basename(file), text: text }
+})
+
+// Save / Save as…: asks for a path when there is none yet
+app.command("file.save", fn(p) {
+    let target = p?.path
+    if target == nil || p?.saveAs == true {
+        target = app.dialog.save({ title: "Save as", fileName: p?.name ?? "untitled.txt", filters: textFiles })?
+        if target == nil {
+            return nil
+        }
+    }
+    fs.writeText(target, p?.text ?? "")?
+    return { path: target, name: path.basename(target) }
+})
+
+// a folder, then what is inside
+app.command("folder.pick", fn() {
+    const dir = app.dialog.open({ title: "Pick a folder", folder: true })?
+    if dir == nil {
+        return nil
+    }
+    return { path: dir, entries: fs.list(dir)? }
+})
+
+// several files at once
+app.command("files.pick", fn() {
+    return app.dialog.open({ title: "Pick files", multiple: true })
+})
+
+// a yes/no question before throwing changes away
+app.command("confirm.discard", fn() {
+    return app.dialog.confirm("Discard the unsaved changes?", {
+        title: "Unsaved changes",
+        kind: "warning",
+        ok: "Discard",
+        cancel: "Keep editing",
+    })
+})
+
+app.command("about", fn() {
+    return app.dialog.message(`A Fogu ${Fogu.version} text editor on ${Fogu.os}.`, { title: "About", kind: "info" })
+})
+
+if !app.run() {
+    const [_v, err] = desktop.call("file.open")
+    print("file.open →", err.message)
+}

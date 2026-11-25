@@ -1,0 +1,73 @@
+// A long job without freezing the window: the command starts an `fg` task
+// and returns at once; the task reports progress with events and checks a
+// cancel flag the page can set.
+//
+//   fogu.call("job.start", { steps })  → job id (right away)
+//   fogu.on("job.progress", …)        ← { id, done, total, percent }
+//   fogu.on("job.done", …)            ← { id, status: "finished" | "cancelled", result }
+//   fogu.emit("job.cancel", id)        → stops it at the next step
+//
+//   fogu desktop build --debug     → dist/background-task
+//   fogu main.fg                   → no window: runs one small job, prints its events
+import desktop from "desktop"
+import time from "fogu:time"
+
+const app = desktop.app({ name: "background-task", title: "Jobs (background task)", identifier: "dev.fogu.examples.background-task" })
+app.createBrowser({ width: 520, height: 420 })
+
+let nextId = 1
+const cancelled = {}
+
+// One step of real work would go here (a download, a file, a query...).
+// Waiting calls (time.delay, http, sql, process.run) let other tasks run;
+// a long CPU loop should call time.delay(0) now and then for the same reason.
+fn step(i) {
+    time.delay(100ms)
+    return i * i
+}
+
+fn runJob(id, total) {
+    let sum = 0
+    for i in 0..total {
+        if cancelled[str(id)] == true {
+            cancelled.remove(str(id))
+            app.emit("job.done", { id: id, status: "cancelled", result: nil })
+            return nil
+        }
+        sum += step(i)
+        app.emit("job.progress", { id: id, done: i + 1, total: total, percent: (i + 1) * 100 / total })
+    }
+    app.emit("job.done", { id: id, status: "finished", result: sum })
+    return nil
+}
+
+app.command("job.start", fn(p) {
+    const steps = p?.steps ?? 20
+    if typeof(steps) != "int" || steps < 1 || steps > 1000 {
+        return nil, error("steps must be an int between 1 and 1000")
+    }
+    const id = nextId
+    nextId += 1
+    fg runJob(id, steps)          // runs in the background
+    return id                     // the page gets the id immediately
+})
+
+app.on("job.cancel", fn(id) {
+    cancelled[str(id)] = true
+})
+
+if !app.run() {
+    desktop.capture(fn(name, data) {
+        print(name, data)
+    })
+    const id = desktop.call("job.start", { steps: 4 })?
+    print("started job", id)
+    time.delay(600ms)
+    // a second job, cancelled the way the page does: fogu.emit("job.cancel", id)
+    const id2 = desktop.call("job.start", { steps: 10 })?
+    print("started job", id2)
+    time.delay(250ms)
+    Fogu.signal.emit("desktop:ui:job.cancel", id2)
+    time.delay(300ms)
+    desktop.capture(nil)
+}

@@ -1,0 +1,102 @@
+// Saving data: the program folder is replaced by every new build, so keep
+// the user's files in app.dataDir(), a per-user folder named after the
+// app's "identifier" (fogu.json):
+//
+//   Windows  %APPDATA%\dev.fogu.examples.settings\
+//   Linux    ~/.local/share/dev.fogu.examples.settings/
+//   macOS    ~/Library/Application Support/dev.fogu.examples.settings/
+//   no host  .desktop-data/ next to main.fg (plain `fogu main.fg`)
+//
+//   fogu desktop build --debug     → dist/settings
+//   fogu main.fg                   → no window: changes and reloads the settings
+import desktop from "desktop"
+import fs from "fogu:fs"
+import json from "fogu:json"
+import path from "fogu:path"
+
+const app = desktop.app({ name: "settings", title: "Settings", identifier: "dev.fogu.examples.settings" })
+
+const file = path.join(app.dataDir(), "settings.json")
+const defaults = { theme: "light", fontSize: 14, window: nil }
+
+// Missing or damaged file → the defaults; keys added in a later version get
+// their default value.
+fn load() {
+    const [text, err] = fs.readText(file)
+    if err != nil {
+        return defaults.merge({})
+    }
+    const [data, perr] = json.parse(text)
+    if perr != nil || typeof(data) != "map" {
+        return defaults.merge({})
+    }
+    return defaults.merge(data)
+}
+
+fn save(s) {
+    return fs.writeText(file, json.stringify(s))
+}
+
+let settings = load()
+
+// the window opens at the size saved last time (window.remember below)
+const saved = settings.window ?? {}
+const win = app.createBrowser({ width: saved.width ?? 520, height: saved.height ?? 460, maximized: saved.maximized ?? false })
+
+// What the page may change, and how each value is checked.
+fn validate(key, value) {
+    return match key {
+        "theme" => value == "light" || value == "dark"
+        "fontSize" => typeof(value) == "int" && value >= 10 && value <= 32
+        _ => false
+    }
+}
+
+app.command("settings.get", fn() {
+    return settings
+})
+
+// fogu.call("settings.set", { theme: "dark" }) → the new settings
+app.command("settings.set", fn(changes) {
+    if typeof(changes) != "map" {
+        return nil, error("expected a map of settings")
+    }
+    for key, value in changes {
+        if !validate(key, value) {
+            return nil, error(`invalid setting ${key}: ${value}`)
+        }
+    }
+    settings = settings.merge(changes)
+    save(settings)?
+    app.emit("settings", settings)          // every open view updates
+    return settings
+})
+
+app.command("settings.reset", fn() {
+    settings = defaults.merge({})
+    save(settings)?
+    app.emit("settings", settings)
+    return settings
+})
+
+// the window: win.state() asks the host, so it runs in a command
+app.command("window.remember", fn() {
+    const w = win.state()?
+    settings.window = { width: int(w.width), height: int(w.height), maximized: w.maximized }
+    save(settings)?
+    return settings.window
+})
+
+app.command("data.folder", fn() {
+    return app.dataDir()
+})
+
+if !app.run() {
+    print("loaded:", desktop.call("settings.get")?)
+    print("set:   ", desktop.call("settings.set", { theme: "dark", fontSize: 16 })?)
+    const [_v, err] = desktop.call("settings.set", { fontSize: 99 })
+    print("bad:   ", err.message)
+    print("file:  ", path.basename(file), fs.readText(file)?)
+    print("reload:", load())
+    desktop.call("settings.reset")?
+}

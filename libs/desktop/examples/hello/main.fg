@@ -1,0 +1,94 @@
+// The Fogu side of the example: the window, commands the page calls with
+// fogu.call, events it sends with app.emit, and an event from the page (app.on).
+//
+//   fogu desktop build         → dist/hello (dist/hello.exe on Windows)
+//   fogu main.fg               → runs without a window (prints the commands)
+import desktop from "desktop"
+import fs from "fogu:fs"
+import path from "fogu:path"
+import time from "fogu:time"
+import todos from "./todos.fg"
+
+const app = desktop.app({ name: "hello", title: "Fogu Todo", identifier: "dev.fogu.examples.hello" })
+app.createBrowser({ width: 560, height: 720, minWidth: 400, minHeight: 500 })
+
+const file = path.join(app.dataDir(), "todos.json")
+const state = todos.load(file)
+
+// every change is saved and pushed to the page (fogu.on("todos", ...))
+fn changed() {
+    todos.save(state, file)?
+    app.emit("todos", { items: state.items, stats: todos.stats(state) })
+    return nil
+}
+
+app.command("list", fn() {
+    return { items: state.items, stats: todos.stats(state) }
+})
+
+app.command("add", fn(p) {
+    const item = todos.add(state, p?.text)?
+    changed()?
+    return item
+})
+
+app.command("toggle", fn(p) {
+    todos.toggle(state, p?.id)?
+    changed()?
+    return true
+})
+
+app.command("remove", fn(p) {
+    todos.remove(state, p?.id)?
+    changed()?
+    return true
+})
+
+// a native "Save as…" dialog; nil when the user cancels
+app.command("export", fn() {
+    const target = app.dialog.save({
+        title: "Export the todo list",
+        fileName: "todos.md",
+        filters: { Markdown: ["md"], Text: ["txt"] },
+    })?
+    if target == nil {
+        return nil
+    }
+    const lines = state.items.map(fn(i) {
+        const mark = match i.done {
+            true => "x"
+            _ => " "
+        }
+        return `- [${mark}] ${i.text}`
+    })
+    fs.writeText(target, "# Todo\n\n" + lines.join("\n") + "\n")?
+    return target
+})
+
+app.command("about", fn() {
+    return { fogu: Fogu.version, os: Fogu.os, embedded: desktop.embedded, data: file }
+})
+
+// an event from the page: fogu.emit("clear-done")
+app.on("clear-done", fn() {
+    const n = todos.clearDone(state)
+    if n > 0 {
+        changed()
+        app.emit("toast", `${n} finished todo(s) removed`)
+    }
+})
+
+// show the window; then a background task: the uptime, every second (only with a window)
+if app.run() {
+    fg fn() {
+        let seconds = 0
+        loop {
+            time.delay(1s)
+            seconds += 1
+            app.emit("uptime", seconds)
+        }
+    }()
+} else {
+    print("commands:", desktop.commandNames())
+    print("list:", desktop.call("list")?)
+}

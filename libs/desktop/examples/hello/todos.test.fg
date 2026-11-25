@@ -1,0 +1,34 @@
+import { test, expect } from "fogu:test"
+import fs from "fogu:fs"
+import path from "fogu:path"
+import todos from "./todos.fg"
+
+test("add, toggle, remove, clear", () => {
+    const s = todos.empty()
+    const a = todos.add(s, "  milk ")?
+    expect(a).toEqual({ id: 1, text: "milk", done: false })
+    todos.add(s, "bread")?
+    const [_x, err] = todos.add(s, "   ")
+    expect(err.message).toBe("a todo needs some text")
+    const [_y, err2] = todos.add(s, nil)
+    expect(err2).toBeError()
+    const t = todos.toggle(s, 1)?
+    expect(t.done).toBe(true)
+    expect(todos.stats(s)).toEqual({ total: 2, done: 1, left: 1 })
+    expect(todos.clearDone(s)).toBe(1)
+    expect(todos.remove(s, 2)?).toBe(true)
+    const [_z, err3] = todos.remove(s, 2)
+    expect(err3.message).toBe("no todo with id 2")
+    expect(s.items).toEqual([])
+})
+
+test("save and load", () => {
+    const file = path.join(fs.tempDir(), "fogu-desktop-todos-test.json")
+    const s = todos.empty()
+    todos.add(s, "one")?
+    todos.save(s, file)?
+    expect(todos.load(file)).toEqual(s)
+    fs.writeText(file, "{ broken")?
+    expect(todos.load(file)).toEqual(todos.empty())
+    fs.remove(file)?
+})

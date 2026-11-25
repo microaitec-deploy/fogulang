@@ -1,0 +1,264 @@
+// tools/build.fg and tools/package.fg without building anything: where the
+// generic host comes from (cache, prebuilt, cargo), the areas an app needs,
+// the commands, replacing an executable in use, and the files that give an
+// app its identity (Info.plist, .icns, .desktop entry, NSIS script, archives).
+import { test, expect } from "fogu:test"
+import fs from "fogu:fs"
+import json from "fogu:json"
+import path from "fogu:path"
+import process from "fogu:process"
+import time from "fogu:time"
+import zip from "fogu:zip"
+import tools from "../tools/build.fg"
+import packaging from "../tools/package.fg"
+import pe from "../tools/pe.fg"
+
+const tmp = path.join(fs.tempDir(), "fogu-desktop-build-test-" + str(clock()))
+fs.mkdir(tmp)?
+const libVersion = json.parse(fs.readText(path.join(tools.libRoot(), "fogu.json"))?)?.version
+
+fn put(file, text) {
+    fs.mkdir(path.dirname(file))?
+    fs.writeText(file, text)?
+    return file
+}
+
+const noCargo = fn(tool) { return false }
+
+test("areas: what a feature list gives and what a module needs", () => {
+    expect(tools.hostAreas(nil)).toEqual(["network"])
+    expect(tools.hostAreas(["network", "database"])).toEqual(["database", "network", "rpc"])
+    expect(tools.hostAreas(["ai"])).toEqual(["ai", "media", "network"])
+    expect(tools.hostAreas(["full"])).toEqual(["ai", "database", "media", "messaging", "network", "ops", "rpc"])
+    expect(tools.moduleArea("sql")).toBe("database")
+    expect(tools.moduleArea("http")).toBe("network")
+    expect(tools.moduleArea("image")).toBe("media")
+    expect(tools.moduleArea("fs")).toBe(nil)
+    expect(tools.featureKey(nil)).toBe("default")
+    expect(tools.featureKey(["network"])).toBe("default")
+    expect(tools.featureKey(["network", "database"])).toBe("database+network")
+    expect(tools.hostPlatform("x86_64-pc-windows-gnu")).toBe("windows-x64")
+    expect(tools.hostPlatform("aarch64-unknown-linux-gnu")).toBe("linux-arm64")
+    expect(tools.hostPlatform("aarch64-apple-darwin")).toBe("macos-arm64")
+    expect(tools.platformKey("x86_64-pc-windows-gnu")).toBe("windows-x86_64")
+})
+
+test("a module outside the host's areas is named, with its area", () => {
+    const app = path.join(tmp, "areas")
+    put(path.join(app, "main.fg"), "import sql from \"fogu:sql\"\nimport http from \"fogu:http\"\nimport fs from \"fogu:fs\"\n")
+    put(path.join(app, "lib", "pics.fg"), "const image = import(\"fogu:image\")?\n")
+    put(path.join(app, "node_modules", "x", "x.fg"), "import ai from \"fogu:ai\"\n")
+    put(path.join(app, "main.test.fg"), "import kafka from \"fogu:kafka\"\n")
+    const missing = tools.missingAreas(app, nil)
+    expect(missing.map((m) => `fogu:${m.module} (${m.area}) in ${m.file}`).sort()).toEqual(["fogu:image (media) in lib/pics.fg", "fogu:sql (database) in main.fg"])
+    const report = tools.missingAreasReport(missing, nil)
+    expect(len(report)).toBe(3)
+    expect(report.join("\n")).toContain("imports fogu:sql, which is in the \"database\" area")
+    expect(report[2]).toContain("--features network,media,database")
+    // with the areas in fogu.json "desktop.features" nothing is missing
+    expect(tools.missingAreas(app, ["network", "database", "media"])).toEqual([])
+    expect(tools.missingAreasReport([], nil)).toEqual([])
+    expect(tools.missingAreas(app, ["full"])).toEqual([])
+})
+
+test("the host comes prebuilt, without cargo, when one fits", () => {
+    const home = path.join(tmp, "home")
+    const hosts = path.join(tmp, "hosts")
+    process.setEnv("FOGU_HOME", home)
+    process.setEnv("FOGU_DESKTOP_HOSTS", hosts)
+    put(path.join(hosts, "windows-x64", "fogu-desktop.exe"), "default")
+    put(path.join(hosts, "windows-x64-database+network", "fogu-desktop.exe"), "db")
+    put(path.join(hosts, "windows-x64-full", "fogu-desktop.exe"), "full")
+    put(path.join(hosts, "linux-arm64-full", "fogu-desktop"), "full")
+
+    // build: the release host of the default areas
+    const a = tools.host({ target: "windows", quiet: true, has: noCargo })?
+    expect([a.source, a.profile, a.platform, fs.readText(a.exe)?]).toEqual(["prebuilt", "release", "windows-x64", "default"])
+    expect(a.windows).toBe(true)
+    // the same areas written out
+    const b = tools.host({ target: "windows", features: ["network"], quiet: true, has: noCargo })?
+    expect(fs.readText(b.exe)?).toBe("default")
+    // more areas: the smallest host that has them all
+    const c = tools.host({ target: "windows", features: ["database"], quiet: true, has: noCargo })?
+    expect(fs.readText(c.exe)?).toBe("db")
+    const d = tools.host({ target: "windows", features: ["network", "media"], quiet: true, has: noCargo })?
+    expect(fs.readText(d.exe)?).toBe("full")
+    const e = tools.host({ target: "aarch64-unknown-linux-gnu", quiet: true, has: noCargo })?
+    expect([e.platform, e.windows, fs.readText(e.exe)?]).toEqual(["linux-arm64", false, "full"])
+
+    // dev asks for a debug host but takes a release one (no Rust needed)…
+    const dev = tools.host({ target: "windows", debug: true, anyProfile: true, quiet: true, has: noCargo })?
+    expect([dev.source, dev.profile]).toEqual(["prebuilt", "release"])
+    // …unless a debug host was compiled before: the cache comes first
+    const cacheTarget = match Fogu.os {
+        "windows" => "native"
+        _ => "x86_64-pc-windows-gnu"
+    }
+    const cache = path.join(home, "desktop", "hosts", libVersion, cacheTarget, "debug-default", "fogu-desktop.exe")
+    put(cache, "debug")
+    const dev2 = tools.host({ target: "windows", debug: true, anyProfile: true, quiet: true, has: noCargo })?
+    expect([dev2.source, dev2.profile, fs.readText(dev2.exe)?]).toEqual(["cache", "debug", "debug"])
+    fs.remove(cache)
+})
+
+test("when the host must be compiled and there is no cargo, the error says why", () => {
+    process.setEnv("FOGU_HOME", path.join(tmp, "home"))
+    process.setEnv("FOGU_DESKTOP_HOSTS", path.join(tmp, "hosts"))
+    // no prebuilt host for that platform
+    const [_a, e1] = tools.host({ target: "x86_64-apple-darwin", quiet: true, has: noCargo })
+    expect(e1.message).toContain("no prebuilt host for macos-x64 with the areas network")
+    expect(e1.message).toContain("cargo is not installed")
+    expect(e1.message).toContain("https://rustup.rs")
+    // --cargo and --debug ask for a compiled host; the prebuilt ones are listed
+    const [_b, e2] = tools.host({ target: "windows", cargo: true, quiet: true, has: noCargo })
+    expect(e2.message).toContain("(--cargo)")
+    expect(e2.message).toContain("windows-x64 (network)")
+    const [_c, e3] = tools.host({ target: "windows", debug: true, quiet: true, has: noCargo })
+    expect(e3.message).toContain("a debug host is always compiled")
+    const [_d, e4] = tools.host({ target: "windows", features: ["bogus"], quiet: true, has: noCargo })
+    expect(e4.message).toContain("unknown feature 'bogus'")
+})
+
+test("cargo tauri build gets --no-default-features after --", () => {
+    expect(tools.tauriBuildCommand(false, nil, "", "{}")).toBe("cargo tauri build --config '{}'")
+    const cmd = tools.tauriBuildCommand(true, "x86_64-pc-windows-gnu", " --no-default-features --features 'network,database'", "{}")
+    expect(cmd).toBe("cargo tauri build --debug --target x86_64-pc-windows-gnu --features 'network,database' --config '{}' -- --no-default-features")
+})
+
+test("an executable in use is renamed, not lost", () => {
+    const dir = path.join(tmp, "dist")
+    fs.mkdir(dir)?
+    const built = put(path.join(dir, ".bundle", "app"), "new build")
+    const dest = path.join(dir, "app")
+    // nothing there yet, then a plain replacement
+    expect(tools.inUse(dest)).toBe(false)
+    expect(tools.placeExecutable(built, dest)?).toBe(dest)
+    expect(tools.inUse(dest)).toBe(false)
+    expect(tools.placeExecutable(built, dest)?).toBe(dest)
+    expect(fs.exists(dest + ".old")).toBe(false)
+    if Fogu.os != "linux" || !fs.isFile("/bin/sleep") {
+        return nil
+    }
+    // a running program: Linux refuses to write to it, as Windows does (os error 32)
+    fs.copy("/bin/sleep", dest)?
+    process.run("chmod", ["+x", dest])?
+    fg fn() { process.run(dest, ["2"]) }()
+    time.delay(300ms)
+    expect(tools.inUse(dest)).toBe(true)
+    expect(tools.placeExecutable(built, dest)?).toBe(dest)
+    expect(fs.readText(dest)?).toBe("new build")
+    expect(fs.isFile(dest + ".old")).toBe(true)
+    time.delay(2s)
+})
+
+const ID = { name: "notes", title: "My <Notes>", version: "1.2.3", identifier: "com.example.notes", company: "ACME", copyright: "© ACME", description: "Takes notes" }
+
+test("the identity comes from fogu.json", () => {
+    const id = packaging.identity({
+        name: "notes",
+        version: "1.2.3",
+        identifier: "com.example.notes",
+        desk: { title: "My Notes", company: "ACME" },
+        manifest: { description: "Takes notes", author: "Somebody" },
+    })
+    expect(id).toEqual({ name: "notes", title: "My Notes", version: "1.2.3", identifier: "com.example.notes", company: "ACME", copyright: "", description: "Takes notes" })
+    const bare = packaging.identity({ name: "x", version: "0.1.0", identifier: "dev.fogu.app.x", desk: {}, manifest: { author: "Ana" } })
+    expect([bare.title, bare.company, bare.description]).toEqual(["x", "Ana", "x"])
+})
+
+test("macOS: an .app bundle with Info.plist and an .icns", () => {
+    const plist = packaging.infoPlist(ID)
+    expect(plist).toContain("<key>CFBundleName</key>\n    <string>My &lt;Notes&gt;</string>")
+    expect(plist).toContain("<key>CFBundleDisplayName</key>\n    <string>My &lt;Notes&gt;</string>")
+    expect(plist).toContain("<key>CFBundleIdentifier</key>\n    <string>com.example.notes</string>")
+    expect(plist).toContain("<key>CFBundleExecutable</key>\n    <string>notes</string>")
+    expect(plist).toContain("<key>CFBundleIconFile</key>\n    <string>notes.icns</string>")
+    expect(plist).toContain("<key>CFBundleShortVersionString</key>\n    <string>1.2.3</string>")
+    expect(packaging.bundleName(ID)).toBe("My Notes.app")
+
+    const [image, ierr] = import("fogu:image")
+    const app = path.join(tmp, "macapp")
+    fs.mkdir(path.join(app, "icons"))?
+    if ierr == nil {
+        image.new(64, 64, "#16a34a").save(path.join(app, "icons", "icon.png"))?
+    }
+    const dist = path.join(app, "dist")
+    const exe = put(path.join(dist, "notes"), "the executable")
+    const bundle = packaging.macApp(dist, exe, ID, app)?
+    expect(path.basename(bundle)).toBe("My Notes.app")
+    expect(fs.readText(path.join(bundle, "Contents", "MacOS", "notes"))?).toBe("the executable")
+    expect(fs.readText(path.join(bundle, "Contents", "Info.plist"))?).toBe(plist)
+    if ierr == nil {
+        const icns = pe.readBytes(path.join(bundle, "Contents", "Resources", "notes.icns"))?
+        expect(icns.slice(0, 4).text()).toBe("icns")
+        expect(icns.readU32(4, true)).toBe(len(icns))
+        // the first entry: a 16x16 PNG
+        expect(icns.slice(8, 12).text()).toBe("icp4")
+        const first = icns.slice(16, 8 + icns.readU32(12, true))
+        const decoded = image.decode(first)?
+        expect(decoded.width).toBe(16)
+    }
+})
+
+test("Linux: a .desktop entry and the icons under share/", () => {
+    const entry = packaging.desktopEntry(ID)
+    expect(entry.lines()).toEqual([
+        "[Desktop Entry]",
+        "Type=Application",
+        "Name=My <Notes>",
+        "Comment=Takes notes",
+        "Exec=notes",
+        "Icon=notes",
+        "Terminal=false",
+        "Categories=Utility;",
+        "StartupWMClass=notes",
+    ])
+    const [image, ierr] = import("fogu:image")
+    if ierr != nil {
+        return nil
+    }
+    const app = path.join(tmp, "linuxapp")
+    fs.mkdir(path.join(app, "icons"))?
+    image.new(512, 512, "#f97316").save(path.join(app, "icons", "icon.png"))?
+    const dist = path.join(app, "dist")
+    const written = packaging.linuxShare(dist, ID, app)?
+    expect(written.map((f) => f.slice(len(dist) + 1))).toEqual([
+        "share/applications/notes.desktop",
+        "share/icons/hicolor/32x32/apps/notes.png",
+        "share/icons/hicolor/48x48/apps/notes.png",
+        "share/icons/hicolor/128x128/apps/notes.png",
+        "share/icons/hicolor/256x256/apps/notes.png",
+    ])
+    expect(image.info(written[3])?.width).toBe(128)
+    // the archive of a Linux build: the executable and share/, as a .tar.gz
+    const exe = put(path.join(dist, "notes"), "the executable")
+    const archive = packaging.archive(dist, [exe, path.join(dist, "share")], ID, "linux-x86_64")?
+    expect(path.basename(archive)).toBe("notes-1.2.3-linux-x86_64.tar.gz")
+    const names = zip.listTar(archive)?.map((e) => e.name)
+    expect(names).toContain("notes")
+    expect(names).toContain("share/applications/notes.desktop")
+})
+
+test("Windows: a .zip and an NSIS installer script", () => {
+    const dist = path.join(tmp, "windist")
+    const exe = put(path.join(dist, "notes.exe"), "MZ…")
+    const archive = packaging.archive(dist, [exe], ID, "windows-x86_64")?
+    expect(path.basename(archive)).toBe("notes-1.2.3-windows-x86_64.zip")
+    expect(zip.list(archive)?.map((e) => e.name)).toEqual(["notes.exe"])
+
+    const script = packaging.nsisScript(ID, "notes.exe", "notes.ico")
+    expect(script).toContain("Name \"My <Notes>\"")
+    expect(script).toContain("OutFile \"notes-1.2.3-setup.exe\"")
+    expect(script).toContain("InstallDir \"$LOCALAPPDATA\\Programs\\notes\"")
+    expect(script).toContain("RequestExecutionLevel user")
+    expect(script).toContain("Icon \"notes.ico\"")
+    expect(script).toContain("VIProductVersion \"1.2.3.0\"")
+    expect(script).toContain("File \"notes.exe\"")
+    expect(script).toContain("Uninstall\\com.example.notes\" \"DisplayName\" \"My <Notes>\"")
+    expect(script).toContain("WriteRegStr HKCU \"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\com.example.notes\" \"UninstallString\" \"$\\\"$INSTDIR\\uninstall.exe$\\\"\"")
+    // without makensis the script is written and the build says how to compile it
+    const r = packaging.nsis(dist, exe, ID, path.join(tmp, "no-icons"), "")?
+    expect(r.installer).toBe(nil)
+    expect(fs.readText(r.script)?).toBe(packaging.nsisScript(ID, "notes.exe", nil))
+    fs.removeAll(tmp)
+})

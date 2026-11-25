@@ -1,0 +1,73 @@
+// Commands: the page calls `await fogu.call(name, payload)`; the payload
+// arrives as a Fogu value (JSON → map, list, str, int, float, bool, nil) and
+// the return value goes back as JSON.
+//
+//   return value              → the promise resolves with it
+//   return nil, error("msg")  → the promise rejects with Error("msg")
+//   a runtime error           → the same: only that call fails, the app goes on
+//
+//   fogu desktop build --debug     → dist/commands
+//   fogu main.fg                   → no window: calls each command once
+import desktop from "desktop"
+
+const app = desktop.app({ name: "commands", title: "Notes (commands)", identifier: "dev.fogu.examples.commands" })
+app.createBrowser({ width: 520, height: 560 })
+
+let notes = []
+let nextId = 1
+
+// a map payload, validated: a bad one becomes an error for the page
+app.command("notes.add", fn(p) {
+    if typeof(p) != "map" || typeof(p.title) != "str" || p.title.trim() == "" {
+        return nil, error("a note needs a title")
+    }
+    const tags = match typeof(p.tags) {
+        "list" => p.tags.filter((t) => typeof(t) == "str")
+        _ => []
+    }
+    const note = { id: nextId, title: p.title.trim(), tags: tags }
+    nextId += 1
+    notes.push(note)
+    return note
+})
+
+// no payload: fn() without a parameter is fine
+app.command("notes.list", fn() {
+    return notes
+})
+
+// a plain string payload
+app.command("notes.byTag", fn(tag) {
+    return notes.filter((n) => n.tags.contains(tag))
+})
+
+app.command("notes.remove", fn(id) {
+    const before = len(notes)
+    const keep = notes.filter((n) => n.id != id)
+    if len(keep) == before {
+        return nil, error(`no note ${id}`)
+    }
+    notes = keep
+    return true
+})
+
+// a runtime error (int("abc") stops a normal script) only rejects this call
+app.command("parseNumber", fn(text) {
+    return int(text)
+})
+
+if !app.run() {
+    // no window: call each command the way the page does
+    print(desktop.call("notes.add", { title: "Buy milk", tags: ["home"] })?)
+    print(desktop.call("notes.add", { title: "Ship v1", tags: ["work", "urgent"] })?)
+    print(desktop.call("notes.byTag", "work")?)
+    print(desktop.call("notes.remove", 1)?)
+    print(desktop.call("notes.list")?)
+
+    // the errors the page would see as rejected promises
+    for c in [["notes.add", { title: "  " }], ["notes.remove", 42], ["parseNumber", "abc"], ["missing", nil]] {
+        const [_v, err] = desktop.call(c[0], c[1])
+        print(`${c[0]} → error: ${err.message}`)
+    }
+    print("parseNumber(\"7\") →", desktop.call("parseNumber", "7")?)
+}

@@ -1,0 +1,368 @@
+// tools/package.fg — what gives a built app its identity and a file to hand
+// out, without Rust or the Tauri CLI:
+//
+//   * Windows: the .ico for the executable's resources (tools/pe.fg stamps it),
+//     a .zip, and an NSIS installer script (compiled when `makensis` is installed);
+//   * macOS:   <Title>.app with Info.plist and Resources/<name>.icns;
+//   * Linux:   share/applications/<name>.desktop and the icon under
+//     share/icons/hicolor/ (the layout of /usr/share and ~/.local/share), a .tar.gz.
+//
+// Everything is written from Fogu, so a Windows app can be packaged from
+// Linux and the other way round. Image work (icon sizes) needs fogu:image;
+// without it the functions return an error value and the build goes on.
+import fs from "fogu:fs"
+import path from "fogu:path"
+import shell from "fogu:shell"
+import zip from "fogu:zip"
+import pe from "./pe.fg"
+
+// The app's identity as the packagers use it, from prepare()'s result
+// (tools/build.fg): { name, title, version, identifier, company, copyright, description }.
+export fn identity(p) {
+    const desk = p.desk ?? {}
+    const m = p.manifest ?? {}
+    return {
+        name: p.name,
+        title: desk.title ?? p.name,
+        version: p.version,
+        identifier: p.identifier,
+        company: desk.company ?? m.author ?? "",
+        copyright: desk.copyright ?? "",
+        description: m.description ?? desk.title ?? p.name,
+    }
+}
+
+// The app icon in <app>/icons/: { ico, png } (each a path or nil).
+export fn iconFiles(app: str) {
+    const ico = path.join(app, "icons", "icon.ico")
+    const png = path.join(app, "icons", "icon.png")
+    return {
+        ico: match fs.isFile(ico) {
+            true => ico
+            _ => nil
+        },
+        png: match fs.isFile(png) {
+            true => png
+            _ => nil
+        },
+    }
+}
+
+fn imageModule() {
+    const [image, err] = import("fogu:image")
+    if err != nil {
+        return nil, error("this fogu has no fogu:image (the media area): icons cannot be converted")
+    }
+    return image, nil
+}
+
+fn be32(n) {
+    const b = bytes(4)
+    b.writeU32(0, n, true)
+    return b
+}
+
+// An .ico (a buffer) from a PNG file: 16, 24, 32, 48, 64 and 256 pixels.
+export fn icoFromPng(png: str) {
+    const image = imageModule()?
+    const src = image.open(png)?
+    const sizes = [16, 24, 32, 48, 64, 256]
+    const blobs = []
+    for s in sizes {
+        blobs.push(src.resize(s, s).encode("png"))
+    }
+    const out = bytes(6)
+    out.writeU16(2, 1)
+    out.writeU16(4, len(sizes))
+    let offset = 6 + 16 * len(sizes)
+    for i in 0..len(sizes) {
+        const e = bytes(16)
+        e[0] = sizes[i] % 256 // 256 is written as 0
+        e[1] = sizes[i] % 256
+        e.writeU16(4, 1)
+        e.writeU16(6, 32)
+        e.writeU32(8, len(blobs[i]))
+        e.writeU32(12, offset)
+        out.append(e)
+        offset += len(blobs[i])
+    }
+    for b in blobs {
+        out.append(b)
+    }
+    return out, nil
+}
+
+// The .ico of an app for the executable's resources: icons/icon.ico, else
+// one made from icons/icon.png. nil when the app has no icon.
+export fn windowsIcon(app: str) {
+    const files = iconFiles(app)
+    if files.ico != nil {
+        return pe.readBytes(files.ico)
+    }
+    if files.png != nil {
+        return icoFromPng(files.png)
+    }
+    return nil, nil
+}
+
+// An .icns (a buffer) from a PNG file: 16 to 1024 pixels, PNG entries.
+export fn icnsFromPng(png: str) {
+    const image = imageModule()?
+    const src = image.open(png)?
+    const kinds = [["icp4", 16], ["icp5", 32], ["icp6", 64], ["ic07", 128], ["ic08", 256], ["ic09", 512], ["ic10", 1024], ["ic11", 32], ["ic12", 64], ["ic13", 256], ["ic14", 512]]
+    const body = bytes(0)
+    const cache = {}
+    for k in kinds {
+        const key = str(k[1])
+        if cache[key] == nil {
+            cache[key] = src.resize(k[1], k[1]).encode("png")
+        }
+        body.append(bytes(k[0], "latin1"))
+        body.append(be32(8 + len(cache[key])))
+        body.append(cache[key])
+    }
+    const out = bytes("icns", "latin1")
+    out.append(be32(8 + len(body)))
+    out.append(body)
+    return out, nil
+}
+
+fn xml(s) {
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+}
+
+// Info.plist of a macOS app bundle.
+export fn infoPlist(id) {
+    const pairs = [
+        ["CFBundleName", id.title],
+        ["CFBundleDisplayName", id.title],
+        ["CFBundleIdentifier", id.identifier],
+        ["CFBundleExecutable", id.name],
+        ["CFBundleIconFile", id.name + ".icns"],
+        ["CFBundleShortVersionString", id.version],
+        ["CFBundleVersion", id.version],
+        ["CFBundlePackageType", "APPL"],
+        ["CFBundleInfoDictionaryVersion", "6.0"],
+        ["LSMinimumSystemVersion", "10.15"],
+    ]
+    if id.copyright != "" {
+        pairs.push(["NSHumanReadableCopyright", id.copyright])
+    }
+    let body = ""
+    for p in pairs {
+        body += `    <key>${p[0]}</key>\n    <string>${xml(p[1])}</string>\n`
+    }
+    body += "    <key>NSHighResolutionCapable</key>\n    <true/>\n"
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n${body}</dict>\n</plist>\n`
+}
+
+// The name of the .app folder: the title without the characters a file name cannot have.
+export fn bundleName(id) {
+    let n = ""
+    for ch in id.title.chars() {
+        if !"/\\:*?\"<>|".contains(ch) {
+            n += ch
+        }
+    }
+    n = n.trim()
+    if n == "" {
+        n = id.name
+    }
+    return n + ".app"
+}
+
+// <dist>/<Title>.app around a built macOS executable: Contents/MacOS/<name>,
+// Contents/Info.plist, Contents/Resources/<name>.icns (from icons/icon.png).
+// Returns the .app path.
+export fn macApp(dist: str, exe: str, id, app: str) {
+    const bundle = path.join(dist, bundleName(id))
+    if fs.isDir(bundle) {
+        fs.removeAll(bundle)?
+    }
+    const contents = path.join(bundle, "Contents")
+    fs.mkdir(path.join(contents, "MacOS"))?
+    fs.mkdir(path.join(contents, "Resources"))?
+    const inner = path.join(contents, "MacOS", id.name)
+    fs.copy(exe, inner)?
+    if Fogu.os != "windows" {
+        shell.run("chmod +x " + shell.quote(inner))
+    }
+    fs.writeText(path.join(contents, "Info.plist"), infoPlist(id))?
+    fs.writeText(path.join(contents, "PkgInfo"), "APPL????")?
+    const png = iconFiles(app).png
+    if png != nil {
+        const [icns, ierr] = icnsFromPng(png)
+        if ierr != nil {
+            print("note: no .icns in the app bundle: " + ierr.message)
+        } else {
+            pe.writeBytes(path.join(contents, "Resources", id.name + ".icns"), icns)?
+        }
+    } else {
+        print("note: icons/icon.png is missing: the app bundle has the default icon")
+    }
+    return bundle, nil
+}
+
+// A freedesktop .desktop entry. `exec`: the command (default: the app name, found on the PATH).
+export fn desktopEntry(id, exec = nil) {
+    const lines = [
+        "[Desktop Entry]",
+        "Type=Application",
+        "Name=" + id.title,
+        "Comment=" + id.description,
+        "Exec=" + (exec ?? id.name),
+        "Icon=" + id.name,
+        "Terminal=false",
+        "Categories=Utility;",
+        "StartupWMClass=" + id.name,
+    ]
+    return lines.join("\n") + "\n"
+}
+
+// <dist>/share/: applications/<name>.desktop and icons/hicolor/<size>/apps/<name>.png
+// (copy it over /usr/share or ~/.local/share next to the executable in a bin/).
+// Returns the files written.
+export fn linuxShare(dist: str, id, app: str) {
+    const written = []
+    const entry = path.join(dist, "share", "applications", id.name + ".desktop")
+    fs.mkdir(path.dirname(entry))?
+    fs.writeText(entry, desktopEntry(id))?
+    written.push(entry)
+    const png = iconFiles(app).png
+    if png == nil {
+        print("note: icons/icon.png is missing: the .desktop entry has no icon")
+        return written, nil
+    }
+    const [image, ierr] = imageModule()
+    if ierr != nil {
+        // no resizing: the PNG as it is, at 256x256
+        const to = path.join(dist, "share", "icons", "hicolor", "256x256", "apps", id.name + ".png")
+        fs.mkdir(path.dirname(to))?
+        fs.copy(png, to)?
+        written.push(to)
+        return written, nil
+    }
+    const src = image.open(png)?
+    for s in [32, 48, 128, 256] {
+        const to = path.join(dist, "share", "icons", "hicolor", `${s}x${s}`, "apps", id.name + ".png")
+        fs.mkdir(path.dirname(to))?
+        src.resize(s, s).save(to)?
+        written.push(to)
+    }
+    return written, nil
+}
+
+// The archive name of a build: <name>-<version>-<platform>.zip (.tar.gz for Linux).
+export fn archiveName(id, platform: str) {
+    const ext = match platform.starts_with("linux") {
+        true => ".tar.gz"
+        _ => ".zip"
+    }
+    return `${id.name}-${id.version}-${platform}${ext}`
+}
+
+// Packs `items` (paths inside `dist`: the executable, the .app, share/) into
+// <dist>/<archive>. Linux gets a .tar.gz (it keeps the executable bit).
+export fn archive(dist: str, items, id, platform: str) {
+    const dest = path.join(dist, archiveName(id, platform))
+    if fs.isFile(dest) {
+        fs.remove(dest)?
+    }
+    if dest.ends_with(".tar.gz") {
+        zip.tar(dest, items)?
+    } else {
+        zip.zip(dest, items)?
+    }
+    return dest, nil
+}
+
+fn nsisText(s) {
+    return str(s).replace("$", "$$").replace("\"", "$\\\"")
+}
+
+// An NSIS installer script for a built Windows executable: per-user install
+// (no administrator rights), Start menu and desktop shortcuts, an uninstaller
+// listed in "Apps". `exeFile` and `iconFile` are file names next to the script.
+export fn nsisScript(id, exeFile: str, iconFile = nil) {
+    const title = nsisText(id.title)
+    const company = nsisText(match id.company {
+        "" => id.title
+        c => c
+    })
+    const nums = pe.versionNumbers(id.version)
+    const key = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + id.identifier
+    let icon = ""
+    if iconFile != nil {
+        icon = `Icon "${iconFile}"\nUninstallIcon "${iconFile}"\n`
+    }
+    return `; Installer of ${id.title} ${id.version} (written by fogu desktop build --nsis).
+; Compile it with NSIS: makensis ${id.name}-setup.nsi
+Unicode true
+Name "${title}"
+OutFile "${id.name}-${id.version}-setup.exe"
+InstallDir "$LOCALAPPDATA\\Programs\\${nsisText(id.name)}"
+InstallDirRegKey HKCU "${key}" "InstallLocation"
+RequestExecutionLevel user
+SetCompressor /SOLID lzma
+${icon}VIProductVersion "${nums[0]}.${nums[1]}.${nums[2]}.${nums[3]}"
+VIAddVersionKey "ProductName" "${title}"
+VIAddVersionKey "CompanyName" "${company}"
+VIAddVersionKey "FileDescription" "${title} Setup"
+VIAddVersionKey "FileVersion" "${id.version}"
+VIAddVersionKey "ProductVersion" "${id.version}"
+
+Page directory
+Page instfiles
+UninstPage uninstConfirm
+UninstPage instfiles
+
+Section "Install"
+  SetOutPath "$INSTDIR"
+  File "${exeFile}"
+  WriteUninstaller "$INSTDIR\\uninstall.exe"
+  CreateDirectory "$SMPROGRAMS\\${title}"
+  CreateShortcut "$SMPROGRAMS\\${title}\\${title}.lnk" "$INSTDIR\\${exeFile}"
+  CreateShortcut "$DESKTOP\\${title}.lnk" "$INSTDIR\\${exeFile}"
+  WriteRegStr HKCU "${key}" "DisplayName" "${title}"
+  WriteRegStr HKCU "${key}" "DisplayVersion" "${id.version}"
+  WriteRegStr HKCU "${key}" "Publisher" "${company}"
+  WriteRegStr HKCU "${key}" "DisplayIcon" "$INSTDIR\\${exeFile}"
+  WriteRegStr HKCU "${key}" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKCU "${key}" "UninstallString" "$\\"$INSTDIR\\uninstall.exe$\\""
+  WriteRegDWORD HKCU "${key}" "NoModify" 1
+  WriteRegDWORD HKCU "${key}" "NoRepair" 1
+SectionEnd
+
+Section "Uninstall"
+  Delete "$INSTDIR\\${exeFile}"
+  Delete "$INSTDIR\\uninstall.exe"
+  RMDir "$INSTDIR"
+  Delete "$SMPROGRAMS\\${title}\\${title}.lnk"
+  RMDir "$SMPROGRAMS\\${title}"
+  Delete "$DESKTOP\\${title}.lnk"
+  DeleteRegKey HKCU "${key}"
+SectionEnd
+`
+}
+
+// Writes <dist>/<name>-setup.nsi and compiles it when `makensis` is on the
+// PATH. Returns { script, installer (nil when makensis is missing) }.
+export fn nsis(dist: str, exe: str, id, app: str, makensis = nil) {
+    const script = path.join(dist, id.name + "-setup.nsi")
+    let iconFile = nil
+    const [ico, ierr] = windowsIcon(app)
+    if ierr == nil && ico != nil {
+        iconFile = id.name + ".ico"
+        pe.writeBytes(path.join(dist, iconFile), ico)?
+    }
+    fs.writeText(script, nsisScript(id, path.basename(exe), iconFile))?
+    const tool = makensis ?? shell.which("makensis")
+    if tool == nil || tool == "" {
+        return { script: script, installer: nil }, nil
+    }
+    const r = shell.run(shell.quote(tool) + " " + shell.quote(path.basename(script)), { cwd: dist })
+    if !r.ok {
+        return nil, error("makensis failed: " + (r.stdout + r.stderr).trim())
+    }
+    return { script: script, installer: path.join(dist, `${id.name}-${id.version}-setup.exe`) }, nil
+}

@@ -1,0 +1,86 @@
+// Window and tray events as the fogu-desktop host delivers them: Fogu.signal
+// events (desktop:window-event, desktop:tray-event) in, captured
+// Fogu.host.emit messages out. Expected output: events.out.
+import time from "fogu:time"
+import desktop from "../main.fg"
+
+const sent = []
+desktop.capture(fn(name, data) { sent.push({ name: name, data: data }) })
+const seen = []
+
+// window events: per window, every window ("*"), and the close decision
+desktop.mainWindow.on("resized", fn(e) { seen.push(`main resized ${e.width}x${e.height}`) })
+desktop.onWindowEvent("*", fn(e) { seen.push(`any ${e.window} ${e.type}`) })
+let allowClose = false
+desktop.onCloseRequested(fn(e) {
+    seen.push("asked to close " + e.window)
+    return allowClose
+})
+Fogu.signal.emit("desktop:window-event", { window: "main", type: "resized", width: 800, height: 600 })
+Fogu.signal.emit("desktop:window-event", { window: "tool", type: "focus" })
+Fogu.signal.emit("desktop:window-event", { window: "main", type: "closeRequested", prevented: true, decides: "program" })
+time.delay(30ms)
+allowClose = true
+Fogu.signal.emit("desktop:window-event", { window: "main", type: "closeRequested", prevented: true, decides: "program" })
+time.delay(30ms)
+
+// tray: icon clicks, menu items (their own onClick, onMenu, on("menu")), check state
+const t = desktop.tray({
+    onClick: fn(e) { seen.push("tray click") },
+    onDoubleClick: fn(e) { seen.push("tray double click") },
+    onMenu: fn(e) { seen.push("onMenu " + e.item) },
+    menu: [
+        { text: "Open", onClick: fn(e) { seen.push("open clicked") } },
+        { id: "mute", text: "Mute", checked: false },
+    ],
+})
+t.on("menu", fn(e) { seen.push(`menu ${e.item} checked=${e.checked}`) })
+Fogu.signal.emit("desktop:tray-event", { tray: "main", type: "click" })
+Fogu.signal.emit("desktop:tray-event", { tray: "main", type: "doubleClick" })
+Fogu.signal.emit("desktop:tray-event", { tray: "main", type: "menu", item: "Open", checked: nil })
+Fogu.signal.emit("desktop:tray-event", { tray: "main", type: "menu", item: "mute", checked: true })
+Fogu.signal.emit("desktop:tray-event", { tray: "other", type: "click" })
+time.delay(30ms)
+
+for s in seen {
+    print(s)
+}
+print("mute checked:", t.isChecked("mute"))
+print(sent.filter((m) => m.name == "desktop:window").map((m) => m.data))
+
+// the tray asks the host for the Linux click item when it has onClick
+print(sent.filter((m) => m.name == "desktop:tray").map((m) => m.data.hasClick))
+
+// menus: the app menu and a window's; items' onClick, onMenu, check state
+const seen2 = []
+desktop.menu([
+    { text: "File", items: [
+        { text: "New", accelerator: "CmdOrCtrl+N", onClick: fn(e) { seen2.push("new " + e.menu) } },
+        "-",
+        { role: "quit" },
+    ] },
+    { text: "View", items: [{ id: "dark", text: "Dark", checked: false }] },
+], { onMenu: fn(e) { seen2.push("onMenu " + e.item) } })
+desktop.menu([{ text: "Tool", items: [{ text: "Run", onClick: fn(e) { seen2.push("run in " + e.menu) } }] }], { window: "tool" })
+Fogu.signal.emit("desktop:menu-event", { menu: "app", item: "New", checked: nil })
+Fogu.signal.emit("desktop:menu-event", { menu: "app", item: "dark", checked: true })
+Fogu.signal.emit("desktop:menu-event", { menu: "tool", item: "Run", checked: nil })
+Fogu.signal.emit("desktop:menu-event", { menu: "nope", item: "x", checked: nil })
+time.delay(30ms)
+print(seen2)
+print("dark checked:", desktop.menuChecked("dark"))
+print(sent.filter((m) => m.name == "desktop:menu").map((m) => m.data))
+
+// global shortcuts and notifications
+const seen3 = []
+desktop.shortcut("CmdOrCtrl+Shift+K", fn(e) { seen3.push(e.shortcut + " " + e.state) })
+desktop.shortcut("F12", fn(e) { seen3.push("F12 " + e.state) }, { released: true })
+Fogu.signal.emit("desktop:shortcut-event", { shortcut: "CmdOrCtrl+Shift+K", state: "pressed" })
+Fogu.signal.emit("desktop:shortcut-event", { shortcut: "CmdOrCtrl+Shift+K", state: "released" })
+Fogu.signal.emit("desktop:shortcut-event", { shortcut: "F12", state: "released" })
+time.delay(30ms)
+desktop.removeShortcut("F12")
+desktop.notify("Saved", "3 files")
+desktop.notify({ title: "T", icon: "icons/a.png" })
+print(seen3)
+print(sent.filter((m) => m.name == "desktop:shortcut" || m.name == "desktop:notify").map((m) => [m.name, m.data]))

@@ -1,0 +1,266 @@
+// tools/pe.fg: the app's icon and version information written into a Windows
+// executable, on any OS. The executables here are made by the test (headers,
+// a few sections, a resource tree like the host's); tests/build-e2e.fg stamps
+// a real host when one is available.
+import { test, expect } from "fogu:test"
+import fs from "fogu:fs"
+import path from "fogu:path"
+import pe from "../tools/pe.fg"
+import packaging from "../tools/package.fg"
+
+const tmp = path.join(fs.tempDir(), "fogu-desktop-pe-test-" + str(clock()))
+fs.mkdir(tmp)?
+
+// An .ico with one image per size (the bytes of an image do not matter here).
+fn fakeIco(sizes) {
+    const out = bytes(6)
+    out.writeU16(2, 1)
+    out.writeU16(4, len(sizes))
+    let offset = 6 + 16 * len(sizes)
+    const blobs = []
+    for s in sizes {
+        const blob = bytes(40 + s)
+        blob.fill(s % 256)
+        const e = bytes(16)
+        e[0] = s % 256
+        e[1] = s % 256
+        e.writeU16(4, 1)
+        e.writeU16(6, 32)
+        e.writeU32(8, len(blob))
+        e.writeU32(12, offset)
+        out.append(e)
+        offset += len(blob)
+        blobs.push(blob)
+    }
+    for b in blobs {
+        out.append(b)
+    }
+    return out
+}
+
+// The resources of a host: an icon group, version information, a manifest.
+fn hostTree() {
+    const tree = { entries: [] }
+    pe.setIcon(tree, fakeIco([16, 32]))?
+    pe.setVersion(tree, { title: "Fogu Desktop", name: "fogu-desktop", version: "0.1.0", company: "fogu" })
+    pe.setResource(tree, 24, 1, 1033, bytes("<assembly/>"))
+    return tree
+}
+
+// A PE32+ executable: .text, then .rsrc ("middle": followed by .reloc;
+// "last"; "none": no resources), then `tail` after the sections.
+fn fakeExe(where, tail = nil) {
+    const names = match where {
+        "middle" => [".text", ".rsrc", ".reloc"]
+        "last" => [".text", ".rsrc"]
+        _ => [".text", ".reloc"]
+    }
+    const b = bytes(0x400)
+    b.writeU16(0, 0x5A4D)
+    b.writeU32(0x3C, 0x40)
+    b.writeU32(0x40, 0x00004550)
+    const coff = 0x44
+    b.writeU16(coff, 0x8664)
+    b.writeU16(coff + 2, len(names))
+    b.writeU16(coff + 16, 240)
+    const opt = coff + 20
+    b.writeU16(opt, 0x20B)
+    b.writeU32(opt + 32, 0x1000)
+    b.writeU32(opt + 36, 0x200)
+    b.writeU32(opt + 60, 0x400)
+    b.writeU32(opt + 64, 0x12345)
+    b.writeU32(opt + 108, 16)
+    const dirs = opt + 112
+    let va = 0x1000
+    for i, name in names {
+        const at = opt + 240 + i * 40
+        for k, ch in name.chars() {
+            b[at + k] = ch.code()
+        }
+        let data = bytes(0x200)
+        data.fill(0x41 + i)
+        if name == ".rsrc" {
+            data = pe.serialize(hostTree(), va)
+            b.writeU32(dirs + 16, va)
+            b.writeU32(dirs + 20, len(data))
+        }
+        const raw = (len(data) + 0x1FF) / 0x200 * 0x200
+        b.writeU32(at + 8, len(data))
+        b.writeU32(at + 12, va)
+        b.writeU32(at + 16, raw)
+        b.writeU32(at + 20, len(b))
+        b.append(data)
+        b.append(bytes(raw - len(data)))
+        va += (len(data) + 0xFFF) / 0x1000 * 0x1000
+    }
+    b.writeU32(opt + 56, va)
+    if tail != nil {
+        // as a COFF symbol table would sit there
+        b.writeU32(coff + 8, len(b))
+        b.append(tail)
+    }
+    return b
+}
+
+fn write(name, data) {
+    const p = path.join(tmp, name)
+    pe.writeBytes(p, data)?
+    return p
+}
+
+const IDENTITY = { title: "Notas Çã 日本", name: "notas", version: "1.4.2-beta+7", company: "ACME Lda", copyright: "© 2026 ACME" }
+
+test("version numbers and the version resource", () => {
+    expect(pe.versionNumbers("1.4.2")).toEqual([1, 4, 2, 0])
+    expect(pe.versionNumbers("2.10.0-beta+5")).toEqual([2, 10, 0, 0])
+    expect(pe.versionNumbers("v3")).toEqual([0, 0, 0, 0])
+    expect(pe.versionNumbers("1.2.3.99999")).toEqual([1, 2, 3, 65535])
+    const strings = pe.versionStrings(IDENTITY)
+    expect(strings).toEqual({
+        CompanyName: "ACME Lda",
+        FileDescription: "Notas Çã 日本",
+        FileVersion: "1.4.2-beta+7",
+        InternalName: "notas",
+        LegalCopyright: "© 2026 ACME",
+        OriginalFilename: "notas.exe",
+        ProductName: "Notas Çã 日本",
+        ProductVersion: "1.4.2-beta+7",
+    })
+    const back = pe.parseVersion(pe.versionResource(strings, IDENTITY.version))?
+    expect(back["$fileVersion"]).toBe("1.4.2.0")
+    back.remove("$fileVersion")
+    expect(back).toEqual(strings)
+    // characters outside the basic plane are surrogate pairs
+    expect(pe.utf16("a😀").hex()).toBe("61003dd800de")
+})
+
+test("a file is read and written as bytes", () => {
+    const data = bytes([0, 1, 2, 255, 254, 0, 13, 10])
+    const p = write("raw.bin", data)
+    expect(pe.readBytes(p)?).toEqual(data)
+    const [_b, err] = pe.readBytes(path.join(tmp, "missing.bin"))
+    expect(err.message).toContain("does not exist")
+})
+
+test("stamping adds a resource section when .rsrc is not the last one", () => {
+    const tail = bytes("SYMBOLS-AND-STRINGS")
+    const original = fakeExe("middle", tail)
+    const src = write("host.exe", original)
+    const dest = path.join(tmp, "notas.exe")
+    const before = pe.inspect(src)?
+    expect(before.strings.ProductName).toBe("Fogu Desktop")
+    expect(before.icons.map((i) => i.width)).toEqual([16, 32])
+
+    const r = pe.stamp(src, dest, { icon: fakeIco([16, 32, 48, 256]), version: IDENTITY })?
+    expect(r.icons).toBe(4)
+    const after = pe.inspect(dest)?
+    expect(after.sections).toEqual([".text", ".rsrc0", ".reloc", ".rsrc"])
+    expect(after.fileVersion).toBe("1.4.2.0")
+    expect(after.strings.ProductName).toBe("Notas Çã 日本")
+    expect(after.strings.FileDescription).toBe("Notas Çã 日本")
+    expect(after.strings.CompanyName).toBe("ACME Lda")
+    expect(after.strings.OriginalFilename).toBe("notas.exe")
+    expect(after.icons.map((i) => [i.width, i.present])).toEqual([[16, true], [32, true], [48, true], [256, true]])
+
+    const out = pe.readBytes(dest)?
+    const h = pe.headers(out)?
+    // the code and the relocations did not move; the new section follows them
+    expect(out.slice(0x400, 0x600)).toEqual(original.slice(0x400, 0x600))
+    const reloc = h.sections[2]
+    expect(out.slice(reloc.raw, reloc.raw + reloc.rawSize)).toEqual(original.slice(reloc.raw, reloc.raw + reloc.rawSize))
+    const added = h.sections[3]
+    expect(added.va).toBe(reloc.va + 0x1000)
+    expect(added.raw % 0x200).toBe(0)
+    expect(h.rsrcRva).toBe(added.va)
+    // SizeOfImage covers it, the checksum is cleared, what followed the sections still ends the file
+    expect(out.readU32(h.opt + 56)).toBe(added.va + (added.vsize + 0xFFF) / 0x1000 * 0x1000)
+    expect(out.readU32(h.opt + 64)).toBe(0)
+    expect(out.slice(len(out) - len(tail))).toEqual(tail)
+    expect(out.readU32(h.coff + 8)).toBe(len(out) - len(tail))
+    // the other resources are still there
+    const tree = pe.resources(out)?
+    expect(pe.find(pe.find(pe.find(tree, 24).dir, 1).dir, 1033).data.text()).toBe("<assembly/>")
+    // the old images are gone: only the four new ones
+    expect(len(pe.find(tree, pe.RT_ICON).dir.entries)).toBe(4)
+})
+
+test("stamping rewrites .rsrc in place when it is the last section", () => {
+    const src = write("host-last.exe", fakeExe("last"))
+    const dest = path.join(tmp, "last.exe")
+    pe.stamp(src, dest, { icon: fakeIco([32]), version: IDENTITY })?
+    const after = pe.inspect(dest)?
+    expect(after.sections).toEqual([".text", ".rsrc"])
+    expect(after.strings.InternalName).toBe("notas")
+    expect(after.icons.map((i) => i.width)).toEqual([32])
+    // stamping again (another icon, another version) works on the result
+    const again = path.join(tmp, "again.exe")
+    pe.stamp(dest, again, { icon: fakeIco([16, 48]), version: { title: "Two", name: "two", version: "2.0.0" } })?
+    const second = pe.inspect(again)?
+    expect(second.strings.ProductName).toBe("Two")
+    expect(second.strings.has("CompanyName")).toBe(false)
+    expect(second.icons.map((i) => i.width)).toEqual([16, 48])
+})
+
+test("an executable without resources gets them", () => {
+    const src = write("bare.exe", fakeExe("none"))
+    const dest = path.join(tmp, "bare-out.exe")
+    pe.stamp(src, dest, { icon: fakeIco([256]), version: IDENTITY })?
+    const after = pe.inspect(dest)?
+    expect(after.sections).toEqual([".text", ".reloc", ".rsrc"])
+    expect(after.icons.map((i) => i.width)).toEqual([256])
+    expect(after.strings.ProductVersion).toBe("1.4.2-beta+7")
+    // the icon group Windows shows for the file
+    const tree = pe.resources(pe.readBytes(dest)?)?
+    expect(pe.find(tree, pe.RT_GROUP_ICON).dir.entries[0].id).toBe(pe.APP_ICON_ID)
+})
+
+test("only the version, or only the icon", () => {
+    const src = write("host2.exe", fakeExe("middle"))
+    const a = path.join(tmp, "only-version.exe")
+    pe.stamp(src, a, { version: IDENTITY })?
+    const ia = pe.inspect(a)?
+    expect(ia.strings.ProductName).toBe("Notas Çã 日本")
+    expect(ia.icons.map((i) => i.width)).toEqual([16, 32])
+    const b = path.join(tmp, "only-icon.exe")
+    pe.stamp(src, b, { icon: fakeIco([48]) })?
+    const ib = pe.inspect(b)?
+    expect(ib.strings.ProductName).toBe("Fogu Desktop")
+    expect(ib.icons.map((i) => i.width)).toEqual([48])
+})
+
+test("what cannot be stamped is an error value", () => {
+    const [_a, e1] = pe.stamp(write("text.exe", bytes("not an executable at all, just some text that is long enough to hold a header")), path.join(tmp, "x.exe"), { version: IDENTITY })
+    expect(e1.message).toContain("not a Windows executable")
+    const withApp = fakeExe("middle")
+    withApp.append(bytes("{}"))
+    withApp.append(bytes(8))
+    withApp.append(bytes("FOGUBND1"))
+    const [_b, e2] = pe.stamp(write("bundled.exe", withApp), path.join(tmp, "y.exe"), { version: IDENTITY })
+    expect(e2.message).toContain("stamp the host first")
+    const [_c, e3] = pe.stamp(write("host3.exe", fakeExe("middle")), path.join(tmp, "z.exe"), { icon: bytes("PNG, not ICO") })
+    expect(e3.message).toContain("not an .ico file")
+})
+
+test("an .ico is made from icons/icon.png", () => {
+    const [image, ierr] = import("fogu:image")
+    if ierr != nil {
+        return nil // this fogu has no media area
+    }
+    const app = path.join(tmp, "app")
+    fs.mkdir(path.join(app, "icons"))?
+    const img = image.new(300, 300, "#2563eb")
+    img.save(path.join(app, "icons", "icon.png"))?
+    const ico = packaging.windowsIcon(app)?
+    const images = pe.parseIco(ico)?
+    expect(images.map((i) => i.width)).toEqual([16, 24, 32, 48, 64, 0]) // 0 = 256
+    const small = image.decode(images[2].data)?
+    const large = image.decode(images[5].data)?
+    expect([small.width, large.width]).toEqual([32, 256])
+    // icons/icon.ico wins when it is there
+    pe.writeBytes(path.join(app, "icons", "icon.ico"), fakeIco([48]))?
+    const own = packaging.windowsIcon(app)?
+    expect(len(pe.parseIco(own)?)).toBe(1)
+    // no icons: nothing to apply
+    expect(packaging.windowsIcon(path.join(tmp, "nowhere"))?).toBe(nil)
+    fs.removeAll(tmp)
+})

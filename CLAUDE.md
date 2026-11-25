@@ -244,6 +244,11 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
 - Source files use CRLF line endings; keep them — except `scripts/*.sh` (LF: shells refuse CRLF).
 - `scripts/install.sh` / `install.ps1` install Fogu and set the PATH (test install.sh with a
   temporary `HOME`; do not run install.ps1 against the real Windows PATH).
+- `libs/desktop` is a **copy** of `../libs/desktop` (where the desktop library is developed and
+  published from), kept here only so GitHub's macOS runners can build its macOS hosts
+  (`.github/workflows/desktop-hosts.yml`, run by hand; a macOS executable needs a Mac). Do not edit
+  the copy: change `../libs/desktop` and run `sh scripts/sync-desktop-lib.sh` (`--check` compares).
+  It is left out of `fogu-src.tar.gz` (`.gitattributes`).
 - The VS Code extension lives in `editors/vscode` (bun: `bun run gen`, `bun test`,
   `bun run package`); the release workflow packages it with the release's version.
 - The official server is `../server`. Release files are built by the GitHub workflow

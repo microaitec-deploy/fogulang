@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Every window with the app's own UI (fogu://, tauri://): the Fogu bridge, fogu.window, the Tauri core APIs (events, window getters) for apps that use window.__TAURI__ directly, and dragging/maximizing for data-tauri-drag-region in frameless windows.",
+  "windows": ["*"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "allow-fogu-call",
+    "allow-fogu-emit",
+    "allow-fogu-ready",
+    "allow-fogu-window"
+  ]
+}

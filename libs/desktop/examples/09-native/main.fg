@@ -1,0 +1,82 @@
+// A menu bar, a global shortcut, notifications, a worker for CPU-bound work,
+// window opacity, bytes across the page boundary and state kept across hot
+// reloads.
+//
+//   fogu desktop dev        → edit this file while the window is open: the
+//                             program reloads in place and `clicks` survives
+//   fogu desktop build      → dist/native(.exe)
+import desktop from "desktop"
+
+const app = desktop.app({ name: "native", title: "Native features", identifier: "dev.fogu.examples.native" })
+const win = app.createBrowser({ width: 640, height: 520, minWidth: 480, minHeight: 400 })
+
+// kept across hot reloads (fogu desktop dev); a new run starts at 0
+let clicks = desktop.kept("clicks", 0)
+
+// the worker's runtimes start on the first call; 2 threads → 2 calls at once
+const primes = desktop.worker("primes.fg", { threads: 2 })
+
+// ---------- the menu bar ----------
+app.menu([
+    { text: "File", items: [
+        { text: "Notify me", accelerator: "CmdOrCtrl+N", onClick: fn() { app.notify("Fogu", "Hello from the menu") } },
+        "-",
+        { role: "quit" },
+    ] },
+    { text: "Edit", items: [{ role: "undo" }, { role: "redo" }, "-", { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },
+    { text: "View", items: [
+        { id: "ghost", text: "See-through window", checked: false, onClick: fn(e) {
+            win.set({ opacity: match e.checked {
+                true => 0.75
+                _ => 1.0
+            } })
+        } },
+    ] },
+], { onMenu: fn(e) { app.emit("menu", e.item) } })
+
+// ---------- a global shortcut (also while the app is in the background) ----------
+app.shortcut("CmdOrCtrl+Shift+F9", fn(e) {
+    win.show()
+    app.emit("shortcut", e.shortcut)
+})
+
+// ---------- commands ----------
+app.command("click", fn() {
+    clicks += 1
+    desktop.keep("clicks", clicks)
+    return clicks
+})
+
+app.command("primes", fn(limit) {
+    return primes.call("count", limit ?? 2000000)
+})
+
+app.command("opacity", fn(a) {
+    win.set({ opacity: a })
+    return a
+})
+
+// sizes from code stay inside minWidth/minHeight (createBrowser above) on every OS
+app.command("shrink", fn() {
+    win.setSize(100, 100)
+    return nil
+})
+
+app.command("size", fn() { return win.size() })
+
+app.command("notify", fn(text) {
+    app.notify("Fogu", text ?? "Hello")
+    return true
+})
+
+// bytes: a Uint8Array from the page is a buffer here, and back
+app.command("reverse", fn(data) {
+    const out = []
+    for i in 0..len(data) {
+        out.push(data[len(data) - 1 - i])
+    }
+    return bytes(out)
+})
+
+// the definition is complete: show the window (returns at once)
+app.run()

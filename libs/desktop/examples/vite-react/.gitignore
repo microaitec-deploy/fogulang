@@ -1,0 +1,4 @@
+/dist
+/.desktop-data
+/web/node_modules
+/web/dist

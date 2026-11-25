@@ -1,0 +1,87 @@
+// A whole `fogu desktop build` without Rust: a Windows app made from the
+// prebuilt host, with its own icon, name and version, a .zip and an NSIS
+// script. Needs a Windows host: $FOGU_DESKTOP_HOSTS/windows-x64/fogu-desktop.exe
+// or hosts/windows-x64/ of the library — skipped (exit 0) without one.
+// Prints "ok"/"FAIL" lines; exits 1 on a failure (tests/run.fg).
+import fs from "fogu:fs"
+import json from "fogu:json"
+import path from "fogu:path"
+import process from "fogu:process"
+import zip from "fogu:zip"
+import tools from "../tools/build.fg"
+import pe from "../tools/pe.fg"
+
+let failed = 0
+fn expect(label, cond, detail = "") {
+    if cond {
+        print("ok  ", label)
+    } else {
+        failed += 1
+        print("FAIL", label, detail)
+    }
+}
+
+const lib = tools.libRoot()
+const prebuilt = tools.findPrebuilt(lib, "windows-x64", nil, "fogu-desktop.exe")
+if prebuilt == nil {
+    print("skip (no prebuilt Windows host: set FOGU_DESKTOP_HOSTS)")
+    Fogu.exit(0)
+}
+const bin = process.env("FOGU_BIN") ?? Fogu.execPath ?? "fogu"
+
+// an app: examples/hello with another name, a title and an icon
+const tmp = path.join(fs.tempDir(), "fogu-desktop-e2e-" + str(clock()))
+const app = path.join(tmp, "notas")
+fs.mkdir(app)?
+for f in ["main.fg", "todos.fg", "ui"] {
+    fs.copy(path.join(lib, "examples", "hello", f), path.join(app, f))?
+}
+fs.writeText(path.join(app, "fogu.json"), json.stringify({
+    name: "notas",
+    version: "1.4.2",
+    description: "A todo list",
+    entry: "main.fg",
+    author: "ACME Lda",
+    desktop: { title: "Notas Çã", identifier: "com.example.notas", width: 560, height: 720 },
+}))?
+const [image, ierr] = import("fogu:image")
+if ierr == nil {
+    fs.mkdir(path.join(app, "icons"))?
+    const img = image.new(256, 256, "#00000000")
+    img.circle(128, 128, 120, { fill: "#e11d48" })
+    img.save(path.join(app, "icons", "icon.png"))?
+}
+
+const r = process.run(bin, [path.join(lib, "build.fg"), app, "--target", "windows", "--zip", "--nsis"], { env: { FOGU_BIN: bin, FOGU_HOME: path.join(tmp, "home"), FOGU_LIBS: path.dirname(lib) } })?
+expect("the build succeeds without cargo", r.ok, r.stdout + r.stderr)
+expect("it says where the host comes from", r.stdout.contains("host: the prebuilt release host for windows-x64"), r.stdout)
+expect("it says the identity was written", r.stdout.contains("identity: Notas Çã 1.4.2"), r.stdout)
+
+const exe = path.join(app, "dist", "notas.exe")
+expect("dist/notas.exe exists", fs.isFile(exe))
+if fs.isFile(exe) {
+    const data = pe.readBytes(exe)?
+    expect("the app is appended after the stamped host", pe.hasBundle(data))
+    const info = pe.inspect(exe)?
+    expect("ProductName and FileDescription are the title", info.strings.ProductName == "Notas Çã" && info.strings.FileDescription == "Notas Çã", str(info.strings))
+    expect("CompanyName, OriginalFilename, version", info.strings.CompanyName == "ACME Lda" && info.strings.OriginalFilename == "notas.exe" && info.fileVersion == "1.4.2.0", str(info))
+    if ierr == nil {
+        expect("the icon is the app's (6 sizes from icons/icon.png)", len(info.icons) == 6 && info.icons.all((i) => i.present), str(info.icons))
+    }
+    const hostInfo = pe.inspect(prebuilt.exe)?
+    expect("the host itself is untouched", hostInfo.strings.ProductName != "Notas Çã")
+}
+const archive = path.join(app, "dist", "notas-1.4.2-windows-x86_64.zip")
+expect("the .zip holds the executable", fs.isFile(archive) && zip.list(archive)?.map((e) => e.name).contains("notas.exe"))
+const script = path.join(app, "dist", "notas-setup.nsi")
+expect("the NSIS script is written", fs.isFile(script) && fs.readText(script)?.contains("OutFile \"notas-1.4.2-setup.exe\""))
+expect("nothing is left behind", !fs.exists(path.join(app, "dist", ".host")) && !fs.exists(path.join(app, "dist", ".bundle")) && !fs.exists(path.join(app, ".fogu-desktop.json")))
+
+if process.env("FOGU_DESKTOP_E2E_KEEP") == nil {
+    fs.removeAll(tmp)
+} else {
+    print("kept: " + app)
+}
+if failed > 0 {
+    Fogu.exit(1)
+}

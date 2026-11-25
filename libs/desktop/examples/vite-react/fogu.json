@@ -1,0 +1,19 @@
+{
+  "name": "vite-react",
+  "version": "0.1.0",
+  "description": "Fogu Vite React: a Fogu desktop app with a Vite UI",
+  "entry": "main.fg",
+  "desktop": {
+    "title": "Fogu Vite React",
+    "identifier": "dev.fogu.examples.vite-react",
+    "ui": "web",
+    "vite": true,
+    "visible": false
+  },
+  "scripts": {
+    "dev": "fogu desktop dev",
+    "build": "fogu desktop build",
+    "build:windows": "fogu desktop build --target windows"
+  },
+  "dependencies": {}
+}

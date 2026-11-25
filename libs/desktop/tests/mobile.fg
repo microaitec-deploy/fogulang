@@ -1,0 +1,88 @@
+// The mobile build without a device toolchain: the prerequisite checks on a
+// fake machine (everything there / nothing there) and the work crate that
+// `cargo tauri android|ios` would build (in a temporary FOGU_HOME). Prints
+// "ok"/"FAIL" lines; exits 1 on a failure (tests/run.fg).
+import fs from "fogu:fs"
+import path from "fogu:path"
+import process from "fogu:process"
+import mobile from "../tools/mobile.fg"
+
+let failed = 0
+fn expect(label, cond, detail = "") {
+    if cond {
+        print("ok  ", label)
+    } else {
+        failed += 1
+        print("FAIL", label, detail)
+    }
+}
+
+// a machine: tools on the PATH, folders, command results
+fn fake(os, env, tools, dirs, runs) {
+    return {
+        os: os,
+        env: env,
+        which: fn(t) { return tools[t] },
+        run: fn(cmd) { return runs[cmd] ?? { ok: false, stdout: "", stderr: "", code: 1 } },
+        isDir: fn(p) { return dirs[p] != nil },
+        isFile: fn(p) { return false },
+        list: fn(p) { return dirs[p] ?? [] },
+    }
+}
+
+const okRun = fn(out) { return { ok: true, stdout: out, stderr: "", code: 0 } }
+const sdk = "/opt/android-sdk"
+const ready = fake("linux", { JAVA_HOME: "/opt/jdk-17", ANDROID_HOME: sdk }, { cargo: "/usr/bin/cargo", rustup: "/usr/bin/rustup" }, {
+    "/opt/jdk-17": [],
+    "/opt/android-sdk": ["platforms", "ndk"],
+    "/opt/android-sdk/platforms": ["android-34"],
+    "/opt/android-sdk/ndk": ["26.1.10909125", "27.0.12077973"],
+    "/opt/android-sdk/ndk/27.0.12077973": [],
+}, {
+    "cargo tauri --version": okRun("tauri-cli 2.9.1\n"),
+    "rustup target list --installed": okRun("x86_64-unknown-linux-gnu\naarch64-linux-android\n"),
+})
+const r1 = mobile.check("android", ["aarch64"], ready)?
+expect("android: a ready machine passes", r1.ok, r1.missing)
+expect("android: the newest NDK is used", r1.env.NDK_HOME == path.join(sdk, "ndk", "27.0.12077973"), r1.env)
+expect("android: JAVA_HOME and ANDROID_HOME are passed on", r1.env.JAVA_HOME == "/opt/jdk-17" && r1.env.ANDROID_HOME == sdk, r1.env)
+
+const r2 = mobile.check("android", ["aarch64", "armv7"], ready)?
+expect("android: a missing Rust target is reported with its rustup command", !r2.ok && r2.missing.map((m) => m.fix).contains("rustup target add armv7-linux-androideabi"), r2.missing)
+
+const bare = fake("linux", {}, {}, {}, {})
+const r3 = mobile.check("android", ["aarch64"], bare)?
+const what = r3.missing.map((m) => m.what)
+expect("android: an empty machine misses cargo, the Tauri CLI, the target, a JDK, the SDK and the NDK", len(what) == 6, what)
+
+const r4 = mobile.check("ios", ["aarch64"], bare)?
+expect("ios: needs macOS, Xcode and CocoaPods", r4.missing.map((m) => m.what).contains("macOS") && r4.missing.map((m) => m.what).contains("Xcode (xcodebuild)") && r4.missing.map((m) => m.what).contains("CocoaPods (pod)"), r4.missing)
+const mac = fake("macos", {}, { cargo: "c", rustup: "r", xcodebuild: "x", pod: "p" }, {}, {
+    "cargo tauri --version": okRun("tauri-cli 2.9.1"),
+    "rustup target list --installed": okRun("aarch64-apple-ios\n"),
+})
+const r5 = mobile.check("ios", ["aarch64"], mac)?
+expect("ios: a ready Mac passes", r5.ok, r5.missing)
+
+// the work crate, in a temporary FOGU_HOME (a child process: FOGU_HOME is read from the environment)
+if Fogu.args.contains("--work") {
+    const lib = path.absolute(Fogu.asset(""))
+    const work = mobile.workCrate(lib, "dev.fogu.test.mobile", ["network", "database"], "android")?
+    const cargo = fs.readText(path.join(work, "Cargo.toml"))?
+    print("work:", work.starts_with(Fogu.env.FOGU_HOME))
+    print("crate-type:", cargo.contains("crate-type = [\"staticlib\", \"cdylib\", \"rlib\"]"))
+    print("features:", cargo.contains("default = [\"network\", \"database\", \"vendored-openssl\"]"))
+    print("fogu path:", !cargo.contains("../../../lang"))
+    print("sources copied:", fs.isFile(path.join(work, "src", "lib.rs")) && fs.isFile(path.join(work, "..", "client", "fogu.js")) && fs.isFile(path.join(work, "..", "main.fg")))
+    Fogu.exit(0)
+}
+const home = path.join(fs.tempDir(), "fogu-desktop-mobile-" + str(clock()))
+const self = path.join(Fogu.asset(""), "tests", "mobile.fg")
+const r = process.run(Fogu.env.FOGU_BIN ?? "fogu", [self, "--work"], { env: { FOGU_HOME: home } })?
+fs.removeAll(home)
+expect("the work crate: a library for the mobile toolchains, the app's features + vendored OpenSSL, the local Fogu sources", r.ok && !r.stdout.contains("false") && r.stdout.contains("crate-type: true"), r.stdout + r.stderr)
+
+if failed > 0 {
+    print(`${failed} failed`)
+    Fogu.exit(1)
+}

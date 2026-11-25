@@ -1,0 +1,170 @@
+// create.fg — a new desktop app with a Vite UI, from the templates in
+// templates/ (no network needed; installing the UI's packages does).
+//
+//   fogu desktop create <dir> [options]
+//
+//   --template <t>      vanilla | ts | react | vue | svelte | frameless
+//                       (default: react; also vanilla-ts, react-ts, vue-ts,
+//                       svelte-ts). frameless: a window without the system
+//                       title bar ("decorations": false, "transparent": true)
+//                       and a title bar of its own (drag region + buttons)
+//   --title <text>      the window title (default: from the folder name)
+//   --identifier <id>   reverse-DNS id (default: dev.fogu.app.<name>)
+//   --install           also install the UI's packages (bun, else npm)
+//   --force             write into a folder that is not empty
+//
+// The app: fogu.json ("desktop": { "ui": "web", "vite": true }), main.fg (a
+// sample command, an event both ways, a background task) and web/ (a Vite
+// project whose src/fogu-desktop.js + .d.ts are the typed page API).
+import fs from "fogu:fs"
+import json from "fogu:json"
+import path from "fogu:path"
+import regex from "fogu:regex"
+import shell from "fogu:shell"
+import project from "./tools/project.fg"
+import tools from "./tools/build.fg"
+
+const TEMPLATES = { vanilla: "vanilla", "vanilla-js": "vanilla", js: "vanilla", ts: "ts", "vanilla-ts": "ts", react: "react", "react-ts": "react", vue: "vue", "vue-ts": "vue", svelte: "svelte", "svelte-ts": "svelte", frameless: "frameless" }
+
+fn fail(msg) {
+    print("desktop create: " + msg)
+    Fogu.exit(1)
+}
+
+fn usage() {
+    print("usage: fogu create.fg <dir> [--template vanilla|ts|react|vue|svelte|frameless] [--title <text>] [--identifier <id>] [--install] [--force]")
+    Fogu.exit(2)
+}
+
+let dirArg = nil
+let template = "react"
+let title = nil
+let identifier = nil
+let install = false
+let force = false
+let i = 0
+const args = Fogu.args
+while i < len(args) {
+    const a = args[i]
+    if (a == "--template" || a == "-t") && i + 1 < len(args) {
+        template = args[i + 1]
+        i += 1
+    } else if a == "--title" && i + 1 < len(args) {
+        title = args[i + 1]
+        i += 1
+    } else if a == "--identifier" && i + 1 < len(args) {
+        identifier = args[i + 1]
+        i += 1
+    } else if a == "--install" {
+        install = true
+    } else if a == "--force" {
+        force = true
+    } else if a == "-h" || a == "--help" {
+        usage()
+    } else if a.starts_with("-") || dirArg != nil {
+        print("unknown argument: " + a)
+        usage()
+    } else {
+        dirArg = a
+    }
+    i += 1
+}
+if dirArg == nil {
+    usage()
+}
+const tpl = TEMPLATES[template.lower()]
+if tpl == nil {
+    fail(`unknown template '${template}' (one of: vanilla, ts, react, vue, svelte, frameless)`)
+}
+
+const app = path.absolute(dirArg)
+const name = path.basename(app)
+if !regex.test(name, "^[A-Za-z0-9][A-Za-z0-9._-]*$") {
+    fail(`the folder name '${name}' must be letters, digits, '.', '_' or '-' (it names the app and its executable)`)
+}
+if fs.isDir(app) && len(fs.list(app)?) > 0 && !force {
+    fail(`${app} is not empty (use --force to write into it)`)
+}
+
+// "my-app" → "My App"; characters that would break the generated sources are dropped
+fn titleOf(n) {
+    return regex.split(n, "[-_.]+").filter((w) => w != "").map((w) => w.slice(0, 1).upper() + w.slice(1)).join(" ")
+}
+const shown = regex.replaceAll(title ?? titleOf(name), "[<>{}`$\"'\\\\]", "")
+const id = identifier ?? ("dev.fogu.app." + regex.replaceAll(name.lower(), "[^a-z0-9-]", "-"))
+if !regex.test(id, "^[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$") {
+    fail(`the identifier '${id}' must look like com.example.app (letters, digits, '-', dots)`)
+}
+
+fn fill(text) {
+    return text.replace("{{title}}", shown).replace("{{name}}", name).replace("{{pkg}}", name.lower())
+}
+
+// copies a template folder, filling the placeholders
+fn copyTemplate(src0, to) {
+    fs.mkdir(to)?
+    for entry in fs.list(src0)? {
+        const src = path.join(src0, entry)
+        const dst = path.join(to, entry)
+        if fs.isDir(src) {
+            copyTemplate(src, dst)?
+        } else {
+            fs.writeText(dst, fill(fs.readText(src)?))?
+        }
+    }
+    return nil
+}
+
+const lib = tools.libRoot()
+const templates = path.join(lib, "templates")
+const web = path.join(app, "web")
+fs.mkdir(app)?
+copyTemplate(path.join(templates, tpl), web)?
+fs.copy(path.join(templates, "shared", "style.css"), path.join(web, "src", "style.css"))?
+// the typed page API, next to the sources (import { call, on } from "./fogu-desktop.js")
+fs.copy(path.join(lib, "client", "fogu-desktop.js"), path.join(web, "src", "fogu-desktop.js"))?
+fs.copy(path.join(lib, "client", "fogu-desktop.d.ts"), path.join(web, "src", "fogu-desktop.d.ts"))?
+// main.fg: the app and its window (desktop.app, app.createBrowser); a frameless
+// window has no system title bar (the page draws its own frame)
+const windowExtra = match tpl {
+    "frameless" => ", decorations: false"
+    _ => ""
+}
+fs.writeText(path.join(app, "main.fg"), fill(fs.readText(path.join(templates, "main.fg"))?).replace("{{identifier}}", id).replace("{{window}}", windowExtra))?
+
+// the desktop dependency: the one of the project create.fg was run from, if any
+const deps = {}
+const [here, _herr] = project.manifest(fs.cwd())
+if here != nil && here.dependencies != nil && here.dependencies.desktop != nil {
+    deps.desktop = here.dependencies.desktop
+}
+// fogu.json, from a text template to keep its key order
+let manifestText = fill(fs.readText(path.join(templates, "fogu.json.txt"))?)
+    .replace("{{identifier}}", id)
+    .replace("{{lib}}", "desktop/")
+    .replace("{{deps}}", json.stringify(deps))
+if tpl == "frameless" {
+    // no system title bar; the page draws its own frame (templates/frameless/src/frameless.css)
+    // "transparent" stays in fogu.json: a window is transparent from its creation,
+    // and the host opens the main window before main.fg runs
+    manifestText = manifestText.replace("\"vite\": true", "\"vite\": true,\n    \"transparent\": true")
+}
+json.parse(manifestText)?
+fs.writeText(path.join(app, "fogu.json"), manifestText)?
+fs.writeText(path.join(app, ".gitignore"), "/dist\n/.desktop-data\n/web/node_modules\n/web/dist\n")?
+
+print(`created ${app} (${tpl} template)`)
+if install {
+    const [_pm, err] = tools.installDeps({ root: web })
+    if err != nil {
+        fail(err.message)
+    }
+}
+print("")
+print("next:")
+print(`  cd ${dirArg}`)
+if deps.desktop == nil {
+    print("  fogu add desktop                      # pins the desktop lib in fogu.json (optional)")
+}
+print("  fogu desktop dev                      # the window on the Vite dev server (HMR)")
+print("  fogu desktop build                    # dist/" + name + "  (--target windows from Linux/WSL)")

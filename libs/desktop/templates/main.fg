@@ -1,0 +1,52 @@
+// The backend of {{title}}: the app and its window, commands the page runs
+// with call() (or window.fogu.call) and events it receives with on().
+//
+//   fogu desktop dev                     the window on the Vite dev server (HMR)
+//   fogu desktop build                   dist/{{name}}  (--target windows from Linux/WSL)
+//   fogu main.fg                         no window: runs the commands once
+import desktop from "desktop"
+import time from "fogu:time"
+
+const app = desktop.app({ name: "{{name}}", title: "{{title}}", identifier: "{{identifier}}" })
+const win = app.createBrowser({ width: 960, height: 720, minWidth: 480, minHeight: 480{{window}} })
+
+let count = 0
+
+// fogu.call("greet", "Ada") → { message }; an error value rejects the page's promise
+app.command("greet", fn(name) {
+    const who = str(name ?? "").trim()
+    if who == "" {
+        return nil, error("type a name first")
+    }
+    return { message: `Hello, ${who}! This answer comes from Fogu ${Fogu.version} on ${Fogu.os}.` }
+})
+
+// fogu.call("increment", 1) → the new count, also pushed as the "count" event
+app.command("increment", fn(by) {
+    count += by ?? 1
+    app.emit("count", count)
+    return count
+})
+
+// an event from the page: fogu.emit("reset")
+app.on("reset", fn() {
+    count = 0
+    app.emit("count", count)
+})
+
+// the definition is complete: show the window (returns at once)
+if app.run() {
+    // a background task: the uptime, every second
+    fg fn() {
+        let seconds = 0
+        loop {
+            time.delay(1s)
+            seconds += 1
+            app.emit("tick", seconds)
+        }
+    }()
+} else {
+    print("commands:", desktop.commandNames())
+    print("greet:", desktop.call("greet", "Fogu")?)
+    print("increment:", desktop.call("increment", 2)?)
+}

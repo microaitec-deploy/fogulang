@@ -1,0 +1,11 @@
+{id: 2, ok: true, value: 42}
+{error: no way: x, id: 3, ok: false}
+{error: desktop: no command 'nope', id: 4, ok: false}
+{id: 1, ok: true, value: late}
+[{x: 1}, ping]
+[/tmp/a.txt, nil]
+[nil, error: cancelled]
+[{args: {filters: {Text: [txt]}}, id: 1, op: dialog.open}, {args: {message: Sure?}, id: 2, op: dialog.confirm}]
+{id: 5, ok: true, value: picked b.png}
+{id: 6, ok: true, value: {data: {$bytes: //4A}, kind: buffer, size: 3}}
+[{data: [{$bytes: aGk=}, {$bytes: x, other: 1}], name: blob}]

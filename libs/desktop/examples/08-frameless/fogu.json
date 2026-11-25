@@ -1,0 +1,18 @@
+{
+  "name": "frameless",
+  "version": "0.1.0",
+  "description": "A window without the system title bar: its own title bar, drag region and buttons, and a confirmation before closing",
+  "entry": "main.fg",
+  "desktop": {
+    "title": "Frameless",
+    "identifier": "dev.fogu.examples.frameless",
+    "transparent": true,
+    "ui": "ui",
+    "visible": false
+  },
+  "scripts": {
+    "build": "fogu desktop build",
+    "build:debug": "fogu desktop build --debug"
+  },
+  "dependencies": {}
+}

@@ -1,0 +1,152 @@
+// The Fogu side of the bridge, without a window: messages meant for the host
+// are captured (desktop.capture). The host -> program direction (Fogu.signal
+// events) is tested by bridge.fg: `fogu test` stops the signal task a module
+// starts at its top level, so it runs as a plain script (tests/run.fg).
+import { test, expect } from "fogu:test"
+import desktop from "../main.fg"
+
+const sent = []
+desktop.capture(fn(name, data) { sent.push({ name: name, data: data }) })
+
+fn reset() {
+    while len(sent) > 0 {
+        sent.pop()
+    }
+}
+
+desktop.command("add", fn(p) { return p.a + p.b })
+desktop.command("fails", fn(p) { return nil, error("no way: " + str(p)) })
+desktop.command("pair", fn(p) { return p * 2, nil })
+desktop.command("noargs", fn() { return "ok" })
+desktop.command("crash", fn(p) { return int("abc") })
+desktop.command("list", fn() { return [1, 2, 3] })
+
+test("commands are registered", () => {
+    expect(desktop.commandNames()).toEqual(["add", "crash", "fails", "list", "noargs", "pair"])
+})
+
+test("call runs a command like the page does", () => {
+    expect(desktop.call("add", { a: 2, b: 3 })?).toBe(5)
+    expect(desktop.call("pair", 21)?).toBe(42)
+    expect(desktop.call("noargs", { ignored: true })?).toBe("ok")
+    expect(desktop.call("list")?).toEqual([1, 2, 3])
+})
+
+test("errors come back as error values", () => {
+    const [_a, e1] = desktop.call("fails", 7)
+    expect(e1.message).toBe("no way: 7")
+    const [_b, e2] = desktop.call("crash", nil)
+    expect(e2.message).toContain("cannot convert 'abc' to int")
+    const [_c, e3] = desktop.call("missing")
+    expect(e3.message).toBe("desktop: no command 'missing'")
+})
+
+test("emit, window, eval, quit and log go to the host", () => {
+    reset()
+    expect(desktop.emit("tick", { n: 1 })).toBe(true)
+    desktop.window({ title: "T", width: 300 })
+    desktop.eval("document.title = 'x'")
+    desktop.log("a", 1, [2])
+    desktop.quit(3)
+    expect(sent.map((m) => m.name)).toEqual(["desktop:event", "desktop:window", "desktop:eval", "desktop:log", "desktop:quit"])
+    expect(sent[0].data).toEqual({ name: "tick", data: { n: 1 } })
+    expect(sent[1].data).toEqual({ title: "T", width: 300 })
+    expect(sent[3].data).toBe("a 1 [2]")
+    expect(sent[4].data).toEqual({ code: 3 })
+})
+
+test("without the host", () => {
+    desktop.capture(nil)
+    expect(desktop.embedded).toBe(false)
+    expect(desktop.emit("x")).toBe(false)
+    const [_v, err] = desktop.dialog.open()
+    expect(err.message).toContain("needs the desktop host")
+    expect(desktop.dataDir()).toContain(".desktop-data")
+})
+
+test("window handles send desktop:window messages", () => {
+    desktop.capture(fn(name, data) { sent.push({ name: name, data: data }) })
+    reset()
+    const w = desktop.getWindow("settings")
+    expect(w.label).toBe("settings")
+    w.setSize(640, 480)
+    w.setPosition(10, 20)
+    w.toggleMaximize()
+    w.setAlwaysOnTop()
+    w.setMinSize(300, 200)
+    w.setMaxSize()
+    desktop.mainWindow.setDecorations(false)
+    desktop.window({ minimized: true })
+    expect(sent.map((m) => m.name)).toEqual(["desktop:window", "desktop:window", "desktop:window", "desktop:window", "desktop:window", "desktop:window", "desktop:window", "desktop:window"])
+    expect(sent[0].data).toEqual({ width: 640, height: 480, window: "settings" })
+    expect(sent[1].data).toEqual({ x: 10, y: 20, window: "settings" })
+    expect(sent[2].data).toEqual({ window: "settings", action: "toggleMaximize" })
+    expect(sent[3].data).toEqual({ alwaysOnTop: true, window: "settings" })
+    expect(sent[4].data).toEqual({ window: "settings", minWidth: 300, minHeight: 200 })
+    expect(sent[5].data).toEqual({ window: "settings", maxSize: nil })
+    expect(sent[6].data).toEqual({ decorations: false, window: "main" })
+    expect(sent[7].data).toEqual({ minimized: true })
+})
+
+test("window events and close interception are registered with the host", () => {
+    reset()
+    desktop.mainWindow.on("resized", fn(e) {})
+    desktop.onWindowEvent("focus", fn(e) {})
+    desktop.onCloseRequested(fn(e) { return false })
+    desktop.onCloseRequested(nil)
+    desktop.getWindow("tool").eval("1")
+    desktop.emitTo("tool", "hello", 1)
+    expect(sent.map((m) => m.data)).toEqual([
+        { listen: "resized" },
+        { listen: "focus" },
+        { intercept: "main" },
+        { release: "main" },
+        { js: "1", window: "tool" },
+        { name: "hello", data: 1, window: "tool" },
+    ])
+})
+
+test("tray: functions stay in Fogu, the menu goes to the host", () => {
+    reset()
+    const t = desktop.tray({
+        tooltip: "My app",
+        icon: "icons/tray.png",
+        onClick: fn(e) {},
+        closeToTray: true,
+        menu: [
+            { text: "Show", action: "show" },
+            "-",
+            { id: "dark", text: "Dark mode", checked: true, onClick: fn(e) {} },
+            { text: "More", items: [{ id: "about", text: "About", enabled: false }] },
+            { text: "Quit", action: "quit" },
+        ],
+    })
+    expect(t.id).toBe("main")
+    expect(t.isChecked("dark")).toBe(true)
+    expect(sent.map((m) => m.name)).toEqual(["desktop:window", "desktop:tray"])
+    expect(sent[0].data).toEqual({ closeToTray: true })
+    expect(sent[1].data).toEqual({
+        op: "set",
+        id: "main",
+        hasClick: true,
+        tooltip: "My app",
+        icon: "icons/tray.png",
+        menu: [
+            { text: "Show", action: "show", id: "Show" },
+            "-",
+            { id: "dark", text: "Dark mode", checked: true },
+            { text: "More", id: "More", items: [{ id: "about", text: "About", enabled: false }] },
+            { text: "Quit", action: "quit", id: "Quit" },
+        ],
+    })
+    reset()
+    t.setTooltip("Busy")
+    t.setMenu(nil)
+    t.remove()
+    expect(sent.map((m) => m.data)).toEqual([
+        { op: "set", id: "main", tooltip: "Busy" },
+        { op: "set", id: "main", menu: nil },
+        { op: "remove", id: "main" },
+    ])
+    desktop.capture(nil)
+})

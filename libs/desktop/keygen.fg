@@ -1,0 +1,111 @@
+// keygen.fg — the signing keys of an app's updates (see update.fg).
+//
+//   fogu desktop keygen [app-dir] [--endpoint URL] [--force]
+//
+// Writes the key pair to <app-dir>/.fogu-update.key (keep it secret: whoever
+// has it can publish updates; it is added to .gitignore) and the public key
+// to fogu.json → "desktop.update.pubkey". `fogu desktop build` then signs
+// every build and writes dist/latest.json. On a CI machine, pass the private
+// key in the environment variable FOGU_DESKTOP_UPDATE_KEY instead of the file.
+import fs from "fogu:fs"
+import json from "fogu:json"
+import path from "fogu:path"
+import regex from "fogu:regex"
+import security from "fogu:security"
+import project from "./tools/project.fg"
+
+fn fail(msg) {
+    print("error: " + msg)
+    Fogu.exit(1)
+}
+
+let appArg = nil
+let endpoint = nil
+let force = false
+const args = Fogu.args
+let i = 0
+while i < len(args) {
+    const a = args[i]
+    if a == "--endpoint" && i + 1 < len(args) {
+        endpoint = args[i + 1]
+        i += 1
+    } else if a == "--force" {
+        force = true
+    } else if a == "-h" || a == "--help" {
+        print("usage: fogu desktop keygen [app-dir] [--endpoint URL] [--force]")
+        Fogu.exit(0)
+    } else if a.starts_with("-") {
+        fail("unknown option " + a)
+    } else {
+        appArg = a
+    }
+    i += 1
+}
+
+const app = path.absolute(appArg ?? ".")
+const [m, merr] = project.manifest(app)
+if merr != nil {
+    fail(merr.message)
+}
+const keyFile = path.join(app, ".fogu-update.key")
+if fs.exists(keyFile) && !force {
+    fail(`${keyFile} exists (--force makes a new pair; apps signed with the old key will refuse updates signed with the new one)`)
+}
+const k = security.keypair()
+fs.writeText(keyFile, json.stringify(k) + "\n")?
+print("private key: " + keyFile + "  (secret: back it up, never commit it)")
+
+// .gitignore
+const gi = path.join(app, ".gitignore")
+let ignore = ""
+if fs.isFile(gi) {
+    ignore = fs.readText(gi)?
+}
+if !ignore.contains(".fogu-update.key") {
+    let text = ignore
+    if text != "" && !text.ends_with("\n") {
+        text += "\n"
+    }
+    fs.writeText(gi, text + ".fogu-update.key\n")?
+}
+
+// fogu.json: desktop.update.pubkey (edited as text, to keep its formatting)
+const manifestPath = path.join(app, "fogu.json")
+const text = fs.readText(manifestPath)?
+const ep = endpoint ?? (m.desktop ?? {}).update?.endpoint ?? "https://example.com/" + (m.name ?? "app") + "/latest.json"
+let updated = nil
+const existing = (m.desktop ?? {}).update
+if existing != nil && existing.pubkey != nil {
+    const old = str(existing.pubkey)
+    updated = text.replace(old, k.publicKey)
+    if endpoint != nil && existing.endpoint != nil {
+        updated = updated.replace(str(existing.endpoint), endpoint)
+    }
+} else if existing == nil && m.desktop != nil {
+    const mt = regex.find(text, "\"desktop\"\\s*:\\s*\\{")
+    if mt != nil {
+        const at = mt.start + len(mt.text)
+        const entry = `\n    "update": { "endpoint": ${json.stringify(ep)}, "pubkey": ${json.stringify(k.publicKey)} },`
+        updated = text.slice(0, at) + entry + text.slice(at)
+    }
+} else if m.desktop == nil {
+    const mt = regex.find(text, "^\\s*\\{")
+    if mt != nil {
+        const at = mt.start + len(mt.text)
+        const entry = `\n  "desktop": { "update": { "endpoint": ${json.stringify(ep)}, "pubkey": ${json.stringify(k.publicKey)} } },`
+        updated = text.slice(0, at) + entry + text.slice(at)
+    }
+}
+if updated != nil {
+    const [check, cerr] = json.parse(updated)
+    if cerr == nil && check.desktop?.update?.pubkey == k.publicKey {
+        fs.writeText(manifestPath, updated)?
+        print("public key written to " + manifestPath + " (desktop.update.pubkey)")
+        if endpoint == nil && existing?.endpoint == nil {
+            print(`set desktop.update.endpoint to where latest.json will be served (now ${ep})`)
+        }
+        Fogu.exit(0)
+    }
+}
+print("add this to fogu.json:")
+print(`  "desktop": { "update": { "endpoint": ${json.stringify(ep)}, "pubkey": ${json.stringify(k.publicKey)} } }`)

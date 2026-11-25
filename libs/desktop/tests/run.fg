@@ -1,0 +1,105 @@
+// The desktop library's tests (no window needed):
+//
+//   fogu tests/run.fg        (from libs/desktop; runs the files with the same fogu, FOGU_BIN picks another)
+//
+// * desktop.test.fg            — commands, errors, messages to the host (fogu test)
+// * project.test.fg            — fogu.json handling: Vite detection, outDir, base, bun/npm
+// * pe.test.fg                 — the icon and version information written into a Windows .exe
+// * build.test.fg              — where the host comes from (cache, prebuilt, cargo), the areas
+//                                an app needs, .app / .desktop / .zip / NSIS, a busy executable
+// * env.test.fg                — environment variables are read when they are needed
+// * build-e2e.fg               — a whole Windows build without Rust; needs a prebuilt
+//                                Windows host (FOGU_DESKTOP_HOSTS), skipped otherwise
+// * create.fg                  — every template scaffolds an app build.fg recognizes
+// * bridge.fg → bridge.out     — the host → program direction (Fogu.signal events);
+//                                a plain script, see the note in desktop.test.fg
+// * events.fg → events.out     — window and tray events, the close decision
+// * app.fg → app.out           — the app defined in code (desktop.app, createBrowser, run)
+// * client.js                  — the page API (client/fogu.js) against a fake
+//                                Tauri; needs bun or node (skipped otherwise)
+// * mobile.fg                  — the mobile build's prerequisite checks (dry run)
+// * examples/hello/todos.test.fg — the example's logic
+import process from "fogu:process"
+import shell from "fogu:shell"
+import fs from "fogu:fs"
+import json from "fogu:json"
+import path from "fogu:path"
+import project from "../tools/project.fg"
+
+const root = Fogu.asset("")
+const dir = path.join(root, "tests")
+const bin = Fogu.env.FOGU_BIN ?? Fogu.execPath ?? "fogu"
+let failed = 0
+
+fn check(label, r) {
+    if r.ok {
+        print("ok  ", label)
+    } else {
+        failed += 1
+        print("FAIL", label)
+        print(r.stdout + r.stderr)
+    }
+}
+
+check("desktop.test.fg", process.run(bin, ["test", "desktop.test.fg"], { cwd: dir })?)
+check("project.test.fg", process.run(bin, ["test", "project.test.fg"], { cwd: dir })?)
+check("pe.test.fg", process.run(bin, ["test", "pe.test.fg"], { cwd: dir })?)
+check("build.test.fg", process.run(bin, ["test", "build.test.fg"], { cwd: dir })?)
+check("env.test.fg", process.run(bin, ["test", "env.test.fg"], { cwd: dir })?)
+// a whole Windows build from a prebuilt host (skips itself without one)
+const e2e = process.run(bin, [path.join(dir, "build-e2e.fg")], { cwd: root })?
+if e2e.stdout.starts_with("skip") {
+    print("skip", "build-e2e.fg " + e2e.stdout.trim().slice(5))
+} else {
+    check("build-e2e.fg", e2e)
+}
+// create.fg, offline: the files of each template, a valid fogu.json, a Vite UI
+const scratch = path.join(fs.tempDir(), "fogu-desktop-create-" + str(clock()))
+fs.mkdir(scratch)?
+for t in ["vanilla", "ts", "react", "vue", "svelte", "frameless"] {
+    const r = process.run(bin, [path.join(root, "create.fg"), "app-" + t, "--template", t], { cwd: scratch })?
+    const a = path.join(scratch, "app-" + t)
+    let ok = r.ok
+    let why = r.stdout + r.stderr
+    if ok {
+        const [m, merr] = project.manifest(a)
+        const [ui, uerr] = project.ui(a, m?.desktop)
+        const files = ["main.fg", "web/package.json", "web/index.html", "web/src/fogu-desktop.js", "web/src/fogu-desktop.d.ts", "web/src/style.css"]
+        const missing = files.filter((f) => !fs.isFile(path.join(a, f)))
+        const leftovers = Fogu.glob(path.join(a, "**", "*")).filter((f) => fs.isFile(f) && fs.readText(f)?.contains("{{title}}"))
+        ok = merr == nil && uerr == nil && ui.kind == "vite" && len(missing) == 0 && len(leftovers) == 0 && m.desktop.ui == "web"
+        if t == "frameless" {
+            ok = ok && m.desktop.decorations == false && m.desktop.transparent == true
+        }
+        why = `manifest: ${merr} ui: ${uerr} missing: ${missing} placeholders left: ${leftovers}`
+    }
+    check("create.fg --template " + t, { ok: ok, stdout: why, stderr: "" })
+}
+fs.removeAll(scratch)
+check("examples/hello", process.run(bin, ["test", "todos.test.fg"], { cwd: path.join(root, "examples", "hello") })?)
+for name in fs.list(dir)? {
+    if !name.ends_with(".out") {
+        continue
+    }
+    const stem = name.slice(0, len(name) - 4)
+    const r = process.run(bin, [stem + ".fg"], { cwd: dir })?
+    const want = fs.readText(path.join(dir, name))?
+    check(stem + ".fg", { ok: r.ok && r.stdout == want, stdout: r.stdout, stderr: r.stderr })
+}
+// the page API, with bun or node
+const js = shell.which("bun") ?? shell.which("node")
+if js != nil && project.usableTool(js, Fogu.os) {
+    check("client.js", process.run(js, [path.join(dir, "client.js")], { cwd: root })?)
+} else {
+    print("skip", "client.js (no bun or node)")
+}
+// the mobile build: prerequisite checks and the plan, without building
+check("mobile.fg", process.run(bin, [path.join(dir, "mobile.fg")], { cwd: root })?)
+// what desktop.dataDir() creates without the host
+fs.removeAll(path.join(dir, ".desktop-data"))
+fs.removeAll(path.join(root, ".desktop-data"))
+if failed > 0 {
+    print(`${failed} failed`)
+    Fogu.exit(1)
+}
+print("all passed")

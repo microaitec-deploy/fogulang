@@ -1,0 +1,221 @@
+// tools/project.fg — reading an app folder for build.fg, dev.fg and create.fg:
+// the Vite UI (detection, outDir, base), the package manager (bun / npm /
+// pnpm / yarn) and the commands to run. No side effects: the functions only
+// read files, so tests/project.test.fg can check them.
+import fs from "fogu:fs"
+import json from "fogu:json"
+import path from "fogu:path"
+import regex from "fogu:regex"
+
+export const CONFIG_NAMES = ["vite.config.ts", "vite.config.js", "vite.config.mts", "vite.config.mjs", "vite.config.cts", "vite.config.cjs"]
+export const DEFAULT_PORT = 5173
+
+// The vite.config.* of a folder, or nil.
+export fn configFile(root: str) {
+    for n in CONFIG_NAMES {
+        const p = path.join(root, n)
+        if fs.isFile(p) {
+            return p
+        }
+    }
+    return nil
+}
+
+// package.json of a folder as a map, or nil (missing or invalid).
+export fn readPackage(root: str) {
+    const p = path.join(root, "package.json")
+    if !fs.isFile(p) {
+        return nil
+    }
+    const [text, rerr] = fs.readText(p)
+    if rerr != nil {
+        return nil
+    }
+    const [pkg, perr] = json.parse(text)
+    if perr != nil {
+        return nil
+    }
+    return pkg
+}
+
+// Whether package.json lists vite (dependencies or devDependencies).
+export fn hasViteDependency(pkg) {
+    if pkg == nil {
+        return false
+    }
+    return (pkg.dependencies ?? {}).has("vite") || (pkg.devDependencies ?? {}).has("vite")
+}
+
+// A Vite project: a vite.config.* or vite in package.json.
+export fn isViteProject(root: str) {
+    return configFile(root) != nil || hasViteDependency(readPackage(root))
+}
+
+// `build.outDir` written in a Vite config (a string literal), or "dist": the
+// first guess; build.fg then asks Vite itself (tools/build.fg resolveVite).
+export fn outDirFrom(configText) {
+    if configText == nil {
+        return "dist"
+    }
+    const m = regex.find(configText, "\\boutDir\\s*:\\s*['\"`]([^'\"`]+)['\"`]")
+    if m == nil {
+        return "dist"
+    }
+    return m.groups[0]
+}
+
+// `base` written in a Vite config (a string literal), or nil.
+export fn baseFrom(configText) {
+    if configText == nil {
+        return nil
+    }
+    const m = regex.find(configText, "(^|[\\s{,])base\\s*:\\s*['\"`]([^'\"`]*)['\"`]")
+    if m == nil {
+        return nil
+    }
+    return m.groups[1]
+}
+
+// The `--base` to force on `vite build`, or nil when the configured one works.
+// The app is served from the root of Tauri's origin (tauri://localhost,
+// http://tauri.localhost on Windows), so the default "/" and the relative
+// "./" (or "") both work; a sub-path such as "/app/" would 404 every asset.
+export fn baseOverride(base) {
+    if base == nil || base == "/" || base == "./" || base == "" {
+        return nil
+    }
+    return "./"
+}
+
+// Whether a program found on the PATH can be used. Under WSL the Windows
+// PATH is appended (e.g. /mnt/c/Program Files/nodejs/npm): those are Windows
+// programs and break on Linux paths, so they do not count.
+export fn usableTool(found, os: str) {
+    if found == nil || found == "" {
+        return false
+    }
+    if os == "linux" && found.starts_with("/mnt/") {
+        return false
+    }
+    return true
+}
+
+// The package manager of a Vite project: the one its lockfile names (when
+// installed), else bun, else npm (pnpm, yarn after them). `has(tool)` says
+// whether a program is available. nil when there is none.
+export fn packageManager(root: str, has) {
+    const locks = [
+        ["bun.lock", "bun"],
+        ["bun.lockb", "bun"],
+        ["pnpm-lock.yaml", "pnpm"],
+        ["yarn.lock", "yarn"],
+        ["package-lock.json", "npm"],
+    ]
+    for l in locks {
+        if fs.isFile(path.join(root, l[0])) && has(l[1]) {
+            return l[1]
+        }
+    }
+    for pm in ["bun", "npm", "pnpm", "yarn"] {
+        if has(pm) {
+            return pm
+        }
+    }
+    return nil
+}
+
+export fn installCommand(pm: str) {
+    return pm + " install"
+}
+
+// The production build: the package.json "build" script when there is one
+// (it may type-check first, e.g. "tsc -b && vite build"), else vite itself.
+// `extra` (e.g. "--base ./") goes to the end of the command, i.e. to vite.
+export fn buildCommand(pm: str, pkg, extra = "") {
+    const hasScript = pkg != nil && (pkg.scripts ?? {}).has("build")
+    let cmd = ""
+    if hasScript {
+        cmd = pm + " run build"
+        if pm == "npm" && extra != "" {
+            cmd += " --" // npm passes what follows to the script
+        }
+    } else {
+        cmd = viteBin(pm) + " build"
+    }
+    if extra != "" {
+        cmd += " " + extra
+    }
+    return cmd
+}
+
+// The dev server on a fixed address: the window's devUrl is baked into the
+// debug executable, so the port must not move (--strictPort).
+export fn devCommand(pm: str, host: str, port: int) {
+    return `${viteBin(pm)} --host ${host} --port ${port} --strictPort`
+}
+
+fn viteBin(pm: str) {
+    return match pm {
+        "bun" => "bun x vite"
+        "pnpm" => "pnpm exec vite"
+        "yarn" => "yarn vite"
+        _ => "npx vite"
+    }
+}
+
+// The UI of an app, from fogu.json "desktop":
+//
+//   { kind: "static", dir }                         a folder with index.html (ui/)
+//   { kind: "vite", root, config, outDir, out, base, baseOverride, pkg }
+//
+// "vite": true forces Vite (error when the folder is not a Vite project),
+// false turns detection off, absent detects it (vite.config.* or vite in
+// package.json). "outDir" in "desktop" overrides the one read from the config.
+export fn ui(app: str, desk) {
+    const d = desk ?? {}
+    const dir = path.join(app, d.ui ?? "ui")
+    let vite = d.vite
+    if vite == nil {
+        vite = fs.isDir(dir) && isViteProject(dir)
+    }
+    if vite != true {
+        return { kind: "static", dir: dir }, nil
+    }
+    if !fs.isFile(path.join(dir, "package.json")) {
+        return nil, error(`"desktop.vite" is on but ${dir} has no package.json`)
+    }
+    const config = configFile(dir)
+    let text = nil
+    if config != nil {
+        text = fs.readText(config)?
+    }
+    const outDir = d.outDir ?? outDirFrom(text)
+    let out = outDir
+    if !path.isAbsolute(out) {
+        out = path.join(dir, outDir)
+    }
+    const base = baseFrom(text)
+    return {
+        kind: "vite",
+        root: dir,
+        config: config,
+        outDir: outDir,
+        out: path.normalize(out),
+        base: base,
+        baseOverride: baseOverride(base),
+        pkg: readPackage(dir),
+    }, nil
+}
+
+// fogu.json of an app folder: the manifest map, or an error.
+export fn manifest(app: str) {
+    const p = path.join(app, "fogu.json")
+    if !fs.isFile(p) {
+        return nil, error(`${p} not found (an app folder needs a fogu.json)`)
+    }
+    const [m, err] = json.parse(fs.readText(p)?)
+    if err != nil {
+        return nil, error(`${p}: ${err.message}`)
+    }
+    return m, nil
+}

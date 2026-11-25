@@ -1,0 +1,35 @@
+// A frameless window: the page draws the title bar (ui/index.html), and Fogu
+// asks before the window closes.
+//
+// "decorations": false is set here, on the window; "transparent": true stays
+// in fogu.json, because a window is transparent, or not, from its creation and
+// the host opens the main window before this program runs.
+//
+//   fogu desktop build --debug     → dist/frameless
+import desktop from "desktop"
+
+const app = desktop.app({ name: "frameless", title: "Frameless", identifier: "dev.fogu.examples.frameless" })
+const win = app.createBrowser({ width: 520, height: 360, minWidth: 360, minHeight: 240, decorations: false })
+
+let dirty = false
+app.command("edit", fn() {
+    dirty = true
+    return dirty
+})
+
+// the close button of the page (data-fogu-window="close"), Alt+F4, the
+// taskbar: every close asks here first; returning false keeps the window
+win.onCloseRequested(fn(e) {
+    if !dirty {
+        return true
+    }
+    const [ok, err] = app.dialog.confirm("Discard the changes?", { title: "Frameless", ok: "Discard", cancel: "Keep editing" })
+    if err != nil {
+        return true
+    }
+    return ok
+})
+
+if !app.run() {
+    print("edit →", desktop.call("edit")?)
+}

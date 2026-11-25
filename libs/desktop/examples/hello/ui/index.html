@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fogu Todo</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Todo</h1>
+        <p class="sub">A Fogu program behind a native window</p>
+      </header>
+
+      <form id="add">
+        <input id="text" autocomplete="off" placeholder="What needs doing?" maxlength="200" autofocus />
+        <button type="submit">Add</button>
+      </form>
+      <p id="error" role="alert" hidden></p>
+
+      <ul id="list"></ul>
+      <p id="empty" class="muted" hidden>Nothing to do. Add something above.</p>
+
+      <footer>
+        <span id="stats" class="muted"></span>
+        <span class="actions">
+          <button id="clear" class="link" type="button">Clear finished</button>
+          <button id="export" class="link" type="button">Export…</button>
+        </span>
+      </footer>
+    </main>
+
+    <aside id="status" class="muted"><span id="about"></span> · up <span id="uptime">0</span>s</aside>
+    <div id="toast" hidden></div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
