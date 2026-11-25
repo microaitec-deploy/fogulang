@@ -42,7 +42,8 @@ installs it. To install it ahead of time, run `fogu add -g desktop`. An app is
 the **generic host** (the Tauri window with the Fogu runtime, one per platform)
 with the app appended to it, so `dev` starts and `build` finishes in seconds
 and **neither needs Rust, cargo or the Tauri CLI**: the host comes prebuilt
-with the library for Windows x64 and Linux x64, and the build
+with the library for Windows x64, Linux x64 and macOS (Apple Silicon and
+Intel), and the build
 writes the app's own name, version and icon into the executable itself (see
 [Building and shipping](#building-and-shipping)). Rust is only needed for a
 platform or a set of standard library areas without a prebuilt host, for a
@@ -1422,7 +1423,8 @@ inside. `build` and `dev` look for one in this order and say which they use:
    hosts compiled on this machine before;
 2. **a prebuilt host** (a release build): `$FOGU_DESKTOP_HOSTS` if it is set
    (your own builds, a team share, a CI cache), then `hosts/` of the library
-   — the package comes with `windows-x64` and `linux-x64`.
+   — the package comes with `windows-x64`, `linux-x64`, `macos-arm64` and
+   `macos-x64`.
    The folder name says what the host has: `<os>-<arch>/` the default areas
    (`network`), `<os>-<arch>-database+network/` those areas,
    `<os>-<arch>-full/` all of them; the smallest host that has every area the
@@ -1435,7 +1437,7 @@ inside. `build` and `dev` look for one in this order and say which they use:
    the command stops and says what it looked for:
 
 ```text
-desktop build: the desktop host must be compiled (no prebuilt host for macos-x64 with the areas network), which needs Rust, and cargo is not installed. Prebuilt hosts: none for macos-x64 in /home/ana/.fogu/fogu_modules/desktop/hosts. Use the areas of a prebuilt host ("desktop.features" in fogu.json), put a host in $FOGU_DESKTOP_HOSTS/macos-x64/, or install Rust (https://rustup.rs)
+desktop build: the desktop host must be compiled (no prebuilt host for linux-arm64 with the areas network), which needs Rust, and cargo is not installed. Prebuilt hosts: none for linux-arm64 in /home/ana/.fogu/fogu_modules/desktop/hosts. Use the areas of a prebuilt host ("desktop.features" in fogu.json), put a host in $FOGU_DESKTOP_HOSTS/linux-arm64/, or install Rust (https://rustup.rs)
 ```
 
 `fogu desktop dev` prefers a debug host from the cache (it has a console and
@@ -1534,7 +1536,7 @@ dropped: sign `dist/<name>.exe`, the final file.
 ### Requirements per OS
 
 Building an app needs **nothing but Fogu** when a prebuilt host fits (Windows
-x64 and Linux x64 with the default areas). The "to compile a host"
+x64, Linux x64, macOS arm64 and macOS x64 with the default areas). The "to compile a host"
 column is for the other cases: another platform or set of areas, `--debug`,
 `--cargo`, `--rebuild-host`, `--installer`.
 
@@ -1544,6 +1546,24 @@ column is for the other cases: another platform or set of areas, `--debug`,
 | **Windows from Linux** (`--target windows`) | `rustup target add x86_64-pc-windows-gnu`, `mingw-w64` (`x86_64-w64-mingw32-gcc`, `windres`) | The WebView2 Runtime (the `.exe` carries its loader) |
 | **Linux** | Rust, `pkg-config`, and the WebKitGTK 4.1 / GTK 3 / libsoup 3 dev packages:<br>Debian/Ubuntu 22.04+: `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libssl-dev build-essential pkg-config`<br>Fedora: `sudo dnf install webkit2gtk4.1-devel gtk3-devel libsoup3-devel openssl-devel librsvg2-devel`<br>Arch: `sudo pacman -S webkit2gtk-4.1 gtk3 libsoup3 openssl librsvg base-devel` | `libwebkit2gtk-4.1-0` and `libgtk-3-0` (present on desktop installs); for tray icons `libayatana-appindicator3-1` (or `libappindicator3-1`) |
 | **macOS** | Rust, Xcode Command Line Tools (`xcode-select --install`) | macOS 10.15+ |
+
+### macOS
+
+Since 0.7.0 the package has prebuilt hosts for Apple Silicon (`macos-arm64`)
+and Intel (`macos-x64`, macOS 10.15+): `fogu desktop dev` and
+`fogu desktop build` work on a Mac with nothing but Fogu, and `build` makes
+`dist/<Title>.app`. The hosts are built on GitHub's macOS runners (a macOS
+executable can only be built on a Mac); the run that built them also made
+example 01 with the fresh arm64 host, without Rust, and started it.
+
+One limit to know: such an app is the host with the app appended to it, so the
+host's ad-hoc signature no longer covers the whole file — it runs (also on
+Apple Silicon), but `codesign -v` rejects it and it cannot be notarized. That
+is fine for your own machines and for testers; for an app you distribute
+signed and notarized, build it compiled on a Mac (`fogu desktop build --cargo`
+or `--installer`, which need Rust and the Xcode Command Line Tools) and sign
+that. An app downloaded from the internet without notarization is stopped by
+Gatekeeper until the user opens it from the context menu ("Open").
 
 ## Mobile: Android and iOS
 

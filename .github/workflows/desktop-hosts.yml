@@ -1,16 +1,17 @@
-# The prebuilt macOS hosts of the desktop library (libs/desktop, a copy of
-# ../libs/desktop made by scripts/sync-desktop-lib.sh). A macOS executable can
-# only be built on a Mac, so the hosts that let `fogu desktop build` and
-# `fogu desktop dev` work on macOS without Rust are built here, on GitHub's
-# macOS runners, and downloaded from the run as artifacts:
+# The prebuilt hosts of the desktop library (libs/desktop, a copy of
+# ../libs/desktop made by scripts/sync-desktop-lib.sh) that cannot be built on
+# the maintainer's machine: macOS (a macOS executable can only be built on a
+# Mac) and Linux x64 (it needs the WebKitGTK development packages). They let
+# `fogu desktop build` and `fogu desktop dev` work without Rust; they are
+# built here and downloaded from the run as artifacts:
 #
 #   gh workflow run desktop-hosts.yml
-#   gh run download <run id> -D hosts          # fogu-desktop-macos-arm64/, …-x64/
+#   gh run download <run id> -D hosts    # fogu-desktop-macos-arm64/, -macos-x64/, -linux-x64/
 #
 # Each artifact holds the generic host (fogu-desktop) and its SHA256SUMS.
-# server/publish-libs.sh packs them into the library (hosts/macos-arm64/,
-# hosts/macos-x64/) when they are in
-# libs/desktop/runtime/target/<triple>/release/.
+# server/publish-libs.sh packs them into the library (hosts/<platform>/) when
+# they are in libs/desktop/runtime/target/<triple>/release/ (Linux x64:
+# libs/desktop/runtime/target/release/).
 name: desktop-hosts
 
 on:
@@ -22,16 +23,23 @@ permissions:
 jobs:
   host:
     name: ${{ matrix.name }}
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: macos-arm64
+            os: macos-latest
             target: aarch64-apple-darwin
             smoke: true
           - name: macos-x64
+            os: macos-latest
             target: x86_64-apple-darwin
+            smoke: false
+          # (the oldest supported Ubuntu: the host then runs on newer systems too)
+          - name: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
             smoke: false
     steps:
       # the library builds against ../../../lang (the layout of the project:
@@ -54,6 +62,11 @@ jobs:
           if [ "${{ matrix.name }}" = macos-x64 ]; then
             echo MACOSX_DEPLOYMENT_TARGET=10.15 >> "$GITHUB_ENV"
           fi
+          if [ "${{ matrix.name }}" = linux-x64 ]; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+              libjavascriptcoregtk-4.1-dev librsvg2-dev libssl-dev build-essential pkg-config
+          fi
 
       - name: Build the generic host
         working-directory: libs/desktop/runtime
@@ -67,8 +80,14 @@ jobs:
           cp libs/desktop/runtime/target/${{ matrix.target }}/release/fogu-desktop out/fogu-desktop
           file out/fogu-desktop
           ls -l out
-          codesign -dv out/fogu-desktop 2>&1 | head -n 8 || true
-          (cd out && shasum -a 256 fogu-desktop > SHA256SUMS && cat SHA256SUMS)
+          if [ "$RUNNER_OS" = macOS ]; then
+            codesign -dv out/fogu-desktop 2>&1 | head -n 8 || true
+            (cd out && shasum -a 256 fogu-desktop > SHA256SUMS && cat SHA256SUMS)
+          else
+            # the newest glibc symbol the host needs
+            objdump -T out/fogu-desktop | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1
+            (cd out && sha256sum fogu-desktop > SHA256SUMS && cat SHA256SUMS)
+          fi
 
       # Does an app made with this host (the app is appended to it, no Rust)
       # start on this Mac? Informative: a runner without a usable window
