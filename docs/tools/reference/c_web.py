@@ -20,6 +20,7 @@ SECTIONS = [
                     ("opts: { headers, query, json, form, multipart, body, timeout, redirects = true, basicAuth: [user, pass], bearer, ca, insecure }", "", "<code>ca</code>: a PEM certificate (or its path) trusted for HTTPS, e.g. a self-signed one; <code>insecure: true</code> accepts any certificate (development only). <code>form</code>: urlencoded fields. <code>multipart</code>: a map of fields — text values, <code>http.file(path)</code> (streamed from disk), <code>{ data, filename, type }</code> bytes, or a list (a repeated field). Map keys are sent in alphabetical order."),
                     ("http.file(path, { filename, type })", "HttpFile · error", "A file to upload; the type comes from the extension."),
                     ("http.download(url, path, opts?)", "int · error", "Streams the body to a file; returns the bytes written (non-2xx is an error)."),
+                    ("http.stream(url, { method, body, headers, lines, … })", "HttpStream · error", "The response with its body read a piece at a time (a stream of <a href=\"#mod-fs\">fogu:fs</a>: <code>read readLine readAll readText pipe close</code>, <code>for chunk in s</code>), and <code>s.status · s.ok · s.headers · s.url</code>. Any status is a stream; a network failure is an error value. <code>lines: true</code>: <code>for</code> gives lines."),
                     ("res.status · res.ok · res.url · res.headers · res.body", "", "<code>headers</code>: the first value of each (lower case)."),
                     ("res.json() · res.bytes() · res.header(name) · res.cookies()", "", "<code>bytes()</code>: the body as a <a class=\"underline\" href=\"#values\">buffer</a>; <code>header</code> joins repeated values."),
                 ],
@@ -128,7 +129,8 @@ while !done { Fogu.sleep(10ms) }
                     ("handler result", "", "A str (text or HTML), any value (JSON), a response, or nil (204)."),
                     ("web.json/text/html(body, { status, headers })", "Response", ""),
                     ("web.redirect(url, status = 302)", "Response", ""),
-                    ("web.file(path, { download, contentType, status })", "Response · error", "Sent by the server thread (binary safe). <code>download: true</code> uses the file's name, <code>download: \"name\"</code> another (non-ASCII names as RFC 6266 <code>filename*</code>)."),
+                    ("web.file(path, { download, contentType, status })", "Response · error", "Sent by the server thread, a chunk at a time (binary safe; a large file does not have to fit in memory). <code>download: true</code> uses the file's name, <code>download: \"name\"</code> another (non-ASCII names as RFC 6266 <code>filename*</code>)."),
+                    ("web.stream({ status, headers, contentType, highWaterMark })", "ResponseStream", "Return it from the handler and write the body a piece at a time from a task: <code>s.write(data)</code> · <code>s.writeLine(data)</code> → bytes · error, <code>s.end(data?)</code> / <code>s.close()</code>. Backpressure: <code>write</code> waits while more than <code>highWaterMark</code> bytes (1 MiB) are queued for a slow client. A readable (<code>fs.createReadStream</code>, <code>http.stream</code>) returned from a handler, or <code>pipe</code>d into the stream, is sent the same way."),
                     ("web.sse({ retry, headers })", "SseStream", "Return it from the handler; <code>send(data, { event, id })</code>, <code>comment(text)</code>, <code>close()</code>, field <code>open</code>."),
                     ("web.cors({ origin, methods, headers, credentials, maxAge })", "middleware", "Answers preflight requests, also as a route's own middleware. With <code>credentials: true</code> and <code>origin: \"*\"</code> the request's origin is echoed (browsers refuse <code>*</code> with credentials)."),
                     ("web.logger()", "middleware", "<code>GET /path 200 0.4ms</code>."),
@@ -136,6 +138,7 @@ while !done { Fogu.sleep(10ms) }
                 ],
                 "example": r'''
 import web from "fogu:web"
+import fs from "fogu:fs"
 import time from "fogu:time"
 
 const app = web.app()
@@ -156,6 +159,17 @@ app.get("/events", (ctx) => {
     }()
     return stream
 })
+// a large body, written a piece at a time (write waits for a slow client)
+app.get("/export.csv", (ctx) => {
+    const out = web.stream({ contentType: "text/csv" })
+    fg fn() {
+        for i in 0..1000000 { out.writeLine(`${i},${i * i}`)? }
+        out.end()
+    }()
+    return out
+})
+// a file as a stream: constant memory, whatever its size
+app.get("/logs", (ctx) => fs.createReadStream("app.log")?)
 app.ws("/chat", (ws, ctx) => {
     while true {
         const m = ws.next()?

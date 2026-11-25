@@ -457,6 +457,7 @@ pub fn build() -> ModuleValue {
     exports.insert("patch".into(), crate::native::util::nfn_var("patch", 1, |a| hc::with_body("PATCH", a)));
     exports.insert("request".into(), crate::native::util::nfn_var("request", 1, hc::request));
     exports.insert("download".into(), crate::native::util::nfn_var("download", 2, hc::download));
+    exports.insert("stream".into(), crate::native::util::nfn_var("stream", 1, hc::stream));
     exports.insert("file".into(), crate::native::util::nfn_var("file", 1, hc::file));
     exports.insert(
         "serve".into(),
@@ -804,12 +805,28 @@ async fn plain_response(resp: PlainResponse) -> HyperResponse<Body> {
         builder = builder.header(k.as_str(), v.as_str());
     }
     let body = if let Some(path) = &resp.file {
-        match tokio::fs::read(path).await {
-            Ok(data) => {
+        // a chunk at a time (64 KiB): a large file does not have to fit in memory
+        match tokio::fs::File::open(path).await {
+            Ok(file) => {
                 if !resp.headers.contains_key("content-type") {
                     builder = builder.header("content-type", mime_of(path));
                 }
-                full(data)
+                if let Ok(meta) = file.metadata().await {
+                    builder = builder.header("content-length", meta.len());
+                }
+                let chunks = futures_lite::stream::unfold(Some(file), |file| async move {
+                    use tokio::io::AsyncReadExt;
+                    let mut file = file?;
+                    let mut buf = vec![0u8; 64 * 1024];
+                    match file.read(&mut buf).await {
+                        Ok(0) | Err(_) => None,
+                        Ok(n) => {
+                            buf.truncate(n);
+                            Some((Ok::<_, Infallible>(Frame::data(Bytes::from(buf))), Some(file)))
+                        }
+                    }
+                });
+                BodyExt::boxed(StreamBody::new(chunks))
             }
             Err(_) => {
                 return HyperResponse::builder()

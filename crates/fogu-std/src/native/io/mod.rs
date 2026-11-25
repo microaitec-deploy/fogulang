@@ -1,6 +1,7 @@
 //! Files, paths, processes, shell, sockets, archives and data formats (always built).
 
 pub mod fs;
+pub mod stream;
 pub mod path;
 pub mod process;
 pub mod system;

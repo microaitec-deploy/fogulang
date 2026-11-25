@@ -160,42 +160,210 @@ pub struct TestOutcome {
 /// Loads a `*.test.fg` file (registering its tests) and runs every test in
 /// a fresh interpreter. `filter` keeps only the tests whose name contains it.
 /// A test fails when it raises an error or returns an `error` value (so `?`
-/// may be used inside tests).
+/// may be used inside tests). Groups (`describe`), hooks and `only` follow
+/// `native/test.rs`.
 pub fn run_test_file(path: &Path, filter: Option<&str>) -> Result<Vec<TestOutcome>, String> {
-    crate::native::test::take_tests(); // drop leftovers of a failed load
+    use crate::native::test::{self as t, Item};
+    use crate::runtime::value::Value;
+    t::reset(); // drop leftovers of a failed load
     let (interp, program, filename) = load(path)?;
     interp
         .interpret(&program)
         .map_err(|e| located(&interp, &filename, e))?;
+    // the bodies of the groups register their tests (nested groups too)
+    while let Some((body, args)) = t::next_body() {
+        interp
+            .call_value(body, args, Rc::clone(interp.globals_ref()))
+            .map_err(|e| located(&interp, &filename, e))?;
+    }
+    t::end_bodies();
+    let (tests, groups) = t::take();
 
-    let mut out = Vec::new();
-    for t in crate::native::test::take_tests() {
-        if filter.is_some_and(|f| !t.name.contains(f)) {
-            continue;
+    // `only` anywhere: only those tests (and the tests of `only` groups) run
+    let in_only_group = |mut g: usize| loop {
+        if groups[g].only {
+            break true;
         }
-        if t.skip {
-            out.push(TestOutcome { name: t.name, status: TestStatus::Skipped, millis: 0 });
-            continue;
+        match groups[g].parent {
+            Some(p) => g = p,
+            None => break false,
         }
-        let started = std::time::Instant::now();
-        let failures = sched::task_failures().0;
-        let r = interp.call_value(t.func, Vec::new(), Rc::clone(interp.globals_ref()));
+    };
+    let any_only = tests.iter().any(|c| c.only) || groups.iter().any(|g| g.only);
+    let skipped_group = |mut g: usize| loop {
+        if groups[g].skip {
+            break true;
+        }
+        match groups[g].parent {
+            Some(p) => g = p,
+            None => break false,
+        }
+    };
+    let selected: Vec<bool> = tests
+        .iter()
+        .map(|c| filter.is_none_or(|f| c.name.contains(f)) && (!any_only || c.only || in_only_group(c.group)))
+        .collect();
+    let runnable = |c: &crate::native::test::TestCase| !c.skip && !c.todo && !skipped_group(c.group);
+
+    // what a function call gave: an error, an error value, or a failed task
+    let outcome = |r: Result<Value, String>, failures: u64| -> Option<String> {
         sched::shutdown();
-        let status = match r {
-            Err(e) => TestStatus::Failed(located(&interp, &filename, e)),
-            // an error, or a tuple ending in one (`return nil, error(...)`)
+        match r {
+            Err(e) => Some(located(&interp, &filename, e)),
             Ok(v) => match v.into_result() {
-                Err(e) => TestStatus::Failed(format!("returned an error: {}", e.message)),
-                // an `fg` task the test started failed: so does the test
+                Err(e) => Some(format!("returned an error: {}", e.message)),
                 Ok(_) => match sched::task_failures() {
-                    (n, Some(e)) if n != failures => TestStatus::Failed(e),
-                    _ => TestStatus::Passed,
+                    (n, Some(e)) if n != failures => Some(e),
+                    _ => None,
                 },
             },
-        };
-        out.push(TestOutcome { name: t.name, status, millis: started.elapsed().as_millis() });
+        }
+    };
+    let call = |f: &Value, args: Vec<Value>| -> Option<String> {
+        let failures = sched::task_failures().0;
+        let r = interp.call_value(f.clone(), args, Rc::clone(interp.globals_ref()));
+        outcome(r, failures)
+    };
+    // does group `g` hold a selected test that runs?
+    fn has_runnable(g: usize, groups: &[crate::native::test::Group], keep: &dyn Fn(usize) -> bool) -> bool {
+        groups[g].items.iter().any(|it| match *it {
+            Item::Test(i) => keep(i),
+            Item::Group(c) => has_runnable(c, groups, keep),
+        })
     }
+    let keep = |i: usize| selected[i] && runnable(&tests[i]);
+    // the hooks of `g` and its parents: outer first
+    let chain = |g: usize| {
+        let mut c = vec![g];
+        while let Some(p) = groups[*c.last().unwrap()].parent {
+            c.push(p);
+        }
+        c.reverse();
+        c
+    };
+
+    let mut out = Vec::new();
+    // a depth-first walk in declaration order; `None` = the group's beforeAll failed
+    fn walk(
+        g: usize,
+        groups: &[crate::native::test::Group],
+        tests: &[crate::native::test::TestCase],
+        selected: &[bool],
+        keep: &dyn Fn(usize) -> bool,
+        ctx: &mut dyn FnMut(Step) -> Option<String>,
+        out: &mut Vec<TestOutcome>,
+        failed_setup: Option<&str>,
+    ) {
+        let runs = has_runnable(g, groups, keep);
+        let mut setup_error: Option<String> = failed_setup.map(str::to_string);
+        if runs && setup_error.is_none() {
+            for f in &groups[g].before_all {
+                if let Some(e) = ctx(Step::Hook(f)) {
+                    setup_error = Some(prefixed(&e, "beforeAll failed: "));
+                    break;
+                }
+            }
+        }
+        for it in &groups[g].items {
+            match *it {
+                Item::Test(i) => {
+                    let c = &tests[i];
+                    if !selected[i] {
+                        continue;
+                    }
+                    if !keep(i) {
+                        let name = if c.todo { format!("{} (todo)", c.name) } else { c.name.clone() };
+                        out.push(TestOutcome { name, status: TestStatus::Skipped, millis: 0 });
+                        continue;
+                    }
+                    if let Some(e) = &setup_error {
+                        out.push(TestOutcome { name: c.name.clone(), status: TestStatus::Failed(e.clone()), millis: 0 });
+                        continue;
+                    }
+                    let started = std::time::Instant::now();
+                    let error = ctx(Step::Test(i));
+                    let status = match error {
+                        Some(e) => TestStatus::Failed(e),
+                        None => TestStatus::Passed,
+                    };
+                    out.push(TestOutcome { name: c.name.clone(), status, millis: started.elapsed().as_millis() });
+                }
+                Item::Group(c) => walk(c, groups, tests, selected, keep, ctx, out, setup_error.as_deref()),
+            }
+        }
+        // cleanup runs even when tests (or the setup) failed
+        if runs {
+            for f in &groups[g].after_all {
+                if let Some(e) = ctx(Step::Hook(f)) {
+                    let name = if groups[g].name.is_empty() { "afterAll".to_string() } else { format!("{} > afterAll", groups[g].name) };
+                    out.push(TestOutcome { name, status: TestStatus::Failed(e), millis: 0 });
+                }
+            }
+        }
+    }
+    enum Step<'a> {
+        Hook(&'a Value),
+        Test(usize),
+    }
+    let mut ctx = |step: Step| -> Option<String> {
+        match step {
+            Step::Hook(f) => call(f, Vec::new()),
+            Step::Test(i) => {
+                let c = &tests[i];
+                let groups_of = chain(c.group);
+                // beforeEach: outer groups first; a failure skips the test body
+                let mut error = None;
+                for &g in &groups_of {
+                    for f in &groups[g].before_each {
+                        if error.is_none() {
+                            error = call(f, Vec::new()).map(|e| prefixed(&e, "beforeEach failed: "));
+                        }
+                    }
+                }
+                if error.is_none() {
+                    error = call(&c.func, c.args.clone());
+                }
+                // afterEach: inner groups first, always
+                for &g in groups_of.iter().rev() {
+                    for f in &groups[g].after_each {
+                        if let Some(e) = call(f, Vec::new()) {
+                            error.get_or_insert(prefixed(&e, "afterEach failed: "));
+                        }
+                    }
+                }
+                error
+            }
+        }
+    };
+    walk(0, &groups, &tests, &selected, &keep, &mut ctx, &mut out, None);
     Ok(out)
+}
+
+/// `what` put before the message of a failure, after its location when it
+/// has one (`file.fg:3: message` → `file.fg:3: beforeAll failed: message`).
+fn prefixed(e: &str, what: &str) -> String {
+    const MARK: &str = "runtime error: ";
+    if let Some(i) = e.find(MARK) {
+        let at = i + MARK.len();
+        return format!("{}{}{}", &e[..at], what, &e[at..]);
+    }
+    let first = e.lines().next().unwrap_or("");
+    // the location ends at the first ":<digits>: "
+    let bytes = first.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b':' {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > i + 1 && j + 1 < bytes.len() && bytes[j] == b':' && bytes[j + 1] == b' ' {
+                return format!("{}{}{}", &e[..j + 2], what, &e[j + 2..]);
+            }
+        }
+        i += 1;
+    }
+    format!("{}{}", what, e)
 }
 
 /// Runs a standalone source string (`fogu -e`).

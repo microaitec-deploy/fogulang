@@ -135,6 +135,8 @@ struct Plan {
     bearer: Option<String>,
     /// download to this path instead of reading the body
     save_to: Option<String>,
+    /// hand the body over unread (`http.stream`)
+    stream: bool,
     /// HTTPS: an extra trusted certificate (PEM), and whether to accept any
     ca: Option<Vec<u8>>,
     insecure: bool,
@@ -220,6 +222,7 @@ fn plan(method: &str, url: &Value, body: Option<&Value>, o: Option<&Value>) -> R
         basic: None,
         bearer: None,
         save_to: None,
+        stream: false,
         ca: None,
         insecure: false,
     };
@@ -299,6 +302,8 @@ struct Got {
     headers: Vec<(String, String)>,
     body: Vec<u8>,
     saved: Option<u64>,
+    /// the response, its body unread (`Plan::stream`)
+    unread: Option<reqwest::blocking::Response>,
 }
 
 fn no_redirect_client() -> &'static reqwest::blocking::Client {
@@ -393,10 +398,13 @@ fn send(p: Plan) -> Result<Got, String> {
         }
         let mut f = std::fs::File::create(&path).map_err(|e| io_err!("http.download: {}: {}", path, e))?;
         let n = resp.copy_to(&mut f).map_err(|e| io_err!("http.download: {}", crate::native::http::error_chain(&e)))?;
-        return Ok(Got { status, url, headers, body: Vec::new(), saved: Some(n) });
+        return Ok(Got { status, url, headers, body: Vec::new(), saved: Some(n), unread: None });
+    }
+    if p.stream {
+        return Ok(Got { status, url, headers, body: Vec::new(), saved: None, unread: Some(resp) });
     }
     let body = resp.bytes().map_err(|e| io_err!("{}: {}", what, crate::native::http::error_chain(&e)))?.to_vec();
-    Ok(Got { status, url, headers, body, saved: None })
+    Ok(Got { status, url, headers, body, saved: None, unread: None })
 }
 
 fn run(p: Plan) -> Result<Value, String> {
@@ -429,6 +437,42 @@ pub fn request(a: &[Value]) -> Result<Value, String> {
         (m.get("method").map(|v| v.to_display_string()).unwrap_or_else(|| "GET".into()), m.get("url").cloned().unwrap_or(Value::Nil))
     };
     run(plan(&method, &url, None, a.first())?)
+}
+
+/// stream(url, { method, body, headers, lines, ... }) → HttpStream: the
+/// response with its body read a piece at a time (`native/io/stream.rs`).
+/// Any status is a stream (check `status` / `ok`); network failures are errors.
+pub fn stream(a: &[Value]) -> Result<Value, String> {
+    max_args(a, 2, "http.stream")?;
+    let (method, lines) = match a.get(1) {
+        Some(Value::Map(m)) => {
+            let m = m.borrow();
+            (m.get("method").map(|v| v.to_display_string()).unwrap_or_else(|| "GET".into()), matches!(m.get("lines"), Some(Value::Bool(true))))
+        }
+        _ => ("GET".to_string(), false),
+    };
+    // `lines` is the stream's option, not the request's
+    let opts = match a.get(1) {
+        Some(Value::Map(m)) if m.borrow().contains_key("lines") => {
+            let mut copy = m.borrow().clone();
+            copy.remove("lines");
+            Some(Value::Map(std::rc::Rc::new(std::cell::RefCell::new(copy))))
+        }
+        other => other.cloned(),
+    };
+    let mut p = plan(&method, &a[0], None, opts.as_ref())?;
+    p.stream = true;
+    let g = crate::native::rt::offload(move || send(p))??;
+    let Some(resp) = g.unread else { return Err("http.stream: no body".into()) };
+    let headers = crate::native::util::map(g.headers.iter().map(|(k, v)| (k.as_str(), Value::Str(v.as_str().into()))).collect());
+    let fields = vec![
+        ("status", Value::Int(g.status as i64)),
+        ("ok", Value::Bool((200..300).contains(&g.status))),
+        ("url", Value::Str(g.url.into())),
+        ("headers", headers),
+    ];
+    let src = crate::native::stream::source(resp, crate::native::stream::CHUNK);
+    Ok(crate::native::stream::ReadStreamValue::new("HttpStream", src, None, lines, fields))
 }
 
 /// download(url, path, options?) → bytes written

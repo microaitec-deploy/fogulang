@@ -1,0 +1,84 @@
+// Streams: data read and written a piece at a time (fs, http, web).
+// Readables: read / readLine / readAll / readText / pipe / close, and `for`;
+// writables: write / writeLine / close (end).
+import fs from "fogu:fs"
+import http from "fogu:http"
+import web from "fogu:web"
+import time from "fogu:time"
+
+// ---------- fs: a writable, then readables over it ----------
+const out = fs.createWriteStream("streams.tmp.txt")?
+for i in 0..5 { out.writeLine(`line ${i}`)? }
+out.write("last")?
+out.end()
+print("written", out.bytesWritten, out.open)
+
+// lines, as a for loop; chunks of a given size; a byte range (end is inclusive)
+const lines = fs.createReadStream("streams.tmp.txt", { lines: true })?
+const seen = []
+for line in lines { seen.push(line) }
+print(seen, lines.bytesRead, lines.error)
+const r = fs.createReadStream("streams.tmp.txt", { start: 5, end: 10 })?
+print(r.read(3)?, r.read()?, r.read()?)
+const t = fs.createReadStream("streams.tmp.txt")?
+print(t.readLine()?, t.readLine()?, t.readText()?.len())
+
+// pipe: copied without the bytes becoming values; append
+const copy = fs.createWriteStream("streams-copy.tmp.txt")?
+print("piped", fs.createReadStream("streams.tmp.txt")?.pipe(copy)?)
+copy.close()
+print(fs.readText("streams-copy.tmp.txt")? == fs.readText("streams.tmp.txt")?)
+const app2 = fs.createWriteStream("streams.tmp.txt", { append: true })?
+app2.write("!")?
+app2.close()
+print(fs.readText("streams.tmp.txt")?.ends_with("last!"))
+
+// operational failures are error values
+const [_a, e1] = fs.createReadStream("streams-missing.tmp.txt")
+const [_b, e2] = fs.createReadStream(".")
+const closed = fs.createWriteStream("streams-closed.tmp.txt")?
+closed.close()
+const [_c, e3] = closed.write("x")
+print(e1 != nil, e2 != nil, e3 != nil)
+
+// ---------- web: a body written a piece at a time, a file returned as a readable ----------
+const app = web.app()
+app.get("/count", (ctx) => {
+    const s = web.stream({ contentType: "text/plain", headers: { "x-kind": "count" } })
+    fg fn() {
+        for i in 0..3 {
+            s.writeLine(`n ${i}`)?
+            time.delay(5ms)
+        }
+        s.end("end\n")
+    }()
+    return s
+})
+app.get("/file", (ctx) => fs.createReadStream("streams.tmp.txt")?)
+app.get("/served", (ctx) => web.file("streams.tmp.txt"))
+app.listen(18447, { quiet: true })?
+
+// ---------- http: the body read a piece at a time ----------
+let done = false
+fg fn() {
+    const base = "http://127.0.0.1:18447"
+    const c = http.stream(base + "/count", { lines: true })?
+    const got = []
+    for line in c { got.push(line) }
+    print(c.status, c.ok, c.headers["x-kind"], got)
+
+    const f = http.stream(base + "/file")?
+    let n = 0
+    for chunk in f { n = n + len(chunk) }
+    print(f.headers["content-type"], n == len(fs.readText("streams.tmp.txt")?))
+
+    const dl = fs.createWriteStream("streams-dl.tmp.txt")?
+    print("downloaded", http.stream(base + "/served")?.pipe(dl)? > 0)
+    dl.close()
+    print(fs.readText("streams-dl.tmp.txt")? == fs.readText("streams.tmp.txt")?)
+
+    const nf = http.stream(base + "/nope")?
+    print(nf.status, nf.ok)
+    done = true
+}()
+while !done { time.delay(10ms) }

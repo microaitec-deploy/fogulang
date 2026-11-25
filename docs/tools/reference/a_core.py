@@ -514,6 +514,12 @@ print(info.env("FOGU_DOES_NOT_EXIST"), system.time() > 0)
                     ("fs.removeAll(path)", "nil · error", "A folder and everything inside."),
                     ("fs.glob(pattern)", "list", "Paths matching <code>*</code>, <code>?</code>, <code>**</code>, sorted."),
                     ("fs.cwd() · fs.tempDir()", "str", "Working folder · system temp folder."),
+                    ("fs.createReadStream(path, { start, end, lines, bufferSize })", "ReadStream · error", "The file read a piece at a time, in constant memory. <code>end</code> is inclusive; <code>lines: true</code> makes <code>for</code> give lines (str) instead of buffers."),
+                    ("r.read(n = 64 KiB) · r.readLine() · r.readAll() · r.readText()", "buffer · str · nil · error", "<code>nil</code> at the end. Reads that would wait run off the interpreter thread: other <code>fg</code> tasks keep going."),
+                    ("for chunk in r", "", "Every chunk (or line) until the end. An error ends the loop and stays in <code>r.error</code>."),
+                    ("r.pipe(w)", "int · error", "Copies the rest into a <code>WriteStream</code> or a <code>web.stream()</code> response, off the interpreter thread (the bytes never become values); returns the bytes copied."),
+                    ("r.close() · r.bytesRead · r.open · r.path", "", ""),
+                    ("fs.createWriteStream(path, { append })", "WriteStream · error", "<code>w.write(data) · w.writeLine(data)</code> → bytes · error (buffered, 64 KiB), <code>w.flush()</code>, <code>w.close()</code> / <code>w.end(data?)</code>, <code>w.bytesWritten</code>."),
                     ("fs.remote(ssh | \"user@host\", { sudo })", "RemoteFs", "The same functions on a server through <a href=\"#mod-ssh\">fogu:ssh</a> (plus <code>upload(local, remote)</code> and <code>download(remote, local)</code>); every call is an SSH command."),
                 ],
                 "example": r'''
@@ -528,6 +534,31 @@ const [_, err] = fs.readText("missing.txt")
 print(err != nil)
 fs.removeAll("data")?
 print(fs.exists("data"))
+''',
+                "run": True,
+            },
+            {
+                "h3": "Streams",
+                "text": "A file of any size, a piece at a time: memory stays the size of one chunk.",
+                "example": r'''
+import fs from "fogu:fs"
+const out = fs.createWriteStream("log.txt")?
+for i in 0..1000 { out.writeLine(`event ${i} ${i % 7 == 0}`)? }
+out.close()
+
+// the lines that matter, one at a time
+let hits = 0
+for line in fs.createReadStream("log.txt", { lines: true })? {
+    if line.ends_with("true") { hits = hits + 1 }
+}
+print(hits, out.bytesWritten)
+
+// a copy that never holds the file in memory
+const copy = fs.createWriteStream("copy.txt")?
+print(fs.createReadStream("log.txt")?.pipe(copy)?)
+copy.close()
+fs.remove("log.txt")?
+fs.remove("copy.txt")?
 ''',
                 "run": True,
             },
@@ -649,14 +680,19 @@ print("peak", peak, "free", sem.available)
         "id": "mod-test",
         "group": C,
         "title": "fogu:test",
-        "import": 'import { test, skip, expect } from "fogu:test"',
+        "import": 'import { test, describe, expect, beforeAll, afterAll, beforeEach, afterEach } from "fogu:test"',
         "intro": "Used in <code>*.test.fg</code> files, run with <code>fogu test</code>. A test fails when an expectation "
-        "fails, when it raises an error or returns an error value.",
+        "fails, when it raises an error or returns an error value. The API follows Bun's <code>bun:test</code>: groups, "
+        "hooks and parametrized tests.",
         "blocks": [
             {
                 "api": [
-                    ("test(name, fn)", "nil", "Declares a test."),
-                    ("skip(name, fn)", "nil", "A test that is reported but not run."),
+                    ("test(name, fn) · it(name, fn)", "nil", "Declares a test."),
+                    ("test.skip(name, fn) · test.todo(name) · test.only(name, fn)", "nil", "Reported but not run · a test still to write · with any <code>only</code> in the file, only those run. <code>skip(name, fn)</code> is <code>test.skip</code>."),
+                    ("test.skipIf(cond)(name, fn) · test.if(cond)(name, fn)", "nil", "Skipped when <code>cond</code> is true · run only when it is."),
+                    ("test.each(rows)(name, fn)", "nil", "One test per row: a list row gives its values as the arguments, any other row is the argument. In the name, <code>%s %d %i %f %j %o</code> take the row's values in order, <code>%#</code> is the index, <code>$key</code> a field of a map row."),
+                    ("describe(name, fn) · describe.skip · describe.only · describe.each(rows)(name, fn)", "nil", "A group: its tests are named <code>group > test</code>; groups nest."),
+                    ("beforeAll(fn) · afterAll(fn) · beforeEach(fn) · afterEach(fn)", "nil", "Hooks of the group they are declared in (the file at the top level). A group's <code>beforeAll</code> runs before its first test, its <code>afterAll</code> after its last; the <code>beforeEach</code> of the outer groups first, the <code>afterEach</code> of the inner groups first. Cleanup always runs: <code>afterEach</code> after a failed test or a failed <code>beforeEach</code>, <code>afterAll</code> after failures. A failing <code>beforeAll</code> fails the tests of its group."),
                     ("expect(value)", "Expectation", "Then a matcher; <code>.not</code> negates it."),
                     ("toBe(x) · toEqual(x)", "", "Equality (<code>toEqual</code> compares lists and maps deeply)."),
                     ("toBeTruthy() · toBeFalsy() · toBeNil() · toBeError()", "", ""),
@@ -675,6 +711,37 @@ test("math", () => {
 ''',
                 "title": "math.test.fg",
                 "output": "$ fogu test\nmath.test.fg\n  ✓ math (0ms)\n\n1 passed — 1 file(s) [1ms]",
+                "output_title": "fogu test",
+            },
+            {
+                "h3": "Groups, hooks and parametrized tests",
+                "example": r'''
+import { test, describe, expect, beforeAll, afterAll, beforeEach } from "fogu:test"
+import fs from "fogu:fs"
+
+describe("settings file", () => {
+    let path = ""
+    beforeAll(() => { path = fs.tempDir() + "/fogu-settings.json" })
+    beforeEach(() => fs.writeText(path, "{}"))
+    afterAll(() => fs.remove(path))
+
+    test("starts empty", () => expect(fs.readText(path)?).toBe("{}"))
+})
+
+test.each([
+    [2, 3, 5],
+    [10, 20, 30],
+])("add(%d, %d) = %d", (a, b, expected) => {
+    expect(a + b).toBe(expected)
+})
+
+test.each([
+    { input: "123", expected: 123 },
+    { input: "0", expected: 0 },
+])("int($input)", (row) => expect(int(row.input)).toBe(row.expected))
+''',
+                "title": "settings.test.fg",
+                "output": "$ fogu test\nsettings.test.fg\n  ✓ settings file > starts empty (0ms)\n  ✓ add(2, 3) = 5 (0ms)\n  ✓ add(10, 20) = 30 (0ms)\n  ✓ int(123) (0ms)\n  ✓ int(0) (0ms)\n\n5 passed — 1 file(s) [0ms]",
                 "output_title": "fogu test",
             }
         ],

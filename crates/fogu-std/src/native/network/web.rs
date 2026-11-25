@@ -141,6 +141,45 @@ pub fn build() -> ModuleValue {
         }),
     );
 
+    // stream({ status, headers, contentType, highWaterMark }) — a response whose body
+    // the program writes a piece at a time (native/io/stream.rs); return it from the handler
+    exports.insert(
+        "stream".into(),
+        nfn_var("stream", 0, |args| {
+            crate::native::util::max_args(args, 1, "web.stream")?;
+            let mut status = 200;
+            let mut limit = 1usize << 20;
+            let mut headers = HashMap::new();
+            headers.insert("content-type".to_string(), "application/octet-stream".to_string());
+            match args.first() {
+                None | Some(Value::Nil) => {}
+                Some(Value::Map(o)) => {
+                    let o = o.borrow();
+                    match o.get("status") {
+                        None | Some(Value::Nil) => {}
+                        Some(Value::Int(n)) if (100..=599).contains(n) => status = *n,
+                        Some(other) => return Err(format!("web.stream: status must be an int between 100 and 599, got {}", other.to_display_string())),
+                    }
+                    if let Some(Value::Str(t)) = o.get("contentType") {
+                        headers.insert("content-type".to_string(), t.to_string());
+                    }
+                    if let Some(Value::Map(h)) = o.get("headers") {
+                        for (k, v) in h.borrow().iter() {
+                            headers.insert(k.to_lowercase(), v.to_display_string());
+                        }
+                    }
+                    match o.get("highWaterMark") {
+                        None | Some(Value::Nil) => {}
+                        Some(Value::Int(n)) if *n > 0 => limit = *n as usize,
+                        Some(other) => return Err(format!("web.stream: highWaterMark must be an int > 0, got {}", other.to_display_string())),
+                    }
+                }
+                Some(other) => return Err(format!("web.stream: options must be a map, got '{}'", other.type_name())),
+            }
+            Ok(crate::native::stream::ResponseStreamValue::new(status, headers, limit))
+        }),
+    );
+
     // sse({ retry, headers }) — a Server-Sent Events stream; return it from the handler
     exports.insert(
         "sse".into(),
@@ -1141,7 +1180,7 @@ fn content_type_of(s: &str) -> &'static str {
 /// Any handler result → `Response` (`ctx.set.status` applies to plain values).
 fn normalize_response(v: Value, set: &Value) -> Value {
     if let Value::Object(o) = &v {
-        if matches!(o.name().as_str(), "Response" | "SseStream" | "WsAccept" | "StaticPass") {
+        if is_special(o.name().as_str()) {
             return v;
         }
     }
@@ -1168,7 +1207,7 @@ fn apply_set(resp: Value, set: &Value) -> Value {
     };
     let Value::Object(o) = &resp else { return resp };
     // web responses, streams and accepts are changed in place
-    if matches!(o.name().as_str(), "Response" | "SseStream" | "WsAccept" | "StaticPass") {
+    if is_special(o.name().as_str()) {
         let inner = o.inner();
         let mut b = inner.borrow_mut();
         let any = b.as_any_mut();
@@ -1178,6 +1217,8 @@ fn apply_set(resp: Value, set: &Value) -> Value {
             Some(&mut s.headers)
         } else if let Some(p) = any.downcast_mut::<StaticPass>() {
             Some(&mut p.headers)
+        } else if let Some(r) = any.downcast_mut::<crate::native::stream::ResponseStreamValue>() {
+            Some(&mut r.headers)
         } else {
             any.downcast_mut::<WsAccept>().map(|w| &mut w.headers)
         };
@@ -1387,10 +1428,16 @@ pub struct ResponseValue {
     pub file: Option<PathBuf>,
 }
 
+/// The values a handler may return that are not turned into JSON: responses,
+/// streams, accepted upgrades.
+fn is_special(name: &str) -> bool {
+    matches!(name, "Response" | "SseStream" | "WsAccept" | "StaticPass" | "ResponseStream" | "ReadStream" | "HttpStream")
+}
+
 /// The payload of special responses for the server thread (see `http::send_response`).
 pub fn take_special(o: &NativeObjectRef) -> Option<fogu_http::PlainResponse> {
     // only these types can be downcast (others do not implement `as_any`)
-    if !matches!(o.name().as_str(), "Response" | "SseStream" | "WsAccept" | "StaticPass") {
+    if !is_special(o.name().as_str()) {
         return None;
     }
     let inner = o.inner();
@@ -1411,7 +1458,16 @@ pub fn take_special(o: &NativeObjectRef) -> Option<fogu_http::PlainResponse> {
         let tx = w.tx.take()?;
         return Some(fogu_http::PlainResponse { status: 101, headers: w.headers.clone(), body: Vec::new(), file: None, stream: None, upgrade: Some(tx), serve_static: false });
     }
-    None
+    if let Some(r) = any.downcast_mut::<crate::native::stream::ResponseStreamValue>() {
+        let rx = r.rx.take()?;
+        return Some(fogu_http::PlainResponse { status: r.status, headers: r.headers.clone(), body: Vec::new(), file: None, stream: Some(rx), upgrade: None, serve_static: false });
+    }
+    drop(b);
+    // a readable returned as it is: its bytes are the body
+    let (rx, ctype) = crate::native::stream::readable_body(o)?;
+    let mut headers = HashMap::new();
+    headers.insert("content-type".to_string(), ctype.unwrap_or_else(|| "application/octet-stream".into()));
+    Some(fogu_http::PlainResponse { status: 200, headers, body: Vec::new(), file: None, stream: Some(rx), upgrade: None, serve_static: false })
 }
 
 /// `web.sse()`: `send(data, { event, id })`, `comment(text)`, `close()`, field `open`.

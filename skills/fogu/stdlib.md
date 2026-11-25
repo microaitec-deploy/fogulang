@@ -622,6 +622,12 @@ Files and folders. Failures (missing file, permission) are error values.
 - `fs.removeAll(path)` → nil · error — A folder and everything inside.
 - `fs.glob(pattern)` → list — Paths matching `*`, `?`, `**`, sorted.
 - `fs.cwd() · fs.tempDir()` → str — Working folder · system temp folder.
+- `fs.createReadStream(path, { start, end, lines, bufferSize })` → ReadStream · error — The file read a piece at a time, in constant memory. `end` is inclusive; `lines: true` makes `for` give lines (str) instead of buffers.
+- `r.read(n = 64 KiB) · r.readLine() · r.readAll() · r.readText()` → buffer · str · nil · error — `nil` at the end. Reads that would wait run off the interpreter thread: other `fg` tasks keep going.
+- `for chunk in r` — Every chunk (or line) until the end. An error ends the loop and stays in `r.error`.
+- `r.pipe(w)` → int · error — Copies the rest into a `WriteStream` or a `web.stream()` response, off the interpreter thread (the bytes never become values); returns the bytes copied.
+- `r.close() · r.bytesRead · r.open · r.path`
+- `fs.createWriteStream(path, { append })` → WriteStream · error — `w.write(data) · w.writeLine(data)` → bytes · error (buffered, 64 KiB), `w.flush()`, `w.close()` / `w.end(data?)`, `w.bytesWritten`.
 - `fs.remote(ssh | "user@host", { sudo })` → RemoteFs — The same functions on a server through [fogu:ssh](#fogussh) (plus `upload(local, remote)` and `download(remote, local)`); every call is an SSH command.
 
 ```fogu
@@ -645,6 +651,38 @@ output:
 [a.txt, logs] [data/a.txt, data/logs/b.txt]
 true
 false
+```
+
+### Streams
+
+A file of any size, a piece at a time: memory stays the size of one chunk.
+
+```fogu
+import fs from "fogu:fs"
+const out = fs.createWriteStream("log.txt")?
+for i in 0..1000 { out.writeLine(`event ${i} ${i % 7 == 0}`)? }
+out.close()
+
+// the lines that matter, one at a time
+let hits = 0
+for line in fs.createReadStream("log.txt", { lines: true })? {
+    if line.ends_with("true") { hits = hits + 1 }
+}
+print(hits, out.bytesWritten)
+
+// a copy that never holds the file in memory
+const copy = fs.createWriteStream("copy.txt")?
+print(fs.createReadStream("log.txt")?.pipe(copy)?)
+copy.close()
+fs.remove("log.txt")?
+fs.remove("copy.txt")?
+```
+
+output:
+
+```text
+143 15747
+15747
 ```
 
 ## fogu:path
@@ -769,13 +807,17 @@ peak 2 free 2
 ## fogu:test
 
 ```fogu
-import { test, skip, expect } from "fogu:test"
+import { test, describe, expect, beforeAll, afterAll, beforeEach, afterEach } from "fogu:test"
 ```
 
-Used in `*.test.fg` files, run with `fogu test`. A test fails when an expectation fails, when it raises an error or returns an error value.
+Used in `*.test.fg` files, run with `fogu test`. A test fails when an expectation fails, when it raises an error or returns an error value. The API follows Bun's `bun:test`: groups, hooks and parametrized tests.
 
-- `test(name, fn)` → nil — Declares a test.
-- `skip(name, fn)` → nil — A test that is reported but not run.
+- `test(name, fn) · it(name, fn)` → nil — Declares a test.
+- `test.skip(name, fn) · test.todo(name) · test.only(name, fn)` → nil — Reported but not run · a test still to write · with any `only` in the file, only those run. `skip(name, fn)` is `test.skip`.
+- `test.skipIf(cond)(name, fn) · test.if(cond)(name, fn)` → nil — Skipped when `cond` is true · run only when it is.
+- `test.each(rows)(name, fn)` → nil — One test per row: a list row gives its values as the arguments, any other row is the argument. In the name, `%s %d %i %f %j %o` take the row's values in order, `%#` is the index, `$key` a field of a map row.
+- `describe(name, fn) · describe.skip · describe.only · describe.each(rows)(name, fn)` → nil — A group: its tests are named `group > test`; groups nest.
+- `beforeAll(fn) · afterAll(fn) · beforeEach(fn) · afterEach(fn)` → nil — Hooks of the group they are declared in (the file at the top level). A group's `beforeAll` runs before its first test, its `afterAll` after its last; the `beforeEach` of the outer groups first, the `afterEach` of the inner groups first. Cleanup always runs: `afterEach` after a failed test or a failed `beforeEach`, `afterAll` after failures. A failing `beforeAll` fails the tests of its group.
 - `expect(value)` → Expectation — Then a matcher; `.not` negates it.
 - `toBe(x) · toEqual(x)` — Equality (`toEqual` compares lists and maps deeply).
 - `toBeTruthy() · toBeFalsy() · toBeNil() · toBeError()`
@@ -801,6 +843,48 @@ math.test.fg
   ✓ math (0ms)
 
 1 passed — 1 file(s) [1ms]
+```
+
+### Groups, hooks and parametrized tests
+
+```fogu
+import { test, describe, expect, beforeAll, afterAll, beforeEach } from "fogu:test"
+import fs from "fogu:fs"
+
+describe("settings file", () => {
+    let path = ""
+    beforeAll(() => { path = fs.tempDir() + "/fogu-settings.json" })
+    beforeEach(() => fs.writeText(path, "{}"))
+    afterAll(() => fs.remove(path))
+
+    test("starts empty", () => expect(fs.readText(path)?).toBe("{}"))
+})
+
+test.each([
+    [2, 3, 5],
+    [10, 20, 30],
+])("add(%d, %d) = %d", (a, b, expected) => {
+    expect(a + b).toBe(expected)
+})
+
+test.each([
+    { input: "123", expected: 123 },
+    { input: "0", expected: 0 },
+])("int($input)", (row) => expect(int(row.input)).toBe(row.expected))
+```
+
+fogu test:
+
+```text
+$ fogu test
+settings.test.fg
+  ✓ settings file > starts empty (0ms)
+  ✓ add(2, 3) = 5 (0ms)
+  ✓ add(10, 20) = 30 (0ms)
+  ✓ int(123) (0ms)
+  ✓ int(0) (0ms)
+
+5 passed — 1 file(s) [0ms]
 ```
 
 ## fogu:log
@@ -1616,6 +1700,7 @@ A minimal HTTP server (one handler for every request) and an HTTP client. For ro
 - `opts: { headers, query, json, form, multipart, body, timeout, redirects = true, basicAuth: [user, pass], bearer, ca, insecure }` — `ca`: a PEM certificate (or its path) trusted for HTTPS, e.g. a self-signed one; `insecure: true` accepts any certificate (development only). `form`: urlencoded fields. `multipart`: a map of fields — text values, `http.file(path)` (streamed from disk), `{ data, filename, type }` bytes, or a list (a repeated field). Map keys are sent in alphabetical order.
 - `http.file(path, { filename, type })` → HttpFile · error — A file to upload; the type comes from the extension.
 - `http.download(url, path, opts?)` → int · error — Streams the body to a file; returns the bytes written (non-2xx is an error).
+- `http.stream(url, { method, body, headers, lines, … })` → HttpStream · error — The response with its body read a piece at a time (a stream of [fogu:fs](#fogufs): `read readLine readAll readText pipe close`, `for chunk in s`), and `s.status · s.ok · s.headers · s.url`. Any status is a stream; a network failure is an error value. `lines: true`: `for` gives lines.
 - `res.status · res.ok · res.url · res.headers · res.body` — `headers`: the first value of each (lower case).
 - `res.json() · res.bytes() · res.header(name) · res.cookies()` — `bytes()`: the body as a [buffer](#values); `header` joins repeated values.
 
@@ -1727,7 +1812,8 @@ A web framework: routes with parameters, middleware, static files and SPA builds
 - `handler result` — A str (text or HTML), any value (JSON), a response, or nil (204).
 - `web.json/text/html(body, { status, headers })` → Response
 - `web.redirect(url, status = 302)` → Response
-- `web.file(path, { download, contentType, status })` → Response · error — Sent by the server thread (binary safe). `download: true` uses the file's name, `download: "name"` another (non-ASCII names as RFC 6266 `filename*`).
+- `web.file(path, { download, contentType, status })` → Response · error — Sent by the server thread, a chunk at a time (binary safe; a large file does not have to fit in memory). `download: true` uses the file's name, `download: "name"` another (non-ASCII names as RFC 6266 `filename*`).
+- `web.stream({ status, headers, contentType, highWaterMark })` → ResponseStream — Return it from the handler and write the body a piece at a time from a task: `s.write(data)` · `s.writeLine(data)` → bytes · error, `s.end(data?)` / `s.close()`. Backpressure: `write` waits while more than `highWaterMark` bytes (1 MiB) are queued for a slow client. A readable (`fs.createReadStream`, `http.stream`) returned from a handler, or `pipe`d into the stream, is sent the same way.
 - `web.sse({ retry, headers })` → SseStream — Return it from the handler; `send(data, { event, id })`, `comment(text)`, `close()`, field `open`.
 - `web.cors({ origin, methods, headers, credentials, maxAge })` → middleware — Answers preflight requests, also as a route's own middleware. With `credentials: true` and `origin: "*"` the request's origin is echoed (browsers refuse `*` with credentials).
 - `web.logger()` → middleware — `GET /path 200 0.4ms`.
@@ -1735,6 +1821,7 @@ A web framework: routes with parameters, middleware, static files and SPA builds
 
 ```fogu
 import web from "fogu:web"
+import fs from "fogu:fs"
 import time from "fogu:time"
 
 const app = web.app()
@@ -1755,6 +1842,17 @@ app.get("/events", (ctx) => {
     }()
     return stream
 })
+// a large body, written a piece at a time (write waits for a slow client)
+app.get("/export.csv", (ctx) => {
+    const out = web.stream({ contentType: "text/csv" })
+    fg fn() {
+        for i in 0..1000000 { out.writeLine(`${i},${i * i}`)? }
+        out.end()
+    }()
+    return out
+})
+// a file as a stream: constant memory, whatever its size
+app.get("/logs", (ctx) => fs.createReadStream("app.log")?)
 app.ws("/chat", (ws, ctx) => {
     while true {
         const m = ws.next()?

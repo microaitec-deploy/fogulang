@@ -51,6 +51,8 @@ enum Iter {
     Accept(NativeObjectRef),
     /// `for msg in dataChannel`
     Recv(NativeObjectRef),
+    /// `for chunk in stream` (`fs.createReadStream`, `http.stream`)
+    Stream(NativeObjectRef),
 }
 
 struct Frame {
@@ -707,6 +709,7 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
                     }
                     Value::Object(o) if matches!(o.name().as_str(), "TcpListener" | "TlsListener") => Iter::Accept(o),
                     Value::Object(o) if o.name() == "DataChannel" => Iter::Recv(o),
+                    Value::Object(o) if crate::runtime::interpreter::is_stream(&o) => Iter::Stream(o),
                     other => return Err(format!("value of type '{}' is not iterable", other.type_name())),
                 };
             }
@@ -757,6 +760,7 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
                     },
                     Iter::Accept(o) => Some(it.call_native_method(o, "accept", &[])?),
                     Iter::Recv(o) => Some(it.call_native_method(o, "recv", &[])?).filter(|m| !matches!(m, Value::Nil)),
+                    Iter::Stream(o) => it.stream_next(o)?,
                     Iter::Pairs(_) | Iter::Done => None,
                 };
                 match next {

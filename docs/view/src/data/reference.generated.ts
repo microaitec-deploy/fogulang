@@ -971,6 +971,36 @@ export const REFERENCE: Record<string, RefData> = {
       "Working folder · system temp folder."
      ],
      [
+      "fs.createReadStream(path, { start, end, lines, bufferSize })",
+      "ReadStream · error",
+      "The file read a piece at a time, in constant memory. <code>end</code> is inclusive; <code>lines: true</code> makes <code>for</code> give lines (str) instead of buffers."
+     ],
+     [
+      "r.read(n = 64 KiB) · r.readLine() · r.readAll() · r.readText()",
+      "buffer · str · nil · error",
+      "<code>nil</code> at the end. Reads that would wait run off the interpreter thread: other <code>fg</code> tasks keep going."
+     ],
+     [
+      "for chunk in r",
+      "",
+      "Every chunk (or line) until the end. An error ends the loop and stays in <code>r.error</code>."
+     ],
+     [
+      "r.pipe(w)",
+      "int · error",
+      "Copies the rest into a <code>WriteStream</code> or a <code>web.stream()</code> response, off the interpreter thread (the bytes never become values); returns the bytes copied."
+     ],
+     [
+      "r.close() · r.bytesRead · r.open · r.path",
+      "",
+      ""
+     ],
+     [
+      "fs.createWriteStream(path, { append })",
+      "WriteStream · error",
+      "<code>w.write(data) · w.writeLine(data)</code> → bytes · error (buffered, 64 KiB), <code>w.flush()</code>, <code>w.close()</code> / <code>w.end(data?)</code>, <code>w.bytesWritten</code>."
+     ],
+     [
       "fs.remote(ssh | \"user@host\", { sudo })",
       "RemoteFs",
       "The same functions on a server through <a href=\"#mod-ssh\">fogu:ssh</a> (plus <code>upload(local, remote)</code> and <code>download(remote, local)</code>); every call is an SSH command."
@@ -978,6 +1008,13 @@ export const REFERENCE: Record<string, RefData> = {
     ],
     "example": "import fs from \"fogu:fs\"\nfs.mkdir(\"data/logs\")?\nfs.writeText(\"data/a.txt\", \"hello\")?\nfs.append(\"data/a.txt\", \"\\nworld\")?\nprint(fs.readLines(\"data/a.txt\")?, fs.stat(\"data/a.txt\")?.size)\nfs.copy(\"data/a.txt\", \"data/logs/b.txt\")?\nprint(fs.list(\"data\")?, fs.glob(\"data/**/*.txt\"))\nconst [_, err] = fs.readText(\"missing.txt\")\nprint(err != nil)\nfs.removeAll(\"data\")?\nprint(fs.exists(\"data\"))",
     "output": "[hello, world] 11\n[a.txt, logs] [data/a.txt, data/logs/b.txt]\ntrue\nfalse",
+    "outputTitle": "output"
+   },
+   {
+    "h3": "Streams",
+    "text": "A file of any size, a piece at a time: memory stays the size of one chunk.",
+    "example": "import fs from \"fogu:fs\"\nconst out = fs.createWriteStream(\"log.txt\")?\nfor i in 0..1000 { out.writeLine(`event ${i} ${i % 7 == 0}`)? }\nout.close()\n\n// the lines that matter, one at a time\nlet hits = 0\nfor line in fs.createReadStream(\"log.txt\", { lines: true })? {\n    if line.ends_with(\"true\") { hits = hits + 1 }\n}\nprint(hits, out.bytesWritten)\n\n// a copy that never holds the file in memory\nconst copy = fs.createWriteStream(\"copy.txt\")?\nprint(fs.createReadStream(\"log.txt\")?.pipe(copy)?)\ncopy.close()\nfs.remove(\"log.txt\")?\nfs.remove(\"copy.txt\")?",
+    "output": "143 15747\n15747",
     "outputTitle": "output"
    }
   ]
@@ -1129,21 +1166,41 @@ export const REFERENCE: Record<string, RefData> = {
   "id": "mod-test",
   "group": "Core modules",
   "title": "fogu:test",
-  "import": "import { test, skip, expect } from \"fogu:test\"",
-  "intro": "Used in <code>*.test.fg</code> files, run with <code>fogu test</code>. A test fails when an expectation fails, when it raises an error or returns an error value.",
+  "import": "import { test, describe, expect, beforeAll, afterAll, beforeEach, afterEach } from \"fogu:test\"",
+  "intro": "Used in <code>*.test.fg</code> files, run with <code>fogu test</code>. A test fails when an expectation fails, when it raises an error or returns an error value. The API follows Bun's <code>bun:test</code>: groups, hooks and parametrized tests.",
   "blocks": [
    {
     "title": "math.test.fg",
     "api": [
      [
-      "test(name, fn)",
+      "test(name, fn) · it(name, fn)",
       "nil",
       "Declares a test."
      ],
      [
-      "skip(name, fn)",
+      "test.skip(name, fn) · test.todo(name) · test.only(name, fn)",
       "nil",
-      "A test that is reported but not run."
+      "Reported but not run · a test still to write · with any <code>only</code> in the file, only those run. <code>skip(name, fn)</code> is <code>test.skip</code>."
+     ],
+     [
+      "test.skipIf(cond)(name, fn) · test.if(cond)(name, fn)",
+      "nil",
+      "Skipped when <code>cond</code> is true · run only when it is."
+     ],
+     [
+      "test.each(rows)(name, fn)",
+      "nil",
+      "One test per row: a list row gives its values as the arguments, any other row is the argument. In the name, <code>%s %d %i %f %j %o</code> take the row's values in order, <code>%#</code> is the index, <code>$key</code> a field of a map row."
+     ],
+     [
+      "describe(name, fn) · describe.skip · describe.only · describe.each(rows)(name, fn)",
+      "nil",
+      "A group: its tests are named <code>group > test</code>; groups nest."
+     ],
+     [
+      "beforeAll(fn) · afterAll(fn) · beforeEach(fn) · afterEach(fn)",
+      "nil",
+      "Hooks of the group they are declared in (the file at the top level). A group's <code>beforeAll</code> runs before its first test, its <code>afterAll</code> after its last; the <code>beforeEach</code> of the outer groups first, the <code>afterEach</code> of the inner groups first. Cleanup always runs: <code>afterEach</code> after a failed test or a failed <code>beforeEach</code>, <code>afterAll</code> after failures. A failing <code>beforeAll</code> fails the tests of its group."
      ],
      [
       "expect(value)",
@@ -1173,6 +1230,13 @@ export const REFERENCE: Record<string, RefData> = {
     ],
     "example": "import { test, expect } from \"fogu:test\"\n\ntest(\"math\", () => {\n    expect(1 + 2).toBe(3)\n    expect([1, 2]).toContain(2)\n    expect(\"abc\").not.toHaveLength(2)\n    expect(0.1 + 0.2).toBeCloseTo(0.3)\n})",
     "output": "$ fogu test\nmath.test.fg\n  ✓ math (0ms)\n\n1 passed — 1 file(s) [1ms]",
+    "outputTitle": "fogu test"
+   },
+   {
+    "h3": "Groups, hooks and parametrized tests",
+    "title": "settings.test.fg",
+    "example": "import { test, describe, expect, beforeAll, afterAll, beforeEach } from \"fogu:test\"\nimport fs from \"fogu:fs\"\n\ndescribe(\"settings file\", () => {\n    let path = \"\"\n    beforeAll(() => { path = fs.tempDir() + \"/fogu-settings.json\" })\n    beforeEach(() => fs.writeText(path, \"{}\"))\n    afterAll(() => fs.remove(path))\n\n    test(\"starts empty\", () => expect(fs.readText(path)?).toBe(\"{}\"))\n})\n\ntest.each([\n    [2, 3, 5],\n    [10, 20, 30],\n])(\"add(%d, %d) = %d\", (a, b, expected) => {\n    expect(a + b).toBe(expected)\n})\n\ntest.each([\n    { input: \"123\", expected: 123 },\n    { input: \"0\", expected: 0 },\n])(\"int($input)\", (row) => expect(int(row.input)).toBe(row.expected))",
+    "output": "$ fogu test\nsettings.test.fg\n  ✓ settings file > starts empty (0ms)\n  ✓ add(2, 3) = 5 (0ms)\n  ✓ add(10, 20) = 30 (0ms)\n  ✓ int(123) (0ms)\n  ✓ int(0) (0ms)\n\n5 passed — 1 file(s) [0ms]",
     "outputTitle": "fogu test"
    }
   ]
@@ -2272,6 +2336,11 @@ export const REFERENCE: Record<string, RefData> = {
       "Streams the body to a file; returns the bytes written (non-2xx is an error)."
      ],
      [
+      "http.stream(url, { method, body, headers, lines, … })",
+      "HttpStream · error",
+      "The response with its body read a piece at a time (a stream of <a href=\"#mod-fs\">fogu:fs</a>: <code>read readLine readAll readText pipe close</code>, <code>for chunk in s</code>), and <code>s.status · s.ok · s.headers · s.url</code>. Any status is a stream; a network failure is an error value. <code>lines: true</code>: <code>for</code> gives lines."
+     ],
+     [
       "res.status · res.ok · res.url · res.headers · res.body",
       "",
       "<code>headers</code>: the first value of each (lower case)."
@@ -2433,7 +2502,12 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "web.file(path, { download, contentType, status })",
       "Response · error",
-      "Sent by the server thread (binary safe). <code>download: true</code> uses the file's name, <code>download: \"name\"</code> another (non-ASCII names as RFC 6266 <code>filename*</code>)."
+      "Sent by the server thread, a chunk at a time (binary safe; a large file does not have to fit in memory). <code>download: true</code> uses the file's name, <code>download: \"name\"</code> another (non-ASCII names as RFC 6266 <code>filename*</code>)."
+     ],
+     [
+      "web.stream({ status, headers, contentType, highWaterMark })",
+      "ResponseStream",
+      "Return it from the handler and write the body a piece at a time from a task: <code>s.write(data)</code> · <code>s.writeLine(data)</code> → bytes · error, <code>s.end(data?)</code> / <code>s.close()</code>. Backpressure: <code>write</code> waits while more than <code>highWaterMark</code> bytes (1 MiB) are queued for a slow client. A readable (<code>fs.createReadStream</code>, <code>http.stream</code>) returned from a handler, or <code>pipe</code>d into the stream, is sent the same way."
      ],
      [
       "web.sse({ retry, headers })",
@@ -2456,7 +2530,7 @@ export const REFERENCE: Record<string, RefData> = {
       "<code>save(\"uploads/\")</code> keeps a sanitized file name."
      ]
     ],
-    "example": "import web from \"fogu:web\"\nimport time from \"fogu:time\"\n\nconst app = web.app()\napp.use(web.logger())\napp.use(\"/api\", (ctx) => {\n    if ctx.headers[\"x-key\"] != \"secret\" { return web.json({ error: \"forbidden\" }, { status: 403 }) }\n})\napp.get(\"/api/users/:id\", (ctx) => ({ id: ctx.params.id, page: ctx.query.page ?? \"1\" }))\napp.post(\"/api/upload\", (ctx) => {\n    const form = ctx.req.form()?\n    return { saved: form.file.save(\"uploads/\")?, size: form.file.size }\n})\napp.get(\"/events\", (ctx) => {\n    const stream = web.sse()\n    fg fn() {\n        for i in 1..4 { stream.send({ n: i }, { event: \"tick\" }); time.delay(1s) }\n        stream.close()\n    }()\n    return stream\n})\napp.ws(\"/chat\", (ws, ctx) => {\n    while true {\n        const m = ws.next()?\n        if m == nil { break }\n        ws.send(`echo: ${m.data}`)\n    }\n})\napp.static(\"/\", \"dist\", { spa: true, maxAge: 1d })\napp.listen(3000)?\nFogu.signal.wait()    // serves requests until Ctrl+C / SIGTERM"
+    "example": "import web from \"fogu:web\"\nimport fs from \"fogu:fs\"\nimport time from \"fogu:time\"\n\nconst app = web.app()\napp.use(web.logger())\napp.use(\"/api\", (ctx) => {\n    if ctx.headers[\"x-key\"] != \"secret\" { return web.json({ error: \"forbidden\" }, { status: 403 }) }\n})\napp.get(\"/api/users/:id\", (ctx) => ({ id: ctx.params.id, page: ctx.query.page ?? \"1\" }))\napp.post(\"/api/upload\", (ctx) => {\n    const form = ctx.req.form()?\n    return { saved: form.file.save(\"uploads/\")?, size: form.file.size }\n})\napp.get(\"/events\", (ctx) => {\n    const stream = web.sse()\n    fg fn() {\n        for i in 1..4 { stream.send({ n: i }, { event: \"tick\" }); time.delay(1s) }\n        stream.close()\n    }()\n    return stream\n})\n// a large body, written a piece at a time (write waits for a slow client)\napp.get(\"/export.csv\", (ctx) => {\n    const out = web.stream({ contentType: \"text/csv\" })\n    fg fn() {\n        for i in 0..1000000 { out.writeLine(`${i},${i * i}`)? }\n        out.end()\n    }()\n    return out\n})\n// a file as a stream: constant memory, whatever its size\napp.get(\"/logs\", (ctx) => fs.createReadStream(\"app.log\")?)\napp.ws(\"/chat\", (ws, ctx) => {\n    while true {\n        const m = ws.next()?\n        if m == nil { break }\n        ws.send(`echo: ${m.data}`)\n    }\n})\napp.static(\"/\", \"dist\", { spa: true, maxAge: 1d })\napp.listen(3000)?\nFogu.signal.wait()    // serves requests until Ctrl+C / SIGTERM"
    },
    {
     "text": "Without a network, through <code>app.handler()</code>:",

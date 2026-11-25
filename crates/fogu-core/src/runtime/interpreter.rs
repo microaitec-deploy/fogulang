@@ -1222,6 +1222,18 @@ impl Interpreter {
                 Ok(Flow::Normal)
             }
 
+            // a readable stream (`fs.createReadStream`, `http.stream`): each
+            // chunk (or line) until the end; an error ends the loop and stays
+            // in `stream.error`
+            Value::Object(o) if is_stream(&o) => {
+                while let Some(item) = self.stream_next(&o)? {
+                    if let Some(f) = run_body!(item) {
+                        return Ok(f);
+                    }
+                }
+                Ok(Flow::Normal)
+            }
+
             Value::Object(o) if matches!(o.name().as_str(), "TcpListener" | "TlsListener") => {
                 loop {
                     let conn = self.call_native_method(&o, "accept", &[])?;
@@ -2048,9 +2060,29 @@ impl Interpreter {
         Some(waited.and_then(|()| out.expect("ready")))
     }
 
+    /// The next item of a readable stream for `for x in stream`: `None` at the
+    /// end, and also after an error value, which the stream keeps in its
+    /// `error` field (errors are values: the loop does not raise it).
+    pub(crate) fn stream_next(&self, o: &NativeObjectRef) -> Result<Option<Value>, String> {
+        match self.call_native_method(o, "next", &[]) {
+            Ok(Value::Nil) => Ok(None),
+            Ok(Value::Error(e)) => {
+                o.call("__fail", &[Value::Error(e)])?;
+                Ok(None)
+            }
+            Ok(v) => Ok(Some(v)),
+            Err(e) if e.starts_with(super::value::ERR_VALUE_PREFIX) => {
+                let msg = e.strip_prefix(super::value::ERR_VALUE_PREFIX).unwrap_or(&e).to_string();
+                o.call("__fail", &[Value::Str(msg.into())])?;
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// A native method called by the interpreter itself (`for conn in
     /// listener`): asynchronous ones wait cooperatively.
-    fn call_native_method(&self, receiver: &NativeObjectRef, method: &str, args: &[Value]) -> Result<Value, String> {
+    pub(crate) fn call_native_method(&self, receiver: &NativeObjectRef, method: &str, args: &[Value]) -> Result<Value, String> {
         match self.poll_async(receiver, method, args) {
             Some(r) => r,
             None => receiver.call(method, args),
@@ -2806,6 +2838,8 @@ impl Interpreter {
                 }
                 Ok(Value::bound(o, field))
             }
+            // a method value shows the fields of its object (`test.each`, `describe.only`)
+            Value::BoundMethod(b) => b.receiver.get(field).ok_or_else(|| format!("access '.{}' not applicable to 'fn'", field)),
             Value::Struct(s) => {
                 if s.borrow().methods.contains_key(field) {
                     return Ok(Value::struct_bound(Rc::clone(&s), field));
@@ -3459,6 +3493,11 @@ fn array_equal(a: &Value, b: &Value) -> bool {
     }
     let (xs, ys) = (list_items(a), list_items(b));
     xs.len() == ys.len() && xs.iter().zip(ys.iter()).all(|(p, q)| scalar_equal(p, q))
+}
+
+/// Is `o` a readable stream (`for x in o` reads it a piece at a time)?
+pub(crate) fn is_stream(o: &NativeObjectRef) -> bool {
+    matches!(o.name().as_str(), "ReadStream" | "HttpStream")
 }
 
 /// The message of a value a sized list cannot hold.

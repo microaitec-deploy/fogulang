@@ -1,0 +1,13 @@
+written 39 false
+[line 0, line 1, line 2, line 3, line 4, last] 39 nil
+<buffer 3 bytes: 30 0a 6c> <buffer 3 bytes: 69 6e 65> nil
+line 0 line 1 25
+piped 39
+true
+true
+true true true
+200 true count [n 0, n 1, n 2, end]
+text/plain; charset=utf-8 true
+downloaded true
+true
+404 false

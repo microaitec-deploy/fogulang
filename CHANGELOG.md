@@ -8,6 +8,29 @@ be incompatible changes (spec §75).
 
 ### Added
 
+- **Streams in `fogu:fs`, `fogu:http` and `fogu:web`**: data read and written a piece at a
+  time, in constant memory (`native/io/stream.rs`, `docs/architecture/streams.md`).
+  - `fs.createReadStream(path, { start, end, lines, bufferSize })` and
+    `http.stream(url, opts)` are readables: `read(n)`, `readLine()`, `readAll()`,
+    `readText()`, `pipe(w)`, `close()`, and `for chunk in r` (lines with `{ lines: true }`); an
+    error ends the loop and stays in `r.error`.
+  - `fs.createWriteStream(path, { append })` and `web.stream({ status, headers, contentType,
+    highWaterMark })` are writables: `write`, `writeLine`, `end` / `close`. A `web.stream`
+    response applies backpressure: `write` waits while more than 1 MiB is queued for a slow
+    client. A readable returned from a handler is sent as the body.
+  - `pipe` copies on the pool: the bytes never become Fogu values. Reads that would wait run
+    off the interpreter thread, so the other `fg` tasks keep going.
+  - Measured: 200 MB sent to a client reading at 50 MB/s, server peak 22 MB; 400 MB received
+    with `http.stream` (chunks and `pipe`), client peak 26–30 MB.
+- **`fogu:test`: groups, hooks and parametrized tests, as in Bun.** `describe(name, fn)`
+  (nested; tests named `group > test`), `beforeAll` / `afterAll` / `beforeEach` / `afterEach`
+  (scoped to their group; `beforeEach` outer first, `afterEach` inner first; cleanup runs
+  after failures; a failing `beforeAll` fails its group's tests), `test.each(rows)(name, fn)`
+  and `describe.each` (`%s %d %i %f %j %o %#` and `$key` in names), `test.skip`, `test.only`,
+  `test.todo`, `test.skipIf(cond)`, `test.if(cond)`, `describe.skip`, `describe.only`, `it`.
+  A method value exposes the fields of its object (`test.each`), which is what makes `test`
+  both callable and a namespace.
+
 - **`list<int>`, `list<float>` and `list<bool>` store their elements compactly**: 8, 8 and 1
   byte per element instead of 24. A million ints pushed: 65 MB as a plain list, 32 MB as
   `list<int>`, 18 MB as `list<bool>` (peak RSS). **Changes for code that already wrote these
@@ -17,6 +40,10 @@ be incompatible changes (spec §75).
   published libraries declared a variable this way.
 
 ### Performance
+
+- **`web.file` sends the file a chunk at a time** (64 KiB) instead of reading it whole first:
+  a 200 MB file served to a slow client took the server to 244 MB in 0.8.2, 22 MB now. The
+  response also carries `content-length`.
 
 - **Loops over sized lists are compiled.** `xs[i]`, `len(xs)`, `xs.push(v)` and `for x in xs`
   on `list<u8>` … `list<f64>`, `list<int>`, `list<float>` and `list<bool>` run as compiled code

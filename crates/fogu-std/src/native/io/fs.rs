@@ -24,6 +24,9 @@ use crate::native::util::{map, path_str, str_arg, str_list};
 pub fn build() -> ModuleValue {
     let mut e: HashMap<String, Value> = HashMap::new();
 
+    // streams: a file read or written a piece at a time (native/io/stream.rs)
+    e.insert("createReadStream".into(), crate::native::util::nfn_var("createReadStream", 1, super::stream::create_read_stream));
+    e.insert("createWriteStream".into(), crate::native::util::nfn_var("createWriteStream", 1, super::stream::create_write_stream));
     e.insert("readText".into(), nfn("readText", 1, |a| {
         let p = str_arg(a, 0, "fs.readText")?;
         std::fs::read_to_string(&p)

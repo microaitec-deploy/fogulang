@@ -40,6 +40,7 @@ pub use base::cli;
 #[cfg(not(target_family = "wasm"))]
 pub use base::ffi;
 pub use io::fs;
+pub use io::stream;
 pub use io::path;
 pub use io::process;
 pub use io::system;

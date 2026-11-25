@@ -107,6 +107,75 @@ skip("later", () => {})
 }
 
 #[test]
+fn test_command_runs_hooks_groups_and_each() {
+    let d = TempDir::new("test-hooks");
+    d.write(
+        "life.test.fg",
+        r#"import { test, describe, expect, beforeAll, afterAll, beforeEach, afterEach } from "fogu:test"
+import fs from "fogu:fs"
+const log = []
+beforeAll(() => log.push("all:before"))
+afterAll(() => {
+    log.push("all:after")
+    fs.writeText("order.txt", log.join(" "))?
+})
+beforeEach(() => log.push("each:before"))
+afterEach(() => log.push("each:after"))
+test("top", () => log.push("top"))
+describe("db", () => {
+    beforeAll(() => log.push("db:before"))
+    afterAll(() => log.push("db:after"))
+    beforeEach(() => log.push("db:each"))
+    afterEach(() => log.push("db:each:after"))
+    test("fails", () => {
+        log.push("fails")
+        expect(1).toBe(2)
+    })
+    describe("nested", () => { test("deep", () => log.push("deep")) })
+})
+test.each([[2, 3, 5], [1, 1, 2]])("add(%d, %d) = %d", (a, b, c) => expect(a + b).toBe(c))
+test.each([{ s: "7", n: 7 }])("int($s)", (row) => expect(int(row.s)).toBe(row.n))
+test.todo("later")
+"#,
+    );
+    d.write(
+        "setup.test.fg",
+        r#"import { test, describe, expect, beforeAll, afterAll } from "fogu:test"
+describe("broken", () => {
+    beforeAll(() => { return nil, error("no database") })
+    afterAll(() => print("cleaned up"))
+    test("a", () => expect(1).toBe(1))
+})
+"#,
+    );
+    // `only` keeps only those tests of its file
+    d.write(
+        "only.test.fg",
+        r#"import { test, expect } from "fogu:test"
+test.only("chosen", () => expect(1).toBe(1))
+test("not chosen", () => expect(1).toBe(2))
+"#,
+    );
+    let o = fogu(d.path(), &["test"]);
+    let out = text(&o);
+    assert!(!o.status.success(), "{}", out);
+    assert!(out.contains("✓ top") && out.contains("✗ db > fails") && out.contains("✓ db > nested > deep"), "{}", out);
+    assert!(out.contains("✓ add(2, 3) = 5") && out.contains("✓ add(1, 1) = 2") && out.contains("✓ int(7)"), "{}", out);
+    assert!(out.contains("○ later (todo)"), "{}", out);
+    // outer beforeEach first, inner afterEach first; cleanup after a failure; afterAll last
+    let order = fs::read_to_string(d.path().join("order.txt")).unwrap();
+    assert_eq!(
+        order,
+        "all:before each:before top each:after db:before each:before db:each fails db:each:after each:after \
+         each:before db:each deep db:each:after each:after db:after each:before each:after each:before each:after \
+         each:before each:after all:after"
+    );
+    // a failed beforeAll fails the tests of its group and still runs afterAll; only: only that test
+    assert!(out.contains("✗ broken > a") && out.contains("beforeAll failed: returned an error: no database"), "{}", out);
+    assert!(out.contains("cleaned up") && out.contains("✓ chosen") && !out.contains("not chosen"), "{}", out);
+}
+
+#[test]
 fn test_command_fails_tests_that_exit_or_fail_in_a_task() {
     let d = TempDir::new("test-exit");
     d.write("a.test.fg", "import { test, expect } from \"fogu:test\"\ntest(\"fails\", () => { expect(1).toBe(2) })\n");
