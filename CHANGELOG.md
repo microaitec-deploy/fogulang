@@ -45,6 +45,10 @@ be incompatible changes (spec §75).
   `sync.Worker` for a server on several cores (`bench/net/http_workers.fg`, 1024 connections:
   4 workers 111k req/s, 8 workers 146k, Go 91k on the same machine).
 
+- **The grammar** (`docs/grammar.md`, the "Grammar" section of the documentation): an EBNF of
+  what the parser accepts, derived from `lexer.rs` / `parser.rs`, with the precedence table, the
+  rules that are not context-free and examples checked by `docs/tools/gen_grammar.py --check`.
+
 ### Fixed
 
 - `fogu:net` (Linux): a read could wait for ever at the end of a stream when the peer's last

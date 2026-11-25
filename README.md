@@ -775,6 +775,7 @@ benches/            JIT benchmarks (.fg)
 docs/
 ├── docs.html       official language documentation (HTML)
 ├── spec.md         language specification (Draft 0.4)
+├── grammar.md      the grammar the parser accepts (EBNF; also a section of docs.html)
 ├── cli.md · packages.md · jit.md
 ├── analysis.md     history of fixes and known gaps
 └── design/         design notes of the native modules

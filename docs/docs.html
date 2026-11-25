@@ -1449,6 +1449,396 @@ print("ticks", ticks)</script>
 ticks [0, 1, 2, 3]</script>
     </section>
 
+    <!-- ================= GRAMMAR (docs/grammar.md → docs/tools/gen_grammar.py) ================= -->
+    <!-- GRAMMAR: BEGIN -->
+    <section id="grammar" data-group="Language" data-title="Grammar" class="scroll-mt-20 mt-16">
+      <h2 class="text-2xl font-bold">Grammar (EBNF)</h2>
+      <p class="mt-3">This grammar is derived from the reference implementation, not from the specification: <code>lexer.rs</code>, <code>token.rs</code>, <code>parser.rs</code> and <code>ast.rs</code> in <code>lang/crates/fogu-core/src/runtime/</code>. It describes what the parser accepts (Fogu 0.8.3). Constructs the parser does not accept are listed at the end under "Not part of the grammar".</p>
+      <h3 id="grammar-notation" class="text-lg font-semibold mt-8">Notation</h3>
+      <p class="mt-3">The grammar uses ISO-style EBNF with these conventions: <code>name = body ;</code> defines a production; <code>|</code> separates alternatives; <code>[ x ]</code> means x is optional; <code>{ x }</code> means x repeated zero or more times; <code>( x )</code> groups; terminals are written in double quotes (a double quote itself is written <code>'"'</code>); <code>/* ... */</code> is a comment, also used for constraints that EBNF cannot express. Lexical productions (section 1) operate on characters; all later productions operate on tokens, with whitespace and comments already removed.</p>
+      <h3 id="grammar-1-lexical-structure" class="text-lg font-semibold mt-8">1. Lexical structure</h3>
+      <script type="text/x-fogu" data-lang="ebnf" data-title="EBNF">source        = [ BOM ] { whitespace | comment | token } ;
+BOM           = /* U+FEFF, a leading byte order mark: dropped */ ;
+
+whitespace    = /* any Unicode whitespace character, including line breaks */ ;
+comment       = line_comment | block_comment ;
+line_comment  = "//" { /* any char except LF, CR, U+2028, U+2029 */ } ;
+block_comment = "/*" { /* any char */ } "*/" ;
+               /* not nested; an unterminated block comment is an error */
+
+token         = keyword | IDENT | "_" | INT | FLOAT | DURATION
+              | STRING | TEMPLATE | operator | delimiter ;
+
+/* ---- identifiers and keywords ---- */
+
+IDENT         = ident_start { ident_char } ;
+               /* except the keywords, and except "_" alone */
+ident_start   = letter | "_" ;
+ident_char    = letter | unicode_digit | "_" ;
+letter        = /* Unicode alphabetic character */ ;
+unicode_digit = /* Unicode numeric character (char::is_alphanumeric) */ ;
+               /* "_" not followed by an ident_char is the token "_" (wildcard) */
+
+keyword       = "let" | "const" | "fn" | "return" | "if" | "else" | "while"
+              | "for" | "in" | "break" | "continue" | "true" | "false" | "nil"
+              | "import" | "export" | "from" | "as" | "struct" | "interface"
+              | "embed" | "match" | "case" | "default" | "fg" | "chan"
+              | "select" ;
+
+/* Contextual words (ordinary identifiers to the lexer):
+   "loop" (statement start, before "{"), "new" (before an identifier),
+   "any" (in a type). */
+
+/* ---- numbers ---- */
+
+INT           = dec_digits | hex_int | bin_int ;
+hex_int       = "0" ( "x" | "X" ) hex_part { hex_part } ;
+bin_int       = "0" ( "b" | "B" ) bin_part { bin_part } ;
+hex_part      = hex_digit | "_" ;   /* at least one real digit is required */
+bin_part      = "0" | "1" | "_" ;   /* at least one real digit is required */
+dec_digits    = digit { digit | "_" } ;
+FLOAT         = dec_digits "." digit { digit | "_" } [ exponent ]
+              | dec_digits exponent ;
+               /* "." starts a fraction only when a digit follows it */
+exponent      = ( "e" | "E" ) [ "+" | "-" ] digit { digit } ;
+DURATION      = ( dec_digits | FLOAT ) duration_unit ;
+duration_unit = "ns" | "us" | "µs" | "ms" | "s" | "m" | "h" | "d" ;
+               /* only when the whole run of ident_char after the number is
+                  exactly one unit; not available after hex_int / bin_int */
+digit         = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+hex_digit     = digit | "a" | "b" | "c" | "d" | "e" | "f"
+              | "A" | "B" | "C" | "D" | "E" | "F" ;
+
+/* ---- strings ---- */
+
+STRING        = '"' { str_char | escape } '"'
+              | "'" { str_char | escape } "'" ;
+               /* both quote styles produce the same string token; there is no
+                  character literal; a raw line break inside is allowed */
+str_char      = /* any char except "\" and the closing quote */ ;
+escape        = "\" ( "n" | "t" | "r" | "0" | "\" | "'" | '"' ) ;
+
+TEMPLATE      = "`" { tpl_char | tpl_escape | interpolation } "`" ;
+tpl_char      = /* any char except "`", "\", and "$" when followed by "{" */ ;
+tpl_escape    = "\" ( "n" | "t" | "r" | "0" | "\" | "`" | "$" | "'" | '"' ) ;
+interpolation = "${" expr "}" ;
+               /* the text up to the matching "}" (nested braces and quoted
+                  strings are skipped) is lexed on its own and must be exactly
+                  one non-empty expr */
+
+/* ---- operators and delimiters ---- */
+
+operator      = "+" | "-" | "*" | "/" | "%" | "**"
+              | "=" | "==" | "!" | "!=" | "<" | "<=" | ">" | ">=" | "<-"
+              | "&&" | "||" | "|" | "&" | "^" | "~" | "<<" | ">>"
+              | "->" | "=>" | "?" | "??" | "?."
+              | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^="
+              | "<<=" | ">>=" ;
+               /* longest match; "?." is not formed when another "." follows
+                  ("x?..y" is "?" then "..") */
+delimiter     = "(" | ")" | "{" | "}" | "[" | "]"
+              | "," | ";" | ":" | "." | ".." | "..." ;
+
+/* ---- statement termination ---- */
+
+/* There is no newline token. A statement ends where its production ends;
+   an optional ";" may follow. Line breaks matter only in the few places
+   listed in the Notes (they are detected by comparing token line numbers). */</script>
+      <script type="text/x-fogu">// line comment
+/* block comment */
+let n = 1_000 + 0xFF + 0b1010; let f = 2.5e-3
+let d = 500ms + 1.5s
+let s = "a\tb" + 'single' + `sum ${n + 1} at ${d}`
+print(n, f, d, s)</script>
+      <h3 id="grammar-2-program-and-modules" class="text-lg font-semibold mt-8">2. Program and modules</h3>
+      <script type="text/x-fogu" data-lang="ebnf" data-title="EBNF">program       = { ";" } { statement { ";" } } EOF ;
+
+import_stmt   = "import" import_clause "from" STRING [ ";" ] ;
+               /* only when "import" is not followed by "(" */
+import_clause = import_names
+              | "*" "as" IDENT
+              | IDENT [ "," ( import_names | "*" "as" IDENT ) ] ;
+import_names  = "{" [ import_name { "," import_name } [ "," ] ] "}" ;
+import_name   = member_name [ "as" IDENT ] ;
+               /* "default" must be renamed: { default as name } */
+member_name   = IDENT | "default" ;
+
+export_stmt   = "export" export_item ;
+export_item   = fn_decl
+              | let_decl
+              | struct_decl
+              | interface_decl
+              | export_names [ "from" STRING ] [ ";" ]
+              | "*" [ "as" member_name ] "from" STRING [ ";" ]
+              | "default" ( fn_decl | struct_decl | expr [ ";" ] ) ;
+               /* "default fn" is a declaration only when a name follows "fn" */
+export_names  = "{" [ export_name { "," export_name } [ "," ] ] "}" ;
+export_name   = member_name [ "as" member_name ] ;
+               /* without "from", the left-hand name may not be "default" */
+
+dyn_import    = "import" "(" expr ")" ;      /* an expression, see section 6 */</script>
+      <script type="text/x-fogu">import math from "fogu:math"
+import { floor, sqrt as root } from "fogu:math"
+import * as m from "fogu:math"
+export fn area(r) { return math.PI * r * r }
+export const origin = [floor(0.5), root(4), m.abs(-1)]
+export { area as default }</script>
+      <h3 id="grammar-3-declarations" class="text-lg font-semibold mt-8">3. Declarations</h3>
+      <script type="text/x-fogu" data-lang="ebnf" data-title="EBNF">let_decl      = ( "let" | "const" ) let_target "=" expr [ ";" ] ;
+               /* "let" is mutable, "const" is not; the initializer is required */
+let_target    = IDENT [ ":" type ]
+              | "[" let_name { "," let_name } "]" ;   /* no trailing comma */
+let_name      = IDENT | "_" ;
+
+fn_decl       = "fn" IDENT fn_tail ;
+fn_tail       = [ type_params ] param_list [ ":" type ] block ;
+param_list    = "(" [ param { "," param } [ "," ] ] ")" ;
+param         = [ "..." ] IDENT [ ":" type ] [ "=" expr ] ;
+               /* "..." only on the last parameter and never with a default;
+                  parameter names must be distinct */
+type_params   = "<" type_param { "," type_param } ">" ;
+type_param    = IDENT [ ":" type ] ;          /* the bound is parsed and ignored */
+
+struct_decl   = "struct" IDENT [ type_params ] "{" { struct_member } "}" ;
+struct_member = "embed" IDENT                         /* no ";" allowed after it */
+              | "fn" IDENT fn_tail                    /* method */
+              | IDENT param_list [ ":" type ] block   /* method without "fn" */
+              | IDENT [ ":" type ] [ "=" expr ] [ ";" ] ;   /* field */
+               /* a method named "new" is the constructor; members are not
+                  separated by commas */
+
+interface_decl   = "interface" IDENT [ type_params ]
+                   "{" { interface_member [ ";" | "," ] } "}" ;
+interface_member = "embed" IDENT
+                 | [ "fn" ] IDENT ":" type                         /* field */
+                 | [ "fn" ] IDENT "(" [ iface_param { "," iface_param } [ "," ] ] ")"
+                   [ ":" type ] ;                                  /* method */
+iface_param      = [ "..." ] IDENT [ ":" type ] ;</script>
+      <script type="text/x-fogu">let count: int = 0
+const [first, _] = [1, 2]
+fn add<T>(a: T, b: T = 1, ...rest: int): T { return a + b }
+struct Base { id = 0 }
+struct Point<T> { embed Base
+  x: int = 0; tag: T
+  new(x) { this.x = x }
+  fn norm(): int { return this.x } }
+interface Named { fn label(...parts) }
+interface Shape { area(): float; name: str, embed Named }
+print(count, first, add(1), new Point<str>(3).norm())</script>
+      <h3 id="grammar-4-types" class="text-lg font-semibold mt-8">4. Types</h3>
+      <p class="mt-3">Type annotations appear after <code>:</code> in <code>let</code>/<code>const</code>, parameters, return types, struct fields and interface members.</p>
+      <script type="text/x-fogu" data-lang="ebnf" data-title="EBNF">type          = type_postfix { ( "|" | "||" ) type_postfix } ;     /* union */
+type_postfix  = type_atom { "?" } ;                                /* optional */
+type_atom     = "(" type { "," type } ")"    /* one item: grouping; more: tuple */
+              | "nil"
+              | "fn" [ "(" [ type { "," type } [ "," ] ] ")" [ ":" type ] ]
+              | "chan" [ type_args ]
+              | IDENT [ type_args ] ;
+type_args     = "<" type { "," type } ">" ;
+               /* a ">>" or ">>=" token closing two lists is split by the parser */
+
+/* Type names are plain identifiers: "int", "float", "str", "bool", "list",
+   "map", "error", sized names such as "u8", "i64", "f32", struct and
+   interface names are all the IDENT alternative. "any" and the type
+   parameters in scope are erased to "any". */</script>
+      <script type="text/x-fogu">let a: int? = nil
+let b: int | str = "x"
+let c: map<str, list<list<int>>> = {k: [[1]]}
+let f: fn(int, int): int = (x, y) => x + y
+fn pair(): (int, error) { return 1, nil }
+print(a, b, c, f(1, 2), pair())</script>
+      <h3 id="grammar-5-statements" class="text-lg font-semibold mt-8">5. Statements</h3>
+      <script type="text/x-fogu" data-lang="ebnf" data-title="EBNF">statement     = let_decl
+              | fn_decl              /* "fn" followed by an identifier */
+              | struct_decl
+              | interface_decl
+              | import_stmt
+              | export_stmt
+              | if_stmt
+              | while_stmt
+              | loop_stmt
+              | for_stmt
+              | match_stmt
+              | select_stmt
+              | return_stmt
+              | "break" [ ";" ]
+              | "continue" [ ";" ]
+              | block                /* "{" at statement start is always a block */
+              | send_stmt
+              | expr_stmt ;
+
+block         = "{" { ";" } { statement { ";" } } "}" ;
+
+if_stmt       = "if" expr block [ "else" ( if_stmt | block ) ] ;
+while_stmt    = "while" expr block ;
+loop_stmt     = "loop" block ;                /* same as: while true block */
+for_stmt      = "for" IDENT [ "," IDENT ] "in" expr block ;
+
+match_stmt    = "match" expr match_body ;     /* match_body: section 7 */
+
+return_stmt   = "return" [ expr { "," expr } ] [ ";" ] ;
+               /* no value when ";", "}", end of file or a line break follows
+                  "return"; several values form a tuple */
+
+send_stmt     = expr "<-" expr [ ";" ] ;      /* "<-" on the same line as the
+                                                 end of the left expression */
+expr_stmt     = expr [ ";" ] ;                /* includes assignments */
+
+select_stmt   = "select" "{" { select_case } "}" ;
+select_case   = "case" "<-" unary ":" case_body               /* receive, discard */
+              | "case" IDENT "=" "<-" unary ":" case_body     /* receive, bind */
+              | "case" expr "<-" expr ":" case_body           /* send */
+              | "default" ":" case_body ;
+case_body     = { statement } ;   /* up to the next "case", "default" or "}" */
+
+/* Assignment is an expression (section 6); as a statement it has the forms */
+assignment    = assign_target assign_op expr ;
+assign_target = IDENT | postfix "." field_name | postfix "[" expr "]" ;
+assign_op     = "=" | "+=" | "-=" | "*=" | "/=" | "%="
+              | "&=" | "|=" | "^=" | "<<=" | ">>=" ;</script>
+      <script type="text/x-fogu">let total = 0
+for i, v in [1, 2, 3] { if v % 2 == 0 { continue } else { total += v + i } }
+while total > 100 { total >>= 1 }
+loop { break }
+let c = chan(1); c <- total
+select { case v = <-c: print(v) default: print("empty") }</script>
+      <h3 id="grammar-6-expressions" class="text-lg font-semibold mt-8">6. Expressions</h3>
+      <p class="mt-3">Precedence, from lowest (binds loosest) to highest. Each level is one parser function, and each function calls the next one for its operands.</p>
+      <div class="overflow-x-auto mt-4">
+        <table class="w-full text-sm border-collapse">
+          <thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Level</th><th class="py-2 pr-4">Parser function</th><th class="py-2 pr-4">Operators</th><th class="py-2 pr-4">Associativity</th></tr></thead>
+          <tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60">
+            <tr><td class="py-2 pr-4">1</td><td class="py-2 pr-4"><code>parse_assignment</code></td><td class="py-2 pr-4"><code>=</code> <code>+=</code> <code>-=</code> <code>*=</code> <code>/=</code> <code>%=</code> <code>&amp;=</code> <code>|=</code> <code>^=</code> <code>&lt;&lt;=</code> <code>&gt;&gt;=</code></td><td class="py-2 pr-4">right</td></tr>
+            <tr><td class="py-2 pr-4">2</td><td class="py-2 pr-4"><code>parse_range</code></td><td class="py-2 pr-4"><code>..</code></td><td class="py-2 pr-4">none (at most one)</td></tr>
+            <tr><td class="py-2 pr-4">3</td><td class="py-2 pr-4"><code>parse_or</code></td><td class="py-2 pr-4"><code>||</code> <code>??</code></td><td class="py-2 pr-4">left</td></tr>
+            <tr><td class="py-2 pr-4">4</td><td class="py-2 pr-4"><code>parse_and</code></td><td class="py-2 pr-4"><code>&amp;&amp;</code></td><td class="py-2 pr-4">left</td></tr>
+            <tr><td class="py-2 pr-4">5</td><td class="py-2 pr-4"><code>parse_equality</code></td><td class="py-2 pr-4"><code>==</code> <code>!=</code></td><td class="py-2 pr-4">left</td></tr>
+            <tr><td class="py-2 pr-4">6</td><td class="py-2 pr-4"><code>parse_comparison</code></td><td class="py-2 pr-4"><code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code></td><td class="py-2 pr-4">left</td></tr>
+            <tr><td class="py-2 pr-4">7</td><td class="py-2 pr-4"><code>parse_term</code></td><td class="py-2 pr-4"><code>+</code> <code>-</code> <code>|</code> <code>^</code></td><td class="py-2 pr-4">left</td></tr>
+            <tr><td class="py-2 pr-4">8</td><td class="py-2 pr-4"><code>parse_factor</code></td><td class="py-2 pr-4"><code>*</code> <code>/</code> <code>%</code> <code>&lt;&lt;</code> <code>&gt;&gt;</code> <code>&amp;</code></td><td class="py-2 pr-4">left</td></tr>
+            <tr><td class="py-2 pr-4">9</td><td class="py-2 pr-4"><code>parse_power</code></td><td class="py-2 pr-4"><code>**</code></td><td class="py-2 pr-4">right</td></tr>
+            <tr><td class="py-2 pr-4">10</td><td class="py-2 pr-4"><code>parse_unary</code></td><td class="py-2 pr-4">prefix <code>-</code> <code>!</code> <code>~</code> <code>&lt;-</code></td><td class="py-2 pr-4">right (prefix)</td></tr>
+            <tr><td class="py-2 pr-4">11</td><td class="py-2 pr-4"><code>parse_postfix</code></td><td class="py-2 pr-4">call <code>()</code> index <code>[]</code> <code>.</code> <code>?.</code> postfix <code>?</code></td><td class="py-2 pr-4">left</td></tr>
+            <tr><td class="py-2 pr-4">12</td><td class="py-2 pr-4"><code>parse_primary</code></td><td class="py-2 pr-4">literals, names, grouping, ...</td><td class="py-2 pr-4"></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <script type="text/x-fogu" data-lang="ebnf" data-title="EBNF">expr          = assign_expr ;
+assign_expr   = range_expr [ assign_op assign_expr ] ;
+               /* the left side must be an identifier, a "." access or an index */
+range_expr    = or_expr [ ".." or_expr ] ;
+or_expr       = and_expr { ( "||" | "??" ) and_expr } ;
+and_expr      = equality { "&&" equality } ;
+equality      = comparison { ( "==" | "!=" ) comparison } ;
+comparison    = term { ( "<" | "<=" | ">" | ">=" ) term } ;
+term          = factor { ( "+" | "-" | "|" | "^" ) factor } ;
+               /* "-" continues the term only on the same line as its left
+                  operand; "|" is not an operator inside a match pattern */
+factor        = power { ( "*" | "/" | "%" | "<<" | ">>" | "&" ) power } ;
+power         = unary [ "**" power ] ;
+unary         = ( "-" | "!" | "~" | "<-" ) unary | postfix ;
+
+postfix       = primary { call | index | member | opt_member | try } ;
+call          = "(" args ")" ;         /* "(" on the same line as the callee */
+index         = "[" expr "]" ;         /* "[" on the same line as the target */
+member        = "." field_name ;
+opt_member    = "?." field_name ;
+try           = "?" ;                  /* error propagation */
+args          = [ expr { "," expr } [ "," ] ] ;
+field_name    = IDENT | keyword ;
+
+primary       = INT | FLOAT | DURATION | STRING | TEMPLATE
+              | "true" | "false" | "nil"
+              | IDENT
+              | "(" expr ")"
+              | list_lit
+              | map_lit
+              | fn_lit
+              | arrow_fn
+              | new_expr
+              | chan_expr
+              | fg_expr
+              | match_expr
+              | dyn_import ;
+
+list_lit      = "[" [ expr { "," expr } [ "," ] ] "]" ;
+map_lit       = "{" [ map_entry { "," map_entry } [ "," ] ] "}" ;
+map_entry     = ( IDENT | STRING | keyword ) ":" expr ;
+
+fn_lit        = "fn" [ IDENT ] fn_tail ;              /* the name is ignored */
+arrow_fn      = param_list [ ":" type ] "=>" ( block | expr ) ;
+               /* a "{" after "=>" always opens a block */
+
+new_expr      = "new" IDENT [ type_args ] [ "(" args ")" ] ;
+               /* "new" is special only when an identifier follows it;
+                  "(" must be on the same line */
+chan_expr     = "chan" [ "<" /* tokens up to the matching ">" */ ">" ]
+                [ "(" [ IDENT ":" ] [ expr ] ")" ] ;
+fg_expr       = "fg" postfix ;         /* the postfix must be a call */
+match_expr    = "match" expr match_body ;
+dyn_import    = "import" "(" expr ")" ;</script>
+      <script type="text/x-fogu">let m = {name: "fogu", tags: ["a", "b"], if: 1}
+let n = -2 ** 2 + (1 | 2 & 3) << 1
+let inc = (x, by = 1) => x + by
+let twice = fn (x) { return x * 2 }
+let v = m?.meta?.size ?? inc(twice(n))
+print(0..n, m.tags[0], m.if, v, fg twice(2), chan<int>(buffer: 4))</script>
+      <h3 id="grammar-7-patterns" class="text-lg font-semibold mt-8">7. Patterns</h3>
+      <p class="mt-3"><code>match</code> is both a statement (at statement start) and an expression. Both use the same body.</p>
+      <script type="text/x-fogu" data-lang="ebnf" data-title="EBNF">match_body    = "{" { match_arm } "}" ;
+match_arm     = pattern ( "=>" | "->" ) expr [ ";" | "," ] ;
+               /* the arm body is an expression, never a block:
+                  "{" there starts a map literal */
+
+pattern       = pattern_atom { "|" pattern_atom } ;            /* alternatives */
+pattern_atom  = "_"                                            /* wildcard */
+              | IDENT "if" expr                                /* binding + guard */
+              | IDENT   /* binding; only when "=>", "->" or "|" follows */
+              | equality ;                                     /* value pattern */
+               /* a value pattern is any expression of the "equality" level
+                  (literals, negative numbers, names in larger expressions,
+                  calls ...), parsed with "|" disabled; the subject is compared
+                  with its value. There are no range, list, struct or enum
+                  patterns. */</script>
+      <script type="text/x-fogu">fn kind(x) {
+  return match x {
+    0 | 1 => "small"
+    -1 -> "minus one"
+    n if n > 100 => `big ${n}`
+    "s" => "string", nil => "nil"; other => `other ${other}`
+  }
+}
+match kind(5) { "small" => print("s") _ => print("?") }</script>
+      <h3 id="grammar-notes" class="text-lg font-semibold mt-8">Notes</h3>
+      <p class="mt-3">Rules the parser enforces outside the context-free grammar. Each entry names the function in <code>parser.rs</code> (or <code>lexer.rs</code>) that implements it.</p>
+      <ol class="list-decimal pl-6 mt-3 space-y-1">
+        <li><strong>No statement terminator.</strong> Line breaks are not tokens. Every simple statement ends with an optional <code>;</code> (<code>consume_semicolon</code>), and stray <code>;</code> between statements are skipped in programs and blocks (<code>skip_semicolons</code>, called from <code>parse_program</code> and <code>parse_block</code>). Two statements may share a line with nothing between them (<code>let a = 1 let b = 2</code>). Bodies of <code>select</code> cases do not skip stray <code>;</code> (<code>parse_stmt_list_until_case</code>), and a <code>;</code> after <code>embed Name</code> in a struct is an error (<code>parse_struct_body</code>).</li>
+        <li><strong>Line breaks that do matter</strong> (<code>nl_before</code> compares the line of the current token with the previous one). <code>(</code> or <code>[</code> at the start of a line does not continue the previous expression as a call or index (<code>parse_postfix</code>). A binary <code>-</code> at the start of a line is not a subtraction: it starts a new statement or match arm, while <code>+</code> and all other binary operators do continue across lines (<code>parse_term</code>). <code>&lt;-</code> at the start of a line is not a send: it starts a receive expression (<code>parse_stmt</code>). <code>return</code> followed by a line break returns no value (<code>parse_return</code>). <code>new Name</code> followed by <code>(</code> on the next line takes no arguments (<code>parse_primary</code>).</li>
+        <li>**<code>{</code> at statement start is a block**, never a map literal (<code>parse_stmt</code>). In expression position <code>{</code> is always a map literal (<code>parse_primary</code>). There is no struct-literal syntax, so <code>if</code>/<code>while</code>/<code>for</code>/<code>match</code> headers need no special rule: the header expression simply stops before the <code>{</code> of the body, because <code>{</code> is not a postfix or infix token. A header that ends in a map literal still works (<code>if m == {a: 1} { ... }</code>).</li>
+        <li><strong>Arrow function body.</strong> After <code>=&gt;</code>, <code>{</code> always opens a block (<code>parse_arrow_fn</code>); to return a map literal, wrap it in parentheses.</li>
+        <li><strong>Arrow function detection</strong> (<code>arrow_ahead</code>). A <code>(</code> starts an arrow function only if the next token is <code>)</code>, an identifier or <code>...</code>, and the matching <code>)</code> is followed by <code>=&gt;</code>, or by <code>:</code> and then only type-like tokens (identifiers, <code>nil</code>, <code>fn</code>, <code>chan</code>, <code>&lt;</code>, <code>&gt;</code>, <code>&gt;&gt;</code>, <code>|</code>, <code>?</code>, <code>(</code>, <code>)</code>, <code>,</code>) up to <code>=&gt;</code>. Otherwise <code>(</code> is a parenthesised expression. A bare <code>x =&gt; x</code> without parentheses is not accepted.</li>
+        <li>**<code>fn</code> at statement start** is a declaration when an identifier follows, otherwise an anonymous function expression (<code>parse_stmt</code>). In expression position <code>fn name(...) {...}</code> is accepted and the name is dropped (<code>parse_primary</code>).</li>
+        <li>**<code>import</code> at statement start** is a declaration unless <code>(</code> follows; then it is the dynamic <code>import(expr)</code> expression (<code>parse_stmt</code>, <code>parse_primary</code>).</li>
+        <li><strong>Contextual words.</strong> <code>loop</code> is a statement keyword only at statement start directly before <code>{</code> (<code>parse_stmt</code>, <code>parse_loop</code>); <code>new</code> is an operator only directly before an identifier (<code>parse_primary</code>); <code>any</code> is special only as a type name (<code>parse_type_atom</code>). Elsewhere they are ordinary identifiers.</li>
+        <li><strong>Assignment targets.</strong> The left side of <code>=</code> and of the compound operators is parsed as a <code>range_expr</code> and must turn out to be an identifier, a <code>.</code> access or an index; <code>?.</code> chains and everything else are rejected (<code>parse_assignment</code>).</li>
+        <li>**<code>fg</code> needs a call.** The operand of <code>fg</code> is parsed as a postfix expression and must be a call (<code>parse_primary</code>).</li>
+        <li><strong>Optional chaining scope.</strong> A <code>?.</code> makes the whole postfix chain it belongs to optional: the chain is wrapped once at its end, or just before a postfix <code>?</code> (<code>parse_postfix</code>).</li>
+        <li>**<code>|</code> inside patterns.** While a value pattern is parsed the <code>no_pipe</code> flag disables <code>|</code> as bit-or, so it separates alternatives (<code>parse_pattern_atom</code>, <code>parse_term</code>). Guards and arm bodies are parsed with <code>|</code> enabled again.</li>
+        <li><strong>Binding versus value pattern.</strong> A single identifier is a binding only when directly followed by <code>=&gt;</code>, <code>-&gt;</code>, <code>|</code> or <code>if</code>; in any other position it is evaluated as an expression (<code>parse_pattern_atom</code>).</li>
+        <li>**<code>&gt;&gt;</code> in type arguments.** The lexer produces <code>&gt;&gt;</code> (and <code>&gt;&gt;=</code>) as one token; when a type argument list is being closed the parser rewrites it to <code>&gt;</code> (or <code>&gt;=</code>) and consumes one half (<code>close_angle</code>). <code>chan&lt;...&gt;</code> in expression position instead skips tokens while counting <code>&lt;</code>, <code>&gt;</code> and <code>&gt;&gt;</code> (<code>parse_primary</code>).</li>
+        <li><strong>Desugaring of parameters</strong> (<code>parse_param_list</code>, <code>parse_fn_tail</code>, <code>with_prologue</code>). A default <code>p = e</code> becomes the statement <code>p = p ?? e</code> at the start of the body; an annotation <code>p: T</code> becomes a run-time type check there (omitted for <code>any</code> and type parameters); a variadic <code>...p</code> is stored under the name <code>...p</code>, must be last, cannot have a default, and its annotation checks only that it is a <code>list</code>. A return type becomes the first statement of the body.</li>
+        <li><strong>Types are mostly erased</strong> (<code>parse_type_atom</code>, <code>parse_type_params</code>, <code>parse_struct_body</code>). Function types keep only "is a function"; type parameters and their bounds, type arguments of <code>new</code> and <code>chan</code>, and struct field types are parsed and discarded.</li>
+        <li><strong>Other desugarings.</strong> <code>loop { }</code> becomes <code>while true { }</code> (<code>parse_loop</code>); <code>(params) =&gt; expr</code> becomes a function whose body is <code>return expr</code> (<code>parse_arrow_fn</code>); <code>return a, b</code> builds a tuple (<code>parse_return</code>); a method named <code>new</code> in a struct becomes its constructor (<code>parse_struct_body</code>); a unary minus applied to a numeric literal is folded into the literal (<code>parse_unary</code>).</li>
+        <li><strong>Largest negative integer.</strong> <code>9223372036854775808</code> is accepted only directly after a unary <code>-</code> (<code>Lexer::read_number</code>, <code>parse_unary</code>, <code>parse_primary</code>).</li>
+        <li><strong>Duration suffix.</strong> A number is a duration only if the complete word that follows it is a unit; otherwise the number ends and an identifier begins (<code>5kb</code> is <code>5</code> followed by the name <code>kb</code>) (<code>Lexer::duration_unit</code>).</li>
+        <li><strong>Exports.</strong> The same name may not be exported twice in a module (<code>note_export</code>); <code>import { default }</code> must rename it and <code>export { default }</code> is only valid with <code>from</code> (<code>parse_name_list_at</code>, <code>parse_export</code>).</li>
+        <li><strong>Template interpolation.</strong> Each <code>${...}</code> is tokenized separately and must contain exactly one expression (<code>Lexer::read_template</code>, <code>Lexer::read_interpolation</code>, <code>parse_primary</code>).</li>
+      </ol>
+      <h4 id="grammar-not-part-of-the-grammar" class="font-semibold mt-6">Not part of the grammar</h4>
+      <p class="mt-3">Checked against the binary and rejected: <code>enum</code>, type aliases (<code>type T = ...</code>), <code>defer</code>, C-style <code>for</code>, <code>let</code> without an initializer, <code>if</code> as an expression, struct literals (<code>P { x: 1 }</code>; use <code>new P(...)</code>), slice syntax (<code>a[1:2]</code>; <code>a[0..2]</code> parses as an index by a range value), character literals (<code>'a'</code> is a string), size literals (<code>5kb</code>), float literals without a digit on both sides of the dot (<code>1.</code>, <code>.5</code>), range patterns in <code>match</code>, block bodies in <code>match</code> arms, commas between struct members, a trailing comma in <code>let [a, b,]</code>, chained ranges (<code>a..b..c</code>), and arrow functions without parentheses.</p>
+    </section>
+    <!-- GRAMMAR: END -->
+
     <!-- ================= LIBRARY ================= -->
     <!-- STDLIB REFERENCE: BEGIN -->
     <section id="library" data-group="Standard library" data-title="Overview" class="scroll-mt-20 mt-16">

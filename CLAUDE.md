@@ -264,6 +264,9 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
   and more **do not exist yet**. The real status is in `CHECKLIST.md`; check the
   code before assuming anything.
 - `docs/cli.md`, `docs/packages.md`, `docs/jit.md` — reflect the current state.
+- `docs/grammar.md` — the grammar the parser really accepts (EBNF). Update it with every syntax
+  change, then `python docs/tools/gen_grammar.py --check` (its examples through `fogu check`) and
+  `python docs/tools/gen_grammar.py` (the "Grammar" section of `docs.html`, `/docs/grammar` on the site).
 - `docs/bytecode.md` — the design of the bytecode VM (Phase 4) and its "Implementation status":
   read it before touching `runtime/vm/`. `docs/architecture/struct-layouts.md` — how struct
   instances are stored (a layout per type, a vector per instance) and the VM's inline caches.
