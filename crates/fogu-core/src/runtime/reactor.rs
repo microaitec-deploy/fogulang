@@ -35,6 +35,12 @@ struct Entry {
     /// It became readable while nobody waited for that: the next reader
     /// need not wait (see [`take_readable`]).
     ready_read: bool,
+    /// The peer closed its side (or the socket has an error): reported once
+    /// by the kernel, possibly together with the last bytes. A receive that
+    /// took those bytes looks like one that emptied the socket, yet the next
+    /// one has the end of the stream to report and no new event will say so:
+    /// from here on the socket always counts as readable.
+    hup: bool,
     /// Nobody waits behind a gate, but its owner wants to hear when it
     /// becomes readable (see [`notify_readable`]).
     notify: bool,
@@ -137,7 +143,7 @@ impl Reactor {
             return None;
         }
         let e = self.waits.get_mut(fd as usize)?;
-        if !write && std::mem::take(&mut e.ready_read) {
+        if !write && (std::mem::take(&mut e.ready_read) || e.hup) {
             // something arrived meanwhile: try again right away
             return Some(Gate::new(std::sync::atomic::AtomicBool::new(true)));
         }
@@ -204,6 +210,9 @@ impl Reactor {
             let Some(e) = self.waits.get_mut(fd as usize) else { continue };
             // an error or a hang-up is news for both directions: the retry reports it
             let broken = bits & (libc::EPOLLERR | libc::EPOLLHUP) as u32 != 0;
+            if broken || bits & libc::EPOLLRDHUP as u32 != 0 {
+                e.hup = true;
+            }
             if broken || bits & (libc::EPOLLIN | libc::EPOLLRDHUP) as u32 != 0 {
                 match e.read.take() {
                     Some(g) => {
@@ -304,7 +313,7 @@ pub fn take_readable(fd: RawFd) -> bool {
         let mut r = r.borrow_mut();
         let Some(r) = r.as_mut() else { return true };
         match r.waits.get_mut(fd as usize) {
-            Some(e) if e.added => std::mem::take(&mut e.ready_read),
+            Some(e) if e.added => std::mem::take(&mut e.ready_read) || e.hup,
             _ => true,
         }
     })
@@ -322,7 +331,7 @@ pub fn notify_readable(fd: RawFd) -> Notify {
             return Notify::Unwatchable;
         }
         let e = &mut r.waits[fd as usize];
-        if std::mem::take(&mut e.ready_read) {
+        if std::mem::take(&mut e.ready_read) || e.hup {
             return Notify::Ready;
         }
         if !e.notify {

@@ -1,0 +1,12 @@
+lines 300
+frames aaaa bbbb cccc
+line after frames
+bytes xyz
+last tail nil
+alone [2001, no newline at the end] [2001, no newline at the end]
+limited [2, row]
+with a task [2001, no newline at the end] [2001, no newline at the end]
+read(n) true true true true
+invalid utf-8 [3, 2]
+written 2 3 2 1
+true

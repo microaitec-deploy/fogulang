@@ -449,7 +449,7 @@ sleeping, and no receive on a socket known to be drained. TCP 21k → 89k msg/s 
 One interpreter thread serves every connection, so beyond some hundred connections Go (all
 cores) pulls ahead of a single-threaded Fogu server (256 connections: 61k vs 389k msg/s); with
 `tcpListen(addr, { reusePort: true })` in one `sync.Worker` per core Fogu does 471k. After 0.8.3 the plain HTTP server moved to the interpreter thread too (`docs/architecture/direct-http.md`): idle connections hold no task, a few worker tasks serve the ones the reactor reports. One connection 2.4k → 9.2k req/s (Go 3.7k), 64 connections 39k → 56–59k, 1024 connections 32k → 36–41k with a quarter of the CPU and 16 MB instead of 95; with `reusePort`, 4 workers 111k and 8 workers 146k at 1024 connections (Go 91k). **Known gap**: `http.serve` with a trivial handler at 256 connections is 8–18% behind 0.8.3's I/O threads (one core) — use workers.
-`fogu:vm` runs the benchmarks within 0–10% of
+Buffered reads (after 0.8.3): `readLine` / `readExact` of `fogu:net` no longer copy the rest of the receive buffer per call (lines in bursts 1.5 → 0.6 µs each), streams answer from their buffer — or when nothing else could run — without a trip to the pool (117 MB in 64 KiB chunks: 89 → 22 ms; 2M lines: 930 → 490 ms). A hang at the end of a stream is fixed: a short receive that also took the peer's last bytes was read as "socket empty" although the close had already been reported; the reactor keeps the hang-up. `fogu:vm` runs the benchmarks within 0–10% of
 running them directly.
 
 **Size** (after the speed work, same benchmarks): 73.9 MB → 52.2 MB for Linux x64 (Windows

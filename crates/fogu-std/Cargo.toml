@@ -13,6 +13,8 @@ fogu-core = { path = "../fogu-core" }
 bytes = { version = "1", optional = true }
 base64 = "0.22"
 regex = "1"
+# searching bytes (the end of a line in a stream or a socket buffer)
+memchr = "2"
 futures-lite = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

@@ -1,0 +1,78 @@
+// Buffered reads: many lines and frames received in one burst are taken out
+// of the buffer one by one (fogu:net), and a file stream answers from its
+// buffer on the interpreter's thread (fogu:fs), alone or with other tasks.
+import net from "fogu:net"
+import fs from "fogu:fs"
+import time from "fogu:time"
+
+const server = net.tcpListen("127.0.0.1:0")?
+fg fn() {
+    const c = net.tcpConnect(server.addr)?
+    let burst = ""
+    for i in 0..300 { burst = burst + "line " + str(i) + "\r\n" }
+    // lines, then 4-byte frames, a line, raw bytes and a last line without its end
+    c.write(burst + "aaaabbbbcccc" + "after frames\n" + "xyz" + "tail")?
+    c.close()
+}()
+const [conn, aerr] = server.accept()
+let ok = 0
+for i in 0..300 {
+    if conn.readLine()? == "line " + str(i) { ok = ok + 1 }
+}
+print("lines", ok)
+print("frames", conn.readExact(4)?.text(), conn.readExact(4)?.text(), conn.readExact(4)?.text())
+print("line", conn.readLine()?)
+print("bytes", conn.read(3)?.text())
+print("last", conn.readLine()?, conn.readLine()?)
+conn.close()
+
+// ---------- file streams ----------
+let text = ""
+for i in 0..2000 {
+    text = text + "row " + str(i)
+    if i % 2 == 0 { text = text + "\r" }
+    text = text + "\n"
+}
+fs.writeText("buffered.tmp.txt", text + "no newline at the end")?
+
+fn count(opts) {
+    let n = 0
+    let last = ""
+    for line in fs.createReadStream("buffered.tmp.txt", opts)? {
+        n = n + 1
+        last = line
+    }
+    return [n, last]
+}
+print("alone", count({ lines: true }), count({ lines: true, bufferSize: 16 }))
+// `end` stops in the middle of a line
+print("limited", count({ lines: true, end: 9 }))
+
+// the same with another task running (reads that would wait go to the pool)
+let ticks = 0
+let stop = false
+fg fn() { while !stop { ticks = ticks + 1; time.delay(1ms) } }()
+print("with a task", count({ lines: true }), count({ lines: true, bufferSize: 16 }))
+const s = fs.createReadStream("buffered.tmp.txt", { bufferSize: 64 })?
+let size = 0
+while true {
+    const b = s.read(100)?
+    if b == nil { break }
+    size = size + len(b)
+}
+stop = true
+print("read(n)", size == len(text) + 21, s.bytesRead == size, s.read()? == nil, s.readLine()? == nil)
+
+// text that is not valid UTF-8 is still a line
+const bin = fs.createWriteStream("buffered-bin.tmp.txt")?
+bin.write(bytes([104, 105, 255, 10, 111, 107, 10]))?
+bin.close()
+const lines = []
+for line in fs.createReadStream("buffered-bin.tmp.txt", { lines: true })? { lines.push(len(line)) }
+print("invalid utf-8", lines)
+
+// writes: text, a buffer and a list of bytes
+const w = fs.createWriteStream("buffered-out.tmp.txt")?
+print("written", w.write("ab")?, w.writeLine(bytes("cd"))?, w.write([101, 10])?, w.writeLine("")?)
+w.close()
+print(fs.readText("buffered-out.tmp.txt")? == "abcd\ne\n\n")

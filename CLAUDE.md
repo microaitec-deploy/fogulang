@@ -138,6 +138,8 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
   parks the task behind a `sched::Gate` (`offer_gate` / `wait_until_on`). A socket registered
   with tokio wakes an I/O thread for every packet — keep plain sockets out of it. Registration is
   edge-triggered and permanent: a reader may only wait after a receive found the socket empty.
+  A short receive is taken as "empty" (`drained`), except after a hang-up, which the reactor
+  remembers (`Entry::hup`): the end of the stream gets no second event.
   The built-in profiler (`FOGU_PPROF`) can crash when it samples a task's stack under load.
 - On Linux a plain HTTP server (`http.serve` / `app.listen` without TLS, static mounts or
   Socket.IO) is served the same way (`native/network/http_direct.rs`,

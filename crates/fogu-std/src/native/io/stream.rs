@@ -118,6 +118,29 @@ impl ReadState {
         Ok(Some(line))
     }
 
+    /// The next line as a value when it is whole in the buffer (the usual
+    /// case of a loop over lines): made straight from the buffer, one
+    /// allocation at most. `None`: use [`ReadState::line`].
+    fn buffered_line(&mut self) -> Option<Value> {
+        let src = self.src.as_mut()?;
+        let buf = src.buffer();
+        let end = memchr::memchr(b'\n', buf)?;
+        if self.remaining.is_some_and(|r| (end as u64) >= r) {
+            return None;
+        }
+        let mut line = &buf[..end];
+        if line.last() == Some(&b'\r') {
+            line = &line[..line.len() - 1];
+        }
+        let v = match std::str::from_utf8(line) {
+            Ok(s) => Value::Str(s.into()),
+            Err(_) => Value::Str(String::from_utf8_lossy(line).into_owned().into()),
+        };
+        src.consume(end + 1);
+        self.account(end + 1);
+        Some(v)
+    }
+
     fn all(&mut self) -> std::io::Result<Vec<u8>> {
         let mut out = Vec::new();
         while let Some(c) = self.chunk(CHUNK)? {
@@ -141,7 +164,7 @@ impl ReadState {
         match self.src.as_ref() {
             Some(s) => {
                 let b = s.buffer();
-                !b.is_empty() && (!want_line || b.contains(&b'\n'))
+                !b.is_empty() && (!want_line || memchr::memchr(b'\n', b).is_some())
             }
             None => true,
         }
@@ -224,7 +247,11 @@ fn opt_buffer(v: Option<Vec<u8>>) -> Value {
 
 fn opt_text(v: Option<Vec<u8>>) -> Value {
     match v {
-        Some(b) => Value::Str(String::from_utf8_lossy(&b).into_owned().into()),
+        // (valid text becomes the string as it is: no second copy)
+        Some(b) => match String::from_utf8(b) {
+            Ok(s) => Value::Str(s.into()),
+            Err(e) => Value::Str(String::from_utf8_lossy(e.as_bytes()).into_owned().into()),
+        },
         None => Value::Nil,
     }
 }
@@ -260,6 +287,13 @@ impl FoguObject for ReadStreamValue {
     }
 
     fn start_async(&mut self, method: &str, args: &[Value]) -> Option<Result<Poller, String>> {
+        // what the buffer can answer needs no waiting, and with no other
+        // task to run there is nobody to keep waiting (as `rt::offload`):
+        // `call` does it here, without a trip to the pool and back
+        let want_line = method == "readLine" || (method == "next" && self.lines);
+        if matches!(method, "read" | "readLine" | "next") && !self.busy.load(Ordering::Acquire) && (!rt::concurrent() || self.lock().buffered(want_line)) {
+            return None;
+        }
         Some(match method {
             "read" => {
                 let n = match size_arg(args, "read") {
@@ -310,6 +344,23 @@ impl FoguObject for ReadStreamValue {
 
     fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
         match method {
+            // answered on this thread (see `start_async`)
+            "read" | "readLine" | "next" => {
+                if self.busy.load(Ordering::Acquire) {
+                    return Err(format!("{}.{}: another task is reading this stream", self.kind, method));
+                }
+                let kind = self.kind;
+                let fail = |e: std::io::Error| io_err!("{}.{}: {}", kind, method, e);
+                let mut s = self.lock();
+                if method == "readLine" || (method == "next" && self.lines) {
+                    if let Some(v) = s.buffered_line() {
+                        return Ok(v);
+                    }
+                    return s.line().map(opt_text).map_err(fail);
+                }
+                let n = if method == "read" { size_arg(args, "read")? } else { CHUNK };
+                s.chunk(n).map(opt_buffer).map_err(fail)
+            }
             "close" | "destroy" => {
                 self.lock().src = None;
                 Ok(Value::Nil)
@@ -448,18 +499,28 @@ impl FoguObject for WriteStreamValue {
             // written out when it is full, at flush() and at close()
             "write" | "writeLine" => {
                 crate::native::util::max_args(args, 1, method)?;
-                let mut data = match args.first() {
-                    Some(v) => bytes_of(v, method)?,
-                    None => return Err(format!("{}(data) expects 1 argument", method)),
+                let Some(v) = args.first() else { return Err(format!("{}(data) expects 1 argument", method)) };
+                let line: &[u8] = if method == "writeLine" { b"\n" } else { b"" };
+                // text and buffers go to the file's buffer as they are
+                let owned;
+                let held;
+                let data: &[u8] = match v {
+                    Value::Str(s) => s.as_bytes(),
+                    Value::Buffer(b) => {
+                        held = b.borrow();
+                        &held
+                    }
+                    other => {
+                        owned = bytes_of(other, method)?;
+                        &owned
+                    }
                 };
-                if method == "writeLine" {
-                    data.push(b'\n');
-                }
                 let mut f = self.file.lock().unwrap_or_else(|e| e.into_inner());
                 let Some(w) = f.as_mut() else { return Err(io_err!("WriteStream.{}: the stream is closed", method)) };
-                w.write_all(&data).map_err(|e| io_err!("WriteStream.{}: {}: {}", method, self.path, e))?;
-                self.written.fetch_add(data.len(), Ordering::Relaxed);
-                Ok(Value::Int(data.len() as i64))
+                w.write_all(data).and_then(|()| w.write_all(line)).map_err(|e| io_err!("WriteStream.{}: {}: {}", method, self.path, e))?;
+                let n = data.len() + line.len();
+                self.written.fetch_add(n, Ordering::Relaxed);
+                Ok(Value::Int(n as i64))
             }
             "flush" => {
                 let mut f = self.file.lock().unwrap_or_else(|e| e.into_inner());

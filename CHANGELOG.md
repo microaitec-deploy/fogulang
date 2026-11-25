@@ -25,6 +25,17 @@ be incompatible changes (spec §75).
   - Stricter parsing: a request with both `Content-Length` and `Transfer-Encoding`, conflicting
     or non-numeric lengths, or a transfer encoding that does not end in `chunked` is refused
     (400); a response header that is not a valid header is not sent.
+- **`fogu:net`: lines and frames out of a burst** — `readLine` / `readExact` on a TCP connection
+  took their bytes by copying the rest of the receive buffer every time (the cost grew with what
+  was buffered). The buffer now has a read position: 300k lines sent in bursts 1.5 µs → 0.6 µs
+  per line, 4-byte frames 1.2 µs → 0.5 µs. A line of valid UTF-8 becomes the string without a
+  second copy; an operation that completes at once allocates one closure less.
+- **Streams (`fogu:fs`, `http.stream`)**: `read`, `readLine` and `for … in stream` are answered on
+  the interpreter's thread when the bytes are in the stream's buffer, and also — as `rt::offload`
+  already did — when no other task could run meanwhile, instead of a trip to the pool and back
+  for every 64 KiB. A buffered line is made straight from the buffer (`memchr`, one allocation).
+  117 MB file, 2M lines: chunks 89 → 22 ms, `read(n)` 117 → 23 ms, lines 930 → 490 ms,
+  `readLine()` 1710 → 1140 ms. `WriteStream.write` passes text and buffers on without a copy.
 - `fogu:web`: the dispatch of a request makes fewer maps (`fogu:topcoat`'s per-request state is
   created when first used).
 
@@ -36,6 +47,10 @@ be incompatible changes (spec §75).
 
 ### Fixed
 
+- `fogu:net` (Linux): a read could wait for ever at the end of a stream when the peer's last
+  bytes and its close arrived together — the receive that took the bytes looked like one that
+  emptied the socket, and no further event announced the end. The reactor now remembers a
+  hang-up (`Entry::hup`): such a socket always counts as readable. (Present in 0.8.3.)
 - A server started right before `Fogu.signal.wait()` is served even when nothing else is
   called in between.
 

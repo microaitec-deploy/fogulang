@@ -251,7 +251,8 @@ fn direct<T: 'static>(
     let mut finish = Some(finish);
     // every 64th operation in a row lets the other tasks run first
     let mut turn = fast_turn();
-    let mut poller: Poller = Box::new(move || {
+    // (boxed only when it has to wait: usually the first try completes)
+    let mut poller = move || {
         if !turn {
             turn = true;
             return None;
@@ -287,11 +288,10 @@ fn direct<T: 'static>(
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => None,
             Err(e) => Some(Err(io_err!("{}: {}", what, e))),
         }
-    });
-    // usually ready at once
+    };
     match poller() {
         Some(r) => done(r),
-        None => poller,
+        None => Box::new(poller),
     }
 }
 
@@ -302,6 +302,9 @@ fn direct<T: 'static>(
 struct RawTcp {
     sock: std::net::TcpStream,
     buf: RefCell<Vec<u8>>,
+    /// Where the unconsumed bytes of `buf` start: taking a line or a frame
+    /// out of a burst moves this, it does not copy the rest of the burst.
+    pos: std::cell::Cell<usize>,
     /// The last receive took everything the socket had (and the reactor
     /// watches it since): unless the reactor saw more arrive, the next one
     /// would find nothing.
@@ -364,7 +367,12 @@ impl RawTcp {
                 self.watched.set(reactor::watch(self.fd()));
             }
             self.drained.set(got > 0 && got < s.len() && self.watched.get());
-            self.buf.borrow_mut().extend_from_slice(&s[..got]);
+            let mut buf = self.buf.borrow_mut();
+            let pos = self.pos.replace(0);
+            if pos > 0 {
+                buf.drain(..pos);
+            }
+            buf.extend_from_slice(&s[..got]);
             Ok(got)
         })
     }
@@ -372,11 +380,31 @@ impl RawTcp {
     /// The first `n` unconsumed bytes.
     fn take(&self, n: usize) -> Vec<u8> {
         let mut buf = self.buf.borrow_mut();
-        if n >= buf.len() {
-            return std::mem::take(&mut *buf);
+        let pos = self.pos.get();
+        if n >= buf.len() - pos {
+            self.pos.set(0);
+            // (the usual read: everything received, handed over as it is)
+            if pos == 0 {
+                return std::mem::take(&mut *buf);
+            }
+            let out = buf[pos..].to_vec();
+            *buf = Vec::new();
+            return out;
         }
-        let rest = buf.split_off(n);
-        std::mem::replace(&mut *buf, rest)
+        self.pos.set(pos + n);
+        buf[pos..pos + n].to_vec()
+    }
+
+    /// Bytes received and not consumed yet.
+    fn pending(&self) -> usize {
+        self.buf.borrow().len() - self.pos.get()
+    }
+
+    /// Where the first line of the unconsumed bytes ends (past its `\n`),
+    /// looking from `seen` on.
+    fn line_end(&self, seen: usize) -> Option<usize> {
+        let buf = self.buf.borrow();
+        memchr::memchr(b'\n', &buf[self.pos.get() + seen..]).map(|i| seen + i + 1)
     }
 
     /// The operations of a stream, done directly.
@@ -416,7 +444,7 @@ impl RawTcp {
                 let text = method == "readText";
                 let mut first = true;
                 Some(Ok(direct(if text { "readText" } else { "read" }, false, fd, timeout, move || {
-                    if raw.buf.borrow().is_empty() && raw.fill(&mut first)? == 0 {
+                    if raw.pending() == 0 && raw.fill(&mut first)? == 0 {
                         return Ok(Vec::new());
                     }
                     Ok(raw.take(n))
@@ -440,7 +468,7 @@ impl RawTcp {
                 };
                 let mut first = true;
                 Some(Ok(direct("readExact", false, fd, timeout, move || {
-                    while raw.buf.borrow().len() < n {
+                    while raw.pending() < n {
                         if raw.fill(&mut first)? == 0 {
                             return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "early eof"));
                         }
@@ -468,11 +496,10 @@ impl RawTcp {
                 let mut first = true;
                 Some(Ok(direct("readLine", false, fd, timeout, move || {
                     loop {
-                        let end = raw.buf.borrow()[seen..].iter().position(|&b| b == b'\n').map(|i| seen + i + 1);
-                        if let Some(end) = end {
+                        if let Some(end) = raw.line_end(seen) {
                             return Ok(Some(raw.take(end)));
                         }
-                        seen = raw.buf.borrow().len();
+                        seen = raw.pending();
                         if raw.fill(&mut first)? == 0 {
                             // the end of the stream ends the last line too
                             let rest = raw.take(usize::MAX);
@@ -487,7 +514,11 @@ impl RawTcp {
                             b.pop();
                         }
                     }
-                    Value::Str(String::from_utf8_lossy(&b).into())
+                    // (valid text becomes the string as it is: no second copy)
+                    match String::from_utf8(b) {
+                        Ok(s) => Value::Str(s.into()),
+                        Err(e) => Value::Str(String::from_utf8_lossy(e.as_bytes()).into()),
+                    }
                 })))
             }
             _ => None,
@@ -623,7 +654,7 @@ impl TcpStreamValue {
         // Linux: out of the runtime of the I/O threads, into this thread's reactor
         #[cfg(target_os = "linux")]
         {
-            let raw = s.into_std().ok().map(|sock| std::rc::Rc::new(RawTcp { sock, buf: RefCell::new(Vec::new()), drained: std::cell::Cell::new(false), watched: std::cell::Cell::new(false) }));
+            let raw = s.into_std().ok().map(|sock| std::rc::Rc::new(RawTcp { sock, buf: RefCell::new(Vec::new()), pos: std::cell::Cell::new(0), drained: std::cell::Cell::new(false), watched: std::cell::Cell::new(false) }));
             return NativeObjectRef::new(TcpStreamValue {
                 raw,
                 reader: None,
@@ -682,7 +713,7 @@ impl TcpStreamValue {
                     return Err(io_err!("{}: the connection is in use by another task", what));
                 }
             };
-            let pending = raw.buf.borrow().len();
+            let pending = raw.pending();
             if pending > 0 {
                 self.raw = Some(std::rc::Rc::new(raw));
                 return Err(io_err!("{}: {} bytes were received but not read yet", what, pending));
