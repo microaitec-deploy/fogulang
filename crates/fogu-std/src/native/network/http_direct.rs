@@ -4,8 +4,9 @@
 //!
 //! A request never leaves the thread that runs its handler: the listener and
 //! every connection are sockets of this thread's reactor (`runtime/reactor.rs`),
-//! each connection is one task that reads a request, calls the handler and
-//! writes the answer. There is no queue between threads, no wake-up of
+//! a connection between requests holds no task (`IDLE`), and a few worker
+//! tasks serve the ones the reactor reports: read a request, call the handler,
+//! write the answer. There is no queue between threads, no wake-up of
 //! another thread and no allocation freed by a thread that did not make it.
 //! A program that wants more cores starts one server per `sync.Worker` with
 //! `reusePort` (the kernel spreads the connections).
@@ -17,6 +18,7 @@
 //! See `docs/architecture/direct-http.md`.
 
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::io::{ErrorKind, Read};
 use std::mem::MaybeUninit;
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -99,6 +101,18 @@ thread_local! {
     /// How often the sweeper looks: a quarter of the shortest timeout, 10 ms to 1 s.
     static TICK: Cell<Duration> = const { Cell::new(Duration::from_secs(1)) };
     static SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    /// Connections between requests, by descriptor: no task, no buffer; the
+    /// reactor says when one has something to read (`reactor::notify_readable`).
+    static IDLE: RefCell<Vec<Option<Box<Conn>>>> = const { RefCell::new(Vec::new()) };
+    /// Connections with something to read, waiting for a worker task.
+    static READY: RefCell<VecDeque<Box<Conn>>> = const { RefCell::new(VecDeque::new()) };
+    /// Worker tasks alive, those inside a request and those waiting for work.
+    static WORKERS: Cell<usize> = const { Cell::new(0) };
+    static SERVING: Cell<usize> = const { Cell::new(0) };
+    static WAITING: Cell<usize> = const { Cell::new(0) };
+    /// Output buffers of idle connections, for the next ones that answer.
+    static OUTS: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    static FDS: RefCell<Vec<RawFd>> = const { RefCell::new(Vec::new()) };
     /// The `date` header of the current second.
     static DATE: RefCell<(u64, String)> = const { RefCell::new((0, String::new())) };
 }
@@ -152,26 +166,24 @@ fn accept_loop(server: Server, it: &Interpreter, env: Rc<RefCell<Environment>>) 
                     stream: RefCell::new(None),
                 });
                 CONNS.with(|c| c.borrow_mut().insert(fd, Rc::clone(&shared)));
-                let conn = Conn {
+                let conn = Box::new(Conn {
                     shared,
                     fd,
                     server: server.id,
                     opts: Rc::clone(&server.opts),
+                    env: Rc::clone(&env),
                     remote: remote.to_string(),
                     buf: Vec::new(),
                     out: Vec::new(),
                     drained: false,
                     watched: false,
-                };
-                let env = Rc::clone(&env);
-                if let Err(e) = it.spawn_task(Box::new(move |it| {
-                    let mut conn = conn;
-                    // (an error here is the scheduler shutting down)
-                    let _ = conn.serve(it, &env);
-                    Ok(())
-                })) {
-                    eprintln!("[http] cannot start a connection: {}", e);
-                    continue;
+                });
+                // a connection waits for its first request as for any other:
+                // without a task (a worker serves it when something arrives)
+                conn.shared.arm(Phase::Head, Some(server.opts.header_timeout));
+                park(conn);
+                if WORKERS.with(|w| w.get()) == 0 {
+                    spawn_worker(it);
                 }
                 if !SWEEPING.with(|s| s.replace(true)) {
                     let started = it.spawn_task(Box::new(|_| {
@@ -202,6 +214,122 @@ fn accept_loop(server: Server, it: &Interpreter, env: Rc<RefCell<Environment>>) 
     }
 }
 
+/// Puts a connection that has nothing to read aside until it has.
+fn park(mut conn: Box<Conn>) {
+    if conn.out.capacity() > 0 {
+        let out = std::mem::take(&mut conn.out);
+        OUTS.with(|o| {
+            let mut o = o.borrow_mut();
+            if o.len() < 64 {
+                o.push(out);
+            }
+        });
+    }
+    let fd = conn.fd;
+    match reactor::notify_readable(fd) {
+        reactor::Notify::Armed => {
+            conn.watched = true;
+            IDLE.with(|i| {
+                let mut i = i.borrow_mut();
+                if fd as usize >= i.len() {
+                    i.resize_with(fd as usize + 1, || None);
+                }
+                i[fd as usize] = Some(conn);
+            });
+        }
+        // something arrived meanwhile
+        reactor::Notify::Ready => {
+            conn.drained = false;
+            READY.with(|r| r.borrow_mut().push_back(conn));
+            reactor::kick_ready();
+        }
+        reactor::Notify::Unwatchable => {}
+    }
+}
+
+/// The next connection with something to read.
+fn next_ready() -> Option<Box<Conn>> {
+    if let Some(conn) = READY.with(|r| r.borrow_mut().pop_front()) {
+        return Some(conn);
+    }
+    FDS.with(|f| {
+        let mut fds = f.borrow_mut();
+        reactor::take_ready(&mut fds);
+        if fds.is_empty() {
+            return;
+        }
+        IDLE.with(|i| {
+            let mut i = i.borrow_mut();
+            READY.with(|r| {
+                let mut r = r.borrow_mut();
+                for fd in fds.drain(..) {
+                    if let Some(mut conn) = i.get_mut(fd as usize).and_then(Option::take) {
+                        // (the notification is the news `take_readable` would have given)
+                        conn.drained = false;
+                        r.push_back(conn);
+                    }
+                }
+            });
+        });
+    });
+    READY.with(|r| r.borrow_mut().pop_front())
+}
+
+fn spawn_worker(it: &Interpreter) {
+    WORKERS.with(|w| w.set(w.get() + 1));
+    if let Err(e) = it.spawn_task(Box::new(worker)) {
+        WORKERS.with(|w| w.set(w.get() - 1));
+        eprintln!("[http] cannot start a server task: {}", e);
+    }
+}
+
+/// A worker task: serves the connections that have something to read, one
+/// request after the other on its own (warm) stack, and waits for the
+/// reactor when there is none. The requests of all the idle connections
+/// of a thread need as many tasks as there are requests being handled at
+/// once, not one per connection.
+fn worker(it: &Interpreter) -> Result<(), String> {
+    let leave = || WORKERS.with(|w| w.set(w.get() - 1));
+    loop {
+        let Some(conn) = next_ready() else {
+            // two wait for work (one takes over when the other has to wait
+            // inside a request); the rest end
+            if WAITING.with(|w| w.get()) >= 2 {
+                leave();
+                return Ok(());
+            }
+            let Some(gate) = reactor::ready_gate() else {
+                leave();
+                return Ok(());
+            };
+            WAITING.with(|w| w.set(w.get() + 1));
+            let waited = sched::wait_until_on(Some(&gate), || open(&gate));
+            WAITING.with(|w| w.set(w.get() - 1));
+            if waited.is_err() {
+                leave();
+                return waited;
+            }
+            continue;
+        };
+        // this task may have to wait inside the request (a handler that
+        // sleeps, a slow client): another one must be able to go on.
+        // (Counted as serving first: a new task starts running at once.)
+        SERVING.with(|s| s.set(s.get() + 1));
+        if WORKERS.with(|w| w.get()) == SERVING.with(|s| s.get()) {
+            spawn_worker(it);
+        } else if WAITING.with(|w| w.get()) > 0 && READY.with(|r| !r.borrow().is_empty()) {
+            reactor::kick_ready();
+        }
+        let served = conn.serve(it);
+        SERVING.with(|s| s.set(s.get() - 1));
+        // (an error here is the scheduler shutting down)
+        if served.is_err() {
+            leave();
+            return Ok(());
+        }
+    }
+}
+
 /// Acts on the connections whose deadline passed; false when none is open
 /// (the sweeper ends, the next connection starts another).
 fn sweep() -> bool {
@@ -226,7 +354,7 @@ fn sweep() -> bool {
                 s.deadline.set(None);
                 s.expired.set(true);
                 if phase == Phase::Handler {
-                    // the handler still runs (in the connection's task): the
+                    // the handler still runs (in its worker's task): the
                     // client is answered here and the connection ends
                     let mut out = Vec::new();
                     text_response(&mut out, 504, "timeout");
@@ -467,6 +595,8 @@ enum Fail {
     /// nothing to answer: the client left, or was too slow with its headers
     Close,
     Status(u16, String),
+    /// nothing to read and no request begun: the connection waits without a task
+    Idle,
 }
 
 enum Step {
@@ -484,6 +614,7 @@ struct Conn {
     fd: RawFd,
     server: u64,
     opts: Rc<ServerOptions>,
+    env: Rc<RefCell<Environment>>,
     remote: String,
     /// received and not consumed yet (the start of a request, or the next one)
     buf: Vec<u8>,
@@ -593,6 +724,9 @@ impl Conn {
             step = match self.recv_with(&mut first, |me, data| if data.is_empty() { Step::Fail(Fail::Close) } else { me.on_data(data) }) {
                 Ok(step) => step,
                 Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                    if self.buf.is_empty() {
+                        return Ok(Err(Fail::Idle));
+                    }
                     if !self.wait_readable()? {
                         return Ok(Err(Fail::Close));
                     }
@@ -641,13 +775,25 @@ impl Conn {
         Ok(Ok((head, reader.body)))
     }
 
-    /// Serves the connection until it ends.
-    fn serve(&mut self, it: &Interpreter, env: &Rc<RefCell<Environment>>) -> Result<(), String> {
+    /// Serves the requests the connection has; it ends, or goes aside (`park`)
+    /// when there is nothing more to read.
+    fn serve(mut self: Box<Self>, it: &Interpreter) -> Result<(), String> {
         let mut served = 0u32;
+        let env = Rc::clone(&self.env);
+        let env = &env;
+        if self.out.capacity() == 0 {
+            if let Some(out) = OUTS.with(|o| o.borrow_mut().pop()) {
+                self.out = out;
+            }
+        }
         loop {
             let (head, body) = match self.read_request()? {
                 Ok(r) => r,
                 Err(Fail::Close) => return Ok(()),
+                Err(Fail::Idle) => {
+                    park(self);
+                    return Ok(());
+                }
                 Err(Fail::Status(code, msg)) => {
                     self.shared.arm(Phase::Write, None);
                     self.out.clear();

@@ -35,6 +35,19 @@ struct Entry {
     /// It became readable while nobody waited for that: the next reader
     /// need not wait (see [`take_readable`]).
     ready_read: bool,
+    /// Nobody waits behind a gate, but its owner wants to hear when it
+    /// becomes readable (see [`notify_readable`]).
+    notify: bool,
+}
+
+/// What [`notify_readable`] found.
+pub enum Notify {
+    /// The descriptor is in the list of [`take_ready`] when it becomes readable.
+    Armed,
+    /// Something arrived since it was last found empty: read it now.
+    Ready,
+    /// This descriptor cannot be watched.
+    Unwatchable,
 }
 
 struct Reactor {
@@ -43,8 +56,12 @@ struct Reactor {
     sleeping: Arc<AtomicBool>,
     /// By descriptor number (small, dense integers): no hashing on the hot path.
     waits: Vec<Entry>,
-    /// Entries with a gate still closed.
+    /// Entries with a gate still closed, or armed by [`notify_readable`].
     waiting: usize,
+    /// Descriptors armed by [`notify_readable`] that became readable.
+    ready: Vec<RawFd>,
+    /// What the tasks that serve `ready` wait behind (see [`ready_gate`]).
+    ready_gate: Option<Gate>,
 }
 
 thread_local! {
@@ -76,7 +93,7 @@ impl Reactor {
             let sleeping = Arc::new(AtomicBool::new(false));
             WAKERS.lock().unwrap_or_else(|p| p.into_inner()).push((event, Arc::clone(&sleeping)));
             REACTORS.fetch_add(1, Ordering::SeqCst);
-            Some(Reactor { ep, event, sleeping, waits: Vec::new(), waiting: 0 })
+            Some(Reactor { ep, event, sleeping, waits: Vec::new(), waiting: 0, ready: Vec::new(), ready_gate: None })
         }
     }
 
@@ -148,6 +165,9 @@ impl Reactor {
     /// invent data.
     fn forget(&mut self, fd: RawFd) {
         if let Some(e) = self.waits.get_mut(fd as usize).map(std::mem::take) {
+            if e.notify {
+                self.waiting -= 1;
+            }
             if e.added {
                 // SAFETY: removing a descriptor from our own epoll instance
                 unsafe { libc::epoll_ctl(self.ep, libc::EPOLL_CTL_DEL, fd, std::ptr::null_mut()) };
@@ -192,6 +212,13 @@ impl Reactor {
                         self.waiting -= 1;
                         opened = true;
                     }
+                    // (no reader parked: its owner is told through the ready list)
+                    None if e.notify => {
+                        e.notify = false;
+                        self.waiting -= 1;
+                        self.ready.push(fd);
+                        opened = true;
+                    }
                     None => e.ready_read = true,
                 }
             }
@@ -204,7 +231,17 @@ impl Reactor {
                 }
             }
         }
+        if !self.ready.is_empty() {
+            self.open_ready_gate();
+        }
         opened
+    }
+
+    fn open_ready_gate(&mut self) {
+        if let Some(g) = self.ready_gate.take() {
+            g.store(true, Ordering::Release);
+            super::sched::gate_opened(g);
+        }
     }
 }
 
@@ -271,6 +308,66 @@ pub fn take_readable(fd: RawFd) -> bool {
             _ => true,
         }
     })
+}
+
+/// Asks to be told when `fd` becomes readable without a task waiting for it:
+/// the descriptor then appears in [`take_ready`]. For owners of many
+/// descriptors that are idle most of the time (keep-alive connections): an
+/// idle one costs an entry here instead of a parked task. As with a gate,
+/// call it only after a receive found the descriptor empty (or for a
+/// descriptor that was never read). One notification per call.
+pub fn notify_readable(fd: RawFd) -> Notify {
+    with(|r| {
+        if !r.watch(fd) {
+            return Notify::Unwatchable;
+        }
+        let e = &mut r.waits[fd as usize];
+        if std::mem::take(&mut e.ready_read) {
+            return Notify::Ready;
+        }
+        if !e.notify {
+            e.notify = true;
+            r.waiting += 1;
+        }
+        Notify::Armed
+    })
+    .unwrap_or(Notify::Unwatchable)
+}
+
+/// Moves the descriptors that became readable (see [`notify_readable`]) to `into`.
+pub fn take_ready(into: &mut Vec<RawFd>) {
+    REACTOR.with(|r| {
+        if let Some(r) = r.borrow_mut().as_mut() {
+            into.append(&mut r.ready);
+        }
+    });
+}
+
+/// A gate that opens when [`take_ready`] has something to give (open already
+/// when it has). Every task that asks before it opens gets the same gate.
+pub fn ready_gate() -> Option<Gate> {
+    with(|r| {
+        if !r.ready.is_empty() {
+            return Gate::new(AtomicBool::new(true));
+        }
+        if let Some(g) = &r.ready_gate {
+            return Gate::clone(g);
+        }
+        let gate = Gate::default();
+        super::sched::local_gate(&gate);
+        r.ready_gate = Some(Gate::clone(&gate));
+        gate
+    })
+}
+
+/// Opens the gate of [`ready_gate`] now: whoever waits behind it looks again
+/// (its owner has work for it that did not come from a descriptor).
+pub fn kick_ready() {
+    REACTOR.with(|r| {
+        if let Some(r) = r.borrow_mut().as_mut() {
+            r.open_ready_gate();
+        }
+    });
 }
 
 /// Do tasks of this thread wait for sockets? (Then making no progress is

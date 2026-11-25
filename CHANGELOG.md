@@ -10,17 +10,18 @@ be incompatible changes (spec §75).
 
 - **`fogu:http` / `fogu:web` servers run on the interpreter's own thread** (Linux; plain HTTP
   without static mounts or Socket.IO — `native/network/http_direct.rs`,
-  `docs/architecture/direct-http.md`). A connection is one `fg` task on the thread's `epoll`
-  reactor: it parses the request (`httparse`), calls the handler inline and writes the answer —
-  one `recv` and one `send` per request, nothing crosses threads. Timeouts are enforced by one
+  `docs/architecture/direct-http.md`). A connection between requests holds no task: the thread's
+  `epoll` reactor says which ones have something to read (`reactor::notify_readable`) and a few
+  worker tasks serve them — parse (`httparse`), call the handler inline, write the answer; one
+  `recv` and one `send` per request, nothing crosses threads. Timeouts are enforced by one
   sweeper task per thread instead of a timer per request. TLS, static mounts, Socket.IO and the
   other systems keep the previous server; `FOGU_HTTP=threads` keeps it everywhere.
-  - Measured against 0.8.3 (`bench/net/http.fg`, one interpreter): 9.5k req/s on one connection
-    (was 2.4k; Go 3.7k), 46–50k on 64 (was 37–43k) with 3.7 CPU s instead of 12.9 and 16–18 MB
-    instead of 25, p99 4 ms instead of 10–13.
-  - Known cost: one interpreter is one core. With a trivial handler and many connections it is
-    behind 0.8.3, which spread the socket work over the I/O threads (`fogu:web` −15% at 1024
-    connections, `http.serve` −33% at 256). Use a server per `sync.Worker` (below).
+  - Measured against 0.8.3 (`bench/net/http.fg`, one interpreter, interleaved): 9.2k req/s on
+    one connection (was 2.4k; Go 3.7k), 56–59k on 64 (was 39–40k), 46–50k on 256 (was 35–37k),
+    36–41k on 1024 (was 32–33k), with 2.9 CPU s instead of 10.4. Memory with 1024 keep-alive
+    connections: 16–18 MB instead of 95.
+  - Known gap: `http.serve` with a trivial handler at 256 connections is 8–18% behind 0.8.3
+    (one core against its I/O threads). Use a server per `sync.Worker` (below).
   - Stricter parsing: a request with both `Content-Length` and `Transfer-Encoding`, conflicting
     or non-numeric lengths, or a transfer encoding that does not end in `chunked` is refused
     (400); a response header that is not a valid header is not sent.
@@ -30,8 +31,8 @@ be incompatible changes (spec §75).
 ### Added
 
 - `reusePort: true` in `http.serve` and `app.listen`: several servers share a port, one per
-  `sync.Worker` for a server on several cores (`bench/net/http_workers.fg`: 4 workers 113k
-  req/s, 8 workers 169k, Go 64–69k on the same machine).
+  `sync.Worker` for a server on several cores (`bench/net/http_workers.fg`, 1024 connections:
+  4 workers 111k req/s, 8 workers 146k, Go 91k on the same machine).
 
 ### Fixed
 

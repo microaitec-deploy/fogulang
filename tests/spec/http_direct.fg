@@ -11,6 +11,7 @@ fn serve() {
     app.get("/a", (ctx) => "A")
     app.get("/b", (ctx) => ({ b: 2 }))
     app.post("/echo", (ctx) => ctx.body)
+    app.get("/wait", (ctx) => { time.delay(150ms); return "waited" })
     app.get("/events", (ctx) => {
         const s = web.sse({ retry: 500 })
         fg fn() {
@@ -66,6 +67,24 @@ fg fn() {
         if r.body == "A" { ok = ok + 1 }
     }
     print("shared port", ok)
+
+    // handlers that wait do not hold each other up, and idle connections
+    // are served while they wait
+    const t0 = time.monotonic()
+    let waited = 0
+    let quick = 0
+    for i in 0..8 {
+        fg fn() {
+            if http.get("http://127.0.0.1:18531/wait")?.body == "waited" { waited = waited + 1 }
+        }()
+    }
+    time.delay(30ms)
+    for i in 0..8 {
+        if http.get("http://127.0.0.1:18531/a")?.body == "A" { quick = quick + 1 }
+    }
+    const quick_in = time.monotonic() - t0
+    while waited < 8 { time.delay(5ms) }
+    print("waiting handlers", waited, quick, quick_in < 0.14, time.monotonic() - t0 < 0.6)
 
     // a client that leaves in the middle of a request does not hurt the next one
     const gone = net.tcpConnect("127.0.0.1:18531", 2s)?

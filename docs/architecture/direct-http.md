@@ -30,28 +30,37 @@ per-thread `epoll` reactor `fogu:net` already uses:
 1. `start_server` binds the listener and queues it; the next call of the
    interpreter (`Host::before_call` → `http::serve_pending`), or
    `Fogu.signal.wait()` when it is the very next thing, starts its accept task.
-   Each accepted connection is one `fg` task.
-2. The connection task receives into a buffer shared by the thread, parses the
-   request where it was received (`httparse`, the parser hyper uses), builds the
-   `Request` object, **calls the handler in the same task**, writes the answer
-   into the connection's output buffer and sends it. A request costs one `recv`
-   and one `send`; a socket found empty is not asked again before the reactor saw
-   something arrive (`reactor::take_readable`).
+2. **A connection between requests holds no task.** It is an entry in a table
+   of the thread (`IDLE`, by descriptor) and a flag in the reactor
+   (`reactor::notify_readable`): when something arrives the reactor puts its
+   descriptor in a list (`take_ready`) and opens one gate (`ready_gate`).
+   **Worker tasks** wait behind that gate: a worker takes the connections with
+   something to read one after the other, receives into a buffer shared by the
+   thread, parses the request where it was received (`httparse`, the parser
+   hyper uses), builds the `Request` object, **calls the handler in the same
+   task**, writes the answer and sends it; a connection with nothing more to
+   read goes back to the table (its output buffer goes to a small pool). A
+   request costs one `recv` and one `send`. Before a worker enters a request it
+   makes sure another one is free (it starts one if not), because the handler
+   may wait (`time.delay`, a query, a slow client): the tasks alive are the
+   requests being handled at once plus two, not the connections. So every
+   request of a busy server runs on the same warm stack, and ten thousand idle
+   keep-alive connections cost a table entry each.
 3. Nothing of a request is seen by another thread. The usual answer (a
    `Response` object) is written straight from the object, without an
    intermediate `PlainResponse`.
 4. **Deadlines without a timer per request.** A connection publishes its phase
    and deadline (`Shared`); one sweeper task per thread looks at the open
    connections every quarter of the shortest configured timeout (10 ms to 1 s)
-   and acts on the socket: `shutdown(read)` wakes a task waiting for a slow
-   request (which closes, or answers 408 in the body phase); a handler past
+   and acts on the socket: `shutdown(read)` makes an idle or slow connection
+   readable (it then closes, or answers 408 in the body phase); a handler past
    `handlerTimeout` gets its 504 written by the sweeper and the connection
    closed — the handler finishes in its task and its answer is dropped, as
    before. A timeout therefore fires up to a quarter late, never early.
 5. **Streamed bodies** (`web.sse`, `web.stream`, a readable returned from a
    handler) keep their channel; the sending end now also sets a gate
    (`http::StreamReady`, set on every send and when the sender is dropped), so
-   the connection task parks behind it instead of asking the channel on every
+   the worker parks behind it instead of asking the channel on every
    scheduler pass. The sweeper notices a client that left an idle stream.
    `web.file` reads the file on the pool (`rt::offload`), 64 KiB at a time.
 6. **WebSocket upgrades** answer the 101 here and hand a duplicate of the
@@ -91,66 +100,64 @@ Stricter than before, on purpose:
   (a HEAD answer may still announce the size its GET would have).
 
 Different: the requests of one connection are handled one after the other in
-the connection's task (HTTP/1.1 has no other order; pipelined requests were
+the same task (HTTP/1.1 has no other order; pipelined requests were
 already answered in order).
+
+## The reactor
+
+`runtime/reactor.rs` gained the three functions above (`notify_readable`,
+`take_ready` / `ready_gate`, `kick_ready`): a descriptor may be watched without
+a gate of its own. Nothing changes for descriptors that use gates (`fogu:net`):
+the event loop has one more branch, taken only when no reader is parked.
+`bench/net/tcp.fg` and `udp.fg` measure the same before and after (54–64k and
+112–125k msg/s on the loaded machine of the table below, in both builds).
 
 ## Memory
 
-A connection is a task (its stack is pooled and only touched pages are
-resident), two small buffers that are empty between requests (the receive
-buffer is the thread's; the output buffer is dropped when an answer was large)
-and an entry in the thread's connection table. No per-request task, channel,
-timer or `PlainRequest`.
+An idle connection is its `Conn` (the socket, its limits, two empty buffers)
+and an entry in two tables. No stack, no per-request task, channel, timer or
+`PlainRequest`. With 1024 keep-alive connections under load the server peaks at
+16–18 MB (0.8.3: 95 MB; the first version of this server, a task per
+connection: 23–25 MB).
 
 ## Measurements
 
-Same machine (WSL2, 16 logical CPUs, other work running), `bench/.bin/netbench
-load-http`, keep-alive connections, 3–4 s, interleaved runs; the load generator
-runs on the same machine. `web`: `bench/net/http.fg` (`GET /hello`, a small JSON
-from a `fogu:web` route — the case of `bench/run_net.fg`); `raw`: the same
-answer from `http.serve`. Requests/s; CPU seconds and peak RSS of the server at
-64 connections over 4 s.
+Same machine (WSL2, 16 logical CPUs, other work running: compare within a row
+group, not with other documents), `bench/.bin/netbench load-http`, keep-alive
+connections, 3 s, interleaved runs; the load generator runs on the same
+machine. `web`: `bench/net/http.fg` (`GET /hello`, a small JSON from a
+`fogu:web` route — the case of `bench/run_net.fg`); `raw`: the same answer from
+`http.serve`. Requests/s.
 
-| server | 1 conn | 16 | 64 | 256 | 1024 | CPU s | RSS |
-|---|---|---|---|---|---|---|---|
-| Go `net/http` (all cores) | 3.7k | | 64–69k | 88k | 98k | 22 | 24–28 MB |
-| 0.8.3 web | 2.4k | | 37–43k | 43–44k | 38–41k | 12.9 | 25–26 MB |
-| new web, one interpreter | 9.5k | | 46–50k | 42.5k | 33.5k | 3.7 | 16–18 MB |
-| 0.8.3 raw | | 33–35k | 63–69k | 75–78k | | 15 | 22–25 MB |
-| new raw, one interpreter | | 55–58k | 55–67k | 49–52k | | 3.7 | 15–19 MB |
-| new web, 2 workers | | | 82–84k | | | 7.4 | 20 MB |
-| new web, 4 workers | | | 113–114k | 97k | 79k | 14 | 28 MB |
-| new web, 8 workers | | | 169k | | | 21 | 45 MB |
+| server | 1 conn | 64 | 256 | 1024 |
+|---|---|---|---|---|
+| Go `net/http` (all cores) | 3.7k | 63k | | 91k |
+| 0.8.3 web | 2.4–2.5k | 39–40k | 35–37k | 32–33k |
+| a task per connection, web | 9.1–9.6k | 39–40k | 32–34k | 26–27k |
+| **workers, web (this note)** | 9.2–9.3k | 56–59k | 46–50k | 36–41k |
+| 0.8.3 raw | | 55–65k | 65–66k | |
+| a task per connection, raw | | 46–60k | 38–44k | |
+| **workers, raw** | | 69–72k | 54–61k | |
+| workers, web, 4 `sync.Worker` | | 104k | | 111k |
+| workers, web, 8 `sync.Worker` | | 148k | | 146k |
 
-One interpreter now serves on one core what 0.8.3 needed 3 to 4 cores for, and
-a request no longer waits for two thread wake-ups: 4 times the throughput on
-one connection, 1.7 times on 16, p99 at 64 connections 3.7–4.2 ms instead of
-10–13 ms. Per CPU second it handles about 4 times what Go does; 4 workers give
-1.7 times Go's throughput on 64 connections with two thirds of its CPU, 8
-workers 2.5 times with the same CPU.
+CPU seconds of the server over 3 s at 64 connections: 2.9 (0.8.3: 10.4; Go:
+16). Peak RSS: 15–16 MB (0.8.3: 25 MB; Go: 23 MB).
 
-## The cost, accepted
+One interpreter serves on one core more than 0.8.3 did with three to four, at
+every connection count measured for `fogu:web`; a request no longer waits for
+two thread wake-ups (4 times the throughput on one connection, p99 at 64
+connections 3.4 ms instead of 13).
 
-One interpreter is one core, and that core now also does the kernel's work for
-every socket, which 0.8.3 spread over the I/O threads. While the handler is the
-larger part of a request this does not show; with a trivial handler and many
-connections it does:
+## What is left
 
-- `fogu:web`, one interpreter: equal at 256 connections (−2%), **−15% at 1024**;
-- `http.serve` with a trivial handler, one interpreter: −5% at 64 connections,
-  **−33% at 256**.
-
-The cost of a request grows with the number of connections (each connection's
-task has its own stack and the kernel its own socket state: more cache and TLB
-misses), on one core. This was put to the project's owner with these numbers
-and accepted as the default, because every other measure improves (latency,
-CPU, memory, few connections, the official benchmark) and the answer to many
-connections is the one Fogu already gives for cores: a server per `sync.Worker`
-with `reusePort` (4 workers at 1024 connections: 79k against 38–41k). A program
-that wants the previous behaviour sets `FOGU_HTTP=threads`.
-
-What could remove part of it later: an idle keep-alive connection that holds no
-task (its next request would run on a stack that is still in the cache).
+One interpreter is one core, and that core also does the kernel's work for
+every socket, which 0.8.3 spread over the I/O threads. It still shows in one
+case measured: `http.serve` with a trivial handler at 256 connections, 54–61k
+against 65–66k (−8 to −18%). The answer to many connections on many cores is
+the one Fogu gives everywhere: a server per `sync.Worker` with `reusePort`
+(1024 connections: 111k with 4 workers, 146k with 8; Go 91k).
+`FOGU_HTTP=threads` keeps the previous server.
 
 ## Not done
 

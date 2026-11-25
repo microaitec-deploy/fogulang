@@ -141,8 +141,10 @@ Environment: `FOGU_HOME` (default `~/.fogu`), `NO_COLOR`, `FOGU_JIT=0`,
   The built-in profiler (`FOGU_PPROF`) can crash when it samples a task's stack under load.
 - On Linux a plain HTTP server (`http.serve` / `app.listen` without TLS, static mounts or
   Socket.IO) is served the same way (`native/network/http_direct.rs`,
-  `docs/architecture/direct-http.md`): one `fg` task per connection parses the request, calls the
-  handler inline and writes the answer; one sweeper task per thread enforces the timeouts. The
+  `docs/architecture/direct-http.md`): a connection between requests holds no task
+  (`reactor::notify_readable` → `take_ready`); a few worker tasks parse the request, call the
+  handler inline and write the answer; one sweeper task per thread enforces the timeouts.
+  `spawn_task` runs the new task at once: update shared counters before calling it. The
   other servers keep the hyper path below; `FOGU_HTTP=threads` forces it for all. More cores:
   one server per `sync.Worker` with `reusePort: true`. `fogu:web`'s dispatch is the hot part of a
   request (a map made there costs ~0.2 µs): build per-request state lazily.
