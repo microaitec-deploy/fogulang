@@ -133,6 +133,7 @@ pub fn build(args: &[String]) -> i32 {
     let mut lib = false;
     let mut targets: Vec<String> = Vec::new();
     let mut runtime: Option<PathBuf> = None;
+    let mut used_lean = false;
     let mut out_dir = PathBuf::from("dist");
     let mut entry_arg: Option<String> = None;
     let mut embed: Vec<String> = Vec::new();
@@ -209,6 +210,7 @@ pub fn build(args: &[String]) -> i32 {
             (None, Some(f), Some(host)) => lean_runtime(host, f, minimal),
             _ => None,
         };
+        used_lean = lean.is_some();
         match lean.map(Ok).or_else(|| runtime.clone().map(Ok)).unwrap_or_else(|| std::env::current_exe().map_err(|e| e.to_string())) {
             Ok(exe) => plan.push((None, exe)),
             Err(e) => return fail(&format!("cannot find the fogu executable: {}", e)),
@@ -235,6 +237,8 @@ pub fn build(args: &[String]) -> i32 {
                 (None, Some(f)) => lean_runtime(n, f, minimal),
                 _ => None,
             };
+            // (the report below says which runtime was really used)
+            used_lean = used_lean || lean.is_some();
             match lean.map(Ok).or_else(|| runtime.clone().map(Ok)).unwrap_or_else(|| find_runtime(n, true)) {
                 Ok(p) => match check_runtime(&p, n) {
                     Ok(()) => plan.push((Some(n), p)),
@@ -250,8 +254,12 @@ pub fn build(args: &[String]) -> i32 {
         }
     }
 
-    if let Some(f) = &flavor {
-        println!("  {} {}", ui::dim("runtime:"), ui::dim(&format!("{} ({})", f, if f == "core" { "only the always-built modules" } else { "standard library areas used" })));
+    match &flavor {
+        Some(f) if used_lean => {
+            println!("  {} {}", ui::dim("runtime:"), ui::dim(&format!("{} ({})", f, if f == "core" { "only the always-built modules" } else { "standard library areas used" })));
+        }
+        Some(_) => println!("  {} {}", ui::dim("runtime:"), ui::dim("full (every standard library area)")),
+        None => {}
     }
     for f in bundle.files.keys() {
         println!("  {} {}", ui::dim("+"), f);
@@ -426,7 +434,7 @@ fn module_area(module: &str) -> Option<&'static str> {
     Some(match module {
         "etcd" | "kv" | "surrealkv" | "surrealdb" | "sql" | "orm" | "redis" | "scylla" => "database",
         "grpc" | "protobuf" => "rpc",
-        "security" | "tls" | "socketio" | "http" | "web" | "topcoat" | "jwt" | "mail" | "websocket" | "webrtc" | "html" => "network",
+        "security" | "tls" | "socketio" | "http" | "web" | "topcoat" | "jwt" | "mail" | "websocket" | "ws" | "webrtc" | "html" => "network",
         "broker" | "kafka" | "mq" | "fogumq" | "foguMQ-client" | "nats" | "rabbitmq" | "mqtt" | "bullmq" => "messaging",
         "ai" | "plot" => "ai",
         "s3" | "docker" | "service" | "playbook" | "ssh" => "ops",
@@ -476,9 +484,11 @@ fn lean_runtime(target: &str, flavor: &str, minimal: bool) -> Option<PathBuf> {
     if let Some(p) = dirs.iter().map(|d| d.join(&file)).find(|p| p.is_file()) {
         return Some(p);
     }
+    let mut why = String::new();
     if let Some(server) = server_url() {
-        if let Ok(p) = download_runtime_file(&server, target, Some(flavor), &file) {
-            return Some(p);
+        match download_runtime_file(&server, target, Some(flavor), &file) {
+            Ok(p) => return Some(p),
+            Err(e) => why = format!(" ({})", e),
         }
     }
     if minimal {
@@ -490,8 +500,8 @@ fn lean_runtime(target: &str, flavor: &str, minimal: bool) -> Option<PathBuf> {
         eprintln!(
             "{}",
             ui::dim(&format!(
-                "no {} runtime for {} found: using the full one (`fogu build --compile --minimal` compiles a smaller one)",
-                flavor, target
+                "no {} runtime for {} found{}: using the full one (`fogu build --compile --minimal` compiles a smaller one)",
+                flavor, target, why
             ))
         );
     }
@@ -759,26 +769,29 @@ fn find_runtime_lib(target: &str) -> Result<PathBuf, String> {
     ))
 }
 
-/// The functions a host can call: the top-level `fn` declarations of the
-/// entry file (exported or not), with their parameters.
+/// The functions the library announces (its header, the build report): the
+/// `export fn` of the entry file — or, in a file that exports nothing, every
+/// top-level `fn` whose name does not start with `_`. This is the documented
+/// API, not a barrier: the host is trusted (`fogu_eval` runs any code), so it
+/// must never pass a function name it received from outside to `fogu_call`.
 fn entry_functions(bundle: &Bundle) -> Vec<(String, Vec<String>)> {
     use crate::runtime::ast::ExportKind;
     let Some(src) = bundle.files.get(&bundle.entry) else { return Vec::new() };
     let Ok(tokens) = Lexer::new(src).tokenize() else { return Vec::new() };
     let Ok(program) = Parser::new(tokens).parse_program() else { return Vec::new() };
-    let mut out = Vec::new();
+    let (mut exported, mut plain) = (Vec::new(), Vec::new());
     for s in &program {
         match s {
-            Stmt::FnDecl { name, params, .. } if !name.starts_with('_') => out.push((name.clone(), params.clone())),
+            Stmt::FnDecl { name, params, .. } if !name.starts_with('_') => plain.push((name.clone(), params.clone())),
             Stmt::Export(k) => {
                 if let ExportKind::Fn { name, params, .. } = &**k {
-                    out.push((name.clone(), params.clone()));
+                    exported.push((name.clone(), params.clone()));
                 }
             }
             _ => {}
         }
     }
-    out
+    if exported.is_empty() { plain } else { exported }
 }
 
 /// `<name>.h`: the C API plus what this library holds.

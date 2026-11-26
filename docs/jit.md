@@ -50,6 +50,17 @@ Environment: `FOGU_JIT=0`, `FOGU_JIT_DEBUG`, `FOGU_JIT_CALLS` (default 2), `FOGU
   counter to update, and the current line lives in a register — it is written
   to `JitCtx::line` only by the cold block of an error (0 = the function had
   not reached its first statement: the caller's line stands).
+- **Recursion depth is a resource limit, not part of a program's result.** The
+  tree-walker is bound by its stack (about 300–400 thousand nested calls on the main
+  thread, far fewer inside an `fg` task); compiled code uses much smaller frames, and a
+  function such as `fn depth(n) { if n == 0 { return 0 } return 1 + depth(n - 1) }`
+  is compiled into a loop that uses no stack at all (20 million levels return at
+  once). A program that recurses deeper than the tree-walker can go therefore ends
+  with `stack overflow (recursion too deep)` under `--no-jit` and with its result under
+  the JIT. One logical limit for all engines would need a counter updated on every
+  compiled call, which the fundamental rule (no slower than before) rules out; every
+  engine gives the same result at any depth the tree-walker reaches
+  (`tests/spec`, three engines).
 - **Deadlines** (`fogu:vm` timeouts): the limit of the stack check is `jit::Watch::limit`, which a
   watchdog thread raises when the deadline of the running native code passes. Code compiled for a
   run with a deadline (`checked` specializations) also checks it at every loop iteration; the

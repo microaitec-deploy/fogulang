@@ -84,15 +84,58 @@ pub fn build() -> ModuleValue {
 }
 
 /// Environment variables as a map.
+/// Ends the process `pid` (the child of `process.run` that ran out of time).
+fn kill_pid(pid: u32) {
+    #[cfg(unix)]
+    {
+        unsafe extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        // SAFETY: a plain system call on the pid of our own child (SIGKILL = 9)
+        unsafe {
+            kill(pid as i32, 9);
+        }
+    }
+    #[cfg(windows)]
+    {
+        unsafe extern "system" {
+            fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut std::ffi::c_void;
+            fn TerminateProcess(process: *mut std::ffi::c_void, code: u32) -> i32;
+            fn CloseHandle(h: *mut std::ffi::c_void) -> i32;
+        }
+        // SAFETY: kernel32 calls on the pid of our own child (PROCESS_TERMINATE = 1)
+        unsafe {
+            let h = OpenProcess(1, 0, pid);
+            if !h.is_null() {
+                TerminateProcess(h, 1);
+                CloseHandle(h);
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    let _ = pid;
+}
+
 pub fn env_map() -> Value {
     let mut pairs: Vec<(String, Value)> = std::env::vars().map(|(k, v)| (k, Value::Str(v.into()))).collect();
+    // Windows names variables without case (`Path` is `PATH`): the upper-case name is
+    // there too, so `Fogu.env.PATH` works whatever the shell called it
+    if cfg!(windows) {
+        let have: std::collections::HashSet<String> = pairs.iter().map(|(k, _)| k.clone()).collect();
+        let upper: Vec<(String, Value)> = pairs
+            .iter()
+            .filter(|(k, _)| k.to_ascii_uppercase() != *k && !have.contains(&k.to_ascii_uppercase()))
+            .map(|(k, v)| (k.to_ascii_uppercase(), v.clone()))
+            .collect();
+        pairs.extend(upper);
+    }
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
     let m: HashMap<Str, Value> = pairs.into_iter().map(|(k, v)| (Str::from(k), v)).collect();
     Value::Map(std::rc::Rc::new(std::cell::RefCell::new(m)))
 }
 
-/// `run(cmd, args = [], options = {cwd, env, input})` →
-/// `{ ok, code, stdout, stderr }`.
+/// `run(cmd, args = [], options = {cwd, env, input, timeout})` →
+/// `{ ok, code, stdout, stderr, timedOut }`.
 pub fn run(a: &[Value]) -> Result<Value, String> {
     max_args(a, 3, "process.run")?;
     let cmd = str_arg(a, 0, "process.run")?;
@@ -112,6 +155,7 @@ pub fn run(a: &[Value]) -> Result<Value, String> {
         }
     }
     let mut input: Option<Vec<u8>> = None;
+    let mut timeout: Option<std::time::Duration> = None;
     match opt_arg(a, 2) {
         None => {}
         Some(Value::Map(m)) => {
@@ -119,8 +163,13 @@ pub fn run(a: &[Value]) -> Result<Value, String> {
             // an unknown option (`timeout`, a typo) stops the program instead of being ignored
             let mut keys: Vec<&str> = m.keys().map(|k| &**k).collect();
             keys.sort_unstable();
-            if let Some(k) = keys.into_iter().find(|k| !matches!(*k, "cwd" | "env" | "input")) {
-                return Err(format!("process.run: unknown option '{}' (expected cwd, env, input)", k));
+            if let Some(k) = keys.into_iter().find(|k| !matches!(*k, "cwd" | "env" | "input" | "timeout")) {
+                return Err(format!("process.run: unknown option '{}' (expected cwd, env, input, timeout)", k));
+            }
+            // timeout: the child is killed when it runs longer (`timedOut: true`, `ok: false`)
+            match m.get("timeout") {
+                None | Some(Value::Nil) => {}
+                Some(v) => timeout = Some(crate::native::util::duration_arg(v, "process.run: timeout")?),
             }
             match m.get("cwd") {
                 None | Some(Value::Nil) => {}
@@ -150,7 +199,7 @@ pub fn run(a: &[Value]) -> Result<Value, String> {
         }
         Some(other) => {
             return Err(format!(
-                "process.run: options must be a map {{cwd, env, input}}, got '{}'",
+                "process.run: options must be a map {{cwd, env, input, timeout}}, got '{}'",
                 other.type_name()
             ))
         }
@@ -169,17 +218,43 @@ pub fn run(a: &[Value]) -> Result<Value, String> {
             })),
             _ => None,
         };
+        // with a timeout a watcher kills the child when it is still running then;
+        // the pipes close and the wait below returns what was written so far
+        let done = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let killed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher = timeout.map(|t| {
+            let (done, killed, pid) = (std::sync::Arc::clone(&done), std::sync::Arc::clone(&killed), child.id());
+            std::thread::spawn(move || {
+                let (lock, cv) = &*done;
+                let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+                let (guard, waited) = cv.wait_timeout_while(guard, t, |finished| !*finished).unwrap_or_else(|e| e.into_inner());
+                if waited.timed_out() && !*guard {
+                    killed.store(true, std::sync::atomic::Ordering::SeqCst);
+                    kill_pid(pid);
+                }
+            })
+        });
         let out = child.wait_with_output().map_err(|err| io_err!("process.run: {}: {}", cmd, err));
+        {
+            let (lock, cv) = &*done;
+            *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
+            cv.notify_all();
+        }
+        if let Some(w) = watcher {
+            let _ = w.join();
+        }
         if let Some(f) = feeder {
             let _ = f.join();
         }
-        out
+        out.map(|o| (o, killed.load(std::sync::atomic::Ordering::SeqCst)))
     })??;
+    let (out, timed_out) = out;
     let code = out.status.code().unwrap_or(-1);
     Ok(map(vec![
-        ("ok", Value::Bool(out.status.success())),
+        ("ok", Value::Bool(out.status.success() && !timed_out)),
         ("code", Value::Int(code as i64)),
         ("stdout", Value::Str(String::from_utf8_lossy(&out.stdout).to_string().into())),
         ("stderr", Value::Str(String::from_utf8_lossy(&out.stderr).to_string().into())),
+        ("timedOut", Value::Bool(timed_out)),
     ]))
 }

@@ -190,8 +190,10 @@ impl Ty {
                     "fn" => self == Ty::Fn,
                     // never one of the types this inference knows
                     "buffer" | "struct" | "object" => false,
-                    // a struct or an interface (a map may satisfy one)
-                    _ => return None,
+                    // a struct or an interface: a map may satisfy one (and `Any` is not
+                    // reported); a number, a text, a list… never does (L11)
+                    _ if self == Ty::Map => return None,
+                    _ => false,
                 };
                 Some(ok)
             }
@@ -345,6 +347,10 @@ struct Scope {
     /// Names of this scope that cannot be assigned: `const`, functions,
     /// structs, interfaces, imports, loop variables, `match` bindings, `this`.
     immutable: HashSet<String>,
+    /// The annotation of the variables declared here with one (`let x: int`).
+    annotated: HashMap<String, TypeExpr>,
+    /// The structs declared directly in this scope (L11: `S()`, `new N(1)`, methods).
+    structs: HashMap<String, Rc<StructDecl>>,
 }
 
 pub struct Resolver<'a> {
@@ -364,6 +370,25 @@ pub struct Resolver<'a> {
     shared: bool,
     /// Loops around the current statement, in the current function.
     loops: u32,
+    /// The parameter whose default value the prologue just applied, with the type of
+    /// that value (checked against the parameter's annotation, which comes next).
+    last_default: Option<(String, Ty)>,
+    /// Built-in modules imported by name: alias → (`fogu:x`, its exports).
+    modules: HashMap<String, (String, HashSet<String>)>,
+}
+
+thread_local! {
+    /// The exports of a built-in module by name (`fs` → its members), given by
+    /// `fogu check` (the standard library is not part of this crate). Unset when a
+    /// program runs: then nothing is checked here, and the interpreter reports it.
+    static MODULE_EXPORTS: std::cell::OnceCell<fn(&str) -> Option<HashSet<String>>> = const { std::cell::OnceCell::new() };
+}
+
+/// Lets the checker know the members of built-in modules (`fogu check`, once).
+pub fn set_module_exports(f: fn(&str) -> Option<HashSet<String>>) {
+    MODULE_EXPORTS.with(|m| {
+        let _ = m.set(f);
+    });
 }
 
 /// Everything found in a program: errors and warnings, in source order,
@@ -400,6 +425,8 @@ pub fn analyze(program: &[Stmt], builtins: &HashSet<String>) -> Report {
         warnings: Vec::new(),
         shared: false,
         loops: 0,
+        last_default: None,
+        modules: HashMap::new(),
     };
     r.push(program, HashSet::new(), false);
     r.stmts(program);
@@ -417,6 +444,45 @@ fn collect(stmts: &[Stmt]) -> HashSet<String> {
 }
 
 /// The names a statement declares in its scope.
+/// The structs a list of statements declares (also exported ones).
+fn struct_decls(stmts: &[Stmt]) -> HashMap<String, Rc<StructDecl>> {
+    let mut out = HashMap::new();
+    for s in stmts {
+        let d = match s {
+            Stmt::Struct(d) => d,
+            Stmt::Export(e) => match &**e {
+                ExportKind::Struct(d) => d,
+                ExportKind::DefaultDecl(inner) => match &**inner {
+                    Stmt::Struct(d) => d,
+                    _ => continue,
+                },
+                _ => continue,
+            },
+            _ => continue,
+        };
+        out.insert(d.name.clone(), Rc::new(d.clone()));
+    }
+    out
+}
+
+/// The type of a literal (a parameter's default value), `Any` for anything else.
+fn literal_ty(e: &Expr) -> Ty {
+    match e {
+        Expr::Int(_) => Ty::Int,
+        Expr::Float(_) => Ty::Float,
+        Expr::Str(_) => Ty::Str,
+        Expr::Bool(_) => Ty::Bool,
+        Expr::List(_) => Ty::List,
+        _ => Ty::Any,
+    }
+}
+
+/// The names the top level of a program declares (for the message of a name read
+/// before its declaration ran: `Interpreter::interpret`).
+pub fn top_level_names(program: &[Stmt]) -> HashSet<String> {
+    program.iter().flat_map(declared_by).collect()
+}
+
 fn declared_by(s: &Stmt) -> Vec<String> {
     match s {
         Stmt::Let { name, .. } | Stmt::FnDecl { name, .. } => vec![name.clone()],
@@ -708,6 +774,8 @@ impl Resolver<'_> {
             used: HashSet::new(),
             types: HashMap::new(),
             fns,
+            annotated: HashMap::new(),
+            structs: struct_decls(stmts),
         });
     }
 
@@ -787,6 +855,11 @@ impl Resolver<'_> {
     }
 
     /// The scope a name refers to (as `use_name` resolves it).
+    /// The struct `name` refers to here, when it is one declared in this file.
+    fn struct_named(&self, name: &str) -> Option<Rc<StructDecl>> {
+        self.binding(name).and_then(|s| s.structs.get(name).cloned())
+    }
+
     fn binding(&self, name: &str) -> Option<&Scope> {
         let mut crossed_fn = false;
         for s in self.scopes.iter().rev() {
@@ -881,6 +954,12 @@ impl Resolver<'_> {
                     for a in args {
                         self.use_type(a)?;
                     }
+                    // the keys of a map are text: `map<int, V>` could never hold anything
+                    if let ("map", [TypeExpr::Named(k), _]) = (n.as_str(), args.as_slice()) {
+                        if !matches!(k.as_str(), "str" | "string") {
+                            return self.type_fail(format!("the keys of a map are str: write map<str, …>, not map<{}, …>", k));
+                        }
+                    }
                 }
                 if BUILTIN_TYPES.contains(&n.as_str()) {
                     return Ok(());
@@ -948,6 +1027,10 @@ impl Resolver<'_> {
     fn struct_decl(&mut self, d: &StructDecl) -> Result<(), String> {
         for e in &d.embeds {
             self.use_name(e)?;
+        }
+        // one name, one meaning: a field would hide the method (or the other way round)
+        if let Some((m, _, _)) = d.methods.iter().find(|(m, _, _)| d.fields.iter().any(|f| f.name == *m)) {
+            self.report(format!("struct '{}' has a field and a method both named '{}'", d.name, m));
         }
         // Default field values are evaluated on instantiation.
         self.push(&[], HashSet::new(), true);
@@ -1027,6 +1110,16 @@ impl Resolver<'_> {
                         init_ty.name()
                     ));
                 }
+                // `let x: char = "AB"`: a literal of more than one character
+                if let (TypeExpr::Named(n), Expr::Str(s)) = (t, init) {
+                    if n == "char" && s.chars().count() != 1 {
+                        self.report(format!(
+                            "type mismatch: variable '{}' is declared as char, got str of {} characters (a char is one character)",
+                            name,
+                            s.chars().count()
+                        ));
+                    }
+                }
                 // `let x: uint8 = 300`: a literal that can never fit
                 if let (TypeExpr::Named(n), Some(v)) = (t, int_literal(init)) {
                     if let Some(k) = super::ops::Sized::from_name(n).filter(|k| !k.is_float() && !k.fits(v)) {
@@ -1037,6 +1130,9 @@ impl Resolver<'_> {
                             super::ops::out_of_range(n, k)
                         ));
                     }
+                }
+                if let Some(s) = self.scopes.last_mut() {
+                    s.annotated.insert(name.to_string(), t.clone());
                 }
                 Ty::of_annotation(t)
             }
@@ -1066,13 +1162,29 @@ impl Resolver<'_> {
             }
             Stmt::CheckType { name, ty } => {
                 self.use_type(ty)?;
+                // `fn f(x: int = "s")`: a default value that never fits its parameter
+                if let Some((p, t)) = self.last_default.take() {
+                    if p == *name && t.matches(ty) == Some(false) {
+                        self.report(format!("type mismatch: the default value of parameter '{}' is {}, it expects {}", name, t.name(), ty));
+                    }
+                }
                 // after the check, the parameter has that type
                 let t = Ty::of_annotation(ty);
                 self.set_type(name, t);
             }
             Stmt::ReturnType(ty) => self.use_type(ty)?,
             Stmt::Interface(d) => self.declare(&d.name),
-            Stmt::Expr(e) => self.expr(e)?,
+            Stmt::Expr(e) => {
+                // the prologue `p = p ?? <default>` of a parameter with a default value
+                if let Expr::Assign { target, op: None, value } = e {
+                    if let (Expr::Ident(p), Expr::Logical { left, op: LogicalOp::Coalesce, right }) = (&**target, &**value) {
+                        if matches!(&**left, Expr::Ident(q) if q == p) {
+                            self.last_default = Some((p.text.clone(), literal_ty(right)));
+                        }
+                    }
+                }
+                self.expr(e)?
+            }
             Stmt::Block(b) => self.block(b, HashSet::new()),
             Stmt::If {
                 cond,
@@ -1126,8 +1238,14 @@ impl Resolver<'_> {
                 self.declare(name);
                 self.function(name, params, body, false);
             }
-            Stmt::Import { kind, .. } => {
+            Stmt::Import { kind, path } => {
                 let line = self.line;
+                // `import fs from "fogu:fs"`: its members are known (`fogu check`, T02)
+                if let (Some(name), ImportKind::Named { alias } | ImportKind::Namespace { alias }) = (path.strip_prefix("fogu:"), kind) {
+                    if let Some(exports) = MODULE_EXPORTS.with(|m| m.get().and_then(|f| f(name))) {
+                        self.modules.insert(alias.clone(), (path.clone(), exports));
+                    }
+                }
                 for n in import_names(kind) {
                     self.declare(&n);
                     if let Some(s) = self.scopes.last_mut() {
@@ -1220,6 +1338,10 @@ impl Resolver<'_> {
                 "line {}: type error: non-exhaustive match\n  help: add a '_ => ...' arm for the remaining values",
                 self.line
             ));
+        }
+        // an arm after one that takes every value never runs
+        if arms.iter().position(|a| catch_all(&a.pattern)).is_some_and(|i| i + 1 < arms.len()) {
+            self.warnings.push(format!("line {}: unreachable match arm after a catch-all arm ('_' or a name)", self.line));
         }
         for arm in arms {
             let mut binds = HashSet::new();
@@ -1345,8 +1467,23 @@ impl Resolver<'_> {
                 self.expr(index)?;
                 Ty::Any
             }
-            Expr::Access { target, .. } | Expr::OptAccess { target, .. } => {
+            Expr::Access { target, field } | Expr::OptAccess { target, field } => {
                 self.expr(target)?;
+                // `util._private()`: a private name through an imported module
+                if let (Expr::Ident(m), true) = (&**target, field.starts_with('_')) {
+                    if self.binding(m).is_some_and(|s| s.imports.iter().any(|(n, _)| n == m.as_str())) {
+                        self.report(format!("'{}' is private to module '{}' (names starting with '_')", field, m));
+                    }
+                }
+                // `fs.nope`: a member a built-in module does not have (not shadowed since)
+                if let Expr::Ident(m) = &**target {
+                    if let Some((path, exports)) = self.modules.get(m.as_str()) {
+                        if !exports.contains(field.as_str()) && self.binding(m).is_some_and(|s| s.imports.iter().any(|(n, _)| n == m.as_str())) {
+                            let msg = format!("'{}' has no member '{}'", path, field);
+                            self.errors.push(format!("line {}: name error: {}", self.line, msg));
+                        }
+                    }
+                }
                 Ty::Any
             }
             Expr::OptChain(inner) => {
@@ -1354,18 +1491,37 @@ impl Resolver<'_> {
                 Ty::Any
             }
             Expr::Call { callee, args } => self.call(callee, args)?,
-            Expr::Assign { target, value, .. } => {
-                self.expr(value)?;
+            Expr::Assign { target, value, op } => {
+                let value_ty = self.expr_ty(value)?;
                 self.expr(target)?;
                 if let Expr::Ident(name) = &**target {
                     if self.binding(name).is_some_and(|s| s.immutable.contains(name.as_str())) {
                         return self.fail(format!("cannot assign to '{}' because it is a const binding", name));
                     }
+                    // an annotated variable keeps its type: a value known to be of another is refused
+                    if op.is_none() {
+                        let declared = self.binding(name).and_then(|s| s.annotated.get(name.as_str())).cloned();
+                        if let Some(t) = declared.filter(|t| value_ty.matches(t) == Some(false)) {
+                            self.report(format!("type mismatch: variable '{}' is declared as {}, got {}", name, t, value_ty.name()));
+                        }
+                    }
                 }
                 Ty::Any
             }
             Expr::New { name, args } => {
-                self.use_name(name)?;
+                // (`new geo.Point()`: the module is the name used)
+                self.use_name(name.split('.').next().unwrap_or(name))?;
+                // `new f()` of a function, `new N(1, 2)` of a struct without a constructor
+                if let Some(s) = self.binding(name) {
+                    if s.fns.contains_key(name.as_str()) {
+                        self.report(format!("'{}' is not a struct type (it is 'fn')", name));
+                    }
+                }
+                if let Some(d) = self.struct_named(name) {
+                    if d.constructor.is_none() && !args.is_empty() {
+                        self.report(format!("struct '{}' has no constructor, but {} arguments were passed", name, args.len()));
+                    }
+                }
                 args.iter().try_for_each(|x| self.expr(x))?;
                 Ty::Any
             }
@@ -1418,10 +1574,40 @@ impl Resolver<'_> {
         for a in args {
             arg_tys.push(self.expr_ty(a)?);
         }
+        if let Expr::Access { target, field } = callee {
+            match &**target {
+                // `"s".foo()`, `[1].pushh(2)`: the methods of str and list are known
+                Expr::Str(_) | Expr::List(_) => {
+                    let sample = if matches!(&**target, Expr::Str(_)) { crate::runtime::value::Value::str("") } else { crate::runtime::value::Value::List(Rc::new(std::cell::RefCell::new(Vec::new()))) };
+                    if !crate::native::collections::has_method(&sample, field) {
+                        self.report(format!("'{}' has no method '{}'", sample.type_name(), field));
+                    }
+                }
+                // `new S().m(1, 2, 3)`: the method of a struct declared here
+                Expr::New { name, .. } => {
+                    if let Some(d) = self.struct_named(name) {
+                        if let Some((_, params, _)) = d.methods.iter().find(|(m, _, _)| m == field) {
+                            if rest_param(params).is_none() && args.len() > params.len() {
+                                self.report(format!("method '{}' expects at most {} arguments, got {}", field, params.len(), args.len()));
+                            }
+                        } else if !d.fields.iter().any(|f| f.name == *field) && d.embeds.is_empty() {
+                            self.report(format!("field or method '{}' does not exist on '{}'", field, name));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return Ok(Ty::Any);
+        }
         let Expr::Ident(name) = callee else {
             return Ok(Ty::Any);
         };
         let n = args.len();
+        // `S()` for a struct declared here: what the interpreter reports when it runs
+        if self.struct_named(name).is_some() {
+            self.report(format!("'{}' is a struct: create one with `new {}()`", name, name));
+            return Ok(Ty::Any);
+        }
         match self.binding(name) {
             Some(s) => {
                 let Some(sig) = s.fns.get(name.as_str()).cloned() else {
@@ -1581,6 +1767,36 @@ mod tests {
             r.warnings,
             vec!["line 2: destructuring a list binds the whole list to 'a' and nil to the rest (only a tuple, `return a, b`, or a list written here is split)"]
         );
+    }
+
+    #[test]
+    fn warns_about_match_arms_after_a_catch_all() {
+        let r = run("fn f(n) {\n    return match n {\n        1 => \"one\"\n        _ => \"many\"\n        2 => \"two\"\n    }\n}\nprint(f(2))");
+        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+        assert!(r.warnings[0].contains("unreachable match arm after a catch-all arm"), "{:?}", r.warnings);
+        // the catch-all last: nothing to say
+        assert!(run("fn f(n) { return match n { 1 => 1, _ => 2 } }\nprint(f(2))").warnings.is_empty());
+    }
+
+    #[test]
+    fn an_annotated_variable_keeps_its_type() {
+        let r = run("let a: list<int> = [1]\na = \"text\"\nlet n: int = 1\nn = \"x\"\nn = 2\nlet f: float = 1.5\nf = 2\nlet free = 1\nfree = \"ok\"\nprint(a, n, f, free)");
+        assert_eq!(
+            r.errors,
+            vec![
+                "line 2: type error: type mismatch: variable 'a' is declared as list<int>, got str",
+                "line 4: type error: type mismatch: variable 'n' is declared as int, got str",
+            ]
+        );
+        // a value whose type is not known is never reported
+        assert!(run("fn g() { return 1 }\nlet s: str = \"a\"\ns = g()\nprint(s)").errors.is_empty());
+    }
+
+    #[test]
+    fn map_keys_are_str() {
+        let r = run("let m: map<int, str> = {}\nprint(m)");
+        assert!(r.errors.iter().any(|e| e.contains("the keys of a map are str")), "{:?}", r.errors);
+        assert!(run("let m: map<str, int> = {}\nprint(m)").errors.is_empty());
     }
 
     #[test]

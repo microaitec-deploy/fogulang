@@ -1,0 +1,79 @@
+// Earlier-round bugs fixed in 0.8.4 (the third round's regression list).
+import geo from "./_r3geo.fg"
+import csv from "fogu:csv"
+import xml from "fogu:xml"
+import json from "fogu:json"
+import fs from "fogu:fs"
+import path from "fogu:path"
+import zip from "fogu:zip"
+import security from "fogu:security"
+import web from "fogu:web"
+
+// B09: `new` of a struct a module exports
+const p = new geo.Point(3, 4)
+print("B09", p.x, p.y, p.norm1())
+
+// B03: an int under a float annotation is that float
+fn area(w: float, h: float) { return w * h / 2 }
+fn one(): float { return 1 }
+let f: float = 3
+print("B03", area(7, 2), typeof(one()), one(), typeof(f), f)
+
+// L20: each value of an annotated variadic parameter is checked
+fn total(...xs: int) {
+    let t = 0
+    for x in xs { t += x }
+    return t
+}
+print("L20", total(1, 2, 3), total())
+
+// L19: octal literals
+print("L19", 0o17, 0o7_7, 0x1F, 0b101)
+
+// §20: a template inside an interpolation, with a backtick in a string
+const w = "z"
+print("§20", `x ${ `y ${ "`" } ${w}` } w`)
+
+// F03: csv rows of different lengths
+print("F03", csv.stringify([["a", "b"], ["c"]]).trim().replace("\r\n", "|").replace("\n", "|"))
+
+// F02: mixed content stays as it is
+print("F02", xml.stringify(xml.parse("<p>Hello <b>world</b>!</p>", { whitespace: true })).trim())
+
+// §21: a JSON error in a text of several lines names the line and column
+print("§21", json.parse("{\n  \"a\": 1,\n  \"b\": x\n}"))
+
+// F13: the byte order mark is not part of the text
+Fogu.file("r3bom.tmp.txt").write(bytes([0xEF, 0xBB, 0xBF, 0x68, 0x69]))?
+print("F13", fs.readText("r3bom.tmp.txt"), len(fs.readText("r3bom.tmp.txt")), fs.readLines("r3bom.tmp.txt"))
+
+// B28: the folder of a root is the root
+print("B28", path.dirname("/"), path.dirname("/etc"), path.isAbsolute("/etc"), path.isAbsolute("etc"))
+
+// S19: gunzip has a limit
+const big = zip.gzip("A".repeat(100000))
+print("S19", len(zip.gunzip(big)), zip.gunzip(big, { maxSize: 1000 }))
+
+// S13: the short IPv4 forms are the addresses they name
+print("S13", security.isPrivate("127.1"), security.isPrivate("2130706433"), security.isPrivate("0x7f000001"), security.isPrivate("0177.0.0.1"), security.isPrivate("8.8.8.8"))
+
+// S09 / S16: a str guessed as HTML says so; securityHeaders on every answer
+const app = web.app()
+app.use(web.securityHeaders({ hsts: true, csp: "default-src 'self'" }))
+app.get("/h", (ctx) => "<b>hi</b>")
+const r = app.handler()({ method: "GET", path: "/h" })
+const h = r.headers
+print("S09", h["content-type"], h["x-content-type-options"])
+print("S16", h["x-frame-options"], h["referrer-policy"], h["cross-origin-opener-policy"], h["content-security-policy"], h["strict-transport-security"])
+
+// RA03: app.handler() gives the content of a web.file answer
+fs.writeText("r3ra03.tmp.txt", "file body")
+app.get("/f", (ctx) => web.file("r3ra03.tmp.txt", { root: "." }))
+const rf = app.handler()({ method: "GET", path: "/f" })
+print("RA03", rf.status, rf.body, len(rf.bytes()))
+
+// §6: a channel declared chan<int> carries ints (the last line: it stops the program)
+let c: chan<int> = chan(2)
+c <- 1
+print("§6", <-c)
+c <- "not an int"

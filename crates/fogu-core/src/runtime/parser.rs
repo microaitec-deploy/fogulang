@@ -455,12 +455,24 @@ impl Parser {
                     }));
                 }
                 if let Some(ty) = ty.filter(|t| *t != TypeExpr::Any) {
-                    // the variadic parameter is a list of the annotated type
-                    let ty = if rest { TypeExpr::Named("list".into()) } else { ty };
-                    prologue.push(Stmt::CheckType {
-                        name: name.clone(),
-                        ty,
-                    });
+                    if rest {
+                        // the variadic parameter is a list, and each of its values has
+                        // the annotated type: `for xs in xs { <check xs> }` (the loop's
+                        // own `xs` is the value; the message names the parameter)
+                        prologue.push(Stmt::CheckType { name: name.clone(), ty: TypeExpr::Named("list".into()) });
+                        prologue.push(Stmt::For {
+                            id: next_loop_id(),
+                            var: name.clone(),
+                            var2: None,
+                            iter: Expr::Ident(Name::new(name.clone())),
+                            body: Box::new(Stmt::Block(vec![Stmt::CheckType { name: name.clone(), ty }])),
+                        });
+                    } else {
+                        prologue.push(Stmt::CheckType {
+                            name: name.clone(),
+                            ty,
+                        });
+                    }
                 }
                 params.push(if rest { format!("{}{}", REST_PREFIX, name) } else { name });
                 if !self.matches(&Token::Comma) {
@@ -743,6 +755,7 @@ impl Parser {
                     }
                 }
                 Token::Ident(fname) => {
+                    let field_line = self.line();
                     self.advance();
                     // `name(...) { }` — method without `fn` (includes `new`).
                     if self.check(&Token::LParen) {
@@ -767,6 +780,7 @@ impl Parser {
                     fields.push(StructField {
                         name: fname,
                         default,
+                        line: field_line,
                     });
                 }
                 other => {
@@ -1602,7 +1616,12 @@ impl Parser {
 
             Token::Ident(s) => {
                 if s == "new" && matches!(self.peek(), Token::Ident(_)) {
-                    let name = self.expect_ident("a struct name")?;
+                    let mut name = self.expect_ident("a struct name")?;
+                    // `new geo.Point()`: a struct a module exports (kept as "geo.Point")
+                    while self.check(&Token::Dot) && matches!(self.peek_n(1), Token::Ident(_)) {
+                        self.advance();
+                        name = format!("{}.{}", name, self.expect_ident("a struct name")?);
+                    }
                     // `new Stack<int>()`: type arguments are erased
                     if self.check(&Token::Lt) {
                         self.parse_type_args()?;

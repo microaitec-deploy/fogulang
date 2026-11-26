@@ -1,0 +1,5 @@
+nil error MSG_ABC
+error inner NaN inf -inf
+{a: [1, 2.5, x, nil, true]}
+error: Worker.call retfn: result: a value of type 'fn' cannot cross to another thread (numbers, text, bools, nil, lists, maps and errors do)
+NaN

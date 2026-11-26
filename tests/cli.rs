@@ -643,6 +643,16 @@ fn build_lib_makes_a_loadable_shared_library() {
     let header = fs::read_to_string(d.path().join("dist").join("mathlib.h")).unwrap();
     assert!(header.contains("add(a, b)") && header.contains("fogu_load") && !header.contains("_hidden"), "{}", header);
 
+    // SEC02: with `export fn` in the program, only those are listed as its functions
+    let e = TempDir::new("buildlib-exports");
+    e.write("fogu.json", "{ \"name\": \"explib\", \"version\": \"1.0.0\", \"entry\": \"main.fg\" }\n");
+    e.write("main.fg", "fn helper(x) { return x + 1 }\nexport fn api(x) { return helper(x) }\n");
+    let o = fogu(e.path(), &["build", "--lib", "--runtime", &runtime.to_string_lossy()]);
+    let out = text(&o);
+    assert!(o.status.success() && out.contains("functions: api") && !out.contains("helper"), "{}", out);
+    let header = fs::read_to_string(e.path().join("dist").join("explib.h")).unwrap();
+    assert!(header.contains("api(x)") && !header.contains("helper"), "{}", header);
+
     // load it as a host would (from another folder: nothing of the project is needed)
     type Load = unsafe extern "C" fn(*mut *mut c_void) -> *mut c_char;
     type Call = unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> *mut c_char;
@@ -684,4 +694,191 @@ fn build_lib_makes_a_loadable_shared_library() {
         assert!(ask("nope", "[]").contains("\"ok\":false"));
         free(rt);
     }
+}
+
+// ---- 0.8.4: the findings of the third test round ----
+
+#[test]
+fn exit_in_a_task_ends_the_process_with_its_code() {
+    // N01: `Fogu.exit()` in a task while the program waits for a signal crashed on
+    // Windows (0xC0000005) after the output was written
+    let dir = TempDir::new("exit-task");
+    dir.write("a.fg", "fg fn() { Fogu.sleep(100ms); print(\"task exits\"); Fogu.exit(0) }()\nFogu.signal.wait()\n");
+    let o = fogu(dir.path(), &["a.fg"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "task exits");
+    dir.write("b.fg", "fg fn() { Fogu.sleep(50ms); Fogu.exit(7) }()\nFogu.signal.wait()\n");
+    assert_eq!(fogu(dir.path(), &["b.fg"]).status.code(), Some(7));
+    // with a server and a request still running: aborted on Linux (exit code 134,
+    // "panic in a destructor during cleanup") before 0.8.4
+    dir.write(
+        "c.fg",
+        "import web from \"fogu:web\"\nimport http from \"fogu:http\"\nconst app = web.app()\napp.get(\"/slow\", (ctx) => { Fogu.sleep(2s); return \"late\" })\napp.get(\"/a\", (ctx) => \"a\")\napp.listen(18561, { quiet: true })?\nfg fn() { http.get(\"http://127.0.0.1:18561/slow\") }()\nfg fn() {\n    print(http.get(\"http://127.0.0.1:18561/a\")?.body)\n    Fogu.sleep(200ms)\n    print(\"bye\")\n    Fogu.exit(3)\n}()\nFogu.signal.wait()\n",
+    );
+    let o = fogu(dir.path(), &["c.fg"]);
+    assert_eq!(o.status.code(), Some(3), "{}", text(&o));
+    assert!(!text(&o).contains("panicked"), "{}", text(&o));
+    assert_eq!(String::from_utf8_lossy(&o.stdout).replace("\r\n", "\n"), "a\nbye\n");
+}
+
+#[test]
+fn a_task_that_ends_with_an_error_reports_it() {
+    // §23: `f()?` in a task ended it without a word
+    let dir = TempDir::new("task-error");
+    dir.write(
+        "a.fg",
+        "fn f() { return nil, error(\"oops\") }\nfg fn() {\n    print(\"before\")\n    f()?\n    print(\"after\")\n}()\nfg fn() { return 1, nil }()\nFogu.sleep(200ms)\nprint(\"main done\")\n",
+    );
+    let o = fogu(dir.path(), &["a.fg"]);
+    let all = text(&o);
+    assert_eq!(String::from_utf8_lossy(&o.stdout).replace("\r\n", "\n"), "before\nmain done\n", "{}", all);
+    assert!(all.contains("unhandled error: oops"), "{}", all);
+    assert!(all.contains("in the fg task started at a.fg:2"), "{}", all);
+    // only the task that failed is reported
+    assert_eq!(all.matches("unhandled error").count(), 1, "{}", all);
+}
+
+#[test]
+fn sql_errors_do_not_show_the_password() {
+    // SEC03
+    let dir = TempDir::new("sql-redact");
+    dir.write(
+        "a.fg",
+        "import sql from \"fogu:sql\"\nconst [db, err] = sql.open(\"postgres://admin:SuperSecretPw123@127.0.0.1:1/appdb?connect_timeout=1&password=Other9Secret\")\nprint(err.message)\n",
+    );
+    let o = fogu(dir.path(), &["a.fg"]);
+    let all = text(&o);
+    assert!(all.contains("postgres://admin:***@127.0.0.1:1/appdb"), "{}", all);
+    assert!(!all.contains("SuperSecretPw123") && !all.contains("Other9Secret"), "{}", all);
+}
+
+#[test]
+fn check_warns_about_arms_after_a_catch_all_and_test_has_a_timeout() {
+    let dir = TempDir::new("r3-tools");
+    dir.write("m.fg", "fn classify(n: int): str {\n    return match n {\n        1 => \"one\"\n        _ => \"many\"\n        2 => \"two\"\n    }\n}\nprint(classify(2))\n");
+    let o = fogu(dir.path(), &["check", "m.fg"]);
+    assert!(text(&o).contains("W0006") && text(&o).contains("unreachable match arm"), "{}", text(&o));
+    // T04: a test that never ends fails, the next one runs
+    dir.write(
+        "hang.test.fg",
+        "import { test, expect } from \"fogu:test\"\nimport time from \"fogu:time\"\ntest(\"before\", () => { expect(1).toBe(1) })\ntest(\"hangs\", () => { loop { time.delay(20ms) } })\ntest(\"after\", () => { expect(1).toBe(1) })\n",
+    );
+    let o = fogu(dir.path(), &["test", "--timeout", "500ms", "hang.test.fg"]);
+    let all = text(&o);
+    assert_eq!(o.status.code(), Some(1), "{}", all);
+    assert!(all.contains("timed out after 500ms"), "{}", all);
+    assert!(all.contains("2 passed") && all.contains("1 failed"), "{}", all);
+    // T05
+    dir.write("top.fg", "let x = 1\nprint(x + 2)\n");
+    assert!(text(&fogu(dir.path(), &["disasm", "top.fg"])).contains("no functions or methods to disassemble"));
+    // T01: continuation lines keep their indentation
+    dir.write("cont.fg", "const total = 1 +\n    2 +\n    3\nfn compute(a, b) {\n    let result = a\n        + b\n        * 2\n    return result\n}\nprint(total, compute(3, 4))\n");
+    let before = fs::read_to_string(dir.path().join("cont.fg")).unwrap();
+    fogu(dir.path(), &["fmt", "cont.fg"]);
+    assert_eq!(fs::read_to_string(dir.path().join("cont.fg")).unwrap().replace("\r\n", "\n"), before);
+}
+
+#[test]
+fn check_finds_the_obvious_static_errors_of_l11() {
+    let dir = TempDir::new("l11");
+    let cases = [
+        ("a.fg", "struct S {}\nprint(S())\n", "is a struct: create one with `new S()`"),
+        ("b.fg", "fn f() {}\nprint(new f())\n", "'f' is not a struct type (it is 'fn')"),
+        ("c.fg", "print(\"s\".foo())\n", "'str' has no method 'foo'"),
+        ("d.fg", "print([1].pushh(2))\n", "'list' has no method 'pushh'"),
+        ("e.fg", "struct N { a = 1 }\nprint(new N(1, 2, 3))\n", "has no constructor, but 3 arguments were passed"),
+        ("f.fg", "struct S {\n    fn m(a) { return a }\n}\nprint(new S().m(1, 2, 3))\n", "method 'm' expects at most 1 arguments, got 3"),
+        ("g.fg", "interface Closable { close() }\nfn useC(c: Closable) { return c }\nprint(useC(5))\n", "parameter 'c' expects Closable, got int"),
+        ("h.fg", "fn f(x: int = \"s\") { return x }\nprint(f())\n", "the default value of parameter 'x' is str, it expects int"),
+        ("i.fg", "let x: char = \"AB\"\nprint(x)\n", "got str of 2 characters"),
+        ("j.fg", "import u from \"./_u.fg\"\nprint(u._p())\n", "'_p' is private to module 'u'"),
+        ("k.fg", "import fs from \"fogu:fs\"\nprint(fs.thisDoesNotExist(\"x\"))\n", "'fogu:fs' has no member 'thisDoesNotExist'"),
+    ];
+    dir.write("_u.fg", "export fn _p() { return 1 }\nexport fn q() { return 2 }\n");
+    for (file, src, want) in cases {
+        dir.write(file, src);
+        let o = fogu(dir.path(), &["check", file]);
+        assert!(text(&o).contains(want), "{}: {}", file, text(&o));
+    }
+    // and what is right stays right
+    dir.write(
+        "ok.fg",
+        "import u from \"./_u.fg\"\nimport fs from \"fogu:fs\"\nfn shadow(fs) { return fs.whatever }\nprint(fs.exists(\"ok.fg\"), shadow({ whatever: 1 }))\nstruct P {\n    x = 0\n    new(x) { this.x = x }\n    fn get() { return this.x }\n}\ninterface Getter { get() }\nfn show(g: Getter) { return g.get() }\nfn f(x: int = 3) { return x }\nlet c: char = \"A\"\nprint(new P(1).get(), show(new P(2)), show({ get: () => 3 }), f(), c, \"s\".upper(), [1].push(2), u.q())\n",
+    );
+    let o = fogu(dir.path(), &["check", "ok.fg"]);
+    assert!(o.status.success(), "{}", text(&o));
+    assert_eq!(String::from_utf8_lossy(&fogu(dir.path(), &["ok.fg"]).stdout).trim(), "true 1\n1 2 3 3 A S [1, 2] 2");
+}
+
+#[test]
+#[cfg(unix)]
+fn process_run_kills_a_child_that_runs_out_of_time() {
+    // B35
+    let dir = TempDir::new("proc-timeout");
+    dir.write(
+        "a.fg",
+        "import process from \"fogu:process\"\nconst t0 = clock()\nconst r = process.run(\"sleep\", [\"5\"], { timeout: 300ms })?\nprint(r.ok, r.timedOut, clock() - t0 < 3.0)\nconst q = process.run(\"true\", [], { timeout: 5s })?\nprint(q.ok, q.timedOut)\n",
+    );
+    let o = fogu(dir.path(), &["a.fg"]);
+    assert_eq!(String::from_utf8_lossy(&o.stdout).replace("\r\n", "\n"), "false true true\ntrue false\n", "{}", text(&o));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn vm_contexts_do_not_keep_their_functions() {
+    // P07: every fogu:vm context that defined a function leaked ~1.2 KB (266 MB for 200k)
+    let dir = TempDir::new("vm-leak");
+    dir.write(
+        "a.fg",
+        "import vm from \"fogu:vm\"\nfor i in 0..60000 { vm.runInNewContext(\"fn f(x) { return x + 1 }\\nf(1)\") }\nconst st = Fogu.file(\"/proc/self/status\").text()\nfor line in st.split(\"\\n\") { if line.contains(\"VmRSS\") { print(int(line.split(\":\")[1].trim().split(\" \")[0])) } }\n",
+    );
+    let o = fogu(dir.path(), &["a.fg"]);
+    let kb: u64 = String::from_utf8_lossy(&o.stdout).trim().parse().unwrap_or(u64::MAX);
+    // (0.8.3: about 90 MB; now the same as a program that makes no context)
+    assert!(kb < 40_000, "RSS after 60000 contexts: {} kB\n{}", kb, text(&o));
+}
+
+#[test]
+fn jit_debug_names_a_variable_compiled_code_only_reads() {
+    // B23: the message said "assignment to const 'x'" for a `let x`
+    let dir = TempDir::new("jit-debug");
+    dir.write("a.fg", "let x = []\nfor i in 0..1000 { x = [x] }\nprint(len(x))\n");
+    let o = fogu(dir.path(), &["--jit-debug", "a.fg"]);
+    let t = text(&o);
+    assert!(t.contains("assignment to 'x', which compiled code only reads"), "{}", t);
+    assert!(!t.contains("const"), "{}", t);
+    assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "1", "{}", t);
+}
+
+#[test]
+#[cfg(unix)]
+fn local_packages_from_an_archive_and_after_a_change() {
+    let dir = TempDir::new("local-pkg");
+    dir.write("lib/fogu.json", "{\"name\":\"mylib\",\"version\":\"1.0.0\",\"main\":\"index.fg\"}\n");
+    dir.write("lib/index.fg", "export fn hi() { return \"hi\" }\n");
+    dir.write("app/fogu.json", "{\"name\":\"app\",\"version\":\"0.1.0\",\"entry\":\"main.fg\"}\n");
+    dir.write("app/t.fg", "import { hi } from \"mylib-1.0\"\nprint(hi())\n");
+    let app = dir.path().join("app");
+    let tar = Command::new("tar")
+        .args(["czf", "mylib-1.0.tar.gz", "-C", "lib", "."])
+        .current_dir(dir.path())
+        .status()
+        .unwrap();
+    assert!(tar.success());
+
+    // §10: a local .tar.gz is extracted (it failed with "the directory name is invalid")
+    let o = fogu(&app, &["add", "../mylib-1.0.tar.gz"]);
+    assert!(o.status.success(), "{}", text(&o));
+    let o = fogu(&app, &["t.fg"]);
+    assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "hi", "{}", text(&o));
+
+    // §17: a local folder that changed after fogu.lock is named as such, with the way out
+    let o = fogu(&app, &["add", "../lib"]);
+    assert!(o.status.success(), "{}", text(&o));
+    fs::write(dir.path().join("lib/index.fg"), "export fn hi() { return \"HI\" }\n").unwrap();
+    let o = fogu(&app, &["install"]);
+    let t = text(&o);
+    assert!(!o.status.success(), "{}", t);
+    assert!(t.contains("the local package 'lib' changed since fogu.lock was written"), "{}", t);
+    assert!(t.contains("run `fogu update lib`"), "{}", t);
 }

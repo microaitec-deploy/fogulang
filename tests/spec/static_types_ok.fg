@@ -4,7 +4,7 @@ x = "now a string"
 print(x + "!")
 
 fn scale(v: float) { return v * 2 }
-const y: int = scale(2)        // v may hold an int: not reported
+const y: float = scale(2)      // an int argument is a float there (0.8.4, B03): 4.0
 print(y)
 
 fn pick(a, b = "b", ...rest) { return [a, b, len(rest)] }

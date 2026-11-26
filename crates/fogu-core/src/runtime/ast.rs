@@ -274,6 +274,8 @@ pub enum ExportKind {
 pub struct StructField {
     pub name: String,
     pub default: Option<Expr>,
+    /// where it is declared (an error of its default value is reported there)
+    pub line: u32,
 }
 
 #[derive(Debug, Clone)]

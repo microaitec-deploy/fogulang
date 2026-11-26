@@ -148,6 +148,19 @@ impl Environment {
     /// or a child scope still uses the scope…) nothing changes.
     #[inline(never)]
     pub fn break_cycles(env: &Rc<RefCell<Self>>, holders: usize) -> bool {
+        Self::break_cycles_of(env, holders, false)
+    }
+
+    /// [`break_cycles`](Self::break_cycles) for the module scope of a `fogu:vm`
+    /// context that ended (P07): a function defined there holds the scope, the scope
+    /// holds it, and every context leaked them. The same count decides — a function
+    /// or a task that escaped the context keeps everything as it is.
+    #[inline(never)]
+    pub fn release_context(env: &Rc<RefCell<Self>>, holders: usize) -> bool {
+        Self::break_cycles_of(env, holders, true)
+    }
+
+    fn break_cycles_of(env: &Rc<RefCell<Self>>, holders: usize, context: bool) -> bool {
         let count = Rc::strong_count(env);
         if count <= holders || Rc::weak_count(env) != 0 {
             return false;
@@ -155,7 +168,7 @@ impl Environment {
         let me = Rc::as_ptr(env);
         let inside = {
             let Ok(e) = env.try_borrow() else { return false };
-            if e.stable || e.module.is_some() {
+            if !context && (e.stable || e.module.is_some()) {
                 return false;
             }
             // a bounded look: a big structure is not worth it here

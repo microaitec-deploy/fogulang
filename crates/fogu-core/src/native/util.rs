@@ -112,9 +112,130 @@ pub fn deadline_after(d: std::time::Duration) -> std::time::Instant {
     now.checked_add(d).unwrap_or_else(|| now + std::time::Duration::from_secs(100 * 365 * 86_400))
 }
 
+/// The path of `rel` under the folder `root`, for a name that comes from outside
+/// the program (a query, a header, an upload): `..`, drive letters and NUL are
+/// refused, a leading separator is dropped, and what exists of the result must
+/// still be inside the folder once symbolic links are followed.
+pub fn contained(root: &str, rel: &str) -> Result<std::path::PathBuf, String> {
+    let mut out = std::path::PathBuf::from(if root.is_empty() { "." } else { root });
+    for part in rel.split(['/', '\\']) {
+        match part {
+            "" | "." => {}
+            ".." => return Err(format!("'{}' leaves '{}'", rel, root)),
+            p if p.contains(':') || p.contains('\0') => return Err(format!("'{}' is not a name under '{}'", rel, root)),
+            p => out.push(p),
+        }
+    }
+    let base = std::path::Path::new(if root.is_empty() { "." } else { root }).canonicalize().map_err(|e| format!("{}: {}", root, e))?;
+    // (a file still to be created: its nearest existing folder decides)
+    let mut probe = out.as_path();
+    let real = loop {
+        match probe.canonicalize() {
+            Ok(real) => break real,
+            Err(_) => match probe.parent() {
+                Some(up) if !up.as_os_str().is_empty() => probe = up,
+                _ => break base.clone(),
+            },
+        }
+    };
+    if !real.starts_with(&base) {
+        return Err(format!("'{}' leaves '{}'", rel, root));
+    }
+    Ok(out)
+}
+
+/// True when `p` is the folder `base` or something under it, with `..` and
+/// symbolic links resolved (what does not exist yet is resolved by name).
+pub fn is_inside(base: &str, p: &str) -> bool {
+    fn real(p: &std::path::Path) -> Option<std::path::PathBuf> {
+        let abs = std::path::absolute(p).ok()?;
+        // lexical first: `a/../b` must not need `a` to exist
+        let mut flat = std::path::PathBuf::new();
+        for c in abs.components() {
+            match c {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    flat.pop();
+                }
+                other => flat.push(other.as_os_str()),
+            }
+        }
+        // then the links of the part that exists
+        let mut rest = Vec::new();
+        let mut probe = flat.clone();
+        loop {
+            if let Ok(done) = probe.canonicalize() {
+                let mut done = done;
+                for name in rest.iter().rev() {
+                    done.push(name);
+                }
+                return Some(done);
+            }
+            let name = probe.file_name()?.to_os_string();
+            rest.push(name);
+            if !probe.pop() {
+                return None;
+            }
+        }
+    }
+    match (real(std::path::Path::new(base)), real(std::path::Path::new(p))) {
+        (Some(base), Some(p)) => p.starts_with(base),
+        _ => false,
+    }
+}
+
+/// A connection URL (or a message that holds one) as it may be shown: the
+/// password of `scheme://user:password@host` and of a `password=` parameter
+/// becomes `***`. Error messages and logs never carry the secret.
+pub fn redact_url(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("://") {
+        let (head, tail) = rest.split_at(at + 3);
+        out.push_str(head);
+        // the authority ends at the first of these
+        let end = tail.find(['/', '?', '#', ' ', '\'', '"', ')']).unwrap_or(tail.len());
+        let authority = &tail[..end];
+        match authority.rfind('@') {
+            Some(a) => match authority[..a].find(':') {
+                Some(c) => {
+                    out.push_str(&authority[..c + 1]);
+                    out.push_str("***");
+                    out.push_str(&authority[a..]);
+                }
+                None => out.push_str(authority),
+            },
+            None => out.push_str(authority),
+        }
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    for key in ["password=", "passwd=", "pwd=", "sslpassword="] {
+        let mut from = 0;
+        while let Some(i) = out[from..].to_ascii_lowercase().find(key) {
+            let start = from + i + key.len();
+            // (a parameter, not the end of a longer name)
+            let named = from + i == 0 || !out.as_bytes()[from + i - 1].is_ascii_alphanumeric();
+            let end = out[start..].find(['&', ' ', '\'', '"', ';', ')']).map_or(out.len(), |e| start + e);
+            if named {
+                out.replace_range(start..end, "***");
+                from = start + 3;
+            } else {
+                from = start;
+            }
+        }
+    }
+    out
+}
+
 /// Paths are shown with forward slashes on every platform.
 pub fn path_str(p: &std::path::Path) -> String {
-    p.to_string_lossy().replace('\\', "/")
+    let shown = p.to_string_lossy().replace('\\', "/");
+    // (a canonical path on Windows is `\\?\C:\…`: programs and people expect `C:/…`)
+    match shown.strip_prefix("//?/") {
+        Some(plain) if !plain.starts_with("UNC/") => plain.to_string(),
+        _ => shown,
+    }
 }
 
 /// Runs blocking `work` (network I/O) on the worker pool and returns a
@@ -156,6 +277,38 @@ pub fn json_to_value(j: &serde_json::Value) -> Value {
     }
 }
 
+thread_local! {
+    /// Until when each task may wait: the deadline of the `fogu:vm` run (or of
+    /// the test) it is in. Kept by `Interpreter::set_deadline`.
+    static WAIT_LIMITS: std::cell::RefCell<HashMap<usize, (std::time::Instant, std::time::Duration)>> = std::cell::RefCell::new(HashMap::new());
+    /// `WAIT_LIMITS.len()`: the usual case (none) costs one load.
+    static WAIT_LIMIT_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Sets (or clears) the instant after which the task `task` must not be left
+/// sleeping, with the timeout it comes from (for the message).
+pub fn set_wait_limit(task: usize, limit: Option<(std::time::Instant, std::time::Duration)>) {
+    WAIT_LIMITS.with(|m| {
+        let mut m = m.borrow_mut();
+        match limit {
+            Some(l) => {
+                m.insert(task, l);
+            }
+            None => {
+                m.remove(&task);
+            }
+        }
+        WAIT_LIMIT_COUNT.with(|c| c.set(m.len()));
+    });
+}
+
+fn wait_limit() -> Option<(std::time::Instant, std::time::Duration)> {
+    if WAIT_LIMIT_COUNT.with(|c| c.get()) == 0 {
+        return None;
+    }
+    WAIT_LIMITS.with(|m| m.borrow().get(&crate::runtime::sched::task_id()).copied())
+}
+
 /// Sleeps without blocking the other `fg` tasks: they run while this one
 /// (or the main program) waits.
 pub fn sleep_coop(d: std::time::Duration) -> Result<(), String> {
@@ -167,6 +320,39 @@ pub fn sleep_coop(d: std::time::Duration) -> Result<(), String> {
     let deadline = std::time::Instant::now()
         .checked_add(d)
         .ok_or_else(|| format!("sleep: a duration of {} s is too large", d.as_secs()))?;
+    // code with a timeout (`fogu:vm`, `fogu test --timeout`) sleeps no longer than it
+    if let Some((limit, timeout)) = wait_limit().filter(|(limit, _)| *limit < deadline) {
+        sleep_until(limit)?;
+        return Err(format!(
+            "script execution timed out after {}",
+            Value::Duration(timeout.as_nanos() as i64).to_display_string()
+        ));
+    }
+    sleep_until(deadline)
+}
+
+/// Windows wakes sleeping threads on a 15.6 ms tick unless a program asks for 1 ms
+/// (§8: 100 × `time.delay(1ms)` took 1.5 s). Asked once, by the first sleep of the
+/// program; the process keeps it until it ends.
+#[cfg(windows)]
+fn fine_timers() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        #[link(name = "winmm")]
+        unsafe extern "system" {
+            fn timeBeginPeriod(period: u32) -> u32;
+        }
+        // SAFETY: a plain winmm call with a constant
+        unsafe {
+            timeBeginPeriod(1);
+        }
+    });
+}
+
+fn sleep_until(deadline: std::time::Instant) -> Result<(), String> {
+    use crate::runtime::sched;
+    #[cfg(windows)]
+    fine_timers();
     // a task parks behind a gate opened at its deadline: waking costs nothing
     // before, and tasks wake in the order of their deadlines
     if !cfg!(target_family = "wasm") && sched::in_task() {

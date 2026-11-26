@@ -11,10 +11,25 @@ pub fn build() -> ModuleValue {
 
     exports.insert(
         "stringify".into(),
-        nfn("stringify", 1, |args| {
+        crate::native::util::nfn_var("stringify", 1, |args| {
+            crate::native::util::max_args(args, 2, "json.stringify")?;
+            // { strict: true }: what JSON cannot hold is an error, not `null` / "<fn>"
+            let strict = match args.get(1) {
+                None | Some(Value::Nil) => false,
+                Some(Value::Map(o)) => o.borrow().get("strict").is_some_and(|v| v.is_truthy()),
+                Some(other) => return Err(format!("json.stringify: options must be a map, got '{}'", other.type_name())),
+            };
+            if strict {
+                take_lossy();
+            }
             let mut out = String::with_capacity(64);
             write_value(&args[0], &mut out, &mut WalkPath::default(), None)
                 .map_err(|_| io_err!("json.stringify: the value contains itself (a cycle) or is nested too deeply"))?;
+            if strict {
+                if let Some(what) = take_lossy() {
+                    return Err(io_err!("json.stringify: {} is not representable in JSON", what));
+                }
+            }
             Ok(Value::Str(out.into()))
         }),
     );
@@ -66,7 +81,10 @@ fn write_value(v: &Value, out: &mut String, path: &mut WalkPath, on_cycle: Optio
             let _ = write!(out, "{}", n);
         }
         // JSON has no NaN or infinity
-        Value::Float(n) if !n.is_finite() => out.push_str("null"),
+        Value::Float(n) if !n.is_finite() => {
+            lossy("NaN or infinity");
+            out.push_str("null")
+        }
         // the text `print` gives (`value::display_float`): a whole float keeps its `.0`, so it
         // comes back a float; the exponent form starts where print's does (>= 1e21, < 1e-6)
         Value::Float(n) => out.push_str(&crate::runtime::value::display_float(*n)),
@@ -131,12 +149,32 @@ fn write_value(v: &Value, out: &mut String, path: &mut WalkPath, on_cycle: Optio
         // stringify and parse by 6-8%, measured)
         Value::Array(a) => write_array(&a.borrow(), out),
         other => {
+            lossy(other.type_name());
             out.push_str("\"<");
             out.push_str(other.type_name());
             out.push_str(">\"");
         }
     }
     Ok(())
+}
+
+thread_local! {
+    /// What the last values written could not hold as JSON (see [`take_lossy`]).
+    static LOSSY: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+#[cold]
+#[inline(never)]
+fn lossy(what: &'static str) {
+    LOSSY.with(|l| l.set(Some(what)));
+}
+
+/// What was written as something else since the last call — `null` for NaN and
+/// infinity, `"<fn>"` for a value JSON has no form for — or `None` when every
+/// value went out as itself. Callers that must not lose data (`json.stringify`
+/// with `strict`, the boundary of a `sync.Worker`) ask after writing.
+pub fn take_lossy() -> Option<&'static str> {
+    LOSSY.with(|l| l.take())
 }
 
 /// A sized list (`list<u8>`…, `list<char>`) as a JSON array of its elements.
@@ -205,7 +243,7 @@ fn parse(s: &str) -> Result<Value, String> {
     let v = p.parse_value()?;
     p.skip_ws();
     if p.pos != p.b.len() {
-        return Err(format!("extra content after JSON at position {}", p.char_pos()));
+        return Err(format!("extra content after JSON at {}", p.at()));
     }
     Ok(v)
 }
@@ -239,6 +277,24 @@ impl JsonParser<'_> {
     }
 
     /// The position counted in characters (error messages).
+    /// Where the parser is, for a message: `position N` in a one-line text, `line L,
+    /// column C` (1-based) once the text has more lines — a position is no help there.
+    fn at(&self) -> String {
+        let (mut line, mut col) = (1, 1);
+        for (i, c) in self.s.char_indices() {
+            if i >= self.pos {
+                break;
+            }
+            if c == '\n' {
+                line += 1;
+                col = 1;
+            } else {
+                col += 1;
+            }
+        }
+        if line == 1 { format!("position {}", self.char_pos()) } else { format!("line {}, column {}", line, col) }
+    }
+
     fn char_pos(&self) -> usize {
         self.s.char_indices().take_while(|(i, _)| *i < self.pos).count()
     }
@@ -252,7 +308,7 @@ impl JsonParser<'_> {
             Some(b'"') => self.parse_string().map(Value::str),
             Some(b'[' | b'{') => {
                 if self.depth >= MAX_DEPTH {
-                    return Err(format!("JSON nested too deeply at position {} (the limit is {} levels)", self.char_pos(), MAX_DEPTH));
+                    return Err(format!("JSON nested too deeply at {} (the limit is {} levels)", self.at(), MAX_DEPTH));
                 }
                 self.depth += 1;
                 let v = if self.peek() == Some(b'[') { self.parse_array() } else { self.parse_object() };
@@ -260,7 +316,7 @@ impl JsonParser<'_> {
                 v
             }
             Some(c) if c == b'-' || c.is_ascii_digit() => self.parse_number(),
-            _ => Err(format!("invalid JSON at position {}: {}", self.char_pos(), self.peek_char())),
+            _ => Err(format!("invalid JSON at {}: {}", self.at(), self.peek_char())),
         }
     }
 
@@ -269,7 +325,7 @@ impl JsonParser<'_> {
             self.pos += lit.len();
             return Ok(());
         }
-        Err(format!("expected '{}' at position {}", lit, self.char_pos()))
+        Err(format!("expected '{}' at {}", lit, self.at()))
     }
 
     fn hex4(&mut self) -> Result<u32, String> {
@@ -291,7 +347,7 @@ impl JsonParser<'_> {
                     return Ok(out);
                 }
                 b'\\' => break,
-                0..=0x1f => return Err(format!("invalid JSON: a raw control character in a string at position {}", self.char_pos())),
+                0..=0x1f => return Err(format!("invalid JSON: a raw control character in a string at {}", self.at())),
                 _ => self.pos += 1,
             }
         }
@@ -338,7 +394,7 @@ impl JsonParser<'_> {
                     }
                     run = self.pos;
                 }
-                0..=0x1f => return Err(format!("invalid JSON: a raw control character in a string at position {}", self.char_pos())),
+                0..=0x1f => return Err(format!("invalid JSON: a raw control character in a string at {}", self.at())),
                 _ => self.pos += 1,
             }
         }
@@ -356,7 +412,7 @@ impl JsonParser<'_> {
             }
         };
         // RFC 8259: no leading zeros (`01`), digits after `.` and after the exponent
-        let bad = |p: &Self| format!("invalid number at position {}", p.char_pos());
+        let bad = |p: &Self| format!("invalid number at {}", p.at());
         let int_start = self.pos;
         digits(self);
         if self.pos == int_start || (self.b[int_start] == b'0' && self.pos - int_start > 1) {
@@ -431,12 +487,12 @@ impl JsonParser<'_> {
         loop {
             self.skip_ws();
             if self.peek() != Some(b'"') {
-                return Err(format!("invalid JSON at position {}: {}", self.char_pos(), self.peek_char()));
+                return Err(format!("invalid JSON at {}: {}", self.at(), self.peek_char()));
             }
             let key = self.parse_string()?;
             self.skip_ws();
             if self.peek() != Some(b':') {
-                return Err(format!("expected ':' at position {}", self.char_pos()));
+                return Err(format!("expected ':' at {}", self.at()));
             }
             self.pos += 1;
             let value = self.parse_value()?;
@@ -468,6 +524,7 @@ mod tests {
         assert!(parse("[1,").is_err());
         assert_eq!(parse("\"abc").unwrap_err(), "unterminated JSON string");
         assert_eq!(parse("{\"é\": x}").unwrap_err(), "invalid JSON at position 6: 'x'");
+        assert_eq!(parse("{\n  \"a\": 1,\n  \"b\": x\n}").unwrap_err(), "invalid JSON at line 3, column 8: 'x'");
         assert_eq!(parse("  [1] x").unwrap_err(), "extra content after JSON at position 6");
         // nesting: up to MAX_DEPTH levels, an error (not a stack overflow) beyond
         let deep = |n: usize| format!("{}{}", "[".repeat(n), "]".repeat(n));

@@ -369,6 +369,7 @@ impl Lexer {
             let radix = match self.peek_next() {
                 Some('x') | Some('X') => Some(16),
                 Some('b') | Some('B') => Some(2),
+                Some('o') | Some('O') => Some(8),
                 _ => None,
             };
             if let Some(radix) = radix {
@@ -450,6 +451,8 @@ impl Lexer {
 
         if is_float {
             match s.parse::<f64>() {
+                // (`1e400` parses as infinity: a literal is a number that exists)
+                Ok(f) if f.is_infinite() => self.err(format!("float '{}' out of the 64-bit range", s)),
                 Ok(f) => Ok(Token::Float(f)),
                 Err(e) => self.err(format!("invalid float: {}", e)),
             }
@@ -621,13 +624,46 @@ impl Lexer {
                 continue;
             }
             match c {
-                '"' | '\'' | '`' => quote = Some(c),
+                '"' | '\'' => quote = Some(c),
+                // a template inside: its own `${…}` may hold strings with a backtick
+                '`' => {
+                    code.push(c);
+                    self.copy_template(&mut code, l, c0)?;
+                    continue;
+                }
                 '{' => depth += 1,
                 '}' if depth == 0 => return Ok(code),
                 '}' => depth -= 1,
                 _ => {}
             }
             code.push(c);
+        }
+    }
+
+    /// Copies the rest of a template met inside `${…}` (after its opening backtick),
+    /// up to and including its closing one, its own `${…}` read whole.
+    fn copy_template(&mut self, code: &mut Vec<char>, l: u32, c0: u32) -> Result<(), String> {
+        loop {
+            let Some(c) = self.advance() else {
+                return Err(format!("line {}:{}: lexical error: '${{' without '}}' in template string", l, c0));
+            };
+            code.push(c);
+            match c {
+                '\\' => {
+                    if let Some(n) = self.advance() {
+                        code.push(n);
+                    }
+                }
+                '`' => return Ok(()),
+                '$' if self.peek() == Some('{') => {
+                    self.advance();
+                    code.push('{');
+                    let inner = self.read_interpolation(l, c0)?;
+                    code.extend(inner);
+                    code.push('}');
+                }
+                _ => {}
+            }
         }
     }
 

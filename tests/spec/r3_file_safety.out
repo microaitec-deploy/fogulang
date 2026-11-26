@@ -1,0 +1,38 @@
+200 0123456789abcdefghij
+404
+404
+404
+200 0123456789abcdefghij
+200 inside
+200 inside
+404
+404
+404
+404
+200 KEY=1
+[206, content-range: bytes 0-3/20, true, 0123]
+[206, content-range: bytes 10-19/20, true, abcdefghij]
+[206, content-range: bytes 15-19/20, true, fghij]
+[206, content-range: bytes 5-19/20, true, 56789abcdefghij]
+[416, content-range: bytes */20, true, ]
+[200, , true, 0123456789abcdefghij]
+[200, , true, 0123456789abcdefghij]
+200 {"saved":"r3safe.tmp.d/uploads/ok.txt"}
+500
+500
+200 {"saved":"r3safe.tmp.d/uploads/evil.txt"}
+200 {"saved":"r3safe.tmp.d/uploads/_NUL"}
+200 {"saved":"r3safe.tmp.d/uploads/_com1.txt"}
+200 {"saved":"r3safe.tmp.d/uploads/trail.txt"}
+TOP-SECRET
+false false
+true
+false
+false
+true
+r3safe.tmp.d/www/sub/in.txt
+error: path.safeJoin: '../SECRET.txt' leaves 'r3safe.tmp.d/www'
+pub.txt www
+error
+error
+ghij

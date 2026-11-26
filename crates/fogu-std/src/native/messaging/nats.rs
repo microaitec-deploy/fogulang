@@ -83,7 +83,7 @@ fn get_s(m: &HashMap<Str, Value>, k: &str) -> Option<String> {
 fn parse_url(url: &str, cfg: &mut Cfg) -> Result<(), String> {
     let rest = url.strip_prefix("nats://").or_else(|| url.strip_prefix("tcp://")).unwrap_or(url);
     if url.starts_with("tls://") || url.starts_with("wss://") || url.starts_with("ws://") {
-        return Err(format!("nats.connect: '{}': only nats:// (plain TCP) is supported", url));
+        return Err(format!("nats.connect: '{}': only nats:// (plain TCP) is supported", crate::native::util::redact_url(&url)));
     }
     let rest = rest.trim_end_matches('/');
     let (auth, hostport) = match rest.rfind('@') {

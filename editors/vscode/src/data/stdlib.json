@@ -572,9 +572,9 @@
     },
     {
      "name": "stringify",
-     "signature": "json.stringify(value)",
-     "returns": "str",
-     "doc": "Compact JSON (map keys in order).",
+     "signature": "json.stringify(value, { strict })",
+     "returns": "str · error",
+     "doc": "Compact JSON (map keys in order). NaN and infinity are written `null` and a value JSON has no form for as its type name; with `strict: true` they are an error instead.",
      "kind": "function"
     }
    ]
@@ -996,9 +996,9 @@
     },
     {
      "name": "createReadStream",
-     "signature": "fs.createReadStream(path, { start, end, lines, bufferSize })",
+     "signature": "fs.createReadStream(path, { start, end, lines, bufferSize, root })",
      "returns": "ReadStream · error",
-     "doc": "The file read a piece at a time, in constant memory. `end` is inclusive; `lines: true` makes `for` give lines (str) instead of buffers.",
+     "doc": "The file read a piece at a time, in constant memory. With `root` the path is a name from outside the program, kept under that folder (as `web.file`). `end` is inclusive; `lines: true` makes `for` give lines (str) instead of buffers.",
      "kind": "function"
     },
     {
@@ -1061,7 +1061,28 @@
      "name": "normalize",
      "signature": "path.normalize(p)",
      "returns": "str",
-     "doc": "Resolves `.` and `..`.",
+     "doc": "Resolves `.` and `..` by name only: the result may start with `..` — neither it nor `join` keeps a path inside a folder.",
+     "kind": "function"
+    },
+    {
+     "name": "safeJoin",
+     "signature": "path.safeJoin(base, name)",
+     "returns": "str · error",
+     "doc": "The path of a name that comes from outside the program under `base`: an error when it has `..`, a drive letter, or leaves the folder through a symbolic link.",
+     "kind": "function"
+    },
+    {
+     "name": "isInside",
+     "signature": "path.isInside(base, p)",
+     "returns": "bool",
+     "doc": "Is `p` the folder `base` or under it, with `..` and symbolic links resolved?",
+     "kind": "function"
+    },
+    {
+     "name": "real",
+     "signature": "path.real(p)",
+     "returns": "str · error",
+     "doc": "The absolute path with every symbolic link resolved (the file must exist).",
      "kind": "function"
     },
     {
@@ -1344,16 +1365,16 @@
     },
     {
      "name": "from",
-     "signature": "stream.from(list | range | str | chan | readable | stream)",
+     "signature": "stream.from(list | range | str | chan | readable | WebSocket | stream)",
      "returns": "Stream",
-     "doc": "A readable of `fs` / `http` gives its chunks (or lines).",
+     "doc": "A readable of `fs` / `http` gives its chunks (or lines); a [WebSocket](#foguwebsocket) its messages until it closes; a chan its values until it is closed.",
      "kind": "function"
     },
     {
      "name": "of",
      "signature": "stream.of(...values)",
      "returns": "Stream",
-     "doc": "A readable of `fs` / `http` gives its chunks (or lines).",
+     "doc": "A readable of `fs` / `http` gives its chunks (or lines); a [WebSocket](#foguwebsocket) its messages until it closes; a chan its values until it is closed.",
      "kind": "function"
     },
     {
@@ -2395,9 +2416,9 @@
     },
     {
      "name": "serve",
-     "signature": "http.serve(port | \"ip:port\", fn(req), { tls: { cert, key }, quiet, maxBody, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout }?)",
+     "signature": "http.serve(port | \"ip:port\", fn(req), { tls: { cert, key }, quiet, reusePort, maxBody, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout }?)",
      "returns": "nil",
-     "doc": "`tls` serves HTTPS (see [fogu:tls](#fogutls)). The handler returns a response (`http.text/json/html`), a str (text), any other value (JSON), nil (404) or an `error` (logged; the client gets a 500). Limits (defaults): `maxBody` (10 MB, 413), `maxHeaderBytes` (64 KB for the request line and headers, 431), `headerTimeout` (30s to send the headers; also closes idle keep-alive connections), `readTimeout` (60s for the body, 408), `handlerTimeout` (60s for the program's answer, 504; `0` = none). The request path is made canonical once, before static files, middlewares and routes see it: decoded once (`+` stays `+`), repeated slashes collapsed, `.`/`..` resolved; an encoded `/` or `\\`, a raw `\\`, a control character or a `..` above the root is a 400. A Rust panic in a handler answers that request with a 500 and the server goes on. Several servers may run in one program. Requests are answered as soon as they arrive while the program is alive — waiting in `Fogu.signal.wait()`, `time.delay`, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or `\"0.0.0.0:8080\"`, `\"[::1]:8080\"`, `\":8080\"`.",
+     "doc": "`tls` serves HTTPS (see [fogu:tls](#fogutls)). `reusePort: true` lets several servers share the port: one per `sync.Worker` serves on several cores (the kernel spreads the connections). On Linux a plain HTTP server runs on the interpreter's own thread, one `fg` task per connection. The handler returns a response (`http.text/json/html`), a str (text), any other value (JSON), nil (404) or an `error` (logged; the client gets a 500). Limits (defaults): `maxBody` (10 MB, 413), `maxHeaderBytes` (64 KB for the request line and headers, 431), `headerTimeout` (30s to send the headers; also closes idle keep-alive connections), `readTimeout` (60s for the body, 408), `handlerTimeout` (60s for the program's answer, 504; `0` = none). The request path is made canonical once, before static files, middlewares and routes see it: decoded once (`+` stays `+`), repeated slashes collapsed, `.`/`..` resolved; an encoded `/` or `\\`, a raw `\\`, a control character or a `..` above the root is a 400. A Rust panic in a handler answers that request with a 500 and the server goes on. Several servers may run in one program. Requests are answered as soon as they arrive while the program is alive — waiting in `Fogu.signal.wait()`, `time.delay`, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or `\"0.0.0.0:8080\"`, `\"[::1]:8080\"`, `\":8080\"`. `maxBody` (10 MB, 413 beyond it) and `maxHeaderBytes` are a number of bytes or a size written out: `\"512kb\"`, `\"10mb\"`, `\"1gb\"`.",
      "kind": "function"
     },
     {
@@ -2461,9 +2482,9 @@
     },
     {
      "name": "file",
-     "signature": "web.file(path, { download, contentType, status })",
+     "signature": "web.file(path, { root, dotfiles, download, contentType, status })",
      "returns": "Response · error",
-     "doc": "Sent by the server thread, a chunk at a time (binary safe; a large file does not have to fit in memory). `download: true` uses the file's name, `download: \"name\"` another (non-ASCII names as RFC 6266 `filename*`).",
+     "doc": "Sent by the server thread, a chunk at a time (binary safe; a large file does not have to fit in memory). A path with `..` is refused. A name that comes from the request (a query, a header, a body) goes with `root`: `web.file(ctx.query.f, { root: \"www\" })` never leaves that folder (`..`, drive letters and symbolic links out of it are an error; dotfiles are hidden unless `dotfiles: true`). Answers `Range` requests (206, `Accept-Ranges`, `ETag`, `Last-Modified`): downloads resume and media can seek. `download: true` uses the file's name, `download: \"name\"` another (non-ASCII names as RFC 6266 `filename*`).",
      "kind": "function"
     },
     {
@@ -2484,7 +2505,7 @@
      "name": "cors",
      "signature": "web.cors({ origin, methods, headers, credentials, maxAge })",
      "returns": "middleware",
-     "doc": "Answers preflight requests, also as a route's own middleware. With `credentials: true` and `origin: \"*\"` the request's origin is echoed (browsers refuse `*` with credentials).",
+     "doc": "Answers preflight requests, also as a route's own middleware. `credentials: true` needs the origins listed (`origin: [\"https://app.example\"]`): with `*` the program stops when the middleware is made, and an origin that is not on the list gets no CORS header.",
      "kind": "function"
     },
     {
@@ -2893,7 +2914,7 @@
   {
    "name": "websocket",
    "alias": "websocket",
-   "summary": "WebSocket client (`ws://`, `wss://`) and a standalone server. The same connection object is used by `app.ws` in `fogu:web`. Each connection runs on the shared runtime (no thread per connection): `next` and `accept` wait cooperatively and wake up when a message or a client arrives.",
+   "summary": "WebSocket client (`ws://`, `wss://`) and a standalone server; `fogu:ws` is the short name of the same module. The same connection object is used by `app.ws` in `fogu:web` and by `ws.upgrade` in an `http.serve` handler. Each connection runs on the shared runtime (no thread per connection): `next` and `accept` wait cooperatively and wake up when a message or a client arrives. A connection is a stream of its messages: `for m in ws`, `stream.from(ws)`, and `s.pipe(ws)` sends a [stream](#fogustream) or a channel into it.",
    "members": [
     {
      "name": "connect",
@@ -2907,6 +2928,13 @@
      "signature": "websocket.listen(port, { host })",
      "returns": "Server · error",
      "doc": "`port 0` picks a free port; `server.accept(timeout?)` → WebSocket, fields `port url`.",
+     "kind": "function"
+    },
+    {
+     "name": "upgrade",
+     "signature": "websocket.upgrade(req, (ws, req) => …, { protocols })",
+     "returns": "response · error",
+     "doc": "In an [http.serve](#foguhttp) handler: return it to answer a request with `req.upgrade` (101); the function runs in its own task with the connection. `protocols`: the subprotocols accepted (default: the first the client offers). An error value when the request does not ask for a WebSocket.",
      "kind": "function"
     }
    ]
@@ -3985,9 +4013,9 @@
     },
     {
      "name": "fromMarkdown",
-     "signature": "html.fromMarkdown(md)",
+     "signature": "html.fromMarkdown(md, { sanitize })",
      "returns": "str",
-     "doc": "CommonMark + tables, strikethrough, task lists, footnotes.",
+     "doc": "CommonMark + tables, strikethrough, task lists, footnotes. Markdown lets raw HTML through: pass `sanitize: true` for text that is not the program's own (` `, `onerror=`, `javascript:` links are removed).",
      "kind": "function"
     }
    ]

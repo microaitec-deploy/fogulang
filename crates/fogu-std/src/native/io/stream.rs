@@ -718,7 +718,7 @@ impl FoguObject for ResponseStreamValue {
 /// `fs.createReadStream(path, { start, end, lines, bufferSize })`.
 pub fn create_read_stream(args: &[Value]) -> Result<Value, String> {
     crate::native::util::max_args(args, 2, "fs.createReadStream")?;
-    let path = crate::native::util::str_arg(args, 0, "fs.createReadStream")?;
+    let mut path = crate::native::util::str_arg(args, 0, "fs.createReadStream")?;
     let (mut start, mut end, mut lines, mut cap) = (0u64, None, false, CHUNK);
     match args.get(1) {
         None | Some(Value::Nil) => {}
@@ -737,6 +737,11 @@ pub fn create_read_stream(args: &[Value]) -> Result<Value, String> {
                 cap = (b as usize).clamp(4096, 16 * 1024 * 1024);
             }
             lines = matches!(m.get("lines"), Some(Value::Bool(true)));
+            // root: the path is a name from outside, to be kept under this folder
+            if let Some(Value::Str(root)) = m.get("root") {
+                let inside = crate::native::util::contained(root, &path).map_err(|e| io_err!("fs.createReadStream: {}", e))?;
+                path = crate::native::util::path_str(&inside);
+            }
         }
         Some(other) => return Err(format!("fs.createReadStream: options must be a map, got '{}'", other.type_name())),
     }

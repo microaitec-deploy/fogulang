@@ -163,6 +163,12 @@ pub struct TestOutcome {
 /// may be used inside tests). Groups (`describe`), hooks and `only` follow
 /// `native/test.rs`.
 pub fn run_test_file(path: &Path, filter: Option<&str>) -> Result<Vec<TestOutcome>, String> {
+    run_test_file_within(path, filter, None)
+}
+
+/// [`run_test_file`] with a time limit for each test and hook (`fogu test --timeout`):
+/// one that is still running code after it fails with "timed out" and the next one runs.
+pub fn run_test_file_within(path: &Path, filter: Option<&str>, timeout: Option<std::time::Duration>) -> Result<Vec<TestOutcome>, String> {
     use crate::native::test::{self as t, Item};
     use crate::runtime::value::Value;
     t::reset(); // drop leftovers of a failed load
@@ -221,7 +227,18 @@ pub fn run_test_file(path: &Path, filter: Option<&str>) -> Result<Vec<TestOutcom
     };
     let call = |f: &Value, args: Vec<Value>| -> Option<String> {
         let failures = sched::task_failures().0;
+        let task = sched::task_id();
+        if let Some(d) = timeout {
+            interp.set_deadline(task, Some(interpreter::Deadline { at: std::time::Instant::now() + d, timeout: d, cancelled: false }));
+        }
         let r = interp.call_value(f.clone(), args, Rc::clone(interp.globals_ref()));
+        if timeout.is_some() {
+            interp.set_deadline(task, None);
+        }
+        let r = r.map_err(|e| match e.find("script execution timed out after ") {
+            Some(i) => format!("{}timed out after {}", &e[..i], &e[i + "script execution timed out after ".len()..]),
+            None => e,
+        });
         outcome(r, failures)
     };
     // does group `g` hold a selected test that runs?

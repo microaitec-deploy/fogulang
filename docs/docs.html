@@ -392,370 +392,137 @@ print(typeof(bytes("hi")))  // buffer  — mutable bytes: b[0], b.hex(), b.readU
       </ul>
     </section>
 
-    <section id="whats-new" data-group="Getting started" data-title="What's new in 0.8.3" class="scroll-mt-20 mt-16">
-      <h2 class="text-2xl font-bold">What's new in 0.8.3</h2>
-      <p>Version 0.8.3 keeps memory flat when data is large: <strong>streams</strong> for files, downloads and responses,
-      <strong><code>fogu:stream</code></strong> for sequences of values, and compact lists whose loops are compiled. It also
-      gives <code>fogu:test</code> the <strong>groups, hooks and parametrized tests</strong> of Bun. Every program of
-      <code>bench/</code> was measured against 0.8.2 with the same build: none is slower.</p>
+    <section id="whats-new" data-group="Getting started" data-title="What's new in 0.8.4" class="scroll-mt-20 mt-16">
+      <h2 class="text-2xl font-bold">What's new in 0.8.4</h2>
+      <p>Version 0.8.4 closes the findings of the third test round on 0.8.3: files named by a request stay in their folder,
+      CORS with credentials echoes only the origins it lists, passwords no longer appear in connection errors, annotations
+      behave the same in every engine, and <code>fogu:vm</code> contexts are freed. WebSockets become streams, with
+      <code>fogu:ws</code> as their short name, <code>pipe</code> into channels and sockets, and <code>ws.upgrade</code> in
+      <code>http.serve</code>. The release was
+      checked with a soak test — load, crashes, a frozen process and security probes — and no benchmark is slower than in 0.8.3;
+      the full list is in the <a class="underline" href="https://github.com/microaitec-deploy/fogulang/blob/main/CHANGELOG.md">changelog</a>.</p>
 
-      <h3 class="text-lg font-semibold mt-10" id="new-streams">Files, downloads and responses a piece at a time</h3>
-      <p><code>fs.createReadStream</code>, <code>http.stream</code>, <code>fs.createWriteStream</code> and <code>web.stream</code>
-      read and write a chunk at a time; <code>for line in stream</code> walks one, <code>pipe</code> copies off the interpreter
-      thread, and a response waits for a slow client instead of filling memory — 200 MB served to one took the server to
-      22 MB, where <code>web.file</code> of 0.8.2 reached 244 MB (it now streams too). See <a class="underline" href="#mod-fs">fogu:fs</a>,
-      <a class="underline" href="#mod-http">fogu:http</a> and <a class="underline" href="#mod-web">fogu:web</a>.</p>
-      <script type="text/x-fogu">// a file of any size, a line at a time: memory stays the size of one chunk
-import fs from "fogu:fs"
+      <h3 class="text-lg font-semibold mt-10" id="new-ws">WebSockets, streams and channels together</h3>
+      <p><code>fogu:ws</code> is the short name of <code>fogu:websocket</code>, and a connection is a stream of its messages: <code>for m in ws</code>, <code>stream.from(ws)</code>, and <code>s.pipe(ws)</code> sends a stream — or a channel, through <code>stream.from(ch)</code> — into it. <code>ws.upgrade(req, handler)</code> answers a WebSocket from an <code>http.serve</code> handler, as <code>app.ws</code> does in <code>fogu:web</code>; the handler runs in its own task. See <a class="underline" href="#mod-websocket">fogu:ws</a>.</p>
+      <script type="text/x-fogu">// fogu:ws: a WebSocket is a stream of its messages, and a stream or a channel goes into one
 
-fn level(i) { return match i % 1000 { 0 => "ERROR", _ => "ok" } }
-
-const out = fs.createWriteStream("events.log")?
-for i in 0..100000 { out.writeLine(`${i} ${level(i)}`)? }
-out.close()
-
-let errors = 0
-for line in fs.createReadStream("events.log", { lines: true })? {
-    if line.ends_with("ERROR") { errors = errors + 1 }
-}
-print("errors:", errors, "of", out.bytesWritten, "bytes")
-
-// a copy that never holds the file in memory (copied off the interpreter thread)
-const copy = fs.createWriteStream("events.copy")?
-print("copied:", fs.createReadStream("events.log")?.pipe(copy)?, "bytes")
-copy.close()
-fs.remove("events.log")?
-fs.remove("events.copy")?</script>
-      <script type="text/x-fogu" data-lang="text">errors: 100 of 889190 bytes
-copied: 889190 bytes</script>
-
-      <h3 class="text-lg font-semibold mt-10" id="new-value-streams">fogu:stream: streams of values, pulled</h3>
-      <p>Operators work when the consumer asks for the next value: a chain holds one value per stage, infinite sources are
-      fine, the consumer sets the pace. <code>stream.create</code> is the bridge from tasks, with a bounded buffer; errors end
-      a stream and <code>cancel()</code> goes upstream. Two million values through <code>map</code> and <code>filter</code>:
-      11 MB, against 214 MB with lists. See <a class="underline" href="#mod-stream">fogu:stream</a>.</p>
-      <script type="text/x-fogu">// streams of values: pulled a value at a time, never a whole list in memory
+import ws from "fogu:ws"
+import http from "fogu:http"
 import stream from "fogu:stream"
 
-// infinite and lazy: only what take(5) needs is computed
-print(stream.range(0).map((x) => x * x).filter((x) => x % 3 == 0).take(5).toList()?)
+// http.serve: answer the upgrade, the handler runs in its own task
+http.serve(18471, (req) => {
+    if !req.upgrade { return http.text("a WebSocket endpoint") }
+    // each message, upper-cased, straight back: the socket is a stream
+    return ws.upgrade(req, (conn, r) => stream.from(conn).map((m) => m.data.upper()).pipe(conn))
+}, { quiet: true })?
 
-// a task produces, the consumer sets the pace: at most 4 values wait in between
-const readings = stream.create({ buffer: 4 })
+const conn = ws.connect("ws://127.0.0.1:18471/shout")?
+// a channel written by a task goes into the socket...
+const lines = chan(8)
 fg fn() {
-    for i in 0..12 { readings.write(20 + i % 4)? }
-    readings.close()
+    for w in ["hello", "streams", "and channels"] { lines <- w }
+    close(lines)
 }()
-for avg in readings.chunk(4).map((b) => b.reduce((a, x) => a + x, 0.0) / len(b)) {
-    print("average", avg)
-}
+print("sent", stream.from(lines).pipe(conn, { end: false })?)
+// ...and the answers come out of it as a stream
+for text in stream.from(conn).map((m) => m.data).take(3) { print(text) }</script>
+      <script type="text/x-fogu" data-lang="text">sent 3
+HELLO
+STREAMS
+AND CHANNELS</script>
 
-// an error value ends the stream; the terminal returns it
-const [_, err] = stream.of(4, 2, 0, 1).map((x) => {
-    if x == 0 { return nil, error("division by zero") }
-    return 8 / x
-}).toList()
-print(err)</script>
-      <script type="text/x-fogu" data-lang="text">[0, 9, 36, 81, 144]
-average 21.5
-average 21.5
-average 21.5
-error: division by zero</script>
-
-      <h3 class="text-lg font-semibold mt-10" id="new-tests">fogu:test: groups, hooks, one test per row</h3>
-      <p><code>describe</code>, <code>beforeAll</code>, <code>afterAll</code>, <code>beforeEach</code>, <code>afterEach</code>
-      (the cleanup runs even when a test fails), <code>test.each(rows)</code> and <code>describe.each</code>,
-      <code>test.skip</code>, <code>only</code>, <code>todo</code>, <code>skipIf</code>. See <a class="underline" href="#mod-test">fogu:test</a>.</p>
-      <script type="text/x-fogu">// run with: fogu test (this page shows what it printed)
-import { test, describe, expect, beforeAll, afterAll, beforeEach } from "fogu:test"
-
-describe("cart", () => {
-    let db = nil
-    let cart = nil
-    beforeAll(() => { db = { open: true } })        // once, before the group's tests
-    beforeEach(() => { cart = { items: [] } })      // a fresh cart for every test
-    afterAll(() => { db = nil })                    // once, after them — even after a failure
-
-    test("starts empty", () => {
-        expect(db.open).toBe(true)
-        expect(len(cart.items)).toBe(0)
-    })
-    test("adds", () => {
-        cart.items.push("tea")
-        expect(cart.items).toEqual(["tea"])
-    })
-})
-
-// one test per row
-test.each([
-    [2, 3, 5],
-    [10, 20, 30],
-    [-1, 1, 0],
-])("add(%d, %d) = %d", (a, b, expected) => expect(a + b).toBe(expected))</script>
-      <script type="text/x-fogu" data-lang="text">tests.test.fg
-  ✓ cart &gt; starts empty
-  ✓ cart &gt; adds
-  ✓ add(2, 3) = 5
-  ✓ add(10, 20) = 30
-  ✓ add(-1, 1) = 0
-
-5 passed — 1 file(s)</script>
-
-      <h3 class="text-lg font-semibold mt-10" id="new-compact-loops">Compact lists, compiled loops</h3>
-      <p><code>list&lt;int&gt;</code> and <code>list&lt;float&gt;</code> take 8 bytes per element and <code>list&lt;bool&gt;</code>
-      one; loops over every compact list are compiled and read the compact storage in place. <strong>A change</strong> for
-      code that already wrote these annotations (until now they only documented the intent): storing a value of another
-      type is a type mismatch, and an int stored in a <code>list&lt;float&gt;</code> reads back as a float.</p>
-      <script type="text/x-fogu">// list<int>, list<float>, list<bool> now pack too: 8, 8 and 1 byte per element
-let samples: list<int> = []
-let flags: list<bool> = []
-for i in 0..1000000 {
-    samples.push(i % 1000)
-    flags.push(i % 7 == 0)
-}
-
-// loops over them are compiled: they read the compact storage in place
-let total = 0
-for s in samples { total = total + s }
-let sevens = 0
-for i in 0..len(flags) { if flags[i] { sevens = sevens + 1 } }
-print(total, sevens, typeof(samples))</script>
-      <script type="text/x-fogu" data-lang="text">499500000 142858 list</script>
-
-      <h3 class="text-lg font-semibold mt-12" id="new-082">From 0.8.2</h3>
-      <p>Version 0.8.2 makes type annotations do more: an annotation can now decide <strong>how data is stored</strong>,
-      and interfaces can describe <strong>fields and other interfaces</strong>, not only method names. Nothing existing
-      changes its meaning, and every program of <code>bench/</code> was measured against 0.8.1 with the same build: none is
-      slower.</p>
-
-      <h3 class="text-lg font-semibold mt-10" id="new-sized">Annotations that size the storage</h3>
-      <p>A list declared with a sized element type keeps its elements with that size — one byte per <code>u8</code>, four
-      per <code>i32</code>, <code>f32</code> or <code>char</code>, eight per <code>i64</code> or <code>f64</code> — instead
-      of a 24-byte value each. A million elements: 52 MB as a plain list, 5 MB as <code>list&lt;u8&gt;</code>, 10 MB as
-      <code>list&lt;i32&gt;</code>, 11 MB as <code>list&lt;char&gt;</code>, 18 MB as <code>list&lt;f64&gt;</code>. It is still
-      a list: the same methods, printing, <code>==</code> and JSON. The sized types also have short names:
-      <code>i8 i16 i32 i64 u8 u16 u32 u64 f32 f64</code>. Loops over these lists run in the interpreter for now: they save
-      memory, not time. More in <a class="underline" href="#sized-storage">Lists stored with their size</a>.</p>
-      <script type="text/x-fogu">let pixels: list<u8> = [0, 128, 255]      // 1 byte per element
-let samples: list<i16> = []               // 2 bytes
-let word: list<char> = "fogu".chars()     // 4 bytes
-for i in 0..5 { samples.push(i * 1000 - 2000) }
-pixels[0] = 64
-word[0] = "F"
-print(pixels, samples, word.join(""), typeof(pixels))
-print(samples.map((x) => x / 1000), pixels == [64, 128, 255])</script>
-      <script type="text/x-fogu" data-lang="text">[64, 128, 255] [-2000, -1000, 0, 1000, 2000] Fogu list
-[-2, -1, 0, 1, 2] true</script>
-
-      <h3 class="text-lg font-semibold mt-10" id="new-interfaces">Interfaces: fields, <code>embed</code>, and methods that fit</h3>
-      <p>An interface may require fields with their type and everything other interfaces require. A method satisfies a
-      requirement only when it can take the arguments the interface declares — <code>write()</code> no longer passes for
-      <code>write(data, n)</code>; before, the mismatch appeared only when the call failed. <code>any</code> is the type of
-      values of mixed types. More in <a class="underline" href="#interfaces">Interfaces</a>.</p>
-      <script type="text/x-fogu">interface Shape { area(): float }
-interface Named { name: str }                 // a required field
-interface Figure {                            // what Shape and Named ask, and one more
-    embed Shape
-    embed Named
-    describe(): str
-}
-struct Square {
-    name = "square"
-    side = 2.0
-    area(): float { return this.side * this.side }
-    describe(): str { return `${this.name} ${this.area()}` }
-}
-fn show(f: Figure): str { return f.describe() }
-print(show(new Square()))
-
-const things: list<any> = [new Square(), 42, "text", nil]
-for t in things { print(typeof(t)) }</script>
-      <script type="text/x-fogu" data-lang="text">square 4.0
-struct
-int
-str
-nil</script>
-
-      <h3 class="text-lg font-semibold mt-10" id="new-loops">Loops: division by a constant</h3>
-      <p>A <code>for i in a..b</code> with bounds within <code>0..2^31</code> is compiled knowing the range of
-      <code>i</code>: <code>i % 7</code> and <code>i / 7</code> become one multiplication and a shift, and small products
-      need no overflow check. Twenty million iterations of <code>sum + (i % 7) * 3</code>: 61.5 ms → 45.6 ms on the same
-      machine and build (measured under load, interleaved with 0.8.1).</p>
-
-      <h3 class="text-lg font-semibold mt-10" id="new-editor">The editor knows your code</h3>
-      <p>The VS Code extension reads the declarations of the file and of the files it imports:
-      <code>import { … } from "./shapes.fg"</code> lists what that file exports with typed signatures, members come
-      after a value whose struct or interface is declared (and after <code>this.</code>), calls show their parameters,
-      F12 goes to the definition, and the outline lists functions, structs and interfaces. New snippets cover typed
-      exports and imports, <code>any</code>, sized lists, interfaces and workers.</p>
-
-      <h3 class="text-lg font-semibold mt-12" id="new-081">From 0.8.1</h3>
-      <p>Version 0.8.1 is a <strong>consolidation release</strong>. Two rounds of external tests found 286 bugs in 0.8.0;
-      this release fixes the critical ones and most of the high ones, makes the interpreter, the JIT and the new bytecode VM
-      give the same results on every test, and adds acceptance tests for memory, determinism and numbers. The architecture
-      and the execution model are those of 0.8.0. Fogu is classified <strong>pre-production, with positive indicators</strong>:
-      what exists and what is still to be shown is in <code>docs/production-readiness.md</code>. Every example below was run
-      with the release; the box under it is what it printed. The full list is in the <code>CHANGELOG</code>.</p>
-      <div class="overflow-x-auto mt-4">
-        <table class="w-full text-sm border-collapse">
-          <thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Measured</th><th class="py-2 pr-4">0.8.0</th><th class="py-2 pr-4">0.8.1</th></tr></thead>
-          <tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60">
-            <tr><td class="py-2 pr-4">Handler with a local helper, memory after 300 000 calls</td><td class="py-2 pr-4">242 MB, growing</td><td class="py-2 pr-4">8–11 MB, flat</td></tr>
-            <tr><td class="py-2 pr-4">20 000 tasks blocked on a channel</td><td class="py-2 pr-4">killed after 300 s</td><td class="py-2 pr-4">0.7 s</td></tr>
-            <tr><td class="py-2 pr-4"><code>regex.findAll</code>, 800 KB, 100 000 matches</td><td class="py-2 pr-4">8.6 s</td><td class="py-2 pr-4">0.31 s</td></tr>
-            <tr><td class="py-2 pr-4">Order book over heaps of structs (<code>bench/orders</code>)</td><td class="py-2 pr-4">4.5 s</td><td class="py-2 pr-4">4.5 s · 1.4 s with <code>--engine=vm</code></td></tr>
-            <tr><td class="py-2 pr-4"><code>bench/maps</code> / <code>bench/records</code></td><td class="py-2 pr-4">140 / 76 ms</td><td class="py-2 pr-4">111 / 68 ms</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p class="mt-2 text-sm">Measured during development on an AMD Ryzen 7 5700U (minimum of interleaved runs). The comparison
-      campaign of the release against 0.8.0 on a quiet machine (<code>bench/compare.fg</code>) is still to be run; its result
-      will be published with its method.</p>
-
-      <h3 class="text-lg font-semibold mt-10" id="new-errors">Errors as values: <code>return a, b</code> is a tuple</h3>
-      <p>A function that succeeded and returned a list was read as a value/error pair: <code>const [rows, err] = db.query(…)</code>
-      with two rows gave the first row and took the second for an error. Now <code>return a, b</code> builds a <strong>tuple</strong>
-      (it prints like a list; <code>typeof</code> is <code>"tuple"</code>), <code>const [v, err] = …</code> splits only a tuple, an
-      <code>error</code> or a list written in the declaration, and <code>?</code> reacts only to an <code>error</code> or a tuple ending
-      in one. <strong>What changes:</strong> <code>const [a, b] = xs</code> with a list from elsewhere gives the whole list and
-      <code>nil</code> — index the list instead; <code>fogu check</code> warns about it (W0005).</p>
-      <script type="text/x-fogu">// `return a, b` is a tuple: a list a function returns is never read as a value/error pair
-import sql from "fogu:sql"
-import json from "fogu:json"
-
-const db = sql.open("sqlite::memory:")?
-db.exec("CREATE TABLE item (name TEXT)")?
-for n in ["ana", "bia", "caio"] { db.run("INSERT INTO item VALUES (?)", [n])? }
-
-const [rows, err] = db.query("SELECT name FROM item ORDER BY name")
-print(rows, err)                        // all three rows, and no error
-
-fn first(text) {
-    const v = json.parse(text)?         // ? only reacts to errors
-    return v, nil
-}
-print(first("[5, null]"))               // the list itself, not 5
-const [v, e] = first("{oops")
-print(v, e.message)</script>
-      <script type="text/x-fogu" data-lang="text">[{name: ana}, {name: bia}, {name: caio}] nil
-[[5, nil], nil]
-nil json.parse: invalid JSON at position 1: 'o'</script>
-
-      <h3 class="text-lg font-semibold mt-10" id="new-security">One canonical request path</h3>
-      <p>The HTTP server and <code>fogu:web</code> make the request path canonical once, before static files, middlewares and
-      routes see it. In 0.8.0 <code>//api/me</code> skipped <code>app.use("/api", …)</code>. Servers also get limits with
-      defaults (<code>maxHeaderBytes</code>, <code>headerTimeout</code>, <code>readTimeout</code>, <code>handlerTimeout</code>, a JSON
-      depth of 512), a panic in a handler gives a 500 instead of stopping the server, topcoat checks CSRF and template filters
-      no longer let scripts through.</p>
-      <script type="text/x-fogu">// The request path is made canonical once, before middlewares and routes see it
+      <h3 class="text-lg font-semibold mt-10" id="new-files">Download routes that cannot leave their folder</h3>
+      <p><code>web.file(name, { root })</code> checks every component of a name that comes from a request, follows links only inside the folder and hides dotfiles; a file it cannot serve is a 404. <code>path.safeJoin</code>, <code>path.isInside</code> and <code>fs.realpath</code> do the same check for your own paths, uploads are saved only inside their folder, and file answers honour <code>Range</code> (206, 416). See <a class="underline" href="#mod-web">Safe files</a>.</p>
+      <script type="text/x-fogu">// a download route that cannot leave its folder: `root` checks every component and the links
 import web from "fogu:web"
+import fs from "fogu:fs"
+import path from "fogu:path"
+
+fs.mkdir("public")?
+fs.writeText("public/report.txt", "quarterly numbers")?
+fs.writeText("public/.env", "KEY=1")?
+fs.writeText("secret.txt", "do not serve")?
 
 const app = web.app()
-app.use("/api", (ctx) => {
-    if ctx.headers["authorization"] != "Bearer secret" { return web.text("unauthorized", { status: 401 }) }
-})
-app.get("/api/me", (ctx) => ({ user: "ana" }))
-
-const h = app.handler()                 // the app, without a network
-const auth = { authorization: "Bearer secret" }
-print("/api/me with the token →", h({ method: "GET", path: "/api/me", headers: auth }).status)
-// 0.8.0 matched the middleware's prefix on the raw path: "//api/me" skipped it
-for path in ["/api/me", "//api/me", "/x/../api/me", "/api/./me", "/api%2Fme", "/../etc/passwd"] {
-    print(path, "→", h({ method: "GET", path: path }).status)
-}</script>
-      <script type="text/x-fogu" data-lang="text">/api/me with the token → 200
-/api/me → 401
-//api/me → 401
-/x/../api/me → 401
-/api/./me → 401
-/api%2Fme → 400
-/../etc/passwd → 400</script>
-
-      <h3 class="text-lg font-semibold mt-10" id="new-memory">Handlers with local helpers no longer leak</h3>
-      <p>A function stored in the scope it was created in kept that scope alive forever. A scope and the closures stored in it
-      are now freed together when nothing else holds them, on the three engines. Plain data cycles (a list that contains itself)
-      are still never freed: there is no cycle collector.</p>
-      <script type="text/x-fogu">// A handler with a local helper and a closure: its scope is freed after each call
-import fs from "fogu:fs"
-
-fn rssMB() {
-    const [s, _] = fs.readText("/proc/self/status")
-    for line in s.split("\n") {
-        if line.starts_with("VmRSS:") { return int(line.split(":")[1].trim().split(" ")[0]) / 1024 }
-    }
-    return 0
+app.get("/files/:name", (ctx) => web.file(ctx.params.name, { root: "public" }))
+const h = app.handler()
+for name in ["report.txt", "../secret.txt", ".env"] {
+    const r = h({ method: "GET", path: "/files/" + name })
+    print(name, "->", r.status, r.body)
 }
 
-fn handle(req) {
-    const items = [req, req + 1, req + 2]
-    fn helper(x) { return x * 2 + items[0] }      // keeps this scope alive while it lives
-    const cb = (x) => helper(x)
-    return cb(req)
+// the same check for the paths a program builds itself
+print(path.safeJoin("public", "2026/q3.txt"))
+print(path.safeJoin("public", "../secret.txt"))
+print(path.isInside("public", "public/../secret.txt"))</script>
+      <script type="text/x-fogu" data-lang="text">report.txt -> 200 quarterly numbers
+../secret.txt -> 404 not found
+.env -> 404 not found
+public/2026/q3.txt
+error: path.safeJoin: '../secret.txt' leaves 'public'
+false</script>
+
+      <h3 class="text-lg font-semibold mt-10" id="new-types">Annotations mean what they say, in every engine</h3>
+      <p>An int under a <code>float</code> annotation is a float — parameters, returns and <code>let</code> — in the interpreter, the JIT and the VM alike. <code>chan&lt;int&gt;</code> refuses other values, each value of a typed variadic parameter is checked, <code>0o17</code> is octal and <code>1e400</code> an error. <code>fogu check</code> finds more before running: <code>S()</code> without <code>new</code>, missing methods, wrong arity, unreachable <code>match</code> arms, unknown members of <code>fogu:*</code> modules. See <a class="underline" href="#types">Annotations</a>.</p>
+      <script type="text/x-fogu">// annotations mean what they say, in every engine
+fn area(w: float, h: float): float { return w * h }
+print(area(3, 2), typeof(area(3, 2)))     // the ints are floats here
+
+let ids: chan<int> = chan(4)
+ids <- 7
+print(<-ids)
+
+fn total(...xs: int) {
+    let s = 0
+    for x in xs { s += x }
+    return s
 }
+print(total(1, 2, 3))
+print(0o17, 0x1f)                         // octal literals</script>
+      <script type="text/x-fogu" data-lang="text">6.0 float
+7
+6
+15 31</script>
 
-const before = rssMB()
-let total = 0
-for i in 0..300000 { total += handle(i) % 7 }
-const growth = rssMB() - before
-print("300 000 calls, memory growth under 5 MB:", growth < 5, "| 0.8.0 grew by about 200 MB")</script>
-      <script type="text/x-fogu" data-lang="text">300 000 calls, memory growth under 5 MB: true | 0.8.0 grew by about 200 MB</script>
+      <h3 class="text-lg font-semibold mt-10" id="new-workers">What a Worker returns is what it computed</h3>
+      <p>Errors keep their message and NaN and infinity stay what they are when they cross a <code>sync.Worker</code>; a value that cannot cross — a function, a channel — is an error that says so, never its printed form. An <code>fg</code> task that ends with an error reports it, and <code>Fogu.exit()</code> from a task ends the program cleanly. See <a class="underline" href="#mod-sync">sync.Worker</a>.</p>
+      <script type="text/x-fogu">// what a sync.Worker returns is what it computed: errors keep their message, NaN stays NaN
+import sync from "fogu:sync"
 
-      <h3 class="text-lg font-semibold mt-10" id="new-vm">A bytecode VM, opt-in</h3>
-      <p><code>fogu --engine=vm app.fg</code> (or <code>FOGU_ENGINE=vm</code>) compiles each function to a register machine, with
-      inline caches for struct fields, methods and calls. On whole programs the JIT does not compile it runs 2× to 3.3× faster
-      than the interpreter; a function with closures, <code>match</code>, <code>fg</code> or <code>?.</code> still runs on the
-      interpreter, which stays the default and the reference. <code>fogu disasm app.fg</code> prints the bytecode. This program
-      prints the same with and without the VM:</p>
-      <script type="text/x-fogu">// The bytecode VM (opt-in): run with `fogu --engine=vm vm.fg`
-
-struct Order {
-    id = 0
-    price = 0
-    new(id, price) {
-        this.id = id
-        this.price = price
-    }
-    fn cheaper(o) { return this.price < o.price || (this.price == o.price && this.id < o.id) }
+const w = sync.Worker(`
+fn parse(text) {
+    if text == "" { return nil, error("empty input") }
+    return { n: len(text), ratio: 0.0 / 0.0 }
 }
+fn handler() { return (x) => x }
+`)?
+const [v, err] = w.call("parse", "")
+print(v, typeof(err), err.message)
+print(w.call("parse", "abc")?)
+// a function cannot cross threads: an error says so, instead of its printed form
+print(w.call("handler"))
+w.close()</script>
+      <script type="text/x-fogu" data-lang="text">nil error empty input
+{n: 3, ratio: NaN}
+error: Worker.call handler: result: a value of type 'fn' cannot cross to another thread (numbers, text, bools, nil, lists, maps and errors do)</script>
 
-fn best(orders) {
-    let b = orders[0]
-    for o in orders {
-        if o.cheaper(b) { b = o }
-    }
-    return b
-}
+      <h3 class="text-lg font-semibold mt-10" id="new-sandbox">Sandboxes that stop and free</h3>
+      <p>A <code>timeout</code> of <code>fogu:vm</code> stops a script that sleeps, and a finished context is freed: 200 000 contexts that each define a function took 266 MB in 0.8.3 and take 13 MB now. <code>fogu test --timeout</code> ends a test that never returns. See <a class="underline" href="#mod-vm">fogu:vm</a>.</p>
+      <script type="text/x-fogu">// fogu:vm contexts: a timeout stops a script that waits, and a finished context is freed
+import vm from "fogu:vm"
+import time from "fogu:time"
 
-const orders = []
-for i in 0..200000 { orders.push(new Order(i, (i * 7919) % 1000)) }
-const b = best(orders)
-print("best:", b.id, b.price)</script>
-      <script type="text/x-fogu" data-lang="text">best: 0 0</script>
+const t0 = time.monotonic()
+const r = vm.runInNewContext("Fogu.sleep(5s)", {}, { timeout: 200ms })
+print(typeof(r), r.message, time.monotonic() - t0 < 1.0)
 
-      <h3 class="text-lg font-semibold mt-10" id="new-lib">Shared libraries: <code>fogu build --lib</code></h3>
-      <p>A Fogu program becomes a shared library (<code>lib&lt;name&gt;.so</code>, <code>&lt;name&gt;.dll</code>,
-      <code>lib&lt;name&gt;.dylib</code>) and a C header that lists its functions. A host loads it, calls <code>fogu_load</code> once
-      and then <code>fogu_call</code> with JSON arguments; an <code>error</code> the function returns is the call's error. Below:
-      the program, then the build and a Python host (<code>ctypes</code>) calling it.</p>
-      <script type="text/x-fogu">// fogu build --lib: this file becomes dist/libprices.so (.dll, .dylib) and prices.h
-fn total(items) {
-    let sum = 0.0
-    for it in items { sum += it.price * it.qty }
-    return sum
-}
-
-fn discount(amount, code) {
-    if code != "WELCOME10" { return nil, error(`unknown code ${code}`) }
-    return amount * 0.9, nil
-}</script>
-      <script type="text/x-fogu" data-lang="text">  + fogu.json
-  + main.fg
-built dist/libprices.so (2 file(s))
-wrote dist/prices.h
-  functions: total, discount
-{"ok":true,"value":20.0}
-{"ok":true,"value":18.0}
-{"ok":false,"error":"unknown code BOGUS"}</script>
+// 200 000 contexts that each define a function: 13 MB in 0.8.4, 266 MB in 0.8.3
+let sum = 0
+for i in 0..20000 { sum += vm.runInNewContext("fn f(x) { return x + 1 }\nf(" + str(i) + ")") }
+print(sum)</script>
+      <script type="text/x-fogu" data-lang="text">error <vm>:1: runtime error: script execution timed out after 200ms true
+200010000</script>
     </section>
 
     <section id="types" data-group="Language" data-title="Type annotations" class="scroll-mt-20 mt-16">
@@ -1453,7 +1220,7 @@ ticks [0, 1, 2, 3]</script>
     <!-- GRAMMAR: BEGIN -->
     <section id="grammar" data-group="Language" data-title="Grammar" class="scroll-mt-20 mt-16">
       <h2 class="text-2xl font-bold">Grammar (EBNF)</h2>
-      <p class="mt-3">This grammar is derived from the reference implementation, not from the specification: <code>lexer.rs</code>, <code>token.rs</code>, <code>parser.rs</code> and <code>ast.rs</code> in <code>lang/crates/fogu-core/src/runtime/</code>. It describes what the parser accepts (Fogu 0.8.3). Constructs the parser does not accept are listed at the end under "Not part of the grammar".</p>
+      <p class="mt-3">This grammar is derived from the reference implementation, not from the specification: <code>lexer.rs</code>, <code>token.rs</code>, <code>parser.rs</code> and <code>ast.rs</code> in <code>lang/crates/fogu-core/src/runtime/</code>. It describes what the parser accepts (Fogu 0.8.4). Constructs the parser does not accept are listed at the end under "Not part of the grammar".</p>
       <h3 id="grammar-notation" class="text-lg font-semibold mt-8">Notation</h3>
       <p class="mt-3">The grammar uses ISO-style EBNF with these conventions: <code>name = body ;</code> defines a production; <code>|</code> separates alternatives; <code>[ x ]</code> means x is optional; <code>{ x }</code> means x repeated zero or more times; <code>( x )</code> groups; terminals are written in double quotes (a double quote itself is written <code>'"'</code>); <code>/* ... */</code> is a comment, also used for constraints that EBNF cannot express. Lexical productions (section 1) operate on characters; all later productions operate on tokens, with whitespace and comments already removed.</p>
       <h3 id="grammar-1-lexical-structure" class="text-lg font-semibold mt-8">1. Lexical structure</h3>
@@ -1769,7 +1536,8 @@ fn_lit        = "fn" [ IDENT ] fn_tail ;              /* the name is ignored */
 arrow_fn      = param_list [ ":" type ] "=>" ( block | expr ) ;
                /* a "{" after "=>" always opens a block */
 
-new_expr      = "new" IDENT [ type_args ] [ "(" args ")" ] ;
+new_expr      = "new" IDENT { "." IDENT } [ type_args ] [ "(" args ")" ] ;
+               /* "new geo.Point()": a struct a module exports (0.8.4) */
                /* "new" is special only when an identifier follows it;
                   "(" must be on the same line */
 chan_expr     = "chan" [ "<" /* tokens up to the matching ">" */ ">" ]
@@ -1845,7 +1613,7 @@ match kind(5) { "small" => print("s") _ => print("?") }</script>
       <h2 class="text-2xl font-bold">Standard library</h2>
       <p>Modules are imported with <code>import name from "fogu:name"</code> (or by name: <code>import { parse } from "fogu:json"</code>). Each section below lists every function with its parameters and return value, and shows an example with its <strong>real output</strong> (the examples are run when this page is generated). <div class="overflow-x-auto mt-4"><table class="w-full text-sm"><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr><td class="py-2 pr-4 font-medium whitespace-nowrap">Core</td><td class="py-2"><a class="text-ember-600 dark:text-ember-400 underline" href="#mod-math"><code>fogu:math</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-json"><code>fogu:json</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-time"><code>fogu:time</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-types"><code>fogu:types</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-system"><code>fogu:system</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-fs"><code>fogu:fs</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-path"><code>fogu:path</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-process"><code>fogu:process</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-sync"><code>fogu:sync</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-stream"><code>fogu:stream</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-test"><code>fogu:test</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-log"><code>fogu:log</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-regex"><code>fogu:regex</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-crypto"><code>fogu:crypto</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-password"><code>fogu:password</code></a></td></tr><tr><td class="py-2 pr-4 font-medium whitespace-nowrap">Data formats</td><td class="py-2"><a class="text-ember-600 dark:text-ember-400 underline" href="#mod-csv"><code>fogu:csv</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-excel"><code>fogu:excel</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-yaml"><code>fogu:yaml</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-toml"><code>fogu:toml</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-xml"><code>fogu:xml</code></a></td></tr><tr><td class="py-2 pr-4 font-medium whitespace-nowrap">Storage</td><td class="py-2"><a class="text-ember-600 dark:text-ember-400 underline" href="#mod-kv"><code>fogu:kv</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-surrealkv"><code>fogu:surrealkv</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-surrealdb"><code>fogu:surrealdb</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-sql"><code>fogu:sql</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-orm"><code>fogu:orm</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-redis"><code>fogu:redis</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-s3"><code>fogu:s3</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-scylla"><code>fogu:scylla</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-etcd"><code>fogu:etcd</code></a></td></tr><tr><td class="py-2 pr-4 font-medium whitespace-nowrap">Web &amp; network</td><td class="py-2"><a class="text-ember-600 dark:text-ember-400 underline" href="#mod-http"><code>fogu:http</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-web"><code>fogu:web</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-jwt"><code>fogu:jwt</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-topcoat"><code>fogu:topcoat</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-websocket"><code>fogu:websocket</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-socketio"><code>fogu:socketio</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-grpc"><code>fogu:grpc</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-net"><code>fogu:net</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-tls"><code>fogu:tls</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-security"><code>fogu:security</code></a></td></tr><tr><td class="py-2 pr-4 font-medium whitespace-nowrap">Messaging &amp; events</td><td class="py-2"><a class="text-ember-600 dark:text-ember-400 underline" href="#mod-nats"><code>fogu:nats</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-kafka"><code>fogu:kafka</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-rabbitmq"><code>fogu:rabbitmq</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-mqtt"><code>fogu:mqtt</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-broker"><code>fogu:broker</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-fogumq"><code>fogu:fogumq</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-foguMQ-client"><code>fogu:foguMQ-client</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-events"><code>fogu:events</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-cron"><code>fogu:cron</code></a></td></tr><tr><td class="py-2 pr-4 font-medium whitespace-nowrap">Integrations</td><td class="py-2"><a class="text-ember-600 dark:text-ember-400 underline" href="#mod-mail"><code>fogu:mail</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-ai"><code>fogu:ai</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-ssh"><code>fogu:ssh</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-shell"><code>fogu:shell</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-ffi"><code>fogu:ffi</code></a> <a class="text-ember-600 dark:text-ember-400 underline" href="#mod-playbook"><code>fogu:playbook</code></a></td></tr></tbody></table></div></p>
       <h3 class="text-lg font-semibold">Conventions</h3>
-      <p><strong>Errors are values.</strong> Operational failures — a missing file, a refused connection, a server error, malformed input — come back as an <code>error</code> value: handle them with <code>?</code> (propagate) or <code>const [value, err] = f()</code>. Programming mistakes — a wrong argument type, an unknown option — stop the program with a message. <strong>Options</strong> are passed as a last map argument: <code>f(x, { timeout: 5s })</code>. <strong>Durations</strong> accept a duration literal (<code>500ms</code>, <code>2s</code>, <code>1h</code>) or an int number of milliseconds. Network operations wait cooperatively: other <code>fg</code> tasks keep running while one waits.</p>
+      <p><strong>Errors are values.</strong> Operational failures — a missing file, a refused connection, a server error, malformed input — come back as an <code>error</code> value: handle them with <code>?</code> (propagate) or <code>const [value, err] = f()</code>. Programming mistakes — a wrong argument type, an unknown option — stop the program with a message. <strong>Options</strong> are passed as a last map argument: <code>f(x, { timeout: 5s })</code>. <strong>Durations</strong> accept a duration literal (<code>500ms</code>, <code>2s</code>, <code>1h</code>) or an int number of milliseconds; a duration has the fields <code>ns us ms</code> (int) and <code>seconds minutes hours</code> (float). Network operations wait cooperatively: other <code>fg</code> tasks keep running while one waits.</p>
       <script type="text/x-fogu" data-title="example.fg">import json from "fogu:json"
 
 const [cfg, err] = json.parse("{ broken")      // an error value, not a crash
@@ -1897,7 +1665,7 @@ a+b+c ababab mundo
 true 2 [x, y] [a, b, c]
 template: 2 items</script>
       <h3 class="text-lg font-semibold">list</h3>
-      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.push(x) · l.pop()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · value</td><td class="py-2">Add to / remove from the end.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.unshift(x) · l.shift()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · value</td><td class="py-2">Add to / remove from the start.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.insert(i, x) · l.remove(i)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · value</td><td class="py-2">At an index.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.first() · l.last()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">value</td><td class="py-2"><code>nil</code> when empty.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.contains(x) · l.index_of(x)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">bool · int</td><td class="py-2">Search by value.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.join(sep)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Items as text joined with <code>sep</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.reverse() · l.sort(fn?)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list</td><td class="py-2">New list; <code>sort</code> takes an optional comparator <code>(a, b) =&gt; int</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.slice(start, end?) · l.concat(other)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list</td><td class="py-2">Copies.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.map(fn) · l.filter(fn) · l.find(fn)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list · list · value</td><td class="py-2">Functional helpers.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.any(fn) · l.all(fn) · l.each(fn)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">bool · bool · nil</td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.reduce(fn, initial)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">value</td><td class="py-2"><code>fn(acc, item)</code> over the items.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.clear() · l.len()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · int</td><td class="py-2"></td></tr></tbody></table></div>
+      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.push(x...) · l.pop()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list · value</td><td class="py-2">Add to / remove from the end. <code>push</code> returns the list itself (chainable: <code>xs.push(1).push(2)</code>).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.unshift(x) · l.shift()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · value</td><td class="py-2">Add to / remove from the start.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.insert(i, x) · l.remove(i)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · value</td><td class="py-2">At an index.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.first() · l.last()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">value</td><td class="py-2"><code>nil</code> when empty.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.contains(x) · l.index_of(x)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">bool · int</td><td class="py-2">Search by value.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.join(sep)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Items as text joined with <code>sep</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.reverse() · l.sort(fn?)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list</td><td class="py-2">New list; <code>sort</code> takes an optional comparator <code>(a, b) =&gt; int</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.slice(start, end?) · l.concat(other)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list</td><td class="py-2">Copies.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.map(fn) · l.filter(fn) · l.find(fn)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list · list · value</td><td class="py-2">Functional helpers.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.any(fn) · l.all(fn) · l.each(fn)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">bool · bool · nil</td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.reduce(fn, initial)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">value</td><td class="py-2"><code>fn(acc, item)</code> over the items.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>l.clear() · l.len()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · int</td><td class="py-2"></td></tr></tbody></table></div>
       <script type="text/x-fogu" data-title="example.fg">const nums = [5, 3, 8, 1]
 nums.push(10)
 print(nums, nums.sort(), nums.sort((a, b) => b - a))
@@ -1909,7 +1677,7 @@ print(nums.slice(1, 3), nums.first(), nums.last(), nums.join(" | "))</script>
 27 true true
 [3, 8] 5 10 5 | 3 | 8 | 1 | 10</script>
       <h3 class="text-lg font-semibold">map</h3>
-      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>m.keys() · m.values() · m.entries()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list</td><td class="py-2">Entries are <code>[key, value]</code> pairs.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>m.has(key)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">bool</td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>m.get(key, default?)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">value</td><td class="py-2">The value, or <code>default</code> (nil).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>m.set(key, value) · m[key] = value</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil</td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>m.remove(key)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">value</td><td class="py-2">Removes and returns the value.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>m.merge(other)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">map</td><td class="py-2">A new map; <code>other</code> wins on equal keys.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>m.len() · m.clear()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">int · nil</td><td class="py-2"></td></tr></tbody></table></div>
+      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>m.keys() · m.values() · m.entries()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list</td><td class="py-2">Entries are <code>[key, value]</code> pairs.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>m.has(key)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">bool</td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>m.get(key, default?)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">value</td><td class="py-2">The value, or <code>default</code> (nil).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>m.set(key, value) · m[key] = value</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">map</td><td class="py-2"><code>set</code> returns the map itself (chainable).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>m.remove(key)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">value</td><td class="py-2">Removes and returns the value.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>m.merge(other)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">map</td><td class="py-2">A new map; <code>other</code> wins on equal keys.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>m.len() · m.clear()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">int · nil</td><td class="py-2"></td></tr></tbody></table></div>
       <script type="text/x-fogu" data-title="example.fg">const user = { name: "Ana", age: 30 }
 user.city = "Lisboa"
 print(user.keys(), user.has("age"), user.get("email", "none"))
@@ -2018,7 +1786,7 @@ true true</script>
     <section id="mod-json" data-group="Core modules" data-title="fogu:json" class="scroll-mt-20 mt-16">
       <h2 class="text-2xl font-bold"><code>fogu:json</code></h2>
       <script type="text/x-fogu" data-title="import">import json from "fogu:json"</script>
-      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>json.parse(text)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">value · error</td><td class="py-2">JSON text → maps, lists, str, int, float, bool, nil. Invalid JSON is an error value.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>json.stringify(value)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Compact JSON (map keys in order).</td></tr></tbody></table></div>
+      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>json.parse(text)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">value · error</td><td class="py-2">JSON text → maps, lists, str, int, float, bool, nil. Invalid JSON is an error value.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>json.stringify(value, { strict })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str · error</td><td class="py-2">Compact JSON (map keys in order). NaN and infinity are written <code>null</code> and a value JSON has no form for as its type name; with <code>strict: true</code> they are an error instead.</td></tr></tbody></table></div>
       <script type="text/x-fogu" data-title="example.fg">import json from "fogu:json"
 const data = json.parse("{\"name\": \"Ana\", \"tags\": [\"a\", \"b\"], \"age\": 30}")?
 print(data.name, data.tags, typeof(data.age))
@@ -2096,7 +1864,7 @@ nil true</script>
       <h2 class="text-2xl font-bold"><code>fogu:fs</code></h2>
       <p>Files and folders. Failures (missing file, permission) are error values.</p>
       <script type="text/x-fogu" data-title="import">import fs from "fogu:fs"</script>
-      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.readText(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str · error</td><td class="py-2">Whole file as UTF-8 text.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.readLines(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list · error</td><td class="py-2">Lines without line endings.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.writeText(path, text)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · error</td><td class="py-2">Creates or replaces.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.append(path, text)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · error</td><td class="py-2">Adds to the end (creates the file).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.exists(path) · fs.isFile(path) · fs.isDir(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">bool</td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.mkdir(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · error</td><td class="py-2">Creates the folder and its parents.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.list(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list · error</td><td class="py-2">Names inside a folder, sorted.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.stat(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">map · error</td><td class="py-2"><code>{ size, isFile, isDir, modified }</code> (modified: ms since the epoch).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.copy(from, to) · fs.move(from, to)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · error</td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.remove(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · error</td><td class="py-2">A file or an empty folder.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.removeAll(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · error</td><td class="py-2">A folder and everything inside.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.glob(pattern)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list</td><td class="py-2">Paths matching <code>*</code>, <code>?</code>, <code>**</code>, sorted.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.cwd() · fs.tempDir()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Working folder · system temp folder.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.createReadStream(path, { start, end, lines, bufferSize })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">ReadStream · error</td><td class="py-2">The file read a piece at a time, in constant memory. <code>end</code> is inclusive; <code>lines: true</code> makes <code>for</code> give lines (str) instead of buffers.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>r.read(n = 64 KiB) · r.readLine() · r.readAll() · r.readText()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">buffer · str · nil · error</td><td class="py-2"><code>nil</code> at the end. Reads that would wait run off the interpreter thread: other <code>fg</code> tasks keep going.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>for chunk in r</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2">Every chunk (or line) until the end. An error ends the loop and stays in <code>r.error</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>r.pipe(w)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">int · error</td><td class="py-2">Copies the rest into a <code>WriteStream</code> or a <code>web.stream()</code> response, off the interpreter thread (the bytes never become values); returns the bytes copied.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>r.close() · r.bytesRead · r.open · r.path</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.createWriteStream(path, { append })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">WriteStream · error</td><td class="py-2"><code>w.write(data) · w.writeLine(data)</code> → bytes · error (buffered, 64 KiB), <code>w.flush()</code>, <code>w.close()</code> / <code>w.end(data?)</code>, <code>w.bytesWritten</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.remote(ssh | "user@host", { sudo })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">RemoteFs</td><td class="py-2">The same functions on a server through <a href="#mod-ssh">fogu:ssh</a> (plus <code>upload(local, remote)</code> and <code>download(remote, local)</code>); every call is an SSH command.</td></tr></tbody></table></div>
+      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.readText(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str · error</td><td class="py-2">Whole file as UTF-8 text.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.readLines(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list · error</td><td class="py-2">Lines without line endings.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.writeText(path, text)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · error</td><td class="py-2">Creates or replaces.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.append(path, text)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · error</td><td class="py-2">Adds to the end (creates the file).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.exists(path) · fs.isFile(path) · fs.isDir(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">bool</td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.mkdir(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · error</td><td class="py-2">Creates the folder and its parents.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.list(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list · error</td><td class="py-2">Names inside a folder, sorted.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.stat(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">map · error</td><td class="py-2"><code>{ size, isFile, isDir, modified }</code> (modified: ms since the epoch).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.copy(from, to) · fs.move(from, to)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · error</td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.remove(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · error</td><td class="py-2">A file or an empty folder.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.removeAll(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · error</td><td class="py-2">A folder and everything inside.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.glob(pattern)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list</td><td class="py-2">Paths matching <code>*</code>, <code>?</code>, <code>**</code>, sorted.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.cwd() · fs.tempDir()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Working folder · system temp folder.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.createReadStream(path, { start, end, lines, bufferSize, root })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">ReadStream · error</td><td class="py-2">The file read a piece at a time, in constant memory. With <code>root</code> the path is a name from outside the program, kept under that folder (as <code>web.file</code>). <code>end</code> is inclusive; <code>lines: true</code> makes <code>for</code> give lines (str) instead of buffers.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>r.read(n = 64 KiB) · r.readLine() · r.readAll() · r.readText()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">buffer · str · nil · error</td><td class="py-2"><code>nil</code> at the end. Reads that would wait run off the interpreter thread: other <code>fg</code> tasks keep going.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>for chunk in r</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2">Every chunk (or line) until the end. An error ends the loop and stays in <code>r.error</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>r.pipe(w)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">int · error</td><td class="py-2">Copies the rest into a <code>WriteStream</code> or a <code>web.stream()</code> response, off the interpreter thread (the bytes never become values); returns the bytes copied.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>r.close() · r.bytesRead · r.open · r.path</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.createWriteStream(path, { append })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">WriteStream · error</td><td class="py-2"><code>w.write(data) · w.writeLine(data)</code> → bytes · error (buffered, 64 KiB), <code>w.flush()</code>, <code>w.close()</code> / <code>w.end(data?)</code>, <code>w.bytesWritten</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>fs.remote(ssh | "user@host", { sudo })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">RemoteFs</td><td class="py-2">The same functions on a server through <a href="#mod-ssh">fogu:ssh</a> (plus <code>upload(local, remote)</code> and <code>download(remote, local)</code>); every call is an SSH command.</td></tr></tbody></table></div>
       <script type="text/x-fogu" data-title="example.fg">import fs from "fogu:fs"
 fs.mkdir("data/logs")?
 fs.writeText("data/a.txt", "hello")?
@@ -2139,7 +1907,7 @@ fs.remove("copy.txt")?</script>
     <section id="mod-path" data-group="Core modules" data-title="fogu:path" class="scroll-mt-20 mt-16">
       <h2 class="text-2xl font-bold"><code>fogu:path</code></h2>
       <script type="text/x-fogu" data-title="import">import path from "fogu:path"</script>
-      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>path.join(...parts)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Joined with <code>/</code> and normalized.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>path.dirname(p) · path.basename(p)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Folder · last component.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>path.stem(p) · path.extname(p)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Name without extension · extension with the dot.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>path.normalize(p)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Resolves <code>.</code> and <code>..</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>path.isAbsolute(p)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">bool</td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>path.absolute(p)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Absolute path from the working folder.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>path.sep</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">The system separator.</td></tr></tbody></table></div>
+      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>path.join(...parts)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Joined with <code>/</code> and normalized.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>path.dirname(p) · path.basename(p)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Folder · last component.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>path.stem(p) · path.extname(p)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Name without extension · extension with the dot.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>path.normalize(p)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Resolves <code>.</code> and <code>..</code> by name only: the result may start with <code>..</code> — neither it nor <code>join</code> keeps a path inside a folder.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>path.safeJoin(base, name)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str · error</td><td class="py-2">The path of a name that comes from outside the program under <code>base</code>: an error when it has <code>..</code>, a drive letter, or leaves the folder through a symbolic link.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>path.isInside(base, p)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">bool</td><td class="py-2">Is <code>p</code> the folder <code>base</code> or under it, with <code>..</code> and symbolic links resolved?</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>path.real(p) · fs.realpath(p)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str · error</td><td class="py-2">The absolute path with every symbolic link resolved (the file must exist).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>path.isAbsolute(p)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">bool</td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>path.absolute(p)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Absolute path from the working folder.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>path.sep</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">The system separator.</td></tr></tbody></table></div>
       <script type="text/x-fogu" data-title="example.fg">import path from "fogu:path"
 print(path.join("src", "lib", "../main.fg"))
 print(path.dirname("a/b/c.txt"), path.basename("a/b/c.txt"), path.stem("a/b/c.tar.gz"), path.extname("a/b/c.txt"))
@@ -2264,7 +2032,7 @@ settings.test.fg
       <h2 class="text-2xl font-bold"><code>fogu:stream</code></h2>
       <p>Streams of values: a sequence consumed a value at a time, finite or infinite. Streams are <strong>pulled</strong>: the operators work when the consumer asks for the next value, so a chain holds one value per stage and the consumer sets the pace (backpressure). The only buffer is the one of <code>stream.create</code>, where tasks push values. Design: <code>docs/architecture/value-streams.md</code>.</p>
       <script type="text/x-fogu" data-title="import">import stream from "fogu:stream"</script>
-      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>stream.create({ buffer = 16 })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Stream</td><td class="py-2">Written by tasks, read by a consumer: <code>s.write(v)</code> → nil · error waits while <code>buffer</code> values are unread; <code>s.close()</code> ends it after the values written; <code>s.fail(err)</code> ends it with an error.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>stream.from(list | range | str | chan | readable | stream) · stream.of(...values)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Stream</td><td class="py-2">A readable of <code>fs</code> / <code>http</code> gives its chunks (or lines).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>stream.range(start, end?, step = 1) · stream.generate(fn(i)) · stream.interval(d)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Stream</td><td class="py-2">No <code>end</code>: infinite · <code>fn(0), fn(1)…</code> until it returns <code>nil</code> · 0, 1, 2… one every <code>d</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>s.map(fn) · s.filter(fn) · s.take(n) · s.skip(n) · s.takeWhile(fn) · s.chunk(n) · s.tap(fn) · s.enumerate()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Stream</td><td class="py-2">A new stream; nothing runs yet. <code>chunk</code>: lists of <code>n</code>; <code>enumerate</code>: <code>(index, value)</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>for v in s · s.next()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">value · nil · error</td><td class="py-2">One value at a time; <code>nil</code> at the end. An error ends a <code>for</code> and stays in <code>s.error</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>s.toList() · s.count() · s.reduce(fn, init) · s.forEach(fn) · s.first() · s.find(fn)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">value · error</td><td class="py-2">Consume the stream; an error it ended with is their error.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>s.cancel()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil</td><td class="py-2">Stops the stream and everything upstream: a writer gets an error value, a file is closed. <code>take</code>, <code>takeWhile</code>, <code>first</code> and <code>find</code> cancel upstream once they are done.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>s.done · s.cancelled · s.error · s.buffered</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"></td></tr></tbody></table></div>
+      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>stream.create({ buffer = 16 })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Stream</td><td class="py-2">Written by tasks, read by a consumer: <code>s.write(v)</code> → nil · error waits while <code>buffer</code> values are unread; <code>s.close()</code> ends it after the values written; <code>s.fail(err)</code> ends it with an error.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>stream.from(list | range | str | chan | readable | WebSocket | stream) · stream.of(...values)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Stream</td><td class="py-2">A readable of <code>fs</code> / <code>http</code> gives its chunks (or lines); a <a class="underline" href="#mod-websocket">WebSocket</a> its messages until it closes; a chan its values until it is closed.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>stream.range(start, end?, step = 1) · stream.generate(fn(i)) · stream.interval(d)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Stream</td><td class="py-2">No <code>end</code>: infinite · <code>fn(0), fn(1)…</code> until it returns <code>nil</code> · 0, 1, 2… one every <code>d</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>s.map(fn) · s.filter(fn) · s.take(n) · s.skip(n) · s.takeWhile(fn) · s.chunk(n) · s.tap(fn) · s.enumerate()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Stream</td><td class="py-2">A new stream; nothing runs yet. <code>chunk</code>: lists of <code>n</code>; <code>enumerate</code>: <code>(index, value)</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>for v in s · s.next()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">value · nil · error</td><td class="py-2">One value at a time; <code>nil</code> at the end. An error ends a <code>for</code> and stays in <code>s.error</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>s.toList() · s.count() · s.reduce(fn, init) · s.forEach(fn) · s.first() · s.find(fn)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">value · error</td><td class="py-2">Consume the stream; an error it ended with is their error.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>s.pipe(dest, { end = true })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">int · error</td><td class="py-2">Every value into <code>dest</code>: a chan (<code>ch &lt;- v</code>, waiting when it is full), a WebSocket (<code>send</code>) or a writable stream (<code>write</code>); then <code>dest</code> is closed, unless <code>end: false</code>. Returns how many values went; an error of <code>dest</code> ends the stream with it.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>s.cancel()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil</td><td class="py-2">Stops the stream and everything upstream: a writer gets an error value, a file is closed. <code>take</code>, <code>takeWhile</code>, <code>first</code> and <code>find</code> cancel upstream once they are done.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>s.done · s.cancelled · s.error · s.buffered</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"></td></tr></tbody></table></div>
       <script type="text/x-fogu" data-title="example.fg">import stream from "fogu:stream"
 
 // infinite, lazy: only what take(5) needs is computed
@@ -2747,7 +2515,7 @@ put /app/a 3
       <h3 class="text-lg font-semibold">Client</h3>
       <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>http.get(url, opts?) · http.delete(url, opts?) · http.head(url, opts?)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Response · error</td><td class="py-2">Network failures are error values; HTTP 4xx/5xx are normal responses (<code>res.ok</code> is false).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>http.post(url, body?, opts?) · http.put(…) · http.patch(…)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Response · error</td><td class="py-2"><code>body</code>: a str (text/plain), a map or list (JSON), bytes (octet-stream).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>http.request({ method, url, ...opts })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Response · error</td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>opts: { headers, query, json, form, multipart, body, timeout, redirects = true, basicAuth: [user, pass], bearer, ca, insecure }</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"><code>ca</code>: a PEM certificate (or its path) trusted for HTTPS, e.g. a self-signed one; <code>insecure: true</code> accepts any certificate (development only). <code>form</code>: urlencoded fields. <code>multipart</code>: a map of fields — text values, <code>http.file(path)</code> (streamed from disk), <code>{ data, filename, type }</code> bytes, or a list (a repeated field). Map keys are sent in alphabetical order.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>http.file(path, { filename, type })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">HttpFile · error</td><td class="py-2">A file to upload; the type comes from the extension.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>http.download(url, path, opts?)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">int · error</td><td class="py-2">Streams the body to a file; returns the bytes written (non-2xx is an error).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>http.stream(url, { method, body, headers, lines, … })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">HttpStream · error</td><td class="py-2">The response with its body read a piece at a time (a stream of <a href="#mod-fs">fogu:fs</a>: <code>read readLine readAll readText pipe close</code>, <code>for chunk in s</code>), and <code>s.status · s.ok · s.headers · s.url</code>. Any status is a stream; a network failure is an error value. <code>lines: true</code>: <code>for</code> gives lines.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>res.status · res.ok · res.url · res.headers · res.body</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"><code>headers</code>: the first value of each (lower case).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>res.json() · res.bytes() · res.header(name) · res.cookies()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"><code>bytes()</code>: the body as a <a class="underline" href="#values">buffer</a>; <code>header</code> joins repeated values.</td></tr></tbody></table></div>
       <h3 class="text-lg font-semibold">Server</h3>
-      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>http.serve(port | "ip:port", fn(req), { tls: { cert, key }, quiet, reusePort, maxBody, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout }?)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil</td><td class="py-2"><code>tls</code> serves HTTPS (see <a class="underline" href="#mod-tls">fogu:tls</a>). <code>reusePort: true</code> lets several servers share the port: one per <code>sync.Worker</code> serves on several cores (the kernel spreads the connections). On Linux a plain HTTP server runs on the interpreter's own thread, one <code>fg</code> task per connection. The handler returns a response (<code>http.text/json/html</code>), a str (text), any other value (JSON), nil (404) or an <code>error</code> (logged; the client gets a 500). Limits (defaults): <code>maxBody</code> (10 MB, 413), <code>maxHeaderBytes</code> (64 KB for the request line and headers, 431), <code>headerTimeout</code> (30s to send the headers; also closes idle keep-alive connections), <code>readTimeout</code> (60s for the body, 408), <code>handlerTimeout</code> (60s for the program's answer, 504; <code>0</code> = none). The request path is made canonical once, before static files, middlewares and routes see it: decoded once (<code>+</code> stays <code>+</code>), repeated slashes collapsed, <code>.</code>/<code>..</code> resolved; an encoded <code>/</code> or <code>\</code>, a raw <code>\</code>, a control character or a <code>..</code> above the root is a 400. A Rust panic in a handler answers that request with a 500 and the server goes on. Several servers may run in one program. Requests are answered as soon as they arrive while the program is alive — waiting in <code>Fogu.signal.wait()</code>, <code>time.delay</code>, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or <code>"0.0.0.0:8080"</code>, <code>"[::1]:8080"</code>, <code>":8080"</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>req.method · req.path · req.query · req.headers · req.body</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"><code>query</code> is the raw query string.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>req.header(name) · req.json() · req.form() · req.bytes()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"><code>form()</code>: urlencoded and multipart bodies.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>http.text(body, opts?) · http.json(value, opts?) · http.html(body, opts?)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Response</td><td class="py-2"><code>opts: { status, headers }</code>.</td></tr></tbody></table></div>
+      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>http.serve(port | "ip:port", fn(req), { tls: { cert, key }, quiet, reusePort, maxBody, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout }?)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil</td><td class="py-2"><code>tls</code> serves HTTPS (see <a class="underline" href="#mod-tls">fogu:tls</a>). <code>reusePort: true</code> lets several servers share the port: one per <code>sync.Worker</code> serves on several cores (the kernel spreads the connections). On Linux a plain HTTP server runs on the interpreter's own thread, one <code>fg</code> task per connection. The handler returns a response (<code>http.text/json/html</code>), a str (text), any other value (JSON), nil (404) or an <code>error</code> (logged; the client gets a 500). Limits (defaults): <code>maxBody</code> (10 MB, 413), <code>maxHeaderBytes</code> (64 KB for the request line and headers, 431), <code>headerTimeout</code> (30s to send the headers; also closes idle keep-alive connections), <code>readTimeout</code> (60s for the body, 408), <code>handlerTimeout</code> (60s for the program's answer, 504; <code>0</code> = none). The request path is made canonical once, before static files, middlewares and routes see it: decoded once (<code>+</code> stays <code>+</code>), repeated slashes collapsed, <code>.</code>/<code>..</code> resolved; an encoded <code>/</code> or <code>\</code>, a raw <code>\</code>, a control character or a <code>..</code> above the root is a 400. A Rust panic in a handler answers that request with a 500 and the server goes on. Several servers may run in one program. Requests are answered as soon as they arrive while the program is alive — waiting in <code>Fogu.signal.wait()</code>, <code>time.delay</code>, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or <code>"0.0.0.0:8080"</code>, <code>"[::1]:8080"</code>, <code>":8080"</code>. <code>maxBody</code> (10 MB, 413 beyond it) and <code>maxHeaderBytes</code> are a number of <b>bytes</b> or a size written out: <code>"512kb"</code>, <code>"10mb"</code>, <code>"1gb"</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>req.method · req.path · req.query · req.headers · req.body</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"><code>query</code> is the raw query string.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>req.header(name) · req.json() · req.form() · req.bytes()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"><code>form()</code>: urlencoded and multipart bodies.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>http.text(body, opts?) · http.json(value, opts?) · http.html(body, opts?)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Response</td><td class="py-2"><code>opts: { status, headers }</code>.</td></tr></tbody></table></div>
       <script type="text/x-fogu" data-title="server.fg">import http from "fogu:http"
 
 http.serve(8080, (req) => {
@@ -2805,9 +2573,9 @@ true {avatar: 4, file: report.txt, tags: [a, b], text: hello file
       <p>A web framework: routes with parameters, middleware, static files and SPA builds, uploads, downloads, Server-Sent Events and WebSocket — on one port. Requests are served as soon as they arrive while the program waits (<code>Fogu.signal.wait()</code>, <code>time.delay</code>, a channel), each in its own task: a handler that waits on a query or an HTTP call does not hold the others.</p>
       <script type="text/x-fogu" data-title="import">import web from "fogu:web"</script>
       <h3 class="text-lg font-semibold">App</h3>
-      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>web.app()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">App</td><td class="py-2">Methods return the app, so calls can be chained.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.get/post/put/patch/delete/head/options/all(path, ...middlewares, handler)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">App</td><td class="py-2"><code>/users/:id</code> parameters, <code>*</code> wildcard.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.use(fn) · app.use(prefix, fn)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">App</td><td class="py-2">Middleware for every request, or under a path prefix.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.after((ctx, res) =&gt; …)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">App</td><td class="py-2">After the handler; returning a value replaces the response.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.onError((ctx, err) =&gt; response)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">App</td><td class="py-2">For runtime errors and returned <code>error</code> values (default: a 500 <code>internal error</code>; the message goes to the log, never to the client).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.static(dir) · app.static(prefix, dir, { spa, index, maxAge, dotfiles })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">App</td><td class="py-2">Files served by the server thread: ETag/304, <code>Cache-Control</code>; a file under the prefix of an <code>app.use</code> middleware is served only after the middlewares let the request through; <code>spa: true</code> serves <code>index.html</code> for unknown HTML routes (React, Vue, Svelte builds).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.ws(path, ...middlewares, (ws, ctx) =&gt; …, { protocols })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">App</td><td class="py-2">WebSocket routes; the handler runs in its own task with a <a class="underline" href="#mod-websocket">WebSocket</a> on the upgraded HTTP connection.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.set(key, value) · app.store</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">App · map</td><td class="py-2">Shared state (<code>ctx.store</code>).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.listen(port | "ip:port", { host = "127.0.0.1", maxBody = 10 MB, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout, quiet, reusePort, tls: { cert, key } })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · error</td><td class="py-2">Limits, <code>reusePort</code> and the canonical path as in <code>http.serve</code>; an unknown option stops the program. <code>tls</code> serves HTTPS: PEM text or file paths (<code>tls.selfSigned(["localhost"])</code> for development; options as <code>tls.listen</code>). <code>app.listen("0.0.0.0:3000")</code> (or <code>host: "0.0.0.0"</code>) accepts other machines; IPv6 as <code>"[::1]:3000"</code>. A host in the string wins over <code>host</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.handler()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">fn</td><td class="py-2">Calls the app without a network (tests): <code>h({ method, path, headers, body })</code> → Response.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.routes()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list</td><td class="py-2"></td></tr></tbody></table></div>
+      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>web.app()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">App</td><td class="py-2">Methods return the app, so calls can be chained.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.get/post/put/patch/delete/head/options/all(path, ...middlewares, handler)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">App</td><td class="py-2"><code>/users/:id</code> parameters, <code>*</code> wildcard.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.use(fn) · app.use(prefix, fn)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">App</td><td class="py-2">Middleware for every request, or under a path prefix.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.after((ctx, res) =&gt; …)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">App</td><td class="py-2">After the handler; returning a value replaces the response.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.onError((ctx, err) =&gt; response)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">App</td><td class="py-2">For runtime errors and returned <code>error</code> values (default: a 500 <code>internal error</code>; the message goes to the log, never to the client).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.static(dir) · app.static(prefix, dir, { spa, index, maxAge, dotfiles })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">App</td><td class="py-2">Files served by the server thread: ETag/304, <code>Cache-Control</code>; a file under the prefix of an <code>app.use</code> middleware is served only after the middlewares let the request through; <code>spa: true</code> serves <code>index.html</code> for unknown HTML routes (React, Vue, Svelte builds).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.ws(path, ...middlewares, (ws, ctx) =&gt; …, { protocols })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">App</td><td class="py-2">WebSocket routes; the handler runs in its own task with a <a class="underline" href="#mod-websocket">WebSocket</a> on the upgraded HTTP connection.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.set(key, value) · app.store</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">App · map</td><td class="py-2">Shared state (<code>ctx.store</code>).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.listen(port | "ip:port", { host = "127.0.0.1", maxBody = "10mb", maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout, quiet, reusePort, tls: { cert, key } })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · error</td><td class="py-2">Limits, <code>reusePort</code> and the canonical path as in <code>http.serve</code>; an unknown option stops the program. <code>tls</code> serves HTTPS: PEM text or file paths (<code>tls.selfSigned(["localhost"])</code> for development; options as <code>tls.listen</code>). <code>app.listen("0.0.0.0:3000")</code> (or <code>host: "0.0.0.0"</code>) accepts other machines; IPv6 as <code>"[::1]:3000"</code>. A host in the string wins over <code>host</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.handler()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">fn</td><td class="py-2">Calls the app without a network (tests): <code>h({ method, path, headers, body })</code> → Response.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>app.routes()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">list</td><td class="py-2"></td></tr></tbody></table></div>
       <h3 class="text-lg font-semibold">Context and responses</h3>
-      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>ctx.method · ctx.path · ctx.params · ctx.query · ctx.headers · ctx.body</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"><code>query</code> is a map; header names are lower case.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>ctx.req.json() · ctx.req.form() · ctx.req.bytes()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"><code>form()</code>: fields as str, files as <code>UploadedFile</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>ctx.set.status · ctx.set.headers</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2">Adjust the final response from middleware or handlers.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>ctx.store</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">map</td><td class="py-2">The app's shared map.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>handler result</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2">A str (text or HTML), any value (JSON), a response, or nil (204).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>web.json/text/html(body, { status, headers })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Response</td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>web.redirect(url, status = 302)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Response</td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>web.file(path, { download, contentType, status })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Response · error</td><td class="py-2">Sent by the server thread, a chunk at a time (binary safe; a large file does not have to fit in memory). <code>download: true</code> uses the file's name, <code>download: "name"</code> another (non-ASCII names as RFC 6266 <code>filename*</code>).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>web.stream({ status, headers, contentType, highWaterMark })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">ResponseStream</td><td class="py-2">Return it from the handler and write the body a piece at a time from a task: <code>s.write(data)</code> · <code>s.writeLine(data)</code> → bytes · error, <code>s.end(data?)</code> / <code>s.close()</code>. Backpressure: <code>write</code> waits while more than <code>highWaterMark</code> bytes (1 MiB) are queued for a slow client. A readable (<code>fs.createReadStream</code>, <code>http.stream</code>) returned from a handler, or <code>pipe</code>d into the stream, is sent the same way.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>web.sse({ retry, headers })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">SseStream</td><td class="py-2">Return it from the handler; <code>send(data, { event, id })</code>, <code>comment(text)</code>, <code>close()</code>, field <code>open</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>web.cors({ origin, methods, headers, credentials, maxAge })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">middleware</td><td class="py-2">Answers preflight requests, also as a route's own middleware. With <code>credentials: true</code> and <code>origin: "*"</code> the request's origin is echoed (browsers refuse <code>*</code> with credentials).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>web.logger()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">middleware</td><td class="py-2"><code>GET /path 200 0.4ms</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>UploadedFile: filename, contentType, size, text(), bytes(), json(), save(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"><code>save("uploads/")</code> keeps a sanitized file name.</td></tr></tbody></table></div>
+      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>ctx.method · ctx.path · ctx.params · ctx.query · ctx.headers · ctx.body</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"><code>query</code> is a map; header names are lower case.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>ctx.req.json() · ctx.req.form() · ctx.req.bytes()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"><code>form()</code>: fields as str, files as <code>UploadedFile</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>ctx.set.status · ctx.set.headers</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2">Adjust the final response from middleware or handlers.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>ctx.store</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">map</td><td class="py-2">The app's shared map.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>handler result</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2">A str (text or HTML), any value (JSON), a response, or nil (204).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>web.json/text/html(body, { status, headers })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Response</td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>web.redirect(url, status = 302)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Response</td><td class="py-2"></td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>web.file(path, { root, dotfiles, download, contentType, status })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Response · error</td><td class="py-2">Sent by the server thread, a chunk at a time (binary safe; a large file does not have to fit in memory). A path with <code>..</code> is refused. <b>A name that comes from the request</b> (a query, a header, a body) goes with <code>root</code>: <code>web.file(ctx.query.f, { root: "www" })</code> never leaves that folder (<code>..</code>, drive letters and symbolic links out of it are an error; dotfiles are hidden unless <code>dotfiles: true</code>). Answers <code>Range</code> requests (206, <code>Accept-Ranges</code>, <code>ETag</code>, <code>Last-Modified</code>): downloads resume and media can seek. <code>download: true</code> uses the file's name, <code>download: "name"</code> another (non-ASCII names as RFC 6266 <code>filename*</code>).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>web.stream({ status, headers, contentType, highWaterMark })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">ResponseStream</td><td class="py-2">Return it from the handler and write the body a piece at a time from a task: <code>s.write(data)</code> · <code>s.writeLine(data)</code> → bytes · error, <code>s.end(data?)</code> / <code>s.close()</code>. Backpressure: <code>write</code> waits while more than <code>highWaterMark</code> bytes (1 MiB) are queued for a slow client. A readable (<code>fs.createReadStream</code>, <code>http.stream</code>) returned from a handler, or <code>pipe</code>d into the stream, is sent the same way.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>web.sse({ retry, headers })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">SseStream</td><td class="py-2">Return it from the handler; <code>send(data, { event, id })</code>, <code>comment(text)</code>, <code>close()</code>, field <code>open</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>web.cors({ origin, methods, headers, credentials, maxAge })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">middleware</td><td class="py-2">Answers preflight requests, also as a route's own middleware. <code>credentials: true</code> needs the origins listed (<code>origin: ["https://app.example"]</code>): with <code>*</code> the program stops when the middleware is made, and an origin that is not on the list gets no CORS header.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>web.logger()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">middleware</td><td class="py-2"><code>GET /path 200 0.4ms</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>UploadedFile: filename, contentType, size, text(), bytes(), json(), save(path)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"><code>save("uploads/")</code> keeps a sanitized file name (no folders, no leading dot, no trailing dot or space, no Windows device name). A path written out (<code>save("uploads/" + name)</code>) is the program's own: it is refused when it has a <code>..</code>, but its name is not sanitized — never build it from <code>filename</code>.</td></tr></tbody></table></div>
       <script type="text/x-fogu" data-title="app.fg">import web from "fogu:web"
 import fs from "fogu:fs"
 import time from "fogu:time"
@@ -3045,9 +2813,9 @@ print(h.grade, h.missing.map(fn(m) { return m.header }))</script>
 
     <section id="mod-websocket" data-group="Web &amp; network" data-title="fogu:websocket" class="scroll-mt-20 mt-16">
       <h2 class="text-2xl font-bold"><code>fogu:websocket</code></h2>
-      <p>WebSocket client (<code>ws://</code>, <code>wss://</code>) and a standalone server. The same connection object is used by <code>app.ws</code> in <code>fogu:web</code>. Each connection runs on the shared runtime (no thread per connection): <code>next</code> and <code>accept</code> wait cooperatively and wake up when a message or a client arrives.</p>
+      <p>WebSocket client (<code>ws://</code>, <code>wss://</code>) and a standalone server; <code>fogu:ws</code> is the short name of the same module. The same connection object is used by <code>app.ws</code> in <code>fogu:web</code> and by <code>ws.upgrade</code> in an <code>http.serve</code> handler. Each connection runs on the shared runtime (no thread per connection): <code>next</code> and <code>accept</code> wait cooperatively and wake up when a message or a client arrives. A connection is a stream of its messages: <code>for m in ws</code>, <code>stream.from(ws)</code>, and <code>s.pipe(ws)</code> sends a <a class="underline" href="#mod-stream">stream</a> or a channel into it.</p>
       <script type="text/x-fogu" data-title="import">import websocket from "fogu:websocket"</script>
-      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>websocket.connect(url, { headers, protocols, timeout })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">WebSocket · error</td><td class="py-2">A rejected handshake (401, 404…) is an error value.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>websocket.listen(port, { host })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Server · error</td><td class="py-2"><code>port 0</code> picks a free port; <code>server.accept(timeout?)</code> → WebSocket, fields <code>port url</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>ws.send(data)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · error</td><td class="py-2">str → text frame, <a class="underline" href="#values">buffer</a> or list of bytes → binary frame, other values → JSON text.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>ws.next(timeout?)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Message · nil</td><td class="py-2"><code>{ type: "text" | "binary", data, text, bytes, size, json() }</code>: <code>data</code> is a str for text frames and a buffer for binary ones, <code>text</code> always a str, <code>bytes</code> always a buffer. nil on timeout or when closed.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>ws.tryNext() · ws.ping() · ws.close(code = 1000, reason)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"><code>tryNext</code>: a queued message or nil, without waiting.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>ws.open · ws.closeCode · ws.closeReason · ws.path · ws.url · ws.headers · ws.protocol · ws.pending · ws.error</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"><code>pending</code>: messages queued; <code>error</code>: why the connection failed, or nil.</td></tr></tbody></table></div>
+      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>import ws from "fogu:ws"</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2">The short name of this module: the same functions and connections (<code>ws.connect</code>, <code>ws.listen</code>, <code>ws.upgrade</code>).</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>websocket.connect(url, { headers, protocols, timeout })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">WebSocket · error</td><td class="py-2">A rejected handshake (401, 404…) is an error value.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>websocket.listen(port, { host })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Server · error</td><td class="py-2"><code>port 0</code> picks a free port; <code>server.accept(timeout?)</code> → WebSocket, fields <code>port url</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>ws.send(data)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">nil · error</td><td class="py-2">str → text frame, <a class="underline" href="#values">buffer</a> or list of bytes → binary frame, other values → JSON text.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>ws.next(timeout?)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">Message · nil</td><td class="py-2"><code>{ type: "text" | "binary", data, text, bytes, size, json() }</code>: <code>data</code> is a str for text frames and a buffer for binary ones, <code>text</code> always a str, <code>bytes</code> always a buffer. nil on timeout or when closed.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>for m in ws · for conn in server</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2">Every message until the connection closes (a network error ends the loop and stays in <code>ws.error</code>) · every client, as <code>accept()</code>.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>websocket.upgrade(req, (ws, req) =&gt; …, { protocols })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">response · error</td><td class="py-2">In an <a class="underline" href="#mod-http">http.serve</a> handler: return it to answer a request with <code>req.upgrade</code> (101); the function runs in its own task with the connection. <code>protocols</code>: the subprotocols accepted (default: the first the client offers). An error value when the request does not ask for a WebSocket.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>ws.tryNext() · ws.ping() · ws.close(code = 1000, reason)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"><code>tryNext</code>: a queued message or nil, without waiting.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>ws.open · ws.closeCode · ws.closeReason · ws.path · ws.url · ws.headers · ws.protocol · ws.pending · ws.error</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap"></td><td class="py-2"><code>pending</code>: messages queued; <code>error</code>: why the connection failed, or nil.</td></tr></tbody></table></div>
       <script type="text/x-fogu" data-title="example.fg">import websocket from "fogu:websocket"
 const server = websocket.listen(0)?
 fg fn() {
@@ -3074,6 +2842,32 @@ ws.close()</script>
       <script type="text/x-fogu" data-lang="text" data-title="output">echo /room?x=1: hello
 echo /room?x=1: {"kind":"json"}
 binary <buffer 3 bytes: 01 02 ff> 3 str</script>
+      <h3 class="text-lg font-semibold">Streams, channels and http.serve</h3>
+      <script type="text/x-fogu" data-title="example.fg">import ws from "fogu:ws"
+import http from "fogu:http"
+import stream from "fogu:stream"
+
+// http.serve: answer the upgrade, the handler runs in its own task
+http.serve(18471, (req) => {
+    if !req.upgrade { return http.text("a WebSocket endpoint") }
+    // each message, upper-cased, straight back: the socket is a stream
+    return ws.upgrade(req, (conn, r) => stream.from(conn).map((m) => m.data.upper()).pipe(conn))
+}, { quiet: true })?
+
+const conn = ws.connect("ws://127.0.0.1:18471/shout")?
+// a channel written by a task goes into the socket...
+const lines = chan(8)
+fg fn() {
+    for w in ["hello", "streams", "and channels"] { lines <- w }
+    close(lines)
+}()
+print("sent", stream.from(lines).pipe(conn, { end: false })?)
+// ...and the answers come out of it as a stream
+for text in stream.from(conn).map((m) => m.data).take(3) { print(text) }</script>
+      <script type="text/x-fogu" data-lang="text" data-title="output">sent 3
+HELLO
+STREAMS
+AND CHANNELS</script>
     </section>
 
     <section id="mod-webrtc" data-group="Web &amp; network" data-title="fogu:webrtc" class="scroll-mt-20 mt-16">
@@ -3924,7 +3718,7 @@ print(err)</script>
       <script type="text/x-fogu" data-lang="text" data-title="output"><h1>Tom &amp; Jerry</h1><li>1. CAFÉ</li><li>2. PÃO</li>
 error: html.render: syntax error: unexpected end of block (in <string>:1)</script>
       <h3 class="text-lg font-semibold">Sanitizing and conversions</h3>
-      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>html.escape(text) · html.unescape(text)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Entities: named, decimal and hex.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>html.sanitize(text, { tags, addTags, removeTags, attributes, stripComments })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Removes scripts, event handlers and dangerous URLs.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>html.text(text) · el.toText()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Plain text with paragraphs, bullets and tab-separated cells.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>html.toMarkdown(text) · el.toMarkdown()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Headings, emphasis, links, images, lists, code blocks, quotes, tables.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>html.fromMarkdown(md)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">CommonMark + tables, strikethrough, task lists, footnotes.</td></tr></tbody></table></div>
+      <div class="overflow-x-auto mt-4"><table class="w-full text-sm border-collapse"><thead><tr class="text-left border-b border-slate-200 dark:border-slate-800"><th class="py-2 pr-4">Function</th><th class="py-2 pr-4">Returns</th><th class="py-2">Description</th></tr></thead><tbody class="[&>tr]:border-b [&>tr]:border-slate-100 dark:[&>tr]:border-slate-800/60"><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>html.escape(text) · html.unescape(text)</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Entities: named, decimal and hex.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>html.sanitize(text, { tags, addTags, removeTags, attributes, stripComments })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Removes scripts, event handlers and dangerous URLs.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>html.text(text) · el.toText()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Plain text with paragraphs, bullets and tab-separated cells.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>html.toMarkdown(text) · el.toMarkdown()</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">Headings, emphasis, links, images, lists, code blocks, quotes, tables.</td></tr><tr class="align-top"><td class="py-2 pr-4 whitespace-nowrap"><code>html.fromMarkdown(md, { sanitize })</code></td><td class="py-2 pr-4 text-slate-500 whitespace-nowrap">str</td><td class="py-2">CommonMark + tables, strikethrough, task lists, footnotes. Markdown lets raw HTML through: pass <code>sanitize: true</code> for text that is not the program's own (<code>&lt;script&gt;</code>, <code>onerror=</code>, <code>javascript:</code> links are removed).</td></tr></tbody></table></div>
       <script type="text/x-fogu" data-title="example.fg">import html from "fogu:html"
 print(html.sanitize("<p onclick='steal()'>hi<script>alert(1)</script></p>"))
 print(html.toMarkdown("<h2>Notes</h2><p>Some <b>bold</b> and <a href='https://fogu.dev'>a link</a></p><ul><li>one</li><li>two</li></ul>"))

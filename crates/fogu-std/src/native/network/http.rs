@@ -184,15 +184,39 @@ impl Default for ServerOptions {
     }
 }
 
+/// The bytes of a size written as text: `"4096"`, `"512kb"`, `"10 MB"`, `"1gb"`
+/// (powers of 1024, any case).
+pub(crate) fn size_of(text: &str) -> Option<i64> {
+    let t = text.trim().to_ascii_lowercase();
+    let digits = t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len());
+    let n: i64 = t[..digits].parse().ok()?;
+    let unit = match t[digits..].trim() {
+        "" | "b" => 1,
+        "k" | "kb" | "kib" => 1 << 10,
+        "m" | "mb" | "mib" => 1 << 20,
+        "g" | "gb" | "gib" => 1 << 30,
+        _ => return None,
+    };
+    n.checked_mul(unit)
+}
+
 /// The options `http.serve` and `app.listen` share.
 pub const SERVER_OPTIONS: &str = "tls quiet reusePort maxBody maxHeaderBytes headerTimeout readTimeout handlerTimeout";
 
 impl ServerOptions {
     /// Reads one of [`SERVER_OPTIONS`]; false for a key it does not know.
     pub fn set(&mut self, key: &str, v: &Value, what: &str) -> Result<bool, String> {
-        let bytes = |v: &Value, min: i64| match v {
-            Value::Int(n) if *n >= min => Ok(*n as usize),
-            other => Err(format!("{}: {} must be a number of bytes >= {}, got {}", what, key, min, other.to_display_string())),
+        // a number of bytes, or a size written out: "512kb", "10mb", "1gb"
+        let bytes = |v: &Value, min: i64| {
+            let n = match v {
+                Value::Int(n) => Some(*n),
+                Value::Str(s) => size_of(s),
+                _ => None,
+            };
+            match n {
+                Some(n) if n >= min => Ok(n as usize),
+                _ => Err(format!("{}: {} must be a number of bytes >= {} (or a size such as \"10mb\"), got {}", what, key, min, v.to_display_string())),
+            }
         };
         match key {
             "maxBody" => self.max_body = bytes(v, 1)?,
@@ -807,6 +831,8 @@ async fn handle_request(
     // file or a WebSocket accept — kept only when the server has static
     // mounts or the request asks for an upgrade (not one copy per request)
     let accepts_html = method == "GET" && headers.get("accept").is_some_and(|a| a.contains("text/html"));
+    // (a file answer may be asked for in part)
+    let range = headers.get("range").map(|r| (r.clone(), headers.get("if-range").cloned()));
     let kept = if upgrade || !opts.statics.is_empty() { headers.clone() } else { HashMap::new() };
     let plain = PlainRequest {
         method: method.clone(),
@@ -888,7 +914,127 @@ async fn handle_request(
             return Ok(r);
         }
     }
+    if resp.file.is_some() {
+        return Ok(file_response(resp, range.as_ref().map(|(r, i)| (r.as_str(), i.as_deref())), method == "HEAD").await);
+    }
     Ok(plain_response(resp).await)
+}
+
+/// What of a file a request asks for (RFC 7233; several ranges at once are
+/// answered with the whole file, which the RFC allows).
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum Slice {
+    Whole,
+    /// first and last byte
+    Part(u64, u64),
+    /// nothing of the file is in the range (416)
+    Outside,
+}
+
+pub(crate) fn file_slice(range: Option<(&str, Option<&str>)>, len: u64, etag: &str, modified: &str) -> Slice {
+    let Some((range, if_range)) = range else { return Slice::Whole };
+    // `If-Range`: the range only counts for the version the client has
+    if if_range.is_some_and(|v| v.trim() != etag && v.trim() != modified) {
+        return Slice::Whole;
+    }
+    let Some(spec) = range.trim().strip_prefix("bytes=") else { return Slice::Whole };
+    let Some((a, b)) = spec.trim().split_once('-') else { return Slice::Whole };
+    let (a, b) = (a.trim(), b.trim());
+    let digits = |t: &str| !t.is_empty() && t.bytes().all(|c| c.is_ascii_digit());
+    if a.is_empty() {
+        // the last `b` bytes
+        if !digits(b) {
+            return Slice::Whole;
+        }
+        return match b.parse::<u64>() {
+            Ok(0) => Slice::Outside,
+            Ok(n) if len > 0 => Slice::Part(len.saturating_sub(n), len - 1),
+            Ok(_) => Slice::Outside,
+            Err(_) => Slice::Whole,
+        };
+    }
+    if !digits(a) || !(b.is_empty() || digits(b)) {
+        return Slice::Whole;
+    }
+    let Ok(first) = a.parse::<u64>() else { return Slice::Outside };
+    if first >= len {
+        return Slice::Outside;
+    }
+    let last = if b.is_empty() { len - 1 } else { b.parse::<u64>().unwrap_or(u64::MAX).min(len - 1) };
+    if last < first {
+        return Slice::Whole;
+    }
+    Slice::Part(first, last)
+}
+
+/// The validators of a file answer: (etag, last-modified).
+pub(crate) fn file_validators(meta: &std::fs::Metadata) -> (String, String) {
+    let mtime = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+    (format!("\"{:x}-{:x}\"", meta.len(), mtime), httpdate(mtime))
+}
+
+/// The status, the headers a file answer adds and the bytes to send (first, count).
+pub(crate) fn file_plan(status: i64, headers: &mut HashMap<String, String>, range: Option<(&str, Option<&str>)>, meta: &std::fs::Metadata) -> (i64, u64, u64) {
+    let len = meta.len();
+    // (an answer with a status of its own — an error page — is sent whole)
+    if status != 200 {
+        return (status, 0, len);
+    }
+    let (etag, modified) = file_validators(meta);
+    let slice = file_slice(range, len, headers.get("etag").map_or(etag.as_str(), |e| e.as_str()), &modified);
+    headers.entry("accept-ranges".into()).or_insert_with(|| "bytes".into());
+    headers.entry("etag".into()).or_insert(etag);
+    headers.entry("last-modified".into()).or_insert(modified);
+    match slice {
+        Slice::Whole => (200, 0, len),
+        Slice::Part(a, b) => {
+            headers.insert("content-range".into(), format!("bytes {}-{}/{}", a, b, len));
+            (206, a, b - a + 1)
+        }
+        Slice::Outside => {
+            headers.insert("content-range".into(), format!("bytes */{}", len));
+            (416, 0, 0)
+        }
+    }
+}
+
+/// `web.file`: the file, or the part of it the request asks for, a chunk at a
+/// time (64 KiB): a large file does not have to fit in memory.
+async fn file_response(mut resp: PlainResponse, range: Option<(&str, Option<&str>)>, head: bool) -> HyperResponse<Body> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    let not_found = || HyperResponse::builder().status(StatusCode::NOT_FOUND).header("content-type", "text/plain; charset=utf-8").body(full("file not found")).unwrap();
+    let Some(path) = resp.file.take() else { return not_found() };
+    let Ok(mut file) = tokio::fs::File::open(&path).await else { return not_found() };
+    let Ok(meta) = file.metadata().await else { return not_found() };
+    if meta.is_dir() {
+        return not_found();
+    }
+    let (status, first, count) = file_plan(resp.status, &mut resp.headers, range, &meta);
+    let mut builder = HyperResponse::builder().status(StatusCode::from_u16(status as u16).unwrap_or(StatusCode::OK));
+    for (k, v) in &resp.headers {
+        builder = builder.header(k.as_str(), v.as_str());
+    }
+    if !resp.headers.contains_key("content-type") {
+        builder = builder.header("content-type", mime_of(&path));
+    }
+    builder = builder.header("content-length", count);
+    if head || count == 0 || (first > 0 && file.seek(std::io::SeekFrom::Start(first)).await.is_err()) {
+        return builder.body(full(Bytes::new())).unwrap_or_else(|_| HyperResponse::new(full(Bytes::new())));
+    }
+    let chunks = futures_lite::stream::unfold((file, count), |(mut file, left)| async move {
+        if left == 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; left.min(64 * 1024) as usize];
+        match file.read(&mut buf).await {
+            Ok(0) | Err(_) => None,
+            Ok(n) => {
+                buf.truncate(n);
+                Some((Ok::<_, Infallible>(Frame::data(Bytes::from(buf))), (file, left - n as u64)))
+            }
+        }
+    });
+    builder.body(BodyExt::boxed(StreamBody::new(chunks))).unwrap_or_else(|_| HyperResponse::new(full(Bytes::new())))
 }
 
 async fn plain_response(resp: PlainResponse) -> HyperResponse<Body> {
@@ -898,28 +1044,13 @@ async fn plain_response(resp: PlainResponse) -> HyperResponse<Body> {
         builder = builder.header(k.as_str(), v.as_str());
     }
     let body = if let Some(path) = &resp.file {
-        // a chunk at a time (64 KiB): a large file does not have to fit in memory
-        match tokio::fs::File::open(path).await {
-            Ok(file) => {
+        // (file answers go through `file_response`; this is the same file, whole)
+        match tokio::fs::read(path).await {
+            Ok(data) => {
                 if !resp.headers.contains_key("content-type") {
                     builder = builder.header("content-type", mime_of(path));
                 }
-                if let Ok(meta) = file.metadata().await {
-                    builder = builder.header("content-length", meta.len());
-                }
-                let chunks = futures_lite::stream::unfold(Some(file), |file| async move {
-                    use tokio::io::AsyncReadExt;
-                    let mut file = file?;
-                    let mut buf = vec![0u8; 64 * 1024];
-                    match file.read(&mut buf).await {
-                        Ok(0) | Err(_) => None,
-                        Ok(n) => {
-                            buf.truncate(n);
-                            Some((Ok::<_, Infallible>(Frame::data(Bytes::from(buf))), Some(file)))
-                        }
-                    }
-                });
-                BodyExt::boxed(StreamBody::new(chunks))
+                full(data)
             }
             Err(_) => {
                 return HyperResponse::builder()
@@ -1055,7 +1186,28 @@ async fn serve_static(mounts: &[StaticMount], path: &str, headers: &HashMap<Stri
         if headers.get("if-none-match").is_some_and(|v| v.split(',').any(|t| t.trim() == etag)) {
             return Some(base.status(StatusCode::NOT_MODIFIED).body(full(Bytes::new())).unwrap());
         }
-        let builder = base.status(StatusCode::OK).header("content-type", mime_of(&file)).header("content-length", meta.len());
+        let base = base.header("content-type", mime_of(&file)).header("accept-ranges", "bytes");
+        let range = headers.get("range").map(|r| (r.as_str(), headers.get("if-range").map(String::as_str)));
+        let (first, count) = match file_slice(range, meta.len(), &etag, &httpdate(mtime)) {
+            Slice::Whole => (0, meta.len()),
+            Slice::Part(a, b) => {
+                let builder = base.status(StatusCode::PARTIAL_CONTENT).header("content-range", format!("bytes {}-{}/{}", a, b, meta.len())).header("content-length", b - a + 1);
+                if head {
+                    return Some(builder.body(full(Bytes::new())).unwrap());
+                }
+                use tokio::io::{AsyncReadExt, AsyncSeekExt};
+                let mut f = tokio::fs::File::open(&file).await.ok()?;
+                f.seek(std::io::SeekFrom::Start(a)).await.ok()?;
+                let mut data = Vec::with_capacity((b - a + 1) as usize);
+                f.take(b - a + 1).read_to_end(&mut data).await.ok()?;
+                return Some(builder.body(full(data)).unwrap());
+            }
+            Slice::Outside => {
+                return Some(base.status(StatusCode::RANGE_NOT_SATISFIABLE).header("content-range", format!("bytes */{}", meta.len())).header("content-length", 0).body(full(Bytes::new())).unwrap());
+            }
+        };
+        let _ = first;
+        let builder = base.status(StatusCode::OK).header("content-length", count);
         if head {
             return Some(builder.body(full(Bytes::new())).unwrap());
         }
@@ -1408,24 +1560,16 @@ impl FoguObject for UploadedFile {
             "text" => Ok(Value::Str(String::from_utf8_lossy(&self.part.data).into_owned().into())),
             "bytes" => Ok(crate::native::util::list(self.part.data.iter().map(|b| Value::Int(*b as i64)).collect())),
             "json" => crate::native::json::parse_value(&String::from_utf8_lossy(&self.part.data)).map_err(|e| io_err!("json: {}", e)),
-            // save(path): a folder keeps the original (sanitized) file name; returns the path
+            // save(path): a folder keeps the original (sanitized) file name; returns the path.
+            // A path written out is the program's own, but the client's file name often
+            // ends up in it: it never climbs with `..`
             "save" => {
                 let target = crate::native::util::str_arg(args, 0, "save")?;
                 let mut path = PathBuf::from(&target);
                 if path.is_dir() || target.ends_with('/') || target.ends_with('\\') {
-                    let clean: String = self
-                        .part
-                        .filename
-                        .clone()
-                        .unwrap_or_else(|| "upload".into())
-                        .rsplit(['/', '\\'])
-                        .next()
-                        .unwrap_or("upload")
-                        .chars()
-                        .map(|c| if c.is_alphanumeric() || "._- ".contains(c) { c } else { '_' })
-                        .collect();
-                    let clean = clean.trim_start_matches('.').to_string();
-                    path = path.join(if clean.is_empty() { "upload".to_string() } else { clean });
+                    path = path.join(safe_file_name(self.part.filename.as_deref().unwrap_or("upload")));
+                } else if target.split(['/', '\\']).any(|part| part == "..") || target.contains('\0') {
+                    return Err(io_err!("save: {}: '..' is not allowed in a path (save into a folder: save(\"uploads/\"))", target));
                 }
                 if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
                     std::fs::create_dir_all(dir).map_err(|e| io_err!("save: {}: {}", dir.display(), e))?;
@@ -1440,6 +1584,23 @@ impl FoguObject for UploadedFile {
     fn methods(&self) -> Vec<&'static str> {
         vec!["text", "bytes", "json", "save"]
     }
+}
+
+/// The name an uploaded file is saved under: the last component of what the
+/// client sent, without anything a file system treats specially — separators,
+/// drive and stream marks, a leading dot, the trailing dots and spaces Windows
+/// drops (`a.txt.` is `a.txt` there) and its device names (`NUL`, `CON`, `COM1`…).
+pub(crate) fn safe_file_name(given: &str) -> String {
+    let last = given.rsplit(['/', '\\']).next().unwrap_or("");
+    let clean: String = last.chars().map(|c| if c.is_alphanumeric() || "._- ".contains(c) { c } else { '_' }).collect();
+    let clean = clean.trim_start_matches('.').trim_end_matches(['.', ' ']).trim_start();
+    if clean.is_empty() {
+        return "upload".to_string();
+    }
+    let stem = clean.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit());
+    if device { format!("_{}", clean) } else { clean.to_string() }
 }
 
 pub struct ResponseValue {

@@ -1,0 +1,6 @@
+// A name read before its declaration ran (a function called above `let x`) is
+// reported as that, not as an unknown name (L14, 0.8.4).
+fn f() { return x }
+print("before")
+print(f())
+let x = 1

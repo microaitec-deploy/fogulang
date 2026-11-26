@@ -1,0 +1,2 @@
+// A float literal that is not a 64-bit float is refused (L19, 0.8.4).
+print(1e400)

@@ -17,10 +17,11 @@ fn list(v: Vec<Value>) -> Value {
 
 fn idx(v: &Value, len: usize, what: &str) -> Result<usize, String> {
     match v {
-        Value::Int(i) => {
-            let i = if *i < 0 { *i + len as i64 } else { *i };
+        Value::Int(given) => {
+            let i = if *given < 0 { *given + len as i64 } else { *given };
+            // (the index the program wrote, not the one counted from the end — B17)
             if i < 0 || i as usize > len {
-                Err(format!("{}: index {} out of bounds (length {})", what, i, len))
+                Err(format!("{}: index {} out of bounds (length {})", what, given, len))
             } else {
                 Ok(i as usize)
             }
@@ -92,6 +93,12 @@ fn call_fn(it: Option<&Interpreter>, f: &Value, args: Vec<Value>, name: &str) ->
 }
 
 /// Dispatches `recv.name(args)`. `None` if the method does not exist.
+/// Does `recv` (a str, list, map, buffer) have the method `name`? For `fogu check`:
+/// asked of an empty value, so the answer costs nothing and changes nothing.
+pub fn has_method(recv: &Value, name: &str) -> bool {
+    dispatch(None, recv, name, &[]).is_some()
+}
+
 pub fn call_method(
     it: &Interpreter,
     recv: &Value,

@@ -3,7 +3,7 @@
 This grammar is derived from the reference implementation, not from the
 specification: `lexer.rs`, `token.rs`, `parser.rs` and `ast.rs` in
 `lang/crates/fogu-core/src/runtime/`. It describes what the parser accepts
-(Fogu 0.8.3). Constructs the parser does not accept are listed at the end
+(Fogu 0.8.4). Constructs the parser does not accept are listed at the end
 under "Not part of the grammar".
 
 ## Notation
@@ -366,7 +366,8 @@ fn_lit        = "fn" [ IDENT ] fn_tail ;              /* the name is ignored */
 arrow_fn      = param_list [ ":" type ] "=>" ( block | expr ) ;
                /* a "{" after "=>" always opens a block */
 
-new_expr      = "new" IDENT [ type_args ] [ "(" args ")" ] ;
+new_expr      = "new" IDENT { "." IDENT } [ type_args ] [ "(" args ")" ] ;
+               /* "new geo.Point()": a struct a module exports (0.8.4) */
                /* "new" is special only when an identifier follows it;
                   "(" must be on the same line */
 chan_expr     = "chan" [ "<" /* tokens up to the matching ">" */ ">" ]

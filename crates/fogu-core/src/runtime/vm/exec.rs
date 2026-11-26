@@ -242,11 +242,15 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
     macro_rules! do_return {
         ($v:expr) => {{
             let v: Value = $v;
-            if let Some(ty) = &cur.proto.ret_type {
-                if !it.type_matches(&v, ty, env!())? {
-                    return Err(format!("type mismatch: function '{}' must return {}, got {}", cur.proto.name, ty, describe_for(&v, ty)));
+            let v = match &cur.proto.ret_type {
+                Some(ty) => {
+                    if !it.type_matches(&v, ty, env!())? {
+                        return Err(format!("type mismatch: function '{}' must return {}, got {}", cur.proto.name, ty, describe_for(&v, ty)));
+                    }
+                    super::super::as_annotated(v, ty)
                 }
-            }
+                None => v,
+            };
             it.cur_line.set(cur.saved_line);
             match stack.pop() {
                 None => return Ok(v),
@@ -680,6 +684,10 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
                 if !it.type_matches(&r!(a), ty, env!())? {
                     return Err(format!("type mismatch: parameter '{}' expects {}, got {}", name, ty, describe_for(&r!(a), ty)));
                 }
+                if matches!(r!(a), Value::Int(_)) {
+                    let v = take(&mut r!(a));
+                    r!(a) = super::super::as_annotated(v, ty);
+                }
             }
             Op::CheckVar(a, t) => {
                 let (name, ty) = &cur.proto.types[t as usize];
@@ -688,6 +696,9 @@ fn exec(it: &Interpreter, first: Frame, regs: &mut Vec<Value>) -> Result<Value, 
                 if matches!(ty, crate::runtime::ast::TypeExpr::Generic(..)) {
                     let v = take(&mut r!(a));
                     r!(a) = it.sized_storage(name, v, ty)?;
+                } else if matches!(r!(a), Value::Int(_)) {
+                    let v = take(&mut r!(a));
+                    r!(a) = super::super::as_annotated(v, ty);
                 }
             }
 

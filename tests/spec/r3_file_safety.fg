@@ -1,0 +1,106 @@
+// Files and names that come from a request (0.8.4): `web.file` never climbs with
+// `..` and keeps a client's name under `{ root }`, an upload saved with a path of
+// its own cannot leave its folder, and a file answer honours `Range`.
+import web from "fogu:web"
+import http from "fogu:http"
+import net from "fogu:net"
+import fs from "fogu:fs"
+import path from "fogu:path"
+
+fs.mkdir("r3safe.tmp.d/www/sub")
+fs.mkdir("r3safe.tmp.d/uploads")
+fs.writeText("r3safe.tmp.d/SECRET.txt", "TOP-SECRET")
+fs.writeText("r3safe.tmp.d/www/pub.txt", "0123456789abcdefghij")
+fs.writeText("r3safe.tmp.d/www/sub/in.txt", "inside")
+fs.writeText("r3safe.tmp.d/www/.env", "KEY=1")
+
+const app = web.app()
+app.get("/plain", (ctx) => web.file("r3safe.tmp.d/www/" + ctx.query.f))
+app.get("/rooted", (ctx) => web.file(ctx.query.f, { root: "r3safe.tmp.d/www" }))
+app.get("/dot", (ctx) => web.file(ctx.query.f, { root: "r3safe.tmp.d/www", dotfiles: true }))
+app.post("/up", (ctx) => {
+    const f = ctx.req.form()?
+    return web.json({ saved: f.file.save("r3safe.tmp.d/uploads/" + f.file.filename)? })
+})
+app.post("/updir", (ctx) => {
+    const f = ctx.req.form()?
+    return web.json({ saved: f.file.save("r3safe.tmp.d/uploads/")? })
+})
+app.listen(18541, { quiet: true })?
+
+fn get(url) {
+    const r = http.get("http://127.0.0.1:18541" + url)?
+    return str(r.status) + " " + r.body
+}
+
+// --- web.file ---
+print(get("/plain?f=pub.txt"))
+print(get("/plain?f=../SECRET.txt").slice(0, 3))
+print(get("/plain?f=..%5CSECRET.txt").slice(0, 3))
+print(get("/plain?f=sub/../../SECRET.txt").slice(0, 3))
+print(get("/rooted?f=pub.txt"))
+print(get("/rooted?f=sub/in.txt"))
+print(get("/rooted?f=/sub/in.txt"))
+print(get("/rooted?f=../SECRET.txt").slice(0, 3))
+print(get("/rooted?f=sub/../../SECRET.txt").slice(0, 3))
+print(get("/rooted?f=C:/Windows/win.ini").slice(0, 3))
+print(get("/rooted?f=.env").slice(0, 3))
+print(get("/dot?f=.env"))
+
+// --- Range ---
+fn raw(text) {
+    const c = net.tcpConnect("127.0.0.1:18541", 2s)?
+    c.setTimeout(2s)
+    c.write(text)?
+    const got = c.readAll()?
+    c.close()
+    return got.text()
+}
+fn ranged(range) {
+    const text = raw("GET /rooted?f=pub.txt HTTP/1.1\r\nHost: x\r\nRange: " + range + "\r\nConnection: close\r\n\r\n")
+    const head = text.split("\r\n\r\n")[0].lower()
+    let range_line = ""
+    for line in head.split("\r\n") {
+        if line.slice(0, 14) == "content-range:" { range_line = line }
+    }
+    return [text.split(" ")[1], range_line, head.contains("accept-ranges: bytes"), text.split("\r\n\r\n")[1]]
+}
+print(ranged("bytes=0-3"))
+print(ranged("bytes=10-"))
+print(ranged("bytes=-5"))
+print(ranged("bytes=5-999"))
+print(ranged("bytes=50-60"))
+print(ranged("lines=0-3"))
+print(ranged("bytes=0-1,4-5"))
+
+// --- uploads ---
+fn upload(route, filename) {
+    const boundary = "XBOUNDX"
+    const body = "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"" + filename + "\"\r\nContent-Type: text/plain\r\n\r\nDATA\r\n--" + boundary + "--\r\n"
+    const r = http.post("http://127.0.0.1:18541" + route, body, { headers: { "content-type": "multipart/form-data; boundary=" + boundary } })?
+    return str(r.status) + " " + r.body
+}
+print(upload("/up", "ok.txt"))
+print(upload("/up", "../SECRET.txt").slice(0, 3))
+print(upload("/up", "..\\\\..\\\\x.txt").slice(0, 3))
+print(upload("/updir", "../../evil.txt"))
+print(upload("/updir", "NUL"))
+print(upload("/updir", "com1.txt"))
+print(upload("/updir", "trail.txt. "))
+print(fs.readText("r3safe.tmp.d/SECRET.txt"))
+print(fs.exists("r3safe.tmp.d/evil.txt"), fs.exists("evil.txt"))
+
+// --- path helpers ---
+print(path.isInside("r3safe.tmp.d/www", "r3safe.tmp.d/www/sub/in.txt"))
+print(path.isInside("r3safe.tmp.d/www", "r3safe.tmp.d/www/../SECRET.txt"))
+print(path.isInside("r3safe.tmp.d/www", "r3safe.tmp.d/wwwx/a"))
+print(path.isInside("r3safe.tmp.d/www", "r3safe.tmp.d/www/new/file.txt"))
+print(path.safeJoin("r3safe.tmp.d/www", "sub/in.txt"))
+print(path.safeJoin("r3safe.tmp.d/www", "../SECRET.txt"))
+print(path.basename(path.real("r3safe.tmp.d/www/sub/../pub.txt")?), path.basename(fs.realpath("r3safe.tmp.d/www")?))
+print(typeof(path.real("r3safe.tmp.d/none")))
+const rs = fs.createReadStream("../SECRET.txt", { root: "r3safe.tmp.d/www" })
+print(typeof(rs))
+const tail = fs.createReadStream("pub.txt", { root: "r3safe.tmp.d/www", start: 16 })?
+print(tail.readAll()?.text())
+fs.remove("r3safe.tmp.d")

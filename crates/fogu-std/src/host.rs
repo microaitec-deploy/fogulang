@@ -45,6 +45,11 @@ impl Host for Std {
         if let Some(r) = crate::native::vm::intercept(callee, args, it) {
             return Some(Handled::Native(r));
         }
+        // `ws.upgrade(req, handler)` in an http.serve handler: the handler runs in its own task
+        #[cfg(all(feature = "network", not(target_family = "wasm")))]
+        if let Some(r) = crate::native::web::intercept_upgrade(callee, args, it, env) {
+            return Some(Handled::Native(r));
+        }
         // `socketio.server/connect` start the task that runs their handlers
         #[cfg(all(feature = "network", not(target_family = "wasm")))]
         if let Some(r) = crate::native::socketio::intercept(callee, args, it, env) {
@@ -96,7 +101,7 @@ impl Host for Std {
             return true;
         }
         #[cfg(all(feature = "network", not(target_family = "wasm")))]
-        if matches!(name, "socketio.server" | "socketio.connect") || crate::native::web::is_dispatch(name) || crate::native::webrtc::is_intercepted(name) {
+        if matches!(name, "socketio.server" | "socketio.connect" | "websocket.upgrade") || crate::native::web::is_dispatch(name) || crate::native::webrtc::is_intercepted(name) {
             return true;
         }
         #[cfg(all(feature = "ai", not(target_family = "wasm")))]
@@ -258,6 +263,10 @@ fn install(ctx: &mut NativeContext) {
     #[cfg(feature = "network")]
     #[cfg(not(target_family = "wasm"))]
     ctx.define_lazy("websocket", crate::native::websocket::build);
+    // `fogu:ws`: the short name of the same module
+    #[cfg(feature = "network")]
+    #[cfg(not(target_family = "wasm"))]
+    ctx.define_lazy("ws", crate::native::websocket::build);
     #[cfg(feature = "network")]
     #[cfg(not(target_family = "wasm"))]
     ctx.define_lazy("webrtc", crate::native::webrtc::build);

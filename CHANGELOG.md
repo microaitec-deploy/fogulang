@@ -6,6 +6,160 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-11-26
+
+Closes the findings of the third test round on 0.8.3 (five release blockers first), with the
+direct HTTP server below. No benchmark of `bench/` is slower than in 0.8.3.
+
+### Security
+
+- **`web.file` never reads outside what the program named** (U01, CWE-22). A path with a `..`
+  component is refused, and `web.file(name, { root: "www" })` takes a name that comes from a
+  request (a query, a header, a body): `..`, drive letters and NUL are refused, a leading `/`
+  is dropped, dotfiles are hidden unless `dotfiles: true`, and what exists of the result must
+  still be under the folder once symbolic links are followed. `fs.createReadStream(name,
+  { root })` checks the same way. **Changed behaviour**: `web.file("../shared/x")` now needs
+  `web.file("x", { root: "../shared" })`.
+- **`UploadedFile.save` with a path of its own cannot climb** (U02, CWE-22/73):
+  `save("uploads/" + file.filename)` with `filename="../victim/x"` is an error value instead of
+  a file written outside the folder. The name `save("uploads/")` keeps also loses trailing dots
+  and spaces (U05: `a.txt.` overwrote `a.txt` on Windows) and Windows device names get a `_`
+  (U04: `NUL` discarded the upload in silence).
+- **`web.cors({ credentials: true })` needs the origins listed** (SEC01, CWE-942 — a regression
+  of 0.8.1, which echoed any `Origin` with `Access-Control-Allow-Credentials: true`). With `*`
+  or no `origin` the middleware is refused when it is made; an origin that is not on the list
+  gets neither header.
+- **Connection errors never show the password** (SEC03, CWE-209/532): `sql.open`, `orm`,
+  `surrealdb`, `redis`, `nats`, `mqtt` and `amqp` messages show `scheme://user:***@host` and
+  `password=***`.
+- `fogu:path`: `isInside(base, p)`, `safeJoin(base, name)` (an error value when the name leaves
+  the folder) and `real(p)`; `fs.realpath(p)` (U03). `path.join` / `normalize` are lexical and
+  were never a barrier.
+- `html.fromMarkdown(text, { sanitize: true })` removes raw HTML that runs (`<script>`,
+  `onerror=`, `javascript:` links), as the `| markdown` template filter already did (S03).
+- `fogu build --lib`: the header and the build report list the `export fn` of the entry file
+  when it has any (SEC02). The host stays trusted — it can evaluate any code — and must not
+  pass a function name it received from outside to `fogu_call`.
+
+### Fixed
+
+- **A file `web.file` cannot serve is a 404**, not a 500: a handler that ends with its error
+  (missing file, a dotfile under `{ root }`, a name that leaves the root) answers `404 not found`;
+  the detail still goes to the log. Before, every such request was an `internal error`.
+- **`Fogu.exit()` in a `fg` task while the program is in `Fogu.signal.wait()`** ended with an
+  access violation on Windows (0xC0000005, N01) and — found by the soak test of 0.8.4, with an
+  HTTP server and a request still running — aborted on Linux ("panic in a destructor during
+  cleanup", exit code 134). `exit` ran the thread-local destructors of the calling thread while
+  the scheduler and the servers still used that state. The process now ends right after
+  `cleanup` and a flush of the output (`_exit` / `TerminateProcess`), with its own exit code.
+- **`web.file` and static mounts honour `Range`** (RA02): `206` with `Content-Range`, `416`
+  for a range outside the file, `If-Range`, and `Accept-Ranges`, `ETag` and `Last-Modified`
+  on file answers — downloads resume and media can seek. Several ranges in one request get the
+  whole file.
+- **`sync.Worker`: what crosses is never degraded in silence** (R01). An error value returned
+  by the worker (`return nil, error("…")`) arrives as an error with its message (it was the
+  text `"<error>"`), NaN and infinity arrive as themselves (they were `nil`), and a function,
+  a channel or a native object is an error of the call. Values that are plain JSON take the
+  same path as before.
+- `fogu fmt` keeps the lines that continue an expression one level in (T01): a line that starts
+  with a binary operator or follows one that ends with it; a leading `+ b` keeps its space.
+- `fogu check` (and every run, before the program starts): an annotated variable assigned a
+  value known to be of another type is a type error (`let a: list<int>`, `a = "text"` — C04,
+  B04; values of unknown type are still only checked where they were); `map<int, V>` is
+  refused, map keys are `str` (C03); a `match` arm after a catch-all arm is warning W0006
+  (T03, L12); `fs.nope` on a `fogu:*` module imported by name is an error of `fogu check`
+  (T02); so are the obvious mistakes of L11 — `S()` without `new`, `new f()` of a function,
+  `"s".foo()` / `[1].pushh()`, arguments to a struct without a constructor, too many arguments
+  to a struct method, a literal where an interface is expected, a parameter default of the
+  wrong type, a `char` of two characters and `module._private`.
+- `Response.body` of a `web.file` answer read by the program (through `app.handler()` in a
+  test) is the file's text, and `Response.bytes()` its bytes (RA03).
+- `image.rotate` with an angle that is not finite is an error value, like `image.color` (S01).
+- `fogu disasm` of a file with only top-level code says so instead of printing nothing (T05).
+
+- **Earlier rounds, fixed now**:
+  - `new geo.Point()`: `new` of a struct a module exports (B09).
+  - **Changed behaviour**: an int under a float annotation is that float — parameters, return
+    types and `let` (`fn area(w: float, h: float)` with `area(7, 2)` is `7.0`, it was `7`; B03).
+    Code that relied on the int (`const n: int = scale(2)` with `fn scale(v: float)`) now gets a
+    type error. The JIT leaves such a call to the interpreter (a `float` call keeps its compiled
+    code).
+  - Each value of an annotated variadic parameter is checked (`fn f(...xs: int)`; L20).
+  - `let c: chan<int> = chan(8)` refuses to carry another type (§6); `chan<float>` takes ints.
+  - A struct with a field and a method of the same name is a type error (B20); an error in a
+    field's default value is reported at the field, not at the `struct` line (L13).
+  - Octal literals `0o17` (L19); a float literal beyond the 64-bit range (`1e400`) is a lexical
+    error instead of infinity.
+  - A template inside an interpolation may hold a string with a backtick (§20).
+  - **`fogu:vm` contexts no longer leak** (P07): a function defined in a context held the
+    context's scope and the scope held it, so every context stayed in memory (200 000
+    `runInNewContext` calls: 266 MB; now 13 MB). A context that ends frees what nothing outside
+    can reach — a function it returned or left in the program's sandbox keeps working. The JIT's
+    call counts no longer pass from a freed function to a new one at the same address.
+  - `fogu:vm` and `fogu test --timeout`: a sleep does not outlast the timeout (M45, for
+    `time.delay` / `time.sleep` / `Fogu.sleep`).
+  - `process.run(cmd, args, { timeout })` kills the child when it runs longer (`timedOut: true`;
+    B35).
+  - `csv.stringify` writes rows of different lengths (F03); `xml.stringify` keeps mixed content
+    (`<p>Hello <b>world</b>!</p>`) on one line (F02); `fs.readText` / `readLines` drop a UTF-8
+    byte order mark (F13); a JSON error in a text of several lines gives the line and column
+    (§21).
+  - `path.dirname("/")` is `/`; `path.isAbsolute("/etc")` is true on Windows too (B28).
+  - Windows: canonical paths are never shown or stored as `\\?\C:\…` (`Fogu.asset`, messages,
+    `fogu.lock`; B22, §7, §16); timers have 1 ms resolution once the program sleeps (§8: 100 ×
+    `time.delay(1ms)` took 1.5 s); `Fogu.env.PATH` works whatever case the shell used (§15).
+  - `fogu add ./lib-1.0.tar.gz` installs a local archive (§10); a local package changed since it
+    was locked says so and suggests `fogu update` (§17); `build --compile` reports the runtime
+    it really used, and why a download failed (§13).
+- **Security of earlier rounds**:
+  - A str a handler returns that looks like HTML is sent with `X-Content-Type-Options: nosniff`
+    (S09).
+  - `security.isPrivate` / `inCidr` read the IPv4 forms the C library accepts (`127.1`,
+    `2130706433`, `0x7f000001`, `0177.0.0.1`), so an SSRF check is not walked around (S13).
+  - `zip.gunzip(data, { maxSize })` stops at 1 GiB unless told otherwise (S19); `zip.untar`
+    refuses absolute entry names, as `zip.unzip` does.
+  - A package archive with an absolute or `..` entry, or a link out of the package, is refused
+    (S22).
+
+### Added
+
+- `web.securityHeaders({ frame, referrer, coop, csp, hsts })`: `nosniff`, `X-Frame-Options:
+  DENY`, `Referrer-Policy`, `Cross-Origin-Opener-Policy` on every answer, and a
+  Content-Security-Policy and HSTS when given (S16).
+- `fogu test --timeout 30s` (or `FOGU_TEST_TIMEOUT`): a test or hook still running code after
+  that fails with "timed out" and the next one runs (T04). Off by default: a deadline is
+  checked in every loop and call.
+- `json.stringify(v, { strict: true })`: NaN, infinity and values JSON has no form for are an
+  error value instead of `null` / `"<fn>"` (S02).
+- `maxBody` and `maxHeaderBytes` take a size written out (`"10mb"`, `"512kb"`) as well as a
+  number of bytes (N02).
+- **`fogu:ws`**, the short name of `fogu:websocket`, and WebSockets as streams: `for m in ws`
+  (every message until it closes), `for conn in server` (every client), `stream.from(ws)`, and
+  `s.pipe(dest, { end })` on any stream — into a chan, a WebSocket or a writable, closing it at
+  the end unless `end: false` — so a channel goes into a socket with `stream.from(ch).pipe(ws)`
+  and a socket into a channel with `stream.from(ws).pipe(ch)`. `ws.upgrade(req, (ws, req) => …)`
+  answers a WebSocket upgrade from an `http.serve` handler, as `app.ws` does in `fogu:web` (both
+  run the same code, on the direct and the hyper server).
+
+### Not changed, and why
+
+- Recursion depth (C01): the JIT compiles `1 + depth(n - 1)` into a loop, so it has no depth to
+  count, while the tree-walker is bound by its stack. Counting calls in compiled code would
+  slow every call; the limit is a resource limit, documented in `docs/jit.md`.
+- `int8(200)` wraps (R02): conversions follow Go, annotations check the range.
+- `math.floor(NaN)`, `int(NaN)`, `time.sleep(NaN)` stop the program (S01): they are arithmetic
+  and argument errors, like division by zero, and compiled code raises the same error.
+- `typeof(obj.name)` of a native object is `"fn"` for any name (RA01): several objects answer
+  methods they do not list (`redis` commands, `orm` models).
+- `9007199254740993 == 9007199254740992.0` is true (L17): int and float compare as floats in
+  every engine; an exact mixed comparison would add work to compiled numeric code.
+- FFI arguments wider than the C type are converted as C converts them (§13), and `ffi.read`
+  trusts the size it is given (S21): FFI is unsafe by nature, compiled calls pass integers as
+  they are.
+- `export let` is a copy taken when the module ends (B08), `embed` copies the embedded
+  struct's fields (B07), struct field annotations are documentation (B05): each needs a change
+  of the module or struct representation, left for a design note.
+
 ### Changed
 
 - **`fogu:http` / `fogu:web` servers run on the interpreter's own thread** (Linux; plain HTTP

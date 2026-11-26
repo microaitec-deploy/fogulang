@@ -81,7 +81,8 @@ pub fn parse(spec: &str) -> Result<(Source, String), String> {
         || base == ".."
         || drive
     {
-        return Ok((Source::Local { path: base.to_string() }, default_name(base)));
+        // (`./lib-1.0.tar.gz` is named `lib-1.0`, not `lib-1.0.tar.gz`)
+        return Ok((Source::Local { path: base.to_string() }, default_name(strip_archive(base))));
     }
 
     // host:user/repo

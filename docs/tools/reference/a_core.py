@@ -41,7 +41,8 @@ SECTIONS = [
                 "wrong argument type, an unknown option — stop the program with a message. "
                 "<strong>Options</strong> are passed as a last map argument: <code>f(x, { timeout: 5s })</code>. "
                 "<strong>Durations</strong> accept a duration literal (<code>500ms</code>, <code>2s</code>, "
-                "<code>1h</code>) or an int number of milliseconds. Network operations wait cooperatively: other "
+                "<code>1h</code>) or an int number of milliseconds; a duration has the fields <code>ns us ms</code> (int) and "
+                "<code>seconds minutes hours</code> (float). Network operations wait cooperatively: other "
                 "<code>fg</code> tasks keep running while one waits.",
                 "example": r'''
 import json from "fogu:json"
@@ -129,7 +130,7 @@ print(`template: ${1 + 1} items`)
             {
                 "h3": "list",
                 "api": [
-                    ("l.push(x) · l.pop()", "nil · value", "Add to / remove from the end."),
+                    ("l.push(x...) · l.pop()", "list · value", "Add to / remove from the end. <code>push</code> returns the list itself (chainable: <code>xs.push(1).push(2)</code>)."),
                     ("l.unshift(x) · l.shift()", "nil · value", "Add to / remove from the start."),
                     ("l.insert(i, x) · l.remove(i)", "nil · value", "At an index."),
                     ("l.first() · l.last()", "value", "<code>nil</code> when empty."),
@@ -158,7 +159,7 @@ print(nums.slice(1, 3), nums.first(), nums.last(), nums.join(" | "))
                     ("m.keys() · m.values() · m.entries()", "list", "Entries are <code>[key, value]</code> pairs."),
                     ("m.has(key)", "bool", ""),
                     ("m.get(key, default?)", "value", "The value, or <code>default</code> (nil)."),
-                    ("m.set(key, value) · m[key] = value", "nil", ""),
+                    ("m.set(key, value) · m[key] = value", "map", "<code>set</code> returns the map itself (chainable)."),
                     ("m.remove(key)", "value", "Removes and returns the value."),
                     ("m.merge(other)", "map", "A new map; <code>other</code> wins on equal keys."),
                     ("m.len() · m.clear()", "int · nil", ""),
@@ -349,7 +350,7 @@ print(a == math.randomInt(1, 6), math.random() < 1)
             {
                 "api": [
                     ("json.parse(text)", "value · error", "JSON text → maps, lists, str, int, float, bool, nil. Invalid JSON is an error value."),
-                    ("json.stringify(value)", "str", "Compact JSON (map keys in order)."),
+                    ("json.stringify(value, { strict })", "str · error", "Compact JSON (map keys in order). NaN and infinity are written <code>null</code> and a value JSON has no form for as its type name; with <code>strict: true</code> they are an error instead."),
                 ],
                 "example": r'''
 import json from "fogu:json"
@@ -514,7 +515,7 @@ print(info.env("FOGU_DOES_NOT_EXIST"), system.time() > 0)
                     ("fs.removeAll(path)", "nil · error", "A folder and everything inside."),
                     ("fs.glob(pattern)", "list", "Paths matching <code>*</code>, <code>?</code>, <code>**</code>, sorted."),
                     ("fs.cwd() · fs.tempDir()", "str", "Working folder · system temp folder."),
-                    ("fs.createReadStream(path, { start, end, lines, bufferSize })", "ReadStream · error", "The file read a piece at a time, in constant memory. <code>end</code> is inclusive; <code>lines: true</code> makes <code>for</code> give lines (str) instead of buffers."),
+                    ("fs.createReadStream(path, { start, end, lines, bufferSize, root })", "ReadStream · error", "The file read a piece at a time, in constant memory. With <code>root</code> the path is a name from outside the program, kept under that folder (as <code>web.file</code>). <code>end</code> is inclusive; <code>lines: true</code> makes <code>for</code> give lines (str) instead of buffers."),
                     ("r.read(n = 64 KiB) · r.readLine() · r.readAll() · r.readText()", "buffer · str · nil · error", "<code>nil</code> at the end. Reads that would wait run off the interpreter thread: other <code>fg</code> tasks keep going."),
                     ("for chunk in r", "", "Every chunk (or line) until the end. An error ends the loop and stays in <code>r.error</code>."),
                     ("r.pipe(w)", "int · error", "Copies the rest into a <code>WriteStream</code> or a <code>web.stream()</code> response, off the interpreter thread (the bytes never become values); returns the bytes copied."),
@@ -575,7 +576,10 @@ fs.remove("copy.txt")?
                     ("path.join(...parts)", "str", "Joined with <code>/</code> and normalized."),
                     ("path.dirname(p) · path.basename(p)", "str", "Folder · last component."),
                     ("path.stem(p) · path.extname(p)", "str", "Name without extension · extension with the dot."),
-                    ("path.normalize(p)", "str", "Resolves <code>.</code> and <code>..</code>."),
+                    ("path.normalize(p)", "str", "Resolves <code>.</code> and <code>..</code> by name only: the result may start with <code>..</code> — neither it nor <code>join</code> keeps a path inside a folder."),
+                    ("path.safeJoin(base, name)", "str · error", "The path of a name that comes from outside the program under <code>base</code>: an error when it has <code>..</code>, a drive letter, or leaves the folder through a symbolic link."),
+                    ("path.isInside(base, p)", "bool", "Is <code>p</code> the folder <code>base</code> or under it, with <code>..</code> and symbolic links resolved?"),
+                    ("path.real(p) · fs.realpath(p)", "str · error", "The absolute path with every symbolic link resolved (the file must exist)."),
                     ("path.isAbsolute(p)", "bool", ""),
                     ("path.absolute(p)", "str", "Absolute path from the working folder."),
                     ("path.sep", "str", "The system separator."),
@@ -759,11 +763,12 @@ test.each([
             {
                 "api": [
                     ("stream.create({ buffer = 16 })", "Stream", "Written by tasks, read by a consumer: <code>s.write(v)</code> → nil · error waits while <code>buffer</code> values are unread; <code>s.close()</code> ends it after the values written; <code>s.fail(err)</code> ends it with an error."),
-                    ("stream.from(list | range | str | chan | readable | stream) · stream.of(...values)", "Stream", "A readable of <code>fs</code> / <code>http</code> gives its chunks (or lines)."),
+                    ("stream.from(list | range | str | chan | readable | WebSocket | stream) · stream.of(...values)", "Stream", "A readable of <code>fs</code> / <code>http</code> gives its chunks (or lines); a <a class=\"underline\" href=\"#mod-websocket\">WebSocket</a> its messages until it closes; a chan its values until it is closed."),
                     ("stream.range(start, end?, step = 1) · stream.generate(fn(i)) · stream.interval(d)", "Stream", "No <code>end</code>: infinite · <code>fn(0), fn(1)…</code> until it returns <code>nil</code> · 0, 1, 2… one every <code>d</code>."),
                     ("s.map(fn) · s.filter(fn) · s.take(n) · s.skip(n) · s.takeWhile(fn) · s.chunk(n) · s.tap(fn) · s.enumerate()", "Stream", "A new stream; nothing runs yet. <code>chunk</code>: lists of <code>n</code>; <code>enumerate</code>: <code>(index, value)</code>."),
                     ("for v in s · s.next()", "value · nil · error", "One value at a time; <code>nil</code> at the end. An error ends a <code>for</code> and stays in <code>s.error</code>."),
                     ("s.toList() · s.count() · s.reduce(fn, init) · s.forEach(fn) · s.first() · s.find(fn)", "value · error", "Consume the stream; an error it ended with is their error."),
+                    ("s.pipe(dest, { end = true })", "int · error", "Every value into <code>dest</code>: a chan (<code>ch &lt;- v</code>, waiting when it is full), a WebSocket (<code>send</code>) or a writable stream (<code>write</code>); then <code>dest</code> is closed, unless <code>end: false</code>. Returns how many values went; an error of <code>dest</code> ends the stream with it."),
                     ("s.cancel()", "nil", "Stops the stream and everything upstream: a writer gets an error value, a file is closed. <code>take</code>, <code>takeWhile</code>, <code>first</code> and <code>find</code> cancel upstream once they are done."),
                     ("s.done · s.cancelled · s.error · s.buffered", "", ""),
                 ],

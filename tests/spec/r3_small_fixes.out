@@ -1,0 +1,8 @@
+{"i":null,"n":null}
+error: json.stringify: NaN or infinity is not representable in JSON
+error: json.stringify: fn is not representable in JSON
+{"a":[1,2.5,"x"]}
+<script>alert(1)</script>**b**
+**b**
+1024 200
+1025 413

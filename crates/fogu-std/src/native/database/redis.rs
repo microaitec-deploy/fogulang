@@ -125,7 +125,7 @@ fn parse_cfg(arg: Option<&Value>) -> Result<Cfg, String> {
 }
 
 fn parse_url(url: &str, mut cfg: Cfg) -> Result<Cfg, String> {
-    let (scheme, rest) = url.split_once("://").ok_or_else(|| format!("redis.connect: invalid url '{}'", url))?;
+    let (scheme, rest) = url.split_once("://").ok_or_else(|| format!("redis.connect: invalid url '{}'", crate::native::util::redact_url(url)))?;
     cfg.tls = match scheme {
         "redis" | "valkey" => false,
         "rediss" | "valkeys" => true,

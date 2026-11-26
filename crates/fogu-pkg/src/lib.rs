@@ -66,10 +66,19 @@ pub fn valid_name(name: &str) -> bool {
     ok(rest) && scope.map_or(true, ok)
 }
 
+/// A canonical path without the `\\?\` prefix Windows gives it (`\\?\C:\x` → `C:\x`):
+/// that form must not reach `fogu.lock`, a message or the program.
+pub fn plain_path(p: PathBuf) -> PathBuf {
+    match p.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(rest) if !rest.starts_with("UNC\\") => PathBuf::from(rest),
+        _ => p,
+    }
+}
+
 /// Nearest project directory (with `fogu.json`) starting at `from`.
 pub fn find_root(from: &Path) -> Option<PathBuf> {
     let from = if from.as_os_str().is_empty() { Path::new(".") } else { from };
-    let start = from.canonicalize().unwrap_or_else(|_| from.to_path_buf());
+    let start = from.canonicalize().map(plain_path).unwrap_or_else(|_| from.to_path_buf());
     let mut cur = Some(start.as_path());
     while let Some(d) = cur {
         if d.join(MANIFEST).is_file() {

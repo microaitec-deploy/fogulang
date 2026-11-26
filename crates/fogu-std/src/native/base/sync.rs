@@ -44,6 +44,99 @@
 /// see the tuple the worker returned.
 const TUPLE_MARK: &str = "\u{1}tuple:";
 
+/// Prefix of JSON whose maps `{"\u{1}error": message}` and `{"\u{1}float": "nan"}`
+/// stand for what JSON cannot hold: an error value, NaN, an infinity. Only a value
+/// that has one of them is sent this way; every other goes as plain JSON.
+const RICH_MARK: &str = "\u{1}rich:";
+const RICH_ERROR: &str = "\u{1}error";
+const RICH_FLOAT: &str = "\u{1}float";
+
+/// `v` as the text that crosses to another thread. What cannot cross (a function,
+/// a channel, a native object) is an error — never its printed form.
+fn pack(v: &fogu_core::runtime::value::Value) -> Result<String, String> {
+    crate::native::json::take_lossy();
+    let plain = crate::native::json::stringify_value(v);
+    if crate::native::json::take_lossy().is_none() {
+        return Ok(plain);
+    }
+    Ok(format!("{}{}", RICH_MARK, crate::native::json::stringify_value(&portable(v)?)))
+}
+
+#[cold]
+fn portable(v: &fogu_core::runtime::value::Value) -> Result<fogu_core::runtime::value::Value, String> {
+    use fogu_core::runtime::value::Value;
+    if !crate::runtime::sched::stack_ok() {
+        return Err("the value contains itself or is nested too deeply".to_string());
+    }
+    Ok(match v {
+        Value::Error(e) => crate::native::util::map(vec![(RICH_ERROR, Value::str(e.message.as_str()))]),
+        Value::Float(f) if !f.is_finite() => {
+            let name = if f.is_nan() { "nan" } else if *f > 0.0 { "inf" } else { "-inf" };
+            crate::native::util::map(vec![(RICH_FLOAT, Value::str(name))])
+        }
+        Value::List(l) => crate::native::util::list(l.borrow().iter().map(portable).collect::<Result<_, _>>()?),
+        Value::Tuple(t) => crate::native::util::list(t.iter().map(portable).collect::<Result<_, _>>()?),
+        Value::Map(m) => {
+            let mut out = HashMap::new();
+            for (k, item) in m.borrow().iter() {
+                out.insert(k.clone(), portable(item)?);
+            }
+            Value::Map(Rc::new(std::cell::RefCell::new(out)))
+        }
+        Value::Nil | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_) | Value::Buffer(_) | Value::Array(_) => v.clone(),
+        other => {
+            return Err(format!(
+                "a value of type '{}' cannot cross to another thread (numbers, text, bools, nil, lists, maps and errors do)",
+                other.type_name()
+            ))
+        }
+    })
+}
+
+/// The value of a text made by [`pack`].
+fn unpack(text: &str) -> Result<fogu_core::runtime::value::Value, String> {
+    match text.strip_prefix(RICH_MARK) {
+        Some(json) => crate::native::json::parse_value(json).map(restore),
+        None => crate::native::json::parse_value(text),
+    }
+}
+
+#[cold]
+fn restore(v: fogu_core::runtime::value::Value) -> fogu_core::runtime::value::Value {
+    use fogu_core::runtime::value::{ErrorValue, Value};
+    match &v {
+        Value::List(l) => {
+            let items: Vec<Value> = l.borrow_mut().drain(..).map(restore).collect();
+            *l.borrow_mut() = items;
+        }
+        Value::Map(m) => {
+            let single = {
+                let b = m.borrow();
+                if b.len() == 1 {
+                    match (b.get(RICH_ERROR), b.get(RICH_FLOAT)) {
+                        (Some(Value::Str(msg)), _) => Some(Value::Error(Rc::new(ErrorValue { message: msg.to_string(), cause: Value::Nil, trace: Vec::new() }))),
+                        (_, Some(Value::Str(name))) => Some(Value::Float(match &**name {
+                            "inf" => f64::INFINITY,
+                            "-inf" => f64::NEG_INFINITY,
+                            _ => f64::NAN,
+                        })),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            };
+            if let Some(v) = single {
+                return v;
+            }
+            let items: Vec<_> = m.borrow_mut().drain().map(|(k, item)| (k, restore(item))).collect();
+            m.borrow_mut().extend(items);
+        }
+        _ => {}
+    }
+    v
+}
+
 use std::cell::Cell;
 use ahash::AHashMap as HashMap;
 use std::rc::Rc;
@@ -688,19 +781,17 @@ mod worker {
                     sched::set_served(1);
                     let run = std::panic::AssertUnwindSafe(|| {
                         let f = interp.global(&call.name).ok_or_else(|| format!("the worker has no function '{}'", call.name))?;
-                        let args = match crate::native::json::parse_value(&call.args)? {
+                        let args = match super::unpack(&call.args)? {
                             Value::List(l) => l.borrow().clone(),
                             _ => Vec::new(),
                         };
                         match interp.call_value(f, args, Rc::clone(&globals)) {
                             Ok(Value::Error(e)) => Err(e.message.clone()),
                             // `return a, b`: marked, so the caller gets a tuple back
-                            Ok(Value::Tuple(t)) => Ok(format!(
-                                "{}{}",
-                                super::TUPLE_MARK,
-                                crate::native::json::stringify_value(&crate::native::util::list(t.to_vec()))
-                            )),
-                            Ok(v) => Ok(crate::native::json::stringify_value(&v)),
+                            Ok(Value::Tuple(t)) => {
+                                super::pack(&crate::native::util::list(t.to_vec())).map(|items| format!("{}{}", super::TUPLE_MARK, items)).map_err(|e| format!("result: {}", e))
+                            }
+                            Ok(v) => super::pack(&v).map_err(|e| format!("result: {}", e)),
                             Err(e) => Err(plain(e)),
                         }
                     });
@@ -775,7 +866,7 @@ mod worker {
                 let slot: Slot = Arc::new(Mutex::new(None));
                 let call = Call {
                     name: name.clone(),
-                    args: crate::native::json::stringify_value(&crate::native::util::list(rest.to_vec())),
+                    args: super::pack(&crate::native::util::list(rest.to_vec())).map_err(|e| format!("Worker.call {}: argument: {}", name, e))?,
                     slot: Arc::clone(&slot),
                     guard: IoGuard::new(),
                 };
@@ -784,11 +875,11 @@ mod worker {
                     let out = slot.lock().unwrap_or_else(|p| p.into_inner()).take()?;
                     Some(match out {
                         Ok(json) => match json.strip_prefix(super::TUPLE_MARK) {
-                            Some(items) => match crate::native::json::parse_value(items) {
+                            Some(items) => match super::unpack(items) {
                                 Ok(Value::List(l)) => Ok(Value::tuple(l.borrow().clone())),
                                 other => other,
                             },
-                            None => crate::native::json::parse_value(&json),
+                            None => super::unpack(&json),
                         },
                         Err(e) => Err(io_err!("Worker.call {}: {}", name, e)),
                     })

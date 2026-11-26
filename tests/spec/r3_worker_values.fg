@@ -1,0 +1,21 @@
+// What crosses a sync.Worker (0.8.4): an error value keeps its message, NaN and
+// infinity stay what they are, and a value that cannot cross is an error —
+// never its printed form.
+import sync from "fogu:sync"
+
+const w = sync.Worker(`
+fn boom() { return nil, error("MSG_ABC") }
+fn deep() { return { items: [1, error("inner")], ratio: 0.0 / 0.0, top: 1.0 / 0.0, low: -1.0 / 0.0 } }
+fn plain() { return { a: [1, 2.5, "x", nil, true] } }
+fn retfn() { return (x) => x }
+fn echo(v) { return v }
+`)?
+const [v, e] = w.call("boom")
+print(v, typeof(e), e.message)
+const d = w.call("deep")?
+print(typeof(d.items[1]), d.items[1].message, d.ratio, d.top, d.low)
+print(w.call("plain")?)
+print(w.call("retfn"))
+print(w.call("echo", 0.0 / 0.0)?)
+print(w.call("echo", (x) => x))
+w.close()

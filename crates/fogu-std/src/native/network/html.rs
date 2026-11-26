@@ -70,8 +70,16 @@ pub fn build() -> ModuleValue {
         Ok(Value::Str(to_markdown(doc.tree.root()).into()))
     }));
     e.insert("fromMarkdown".into(), nfn_var("fromMarkdown", 1, |a| {
-        max_args(a, 1, "html.fromMarkdown")?;
-        Ok(Value::Str(markdown_to_html(&str_arg(a, 0, "html.fromMarkdown")?).into()))
+        max_args(a, 2, "html.fromMarkdown")?;
+        // { sanitize: true }: for text that is not the program's own — Markdown lets raw
+        // HTML through, so `<script>`, `onerror=` and `javascript:` links are removed
+        let clean = match a.get(1) {
+            None | Some(Value::Nil) => false,
+            Some(Value::Map(o)) => o.borrow().get("sanitize").is_some_and(|v| v.is_truthy()),
+            Some(other) => return Err(format!("html.fromMarkdown: options must be a map, got '{}'", other.type_name())),
+        };
+        let out = markdown_to_html(&str_arg(a, 0, "html.fromMarkdown")?);
+        Ok(Value::Str(if clean { ammonia::clean(&out) } else { out }.into()))
     }));
     // templates
     e.insert("render".into(), nfn_var("render", 1, |a| {

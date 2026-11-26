@@ -12,7 +12,7 @@ export const REFERENCE: Record<string, RefData> = {
   "blocks": [
    {
     "h3": "Conventions",
-    "text": "<strong>Errors are values.</strong> Operational failures — a missing file, a refused connection, a server error, malformed input — come back as an <code>error</code> value: handle them with <code>?</code> (propagate) or <code>const [value, err] = f()</code>. Programming mistakes — a wrong argument type, an unknown option — stop the program with a message. <strong>Options</strong> are passed as a last map argument: <code>f(x, { timeout: 5s })</code>. <strong>Durations</strong> accept a duration literal (<code>500ms</code>, <code>2s</code>, <code>1h</code>) or an int number of milliseconds. Network operations wait cooperatively: other <code>fg</code> tasks keep running while one waits.",
+    "text": "<strong>Errors are values.</strong> Operational failures — a missing file, a refused connection, a server error, malformed input — come back as an <code>error</code> value: handle them with <code>?</code> (propagate) or <code>const [value, err] = f()</code>. Programming mistakes — a wrong argument type, an unknown option — stop the program with a message. <strong>Options</strong> are passed as a last map argument: <code>f(x, { timeout: 5s })</code>. <strong>Durations</strong> accept a duration literal (<code>500ms</code>, <code>2s</code>, <code>1h</code>) or an int number of milliseconds; a duration has the fields <code>ns us ms</code> (int) and <code>seconds minutes hours</code> (float). Network operations wait cooperatively: other <code>fg</code> tasks keep running while one waits.",
     "example": "import json from \"fogu:json\"\n\nconst [cfg, err] = json.parse(\"{ broken\")      // an error value, not a crash\nif err != nil {\n    print(\"invalid config:\", err.message)\n}\n\nfn load(text: str): error {\n    const data = json.parse(text)?              // ? returns the error to the caller\n    print(\"name:\", data.name)\n    return nil\n}\nprint(load(\"{\\\"name\\\": \\\"fogu\\\"}\"), load(\"nope\") != nil)",
     "output": "invalid config: json.parse: invalid JSON at position 2: 'b'\nname: fogu\nnil true",
     "outputTitle": "output"
@@ -164,9 +164,9 @@ export const REFERENCE: Record<string, RefData> = {
     "h3": "list",
     "api": [
      [
-      "l.push(x) · l.pop()",
-      "nil · value",
-      "Add to / remove from the end."
+      "l.push(x...) · l.pop()",
+      "list · value",
+      "Add to / remove from the end. <code>push</code> returns the list itself (chainable: <code>xs.push(1).push(2)</code>)."
      ],
      [
       "l.unshift(x) · l.shift()",
@@ -248,8 +248,8 @@ export const REFERENCE: Record<string, RefData> = {
      ],
      [
       "m.set(key, value) · m[key] = value",
-      "nil",
-      ""
+      "map",
+      "<code>set</code> returns the map itself (chainable)."
      ],
      [
       "m.remove(key)",
@@ -592,9 +592,9 @@ export const REFERENCE: Record<string, RefData> = {
       "JSON text → maps, lists, str, int, float, bool, nil. Invalid JSON is an error value."
      ],
      [
-      "json.stringify(value)",
-      "str",
-      "Compact JSON (map keys in order)."
+      "json.stringify(value, { strict })",
+      "str · error",
+      "Compact JSON (map keys in order). NaN and infinity are written <code>null</code> and a value JSON has no form for as its type name; with <code>strict: true</code> they are an error instead."
      ]
     ],
     "example": "import json from \"fogu:json\"\nconst data = json.parse(\"{\\\"name\\\": \\\"Ana\\\", \\\"tags\\\": [\\\"a\\\", \\\"b\\\"], \\\"age\\\": 30}\")?\nprint(data.name, data.tags, typeof(data.age))\nprint(json.stringify({ ok: true, list: [1, 2.5, nil] }))",
@@ -971,9 +971,9 @@ export const REFERENCE: Record<string, RefData> = {
       "Working folder · system temp folder."
      ],
      [
-      "fs.createReadStream(path, { start, end, lines, bufferSize })",
+      "fs.createReadStream(path, { start, end, lines, bufferSize, root })",
       "ReadStream · error",
-      "The file read a piece at a time, in constant memory. <code>end</code> is inclusive; <code>lines: true</code> makes <code>for</code> give lines (str) instead of buffers."
+      "The file read a piece at a time, in constant memory. With <code>root</code> the path is a name from outside the program, kept under that folder (as <code>web.file</code>). <code>end</code> is inclusive; <code>lines: true</code> makes <code>for</code> give lines (str) instead of buffers."
      ],
      [
       "r.read(n = 64 KiB) · r.readLine() · r.readAll() · r.readText()",
@@ -1046,7 +1046,22 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "path.normalize(p)",
       "str",
-      "Resolves <code>.</code> and <code>..</code>."
+      "Resolves <code>.</code> and <code>..</code> by name only: the result may start with <code>..</code> — neither it nor <code>join</code> keeps a path inside a folder."
+     ],
+     [
+      "path.safeJoin(base, name)",
+      "str · error",
+      "The path of a name that comes from outside the program under <code>base</code>: an error when it has <code>..</code>, a drive letter, or leaves the folder through a symbolic link."
+     ],
+     [
+      "path.isInside(base, p)",
+      "bool",
+      "Is <code>p</code> the folder <code>base</code> or under it, with <code>..</code> and symbolic links resolved?"
+     ],
+     [
+      "path.real(p) · fs.realpath(p)",
+      "str · error",
+      "The absolute path with every symbolic link resolved (the file must exist)."
      ],
      [
       "path.isAbsolute(p)",
@@ -1256,9 +1271,9 @@ export const REFERENCE: Record<string, RefData> = {
       "Written by tasks, read by a consumer: <code>s.write(v)</code> → nil · error waits while <code>buffer</code> values are unread; <code>s.close()</code> ends it after the values written; <code>s.fail(err)</code> ends it with an error."
      ],
      [
-      "stream.from(list | range | str | chan | readable | stream) · stream.of(...values)",
+      "stream.from(list | range | str | chan | readable | WebSocket | stream) · stream.of(...values)",
       "Stream",
-      "A readable of <code>fs</code> / <code>http</code> gives its chunks (or lines)."
+      "A readable of <code>fs</code> / <code>http</code> gives its chunks (or lines); a <a class=\"underline\" href=\"#mod-websocket\">WebSocket</a> its messages until it closes; a chan its values until it is closed."
      ],
      [
       "stream.range(start, end?, step = 1) · stream.generate(fn(i)) · stream.interval(d)",
@@ -1279,6 +1294,11 @@ export const REFERENCE: Record<string, RefData> = {
       "s.toList() · s.count() · s.reduce(fn, init) · s.forEach(fn) · s.first() · s.find(fn)",
       "value · error",
       "Consume the stream; an error it ended with is their error."
+     ],
+     [
+      "s.pipe(dest, { end = true })",
+      "int · error",
+      "Every value into <code>dest</code>: a chan (<code>ch &lt;- v</code>, waiting when it is full), a WebSocket (<code>send</code>) or a writable stream (<code>write</code>); then <code>dest</code> is closed, unless <code>end: false</code>. Returns how many values went; an error of <code>dest</code> ends the stream with it."
      ],
      [
       "s.cancel()",
@@ -2415,7 +2435,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "http.serve(port | \"ip:port\", fn(req), { tls: { cert, key }, quiet, reusePort, maxBody, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout }?)",
       "nil",
-      "<code>tls</code> serves HTTPS (see <a class=\"underline\" href=\"#mod-tls\">fogu:tls</a>). <code>reusePort: true</code> lets several servers share the port: one per <code>sync.Worker</code> serves on several cores (the kernel spreads the connections). On Linux a plain HTTP server runs on the interpreter's own thread, one <code>fg</code> task per connection. The handler returns a response (<code>http.text/json/html</code>), a str (text), any other value (JSON), nil (404) or an <code>error</code> (logged; the client gets a 500). Limits (defaults): <code>maxBody</code> (10 MB, 413), <code>maxHeaderBytes</code> (64 KB for the request line and headers, 431), <code>headerTimeout</code> (30s to send the headers; also closes idle keep-alive connections), <code>readTimeout</code> (60s for the body, 408), <code>handlerTimeout</code> (60s for the program's answer, 504; <code>0</code> = none). The request path is made canonical once, before static files, middlewares and routes see it: decoded once (<code>+</code> stays <code>+</code>), repeated slashes collapsed, <code>.</code>/<code>..</code> resolved; an encoded <code>/</code> or <code>\\</code>, a raw <code>\\</code>, a control character or a <code>..</code> above the root is a 400. A Rust panic in a handler answers that request with a 500 and the server goes on. Several servers may run in one program. Requests are answered as soon as they arrive while the program is alive — waiting in <code>Fogu.signal.wait()</code>, <code>time.delay</code>, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or <code>\"0.0.0.0:8080\"</code>, <code>\"[::1]:8080\"</code>, <code>\":8080\"</code>."
+      "<code>tls</code> serves HTTPS (see <a class=\"underline\" href=\"#mod-tls\">fogu:tls</a>). <code>reusePort: true</code> lets several servers share the port: one per <code>sync.Worker</code> serves on several cores (the kernel spreads the connections). On Linux a plain HTTP server runs on the interpreter's own thread, one <code>fg</code> task per connection. The handler returns a response (<code>http.text/json/html</code>), a str (text), any other value (JSON), nil (404) or an <code>error</code> (logged; the client gets a 500). Limits (defaults): <code>maxBody</code> (10 MB, 413), <code>maxHeaderBytes</code> (64 KB for the request line and headers, 431), <code>headerTimeout</code> (30s to send the headers; also closes idle keep-alive connections), <code>readTimeout</code> (60s for the body, 408), <code>handlerTimeout</code> (60s for the program's answer, 504; <code>0</code> = none). The request path is made canonical once, before static files, middlewares and routes see it: decoded once (<code>+</code> stays <code>+</code>), repeated slashes collapsed, <code>.</code>/<code>..</code> resolved; an encoded <code>/</code> or <code>\\</code>, a raw <code>\\</code>, a control character or a <code>..</code> above the root is a 400. A Rust panic in a handler answers that request with a 500 and the server goes on. Several servers may run in one program. Requests are answered as soon as they arrive while the program is alive — waiting in <code>Fogu.signal.wait()</code>, <code>time.delay</code>, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or <code>\"0.0.0.0:8080\"</code>, <code>\"[::1]:8080\"</code>, <code>\":8080\"</code>. <code>maxBody</code> (10 MB, 413 beyond it) and <code>maxHeaderBytes</code> are a number of <b>bytes</b> or a size written out: <code>\"512kb\"</code>, <code>\"10mb\"</code>, <code>\"1gb\"</code>."
      ],
      [
       "req.method · req.path · req.query · req.headers · req.body",
@@ -2500,7 +2520,7 @@ export const REFERENCE: Record<string, RefData> = {
       "Shared state (<code>ctx.store</code>)."
      ],
      [
-      "app.listen(port | \"ip:port\", { host = \"127.0.0.1\", maxBody = 10 MB, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout, quiet, reusePort, tls: { cert, key } })",
+      "app.listen(port | \"ip:port\", { host = \"127.0.0.1\", maxBody = \"10mb\", maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout, quiet, reusePort, tls: { cert, key } })",
       "nil · error",
       "Limits, <code>reusePort</code> and the canonical path as in <code>http.serve</code>; an unknown option stops the program. <code>tls</code> serves HTTPS: PEM text or file paths (<code>tls.selfSigned([\"localhost\"])</code> for development; options as <code>tls.listen</code>). <code>app.listen(\"0.0.0.0:3000\")</code> (or <code>host: \"0.0.0.0\"</code>) accepts other machines; IPv6 as <code>\"[::1]:3000\"</code>. A host in the string wins over <code>host</code>."
      ],
@@ -2556,9 +2576,9 @@ export const REFERENCE: Record<string, RefData> = {
       ""
      ],
      [
-      "web.file(path, { download, contentType, status })",
+      "web.file(path, { root, dotfiles, download, contentType, status })",
       "Response · error",
-      "Sent by the server thread, a chunk at a time (binary safe; a large file does not have to fit in memory). <code>download: true</code> uses the file's name, <code>download: \"name\"</code> another (non-ASCII names as RFC 6266 <code>filename*</code>)."
+      "Sent by the server thread, a chunk at a time (binary safe; a large file does not have to fit in memory). A path with <code>..</code> is refused. <b>A name that comes from the request</b> (a query, a header, a body) goes with <code>root</code>: <code>web.file(ctx.query.f, { root: \"www\" })</code> never leaves that folder (<code>..</code>, drive letters and symbolic links out of it are an error; dotfiles are hidden unless <code>dotfiles: true</code>). Answers <code>Range</code> requests (206, <code>Accept-Ranges</code>, <code>ETag</code>, <code>Last-Modified</code>): downloads resume and media can seek. <code>download: true</code> uses the file's name, <code>download: \"name\"</code> another (non-ASCII names as RFC 6266 <code>filename*</code>)."
      ],
      [
       "web.stream({ status, headers, contentType, highWaterMark })",
@@ -2573,7 +2593,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "web.cors({ origin, methods, headers, credentials, maxAge })",
       "middleware",
-      "Answers preflight requests, also as a route's own middleware. With <code>credentials: true</code> and <code>origin: \"*\"</code> the request's origin is echoed (browsers refuse <code>*</code> with credentials)."
+      "Answers preflight requests, also as a route's own middleware. <code>credentials: true</code> needs the origins listed (<code>origin: [\"https://app.example\"]</code>): with <code>*</code> the program stops when the middleware is made, and an origin that is not on the list gets no CORS header."
      ],
      [
       "web.logger()",
@@ -2583,7 +2603,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "UploadedFile: filename, contentType, size, text(), bytes(), json(), save(path)",
       "",
-      "<code>save(\"uploads/\")</code> keeps a sanitized file name."
+      "<code>save(\"uploads/\")</code> keeps a sanitized file name (no folders, no leading dot, no trailing dot or space, no Windows device name). A path written out (<code>save(\"uploads/\" + name)</code>) is the program's own: it is refused when it has a <code>..</code>, but its name is not sanitized — never build it from <code>filename</code>."
      ]
     ],
     "example": "import web from \"fogu:web\"\nimport fs from \"fogu:fs\"\nimport time from \"fogu:time\"\n\nconst app = web.app()\napp.use(web.logger())\napp.use(\"/api\", (ctx) => {\n    if ctx.headers[\"x-key\"] != \"secret\" { return web.json({ error: \"forbidden\" }, { status: 403 }) }\n})\napp.get(\"/api/users/:id\", (ctx) => ({ id: ctx.params.id, page: ctx.query.page ?? \"1\" }))\napp.post(\"/api/upload\", (ctx) => {\n    const form = ctx.req.form()?\n    return { saved: form.file.save(\"uploads/\")?, size: form.file.size }\n})\napp.get(\"/events\", (ctx) => {\n    const stream = web.sse()\n    fg fn() {\n        for i in 1..4 { stream.send({ n: i }, { event: \"tick\" }); time.delay(1s) }\n        stream.close()\n    }()\n    return stream\n})\n// a large body, written a piece at a time (write waits for a slow client)\napp.get(\"/export.csv\", (ctx) => {\n    const out = web.stream({ contentType: \"text/csv\" })\n    fg fn() {\n        for i in 0..1000000 { out.writeLine(`${i},${i * i}`)? }\n        out.end()\n    }()\n    return out\n})\n// a file as a stream: constant memory, whatever its size\napp.get(\"/logs\", (ctx) => fs.createReadStream(\"app.log\")?)\napp.ws(\"/chat\", (ws, ctx) => {\n    while true {\n        const m = ws.next()?\n        if m == nil { break }\n        ws.send(`echo: ${m.data}`)\n    }\n})\napp.static(\"/\", \"dist\", { spa: true, maxAge: 1d })\napp.listen(3000)?\nFogu.signal.wait()    // serves requests until Ctrl+C / SIGTERM"
@@ -2978,10 +2998,15 @@ export const REFERENCE: Record<string, RefData> = {
   "group": "Web & network",
   "title": "fogu:websocket",
   "import": "import websocket from \"fogu:websocket\"",
-  "intro": "WebSocket client (<code>ws://</code>, <code>wss://</code>) and a standalone server. The same connection object is used by <code>app.ws</code> in <code>fogu:web</code>. Each connection runs on the shared runtime (no thread per connection): <code>next</code> and <code>accept</code> wait cooperatively and wake up when a message or a client arrives.",
+  "intro": "WebSocket client (<code>ws://</code>, <code>wss://</code>) and a standalone server; <code>fogu:ws</code> is the short name of the same module. The same connection object is used by <code>app.ws</code> in <code>fogu:web</code> and by <code>ws.upgrade</code> in an <code>http.serve</code> handler. Each connection runs on the shared runtime (no thread per connection): <code>next</code> and <code>accept</code> wait cooperatively and wake up when a message or a client arrives. A connection is a stream of its messages: <code>for m in ws</code>, <code>stream.from(ws)</code>, and <code>s.pipe(ws)</code> sends a <a class=\"underline\" href=\"#mod-stream\">stream</a> or a channel into it.",
   "blocks": [
    {
     "api": [
+     [
+      "import ws from \"fogu:ws\"",
+      "",
+      "The short name of this module: the same functions and connections (<code>ws.connect</code>, <code>ws.listen</code>, <code>ws.upgrade</code>)."
+     ],
      [
       "websocket.connect(url, { headers, protocols, timeout })",
       "WebSocket · error",
@@ -3003,6 +3028,16 @@ export const REFERENCE: Record<string, RefData> = {
       "<code>{ type: \"text\" | \"binary\", data, text, bytes, size, json() }</code>: <code>data</code> is a str for text frames and a buffer for binary ones, <code>text</code> always a str, <code>bytes</code> always a buffer. nil on timeout or when closed."
      ],
      [
+      "for m in ws · for conn in server",
+      "",
+      "Every message until the connection closes (a network error ends the loop and stays in <code>ws.error</code>) · every client, as <code>accept()</code>."
+     ],
+     [
+      "websocket.upgrade(req, (ws, req) => …, { protocols })",
+      "response · error",
+      "In an <a class=\"underline\" href=\"#mod-http\">http.serve</a> handler: return it to answer a request with <code>req.upgrade</code> (101); the function runs in its own task with the connection. <code>protocols</code>: the subprotocols accepted (default: the first the client offers). An error value when the request does not ask for a WebSocket."
+     ],
+     [
       "ws.tryNext() · ws.ping() · ws.close(code = 1000, reason)",
       "",
       "<code>tryNext</code>: a queued message or nil, without waiting."
@@ -3015,6 +3050,12 @@ export const REFERENCE: Record<string, RefData> = {
     ],
     "example": "import websocket from \"fogu:websocket\"\nconst server = websocket.listen(0)?\nfg fn() {\n    const conn = server.accept()?\n    while true {\n        const m = conn.next()?\n        if m == nil { break }\n        if m.type == \"binary\" {\n            conn.send(m.data)                   // a buffer: echoed as a binary frame\n        } else {\n            conn.send(`echo ${conn.path}: ${m.data}`)\n        }\n    }\n}()\nconst ws = websocket.connect(server.url + \"/room?x=1\")?\nws.send(\"hello\")\nprint(ws.next(2s)?.data)\nws.send({ kind: \"json\" })\nprint(ws.next(2s)?.data)\nws.send(bytes([1, 2, 255]))\nconst m = ws.next(2s)?\nprint(m.type, m.data, m.size, typeof(m.text))\nws.close()",
     "output": "echo /room?x=1: hello\necho /room?x=1: {\"kind\":\"json\"}\nbinary <buffer 3 bytes: 01 02 ff> 3 str",
+    "outputTitle": "output"
+   },
+   {
+    "h3": "Streams, channels and http.serve",
+    "example": "import ws from \"fogu:ws\"\nimport http from \"fogu:http\"\nimport stream from \"fogu:stream\"\n\n// http.serve: answer the upgrade, the handler runs in its own task\nhttp.serve(18471, (req) => {\n    if !req.upgrade { return http.text(\"a WebSocket endpoint\") }\n    // each message, upper-cased, straight back: the socket is a stream\n    return ws.upgrade(req, (conn, r) => stream.from(conn).map((m) => m.data.upper()).pipe(conn))\n}, { quiet: true })?\n\nconst conn = ws.connect(\"ws://127.0.0.1:18471/shout\")?\n// a channel written by a task goes into the socket...\nconst lines = chan(8)\nfg fn() {\n    for w in [\"hello\", \"streams\", \"and channels\"] { lines <- w }\n    close(lines)\n}()\nprint(\"sent\", stream.from(lines).pipe(conn, { end: false })?)\n// ...and the answers come out of it as a stream\nfor text in stream.from(conn).map((m) => m.data).take(3) { print(text) }",
+    "output": "sent 3\nHELLO\nSTREAMS\nAND CHANNELS",
     "outputTitle": "output"
    }
   ]
@@ -4789,9 +4830,9 @@ export const REFERENCE: Record<string, RefData> = {
       "Headings, emphasis, links, images, lists, code blocks, quotes, tables."
      ],
      [
-      "html.fromMarkdown(md)",
+      "html.fromMarkdown(md, { sanitize })",
       "str",
-      "CommonMark + tables, strikethrough, task lists, footnotes."
+      "CommonMark + tables, strikethrough, task lists, footnotes. Markdown lets raw HTML through: pass <code>sanitize: true</code> for text that is not the program's own (<code>&lt;script&gt;</code>, <code>onerror=</code>, <code>javascript:</code> links are removed)."
      ]
     ],
     "example": "import html from \"fogu:html\"\nprint(html.sanitize(\"<p onclick='steal()'>hi<script>alert(1)</script></p>\"))\nprint(html.toMarkdown(\"<h2>Notes</h2><p>Some <b>bold</b> and <a href='https://fogu.dev'>a link</a></p><ul><li>one</li><li>two</li></ul>\"))\nprint(html.fromMarkdown(\"**fogu** is *fun*\"))",

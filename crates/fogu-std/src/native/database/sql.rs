@@ -98,7 +98,7 @@ pub(crate) fn connect(url: &str) -> Result<(Pool, String), String> {
     if url.starts_with("sqlite:") {
         use std::str::FromStr;
         // the file is created if it does not exist
-        let opts = SqliteConnectOptions::from_str(&url).map_err(|e| format!("{} at '{}'", e, url))?.create_if_missing(true);
+        let opts = SqliteConnectOptions::from_str(&url).map_err(|e| crate::native::util::redact_url(&format!("{} at '{}'", e, url)))?.create_if_missing(true);
         let pool = rt::block_on(async move {
             SqlitePoolOptions::new()
                 .max_connections(1)
@@ -108,7 +108,7 @@ pub(crate) fn connect(url: &str) -> Result<(Pool, String), String> {
                 .connect_with(opts)
                 .await
         })?
-        .map_err(|e| format!("{} at '{}'", e, url))?;
+        .map_err(|e| crate::native::util::redact_url(&format!("{} at '{}'", e, url)))?;
         return Ok((Pool::Sqlite(pool), url));
     }
     let u = url.clone();
@@ -121,7 +121,7 @@ pub(crate) fn connect(url: &str) -> Result<(Pool, String), String> {
             .connect(&u)
             .await
     })?
-    .map_err(|e| format!("{} at '{}'", e, url))?;
+    .map_err(|e| crate::native::util::redact_url(&format!("{} at '{}'", e, url)))?;
     Ok((Pool::Any(pool), url))
 }
 

@@ -1,0 +1,5 @@
+import vm from "fogu:vm"
+// M45: a sleep inside a fogu:vm script ends at the timeout
+const t0 = clock()
+const r = vm.runInNewContext("Fogu.sleep(5s)", {}, { timeout: 200ms })
+print(typeof(r), clock() - t0 < 2.0)

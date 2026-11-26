@@ -1,6 +1,6 @@
 # Design note: streams of values (`fogu:stream`)
 
-Status: implemented (0.8.3) · `crates/fogu-core/src/native/vstream.rs`.
+Status: implemented (0.8.3; WebSockets and `pipe` in 0.8.4) · `crates/fogu-core/src/native/vstream.rs`.
 Follows `engineering-principles.md`: this note, measurements, tests on the three engines.
 The streams of bytes of `fs`, `http` and `web` are in `streams.md`.
 
@@ -36,10 +36,18 @@ integration with `fg` and channels, bounded memory — never accumulating everyt
    waiting forever, a file or HTTP stream is closed. `take(n)`, `takeWhile`, `first` and `find`
    cancel their upstream once they have what they need.
 6. **Sources from what exists.** `stream.from` takes a list, a range, a text, a channel, a
-   readable of `fs` / `http` (so lines of a file are a stream) or a stream; `stream.of(...)`,
+   readable of `fs` / `http` (so lines of a file are a stream), a WebSocket (its messages until it
+   closes; `for m in ws` is the same pull) or a stream; `stream.of(...)`,
    `stream.range(start, end?, step?)` (no end: infinite), `stream.generate(fn(i))` (until it
    returns nil), `stream.interval(d)`.
-7. **A module, not the core.** The core keeps its primitives (tasks, channels, the iteration of
+7. **Sinks are a terminal, too.** `s.pipe(dest, { end = true })` pulls every value and hands it
+   to a chan (`chan_send`: it waits while the chan is full — the chan's buffer is the
+   backpressure), a WebSocket (`send`) or a writable (`write`), then closes `dest` unless
+   `end: false`. It runs on the consumer's task like every terminal: no task is started, and
+   an error of `dest` ends the stream with it and cancels upstream. So channels and sockets
+   meet through streams in both directions without a new primitive: `stream.from(ch).pipe(ws)`,
+   `stream.from(ws).map(f).pipe(ch)`.
+8. **A module, not the core.** The core keeps its primitives (tasks, channels, the iteration of
    `for`); `fogu:stream` is a module built on them. `for` and the method calls know a stream
    only through two calls (`Interpreter::stream_next`, `call_bound`), like the other objects
    that need the interpreter.

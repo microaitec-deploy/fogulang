@@ -1,0 +1,19 @@
+// web.cors with credentials (0.8.4): the origins must be named — `*` is refused
+// when the middleware is made — and only a listed origin gets the credentials header.
+import web from "fogu:web"
+import http from "fogu:http"
+
+const app = web.app()
+app.use(web.cors({ origin: ["https://good.example", "https://other.example"], credentials: true }))
+app.get("/a", (ctx) => ({ ok: true }))
+app.listen(18542, { quiet: true })?
+
+fn probe(origin) {
+    const r = http.get("http://127.0.0.1:18542/a", { headers: { origin: origin } })?
+    return [r.headers["access-control-allow-origin"], r.headers["access-control-allow-credentials"]]
+}
+print(probe("https://good.example"))
+print(probe("https://other.example"))
+print(probe("https://evil.example"))
+print(probe("null"))
+web.cors({ credentials: true })

@@ -361,7 +361,7 @@ pub fn add(args: &[String]) -> i32 {
         let canon = match &src {
             source::Source::Local { path } if p.global => {
                 let abs = cwd().join(path);
-                format!("file:{}", abs.canonicalize().unwrap_or(abs).display())
+                format!("file:{}", abs.canonicalize().map(crate::pkg::plain_path).unwrap_or(abs).display())
             }
             _ => source::canonical(&src),
         };

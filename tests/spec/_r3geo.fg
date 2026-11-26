@@ -1,0 +1,10 @@
+// helper of r3_historic.fg: a module that exports a struct
+export struct Point {
+    x = 0
+    y = 0
+    new(x, y) {
+        this.x = x
+        this.y = y
+    }
+    fn norm1() { return this.x + this.y }
+}

@@ -1,0 +1,7 @@
+// An error in a field's default value is reported at the field (L13, 0.8.4).
+struct Config {
+    name = "x"
+    port = int("not a number")
+}
+print("before")
+const c = new Config()

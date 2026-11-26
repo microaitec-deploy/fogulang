@@ -379,6 +379,7 @@ impl Interpreter {
     }
 
     pub fn interpret(&self, program: &[Stmt]) -> Result<(), String> {
+        PROGRAM_NAMES.with(|n| *n.borrow_mut() = super::resolver::top_level_names(program));
         let exports = Rc::new(ModuleValue {
             name: "<main>".into(),
             exports: RefCell::new(HashMap::new()),
@@ -467,6 +468,8 @@ impl Interpreter {
 
     /// Sets (or clears) the deadline of the task `task` (`sched::task_id()`).
     pub fn set_deadline(&self, task: usize, d: Option<Deadline>) {
+        // (a sleep does not outlast it: `native::util::sleep_coop`)
+        crate::native::util::set_wait_limit(task, d.map(|d| (d.at, d.timeout)));
         let mut m = self.deadlines.borrow_mut();
         match d {
             Some(d) => {
@@ -876,8 +879,7 @@ impl Interpreter {
     fn exec_let(&self, name: &str, mutable: &bool, init: &Expr, ty: &Option<TypeExpr>, env: Rc<RefCell<Environment>>) -> Result<Flow, String> {
         let mut value = self.eval(init, env.clone())?;
         if let Some(t) = ty {
-            self.check_var(name, &value, t, &env)?;
-            value = self.sized_storage(name, value, t)?;
+            value = self.annotated_value(name, value, t, &env)?;
         }
         self.declare(&env, name, value, *mutable)?;
         Ok(Flow::Normal)
@@ -893,6 +895,10 @@ impl Interpreter {
                 ty,
                 describe_for(&v, ty)
             ));
+        }
+        // an int passed for a `float` parameter is that float (`area(7, 2)` is 3.5 / 2…)
+        if matches!(v, Value::Int(_)) && float_annotation(ty).is_some() {
+            env.borrow_mut().assign(name, as_annotated(v, ty))?;
         }
         Ok(Flow::Normal)
     }
@@ -1234,7 +1240,7 @@ impl Interpreter {
                 Ok(Flow::Normal)
             }
 
-            Value::Object(o) if matches!(o.name().as_str(), "TcpListener" | "TlsListener") => {
+            Value::Object(o) if matches!(o.name().as_str(), "TcpListener" | "TlsListener" | "WebSocketServer") => {
                 loop {
                     let conn = self.call_native_method(&o, "accept", &[])?;
                     if let Some(f) = run_body!(conn) {
@@ -1766,7 +1772,15 @@ impl Interpreter {
             // SAFETY: the interpreter lives until the end of the program;
             // pending tasks are discarded in `shutdown`.
             let it = unsafe { &*(me as *const Interpreter) };
-            it.call_value(callee_val, arg_vals, genv).map(|_| ()).map_err(|e| it.task_error(e, &started))
+            match it.call_value(callee_val, arg_vals, genv) {
+                // nobody receives what a task returns: an error it ends with (`f()?`,
+                // `return nil, error(…)`) is reported like one that stopped it
+                Ok(v) => match v.into_result() {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(it.task_error(format!("unhandled error: {}", e.message), &started)),
+                },
+                Err(e) => Err(it.task_error(e, &started)),
+            }
         })))?;
         Ok(Value::Nil)
     }
@@ -1842,10 +1856,14 @@ impl Interpreter {
 
     /// The struct type called `name` in `env` (for `new name(...)`).
     fn struct_type(&self, name: &str, env: &Rc<RefCell<Environment>>) -> Result<Rc<StructTypeValue>, String> {
-        let t = env
-            .borrow()
-            .get(name)
-            .ok_or_else(|| format!("struct '{}' is not defined", name))?;
+        let t = match env.borrow().get(name) {
+            Some(t) => t,
+            // `new geo.Point()`: through the module value (a plain name is the usual case)
+            None => match name.split_once('.') {
+                Some((first, _)) => self.module_member(name, first, env)?,
+                None => return Err(format!("struct '{}' is not defined", name)),
+            },
+        };
         match t {
             Value::StructType(d) => Ok(d),
             other => Err(format!(
@@ -1854,6 +1872,33 @@ impl Interpreter {
                 other.type_name()
             )),
         }
+    }
+
+    /// An error located at `line` (when known): the line of a struct field.
+    #[cold]
+    #[inline(never)]
+    fn at_line(&self, line: u32, e: String) -> String {
+        if line > 0 {
+            self.cur_line.set(line);
+        }
+        e
+    }
+
+    #[cold]
+    fn module_member(&self, name: &str, first: &str, env: &Rc<RefCell<Environment>>) -> Result<Value, String> {
+        let mut v = env.borrow().get(first).ok_or_else(|| format!("'{}' is not defined", first))?;
+        for part in name.split('.').skip(1) {
+            v = match v {
+                Value::Module(m) => m
+                    .exports
+                    .borrow()
+                    .get(part)
+                    .cloned()
+                    .ok_or_else(|| format!("struct '{}' is not defined (the module does not export '{}')", name, part))?,
+                other => return Err(format!("'{}' is not a struct type (it is '{}')", name, other.type_name())),
+            };
+        }
+        Ok(v)
     }
 
     /// `new name(args)` with the arguments already evaluated (the VM).
@@ -2450,18 +2495,22 @@ impl Interpreter {
                 Err(e) => return Err(e),
             }
         }
-        if let (Ok(v), Some(Stmt::ReturnType(ty))) = (&out, body.first()) {
-            if !self.type_matches(v, ty, &fn_env)? {
-                return Err(format!(
-                    "type mismatch: function '{}' must return {}, got {}",
-                    name,
-                    ty,
-                    describe_for(v, ty)
-                ));
-            }
+        if let (Ok(_), Some(Stmt::ReturnType(ty))) = (&out, body.first()) {
+            out = self.check_return(name, out, ty, &fn_env);
         }
         self.cur_line.set(saved_line);
         out
+    }
+
+    /// The value a function annotated `: ty` returns: checked, and an int under a
+    /// float annotation made a float (out of `run_body`, which every call runs).
+    #[inline(never)]
+    fn check_return(&self, name: &str, out: Result<Value, String>, ty: &TypeExpr, env: &Rc<RefCell<Environment>>) -> Result<Value, String> {
+        let v = out?;
+        if !self.type_matches(&v, ty, env)? {
+            return Err(format!("type mismatch: function '{}' must return {}, got {}", name, ty, describe_for(&v, ty)));
+        }
+        Ok(as_annotated(v, ty))
     }
 
     /// `let x: T = v` — the value must match the annotation.
@@ -2488,8 +2537,22 @@ impl Interpreter {
     /// fresh result: nothing else references it); every element must fit. A
     /// list other variables still reference keeps its storage (packing it would
     /// split it in two). See `docs/architecture/sized-storage.md`.
+    /// `let name: t = value`: checked, stored with its size, an int under a float
+    /// annotation made a float (out of line: `exec_let` runs for every `let`).
+    #[inline(never)]
+    fn annotated_value(&self, name: &str, value: Value, t: &TypeExpr, env: &Rc<RefCell<Environment>>) -> Result<Value, String> {
+        self.check_var(name, &value, t, env)?;
+        let value = self.sized_storage(name, value, t)?;
+        Ok(as_annotated(value, t))
+    }
+
     pub(crate) fn sized_storage(&self, name: &str, v: Value, ty: &TypeExpr) -> Result<Value, String> {
         let TypeExpr::Generic(outer, args) = ty else { return Ok(v) };
+        // `let c: chan<int> = chan(8)`: the channel keeps the type of its values
+        if let (Value::Chan(c), "chan", [TypeExpr::Named(el)]) = (&v, outer.as_str(), args.as_slice()) {
+            c.elem.set(ChanValue::elem_code(el));
+            return Ok(v);
+        }
         let (true, [TypeExpr::Named(el)]) = (outer == "list", args.as_slice()) else { return Ok(v) };
         let Some(kind) = super::array::Elem::from_name(el) else { return Ok(v) };
         let items = match &v {
@@ -2771,7 +2834,11 @@ impl Interpreter {
         // 2) own fields
         for f in &decl.fields {
             let v = match &f.default {
-                Some(e) => self.eval(e, denv.clone())?,
+                // (an error is located at the field, not at the `struct` line — L13)
+                Some(e) => match self.eval(e, denv.clone()) {
+                    Ok(v) => v,
+                    Err(e) => return Err(self.at_line(f.line, e)),
+                },
                 None => Value::Nil,
             };
             values[layout.index[&f.name] as usize] = v;
@@ -2911,7 +2978,38 @@ fn describe_for(v: &Value, ty: &TypeExpr) -> String {
             return ops::out_of_range(n, k);
         }
     }
+    // a tuple of the right size: which value does not fit (B18)
+    if let (Value::Tuple(items), TypeExpr::Tuple(ts)) = (v, named) {
+        if items.len() == ts.len() {
+            let shown: Vec<String> = items.iter().map(describe).collect();
+            if let Some(i) = items.iter().zip(ts).position(|(x, t)| !simple_fit(x, t)) {
+                return format!("({}) — value {} is {}, not {}", shown.join(", "), i + 1, describe(&items[i]), ts[i]);
+            }
+            return format!("({})", shown.join(", "));
+        }
+        return format!("a tuple of {} values", items.len());
+    }
     describe(v)
+}
+
+/// For a message only: does `v` look like the built-in type `t` (no struct lookups)?
+fn simple_fit(v: &Value, t: &TypeExpr) -> bool {
+    match t {
+        TypeExpr::Any => true,
+        TypeExpr::Optional(inner) => matches!(v, Value::Nil) || simple_fit(v, inner),
+        TypeExpr::Named(n) => match n.as_str() {
+            "int" => matches!(v, Value::Int(_)),
+            "float" | "float64" | "f64" | "float32" | "f32" => matches!(v, Value::Float(_) | Value::Int(_)),
+            "str" | "string" => matches!(v, Value::Str(_)),
+            "bool" => matches!(v, Value::Bool(_)),
+            "error" => matches!(v, Value::Error(_) | Value::Nil),
+            "nil" | "void" => matches!(v, Value::Nil),
+            "list" => matches!(v, Value::List(_) | Value::Array(_)),
+            "map" => matches!(v, Value::Map(_)),
+            _ => true,
+        },
+        _ => true,
+    }
 }
 
 fn describe(v: &Value) -> String {
@@ -3022,6 +3120,34 @@ fn check_arity(what: &str, name: &str, params: &[String], n: usize) -> Result<()
 /// Binds the arguments to the parameters; `...rest` receives the list of the rest.
 /// Binds the arguments to the parameters; `syms` are the parameters' interned
 /// names when the function has them (a constructor binds by text).
+/// `Some(true)` for `float32` / `f32`, `Some(false)` for the other float annotations
+/// (`float`, `float64`, `f64`, and those with `?`), `None` for any other type.
+pub(crate) fn float_annotation(ty: &TypeExpr) -> Option<bool> {
+    match ty {
+        TypeExpr::Named(n) => match n.as_str() {
+            "float" | "float64" | "f64" => Some(false),
+            "float32" | "f32" => Some(true),
+            _ => None,
+        },
+        TypeExpr::Optional(inner) => float_annotation(inner),
+        _ => None,
+    }
+}
+
+/// A value as a name annotated `ty` holds it: an int under a float annotation is
+/// that float (B03 — `let x: float = 3` is `3.0`, as in Go); anything else as it is.
+#[inline]
+pub(crate) fn as_annotated(v: Value, ty: &TypeExpr) -> Value {
+    match v {
+        Value::Int(n) => match float_annotation(ty) {
+            Some(true) => Value::Float(n as f32 as f64),
+            Some(false) => Value::Float(n as f64),
+            None => v,
+        },
+        v => v,
+    }
+}
+
 fn bind_params(e: &mut Environment, params: &[String], syms: &[Sym], mut args: Vec<Value>) {
     let rest = rest_param(params);
     let fixed = if rest.is_some() { params.len() - 1 } else { params.len() };
@@ -3051,6 +3177,11 @@ pub enum RecvError {
 fn chan_push(ch: &Rc<ChanValue>, v: Value) -> Result<(), String> {
     if ch.closed.get() {
         return Err("send on a closed channel".into());
+    }
+    // `chan<int>`: the declared type of its values (§6)
+    let elem = ch.elem.get();
+    if elem != 0 && !ChanValue::elem_fits(elem, &v) {
+        return Err(format!("type mismatch: a chan<{}> cannot carry '{}'", ChanValue::elem_name(elem), v.type_name()));
     }
     ch.queue.borrow_mut().push_back(v);
     ch.sent.set(ch.sent.get() + 1);
@@ -3154,9 +3285,18 @@ pub fn chan_recv(ch: &Rc<ChanValue>) -> Result<Value, RecvError> {
 
 // ---------- Indexing ----------
 
+thread_local! {
+    /// What the main program declares at its top level: a name read before its
+    /// declaration ran (a function called above `let x`) is reported as that (L14).
+    static PROGRAM_NAMES: RefCell<std::collections::HashSet<String>> = RefCell::new(std::collections::HashSet::new());
+}
+
 #[cold]
 #[inline(never)]
 fn undefined(name: &str) -> String {
+    if PROGRAM_NAMES.with(|n| n.borrow().contains(name)) {
+        return format!("variable '{}' used before its declaration\n  help: declare '{}' before the code that uses it runs (there is no hoisting)", name, name);
+    }
     format!("variable '{}' is not defined", name)
 }
 
@@ -3505,9 +3645,10 @@ fn array_equal(a: &Value, b: &Value) -> bool {
     xs.len() == ys.len() && xs.iter().zip(ys.iter()).all(|(p, q)| scalar_equal(p, q))
 }
 
-/// Is `o` a readable stream (`for x in o` reads it a piece at a time)?
+/// Is `o` a readable stream (`for x in o` reads it a piece at a time)? A
+/// WebSocket is one too: its messages until it closes.
 pub(crate) fn is_stream(o: &NativeObjectRef) -> bool {
-    o.with_name(|n| matches!(n, "ReadStream" | "HttpStream" | "Stream"))
+    o.with_name(|n| matches!(n, "ReadStream" | "HttpStream" | "Stream" | "WebSocket"))
 }
 
 /// The message of a value a sized list cannot hold.

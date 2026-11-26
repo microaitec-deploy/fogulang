@@ -2608,8 +2608,17 @@ impl<'a, 'f> Gen<'a, 'f> {
                 Ok(())
             }
             Stmt::Let { name, mutable, init, ty } => {
-                let (v, t) = self.expr(init)?;
+                let (mut v, mut t) = self.expr(init)?;
                 if let Some(ty) = ty {
+                    // an int under a float annotation is that float (`interpreter::as_annotated`)
+                    match (t, super::interpreter::float_annotation(ty)) {
+                        (Ty::Int, Some(false)) => {
+                            v = self.b.ins().fcvt_from_sint(types::F64, v);
+                            t = Ty::Float;
+                        }
+                        (Ty::Int, Some(true)) => return bail(format!("'{}': an int under a float32 annotation", name)),
+                        _ => {}
+                    }
                     match annotation_check(ty, t) {
                         Ann::Ok => {}
                         Ann::No => return bail(format!("'{}' does not match its annotation {}", name, ty)),
@@ -2630,6 +2639,10 @@ impl<'a, 'f> Gen<'a, 'f> {
             // annotation costs nothing; otherwise the interpreter reports it.
             Stmt::CheckType { name, ty } => {
                 let (v, t) = self.ident(name)?;
+                // (the interpreter turns the int into a float: this specialization is left to it)
+                if t == Ty::Int && super::interpreter::float_annotation(ty).is_some() {
+                    return bail(format!("parameter '{}': an int for a float annotation", name));
+                }
                 match annotation_check(ty, t) {
                     Ann::Ok => {}
                     Ann::No => return bail(format!("parameter '{}' does not match its annotation {}", name, ty)),
@@ -2644,6 +2657,9 @@ impl<'a, 'f> Gen<'a, 'f> {
                     }
                 }
                 Ok(())
+            }
+            Stmt::ReturnType(ty) if self.ret == Some(Ty::Int) && super::interpreter::float_annotation(ty).is_some() => {
+                bail(format!("return type: an int for the float annotation {}", ty))
             }
             Stmt::ReturnType(ty) => match self.ret.map(|r| annotation_check(ty, r)) {
                 Some(Ann::Ok) => Ok(()),
@@ -3249,7 +3265,7 @@ impl<'a, 'f> Gen<'a, 'f> {
                     return bail(format!("assignment to non-local variable '{}'", name));
                 };
                 if !local.mutable {
-                    return bail(format!("assignment to const '{}'", name));
+                    return bail(format!("assignment to '{}', which compiled code only reads", name));
                 }
                 let cur = self.b.use_var(local.var);
                 if local.ty == Ty::Int {
@@ -4363,7 +4379,13 @@ pub struct Jit {
     cfg: JitConfig,
     inner: Option<Inner>,
     init_failed: bool,
-    counts: HashMap<usize, u32>,
+    /// Calls of each function body so far. The `Weak` keeps the body's address
+    /// from being given to another body while the count exists (a `fogu:vm` context
+    /// that ended frees its functions, P07): a new function never inherits the
+    /// count — nor a failed compilation — of a dead one at the same address.
+    counts: HashMap<usize, (u32, std::rc::Weak<Vec<Stmt>>)>,
+    /// `counts.len()` at which the counts of dead bodies are dropped.
+    prune_at: usize,
     loop_names: HashMap<u32, Rc<Vec<String>>>,
     /// The stack limit of the native code, shared with the watchdog.
     watch: std::sync::Arc<Watch>,
@@ -4372,12 +4394,30 @@ pub struct Jit {
 }
 
 impl Jit {
+    /// The count of a body called for the first time (cold: once per function).
+    #[cold]
+    #[inline(never)]
+    fn count_new(&mut self, f: &FnValue) -> &mut u32 {
+        if self.counts.len() >= self.prune_at {
+            // bodies that no longer exist: their counts, and their failed specializations
+            self.counts.retain(|_, (_, body)| body.strong_count() > 0);
+            if let Some(inner) = self.inner.as_mut() {
+                let alive = &self.counts;
+                inner.specs.retain(|k, s| !matches!(s, Spec::Failed(_)) || alive.contains_key(&k.ptr));
+            }
+            self.prune_at = (self.counts.len() * 2).max(4096);
+        }
+        let ptr = Rc::as_ptr(&f.body) as usize;
+        &mut self.counts.entry(ptr).or_insert_with(|| (0, Rc::downgrade(&f.body))).0
+    }
+
     pub fn new() -> Self {
         Jit {
             cfg: config(),
             inner: None,
             init_failed: false,
             counts: HashMap::new(),
+            prune_at: 4096,
             loop_names: HashMap::new(),
             watch: std::sync::Arc::new(Watch {
                 armed: std::sync::Mutex::new(None),
@@ -4499,7 +4539,10 @@ impl Jit {
         let key = FnKey { ptr: Rc::as_ptr(&f.body) as usize, mask, n: args.len() as u8, checked: deadline.is_some() };
 
         // Only compile after a few interpreted calls.
-        let c = self.counts.entry(key.ptr).or_insert(0);
+        let c = match self.counts.get_mut(&key.ptr) {
+            Some(c) => &mut c.0,
+            None => self.count_new(f),
+        };
         *c += 1;
         if *c < self.cfg.call_threshold {
             return None;

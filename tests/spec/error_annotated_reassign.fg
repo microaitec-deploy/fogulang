@@ -1,0 +1,5 @@
+// An annotated variable keeps its type: a value known to be of another type is
+// refused before the program runs (0.8.4).
+let a: list<int> = [1, 2, 3]
+print("not reached")
+a = "no longer a list"

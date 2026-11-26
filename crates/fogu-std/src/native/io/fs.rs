@@ -27,16 +27,21 @@ pub fn build() -> ModuleValue {
     // streams: a file read or written a piece at a time (native/io/stream.rs)
     e.insert("createReadStream".into(), crate::native::util::nfn_var("createReadStream", 1, super::stream::create_read_stream));
     e.insert("createWriteStream".into(), crate::native::util::nfn_var("createWriteStream", 1, super::stream::create_write_stream));
+    e.insert("realpath".into(), nfn("realpath", 1, super::path::real));
     e.insert("readText".into(), nfn("readText", 1, |a| {
         let p = str_arg(a, 0, "fs.readText")?;
+        // (a UTF-8 byte order mark is not part of the text)
         std::fs::read_to_string(&p)
-            .map(Value::str)
+            .map(|text| match text.strip_prefix('\u{feff}') {
+                Some(rest) => Value::str(rest),
+                None => Value::str(text),
+            })
             .map_err(|err| io_err!("fs.readText: {}: {}", p, err))
     }));
     e.insert("readLines".into(), nfn("readLines", 1, |a| {
         let p = str_arg(a, 0, "fs.readLines")?;
         let text = std::fs::read_to_string(&p).map_err(|err| io_err!("fs.readLines: {}: {}", p, err))?;
-        Ok(str_list(text.lines().map(str::to_string)))
+        Ok(str_list(text.strip_prefix('\u{feff}').unwrap_or(&text).lines().map(str::to_string)))
     }));
     e.insert("writeText".into(), nfn("writeText", 2, |a| {
         let p = str_arg(a, 0, "fs.writeText")?;

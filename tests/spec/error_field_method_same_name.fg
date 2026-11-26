@@ -1,0 +1,6 @@
+// A struct field and a method with the same name are refused (B20, 0.8.4).
+struct S {
+    x = 1
+    fn x() { return 2 }
+}
+print(new S().x)

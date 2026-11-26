@@ -718,7 +718,8 @@ impl FoguObject for Image {
                 max_args(a, 2, "rotate")?;
                 let deg = num_at(a, 0, "rotate")?;
                 if !deg.is_finite() {
-                    return Err(format!("rotate: the angle must be a finite number, got {}", deg));
+                    // (an angle is data, often computed: an error value, as `image.color`)
+                    return Err(io_err!("rotate: the angle must be a finite number, got {}", deg));
                 }
                 let deg = deg.rem_euclid(360.0);
                 let o = opts(opt_arg(a, 1), "rotate")?;

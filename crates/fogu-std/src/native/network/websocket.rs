@@ -52,6 +52,11 @@ pub fn build() -> ModuleValue {
     let mut e: HashMap<String, Value> = HashMap::new();
     e.insert("connect".into(), nfn_var("connect", 1, connect));
     e.insert("listen".into(), nfn_var("listen", 1, listen));
+    // upgrade(req, (ws, req) => …, { protocols }): run by the interpreter (web::intercept_upgrade)
+    e.insert(
+        "upgrade".into(),
+        nfn_var("websocket.upgrade", 2, |_| Err("websocket.upgrade: call it from an http.serve handler, with the request".into())),
+    );
     ModuleValue {
         name: "fogu:websocket".into(),
         exports: RefCell::new(e),
@@ -333,6 +338,8 @@ impl FoguObject for ConnValue {
                 let _ = self.tx.send(Out::Close(code, reason));
                 Ok(Value::Nil)
             }
+            // `for msg in ws` ended with a network error: it is already in `ws.error`
+            "__fail" => Ok(Value::Nil),
             other => Err(format!("method '{}' does not exist on WebSocket (send next tryNext ping close)", other)),
         }
     }

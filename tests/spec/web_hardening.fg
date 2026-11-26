@@ -53,12 +53,14 @@ print("download", h({ method: "GET", path: "/dl" }).headers["content-disposition
 r = h({ method: "OPTIONS", path: "/cors", headers: { origin: "http://a.example", "access-control-request-method": "GET" } })
 print("preflight", r.status, r.headers["access-control-allow-origin"])
 
-// S15: credentials with origin "*" echo the request's origin, never "*"
+// S15 / SEC01: credentials only for the origins that are listed (never "*", never an echo)
 const app2 = web.app()
-app2.use(web.cors({ credentials: true }))
+app2.use(web.cors({ origin: ["http://b.example"], credentials: true }))
 app2.get("/", (ctx) => "x")
 r = app2.handler()({ method: "GET", path: "/", headers: { origin: "http://b.example" } })
 print("credentials", r.headers["access-control-allow-origin"], r.headers["access-control-allow-credentials"], r.headers["vary"])
+r = app2.handler()({ method: "GET", path: "/", headers: { origin: "http://evil.example" } })
+print("not listed", r.headers["access-control-allow-origin"], r.headers["access-control-allow-credentials"])
 
 // M01 / S10: procedures need the runtime's x-topcoat header and a same-site origin
 const proc = (headers, body) => {

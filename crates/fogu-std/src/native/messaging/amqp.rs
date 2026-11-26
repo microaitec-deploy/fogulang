@@ -534,7 +534,7 @@ pub fn parse_url(url: &str) -> Result<Url, String> {
     let (tls, rest) = match url.split_once("://") {
         Some(("amqp", r)) => (false, r),
         Some(("amqps", r)) => (true, r),
-        _ => return Err(format!("expected an amqp:// or amqps:// url, got '{}'", url)),
+        _ => return Err(format!("expected an amqp:// or amqps:// url, got '{}'", crate::native::util::redact_url(url))),
     };
     let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
     let (auth, hostpath) = match rest.rfind('@') {

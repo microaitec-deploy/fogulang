@@ -206,7 +206,7 @@ async fn http_call(client: reqwest::Client, url: String, s: Session, method: Str
         (None, Some((u, p))) => req.basic_auth(u, Some(p)),
         _ => req,
     };
-    let res = req.send().await.map_err(|e| format!("{} ({})", e, url))?;
+    let res = req.send().await.map_err(|e| crate::native::util::redact_url(&format!("{} ({})", e, url)))?;
     let status = res.status();
     let text = res.text().await.map_err(|e| e.to_string())?;
     let j: Json = serde_json::from_str(&text).map_err(|_| format!("HTTP {}: {}", status.as_u16(), text.chars().take(200).collect::<String>()))?;
@@ -251,7 +251,7 @@ fn connect(args: &[Value]) -> Result<Value, String> {
     let mut url = url.or_else(|| env("SURREAL_URL")).unwrap_or_else(|| "ws://127.0.0.1:8000".into());
     let scheme = url.split("://").next().unwrap_or("").to_ascii_lowercase();
     if !matches!(scheme.as_str(), "ws" | "wss" | "http" | "https") {
-        return Err(format!("surrealdb.connect: the url must start with ws://, wss://, http:// or https://, got '{}'", url));
+        return Err(format!("surrealdb.connect: the url must start with ws://, wss://, http:// or https://, got '{}'", crate::native::util::redact_url(&url)));
     }
     if !url.trim_end_matches('/').ends_with("/rpc") {
         url = format!("{}/rpc", url.trim_end_matches('/'));
@@ -319,7 +319,7 @@ fn connect(args: &[Value]) -> Result<Value, String> {
         }
         Ok((transport, session))
     })?;
-    let (transport, session) = r.map_err(|e| io_err!("surrealdb: {} ({})", e, url))?;
+    let (transport, session) = r.map_err(|e| io_err!("surrealdb: {}", crate::native::util::redact_url(&format!("{} ({})", e, url))))?;
     Ok(NativeObjectRef::new(Client { url, transport, session: Arc::new(Mutex::new(session)), timeout }).to_value())
 }
 

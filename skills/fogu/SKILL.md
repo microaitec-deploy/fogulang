@@ -184,7 +184,7 @@ panic`, and the `Fogu` object: `Fogu.file(path).text()/.json()/.write(str or buf
 | files, paths, processes, shell | `fogu:fs` `fogu:path` `fogu:process` `fogu:shell` |
 | JSON, JSON5, CSV, Excel, YAML, TOML, XML, Markdown | `fogu:json` `fogu:json5` `fogu:csv` `fogu:excel` `fogu:yaml` `fogu:toml` `fogu:xml` `fogu:markdown` |
 | time, scheduling, events | `fogu:time` `fogu:cron` `fogu:events` |
-| HTTP client/server (uploads: `multipart` + `http.file`), web framework, WebSocket, TCP/UDP | `fogu:http` `fogu:web` `fogu:websocket` `fogu:net` (`conn.read()` → buffer, `readLine()` → str, both `nil` at end of stream) |
+| HTTP client/server (uploads: `multipart` + `http.file`), web framework, WebSocket, TCP/UDP | `fogu:http` `fogu:web` `fogu:websocket` (= `fogu:ws`; `for m in ws`, `stream.from(ws)`, `s.pipe(ws)`, `ws.upgrade(req, fn)` in `http.serve`) `fogu:net` (`conn.read()` → buffer, `readLine()` → str, both `nil` at end of stream) |
 | interactive server-rendered UIs (signals, shards, procedures; Topcoat UI / shadcn-rs kits, Tailwind) | `fogu:topcoat` with `fogu:web` |
 | Socket.IO (server, also on a `fogu:web` port; client), gRPC | `fogu:socketio` `fogu:grpc` (+ `fogu:protobuf` schemas) |
 | WebRTC data channels, peer to peer with Fogu or browsers (signaling rooms on a `fogu:web` app, browser client at `/rtc/client.js`) | `fogu:webrtc` (`webrtc.connect(url, room)?.channel("data")`; `send`, `recv`, `for msg in ch`) |
@@ -249,8 +249,17 @@ select {
   A deadlock between tasks is detected and reported. `fogu:cron` jobs run when the
   program calls `cron.tick()` (e.g. in a loop with `time.delay`), not by themselves.
 - `time.delay(0ms)` lets the other tasks run once. An error that ends an `fg` task
-  is printed like any error (file, line, code) and the other tasks go on; under
+  is printed like any error (file, line, code) and the other tasks go on — also an
+  error value the task ends with (`f()?`, `return nil, error(…)`); under
   `fogu test` it fails the test that started the task.
+- **Names that come from a request are not paths.** Serve them with
+  `web.file(ctx.query.f, { root: "www" })` (never `web.file("www/" + name)`: a path
+  with `..` is refused), save uploads with `file.save("uploads/")` (the name is
+  sanitized; never `save("uploads/" + file.filename)`), and elsewhere use
+  `path.safeJoin(base, name)?` or `path.isInside(base, p)`. `path.join` and
+  `path.normalize` do not keep a path inside a folder.
+- `web.cors({ origin: ["https://app.example"], credentials: true })`: with
+  credentials the origins must be listed (`*` stops the program).
 
 ```fogu
 import web from "fogu:web"
@@ -269,7 +278,7 @@ fogu run                     # run "entry"; `fogu <script>` runs a script of fog
 fogu add user/repo@^1.2.0    # dependency from git (also gitlab:, tar.gz, ./folder)
 # a library is a project whose entry file `export`s its API (fogu.json: name, version, entry);
 # push it to git and others `fogu add user/repo` it — e.g. github.com/microaitec-deploy/fogulang_module
-fogu test [-t name]          # run *.test.fg
+fogu test [-t name] [--timeout 30s]   # run *.test.fg
 fogu fmt --check             # formatting check for CI
 fogu build --compile         # standalone executable in dist/ (no Fogu needed to run it)
 fogu build --compile --target linux-arm64,windows-x64   # other platforms

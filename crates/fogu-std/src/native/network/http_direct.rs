@@ -392,6 +392,8 @@ struct Head {
     upgrade: bool,
     ws_key: Option<String>,
     expect: bool,
+    /// `Range` and `If-Range`, for a file answer
+    range: Option<(String, Option<String>)>,
     body: BodyKind,
     meta: Meta,
 }
@@ -443,7 +445,7 @@ fn parse_head(data: &[u8], opts: &ServerOptions) -> Parsed {
     };
     let mut headers = HashMap::with_capacity(r.headers.len());
     let (mut len, mut encoded, mut chunked) = (None::<usize>, false, false);
-    let (mut keep, mut upgrade, mut expect) = (!http10, false, false);
+    let (mut keep, mut upgrade, mut expect, mut ranged) = (!http10, false, false, false);
     for h in r.headers.iter() {
         let name = h.name.to_ascii_lowercase();
         // values with bytes >= 0x80 are decoded as UTF-8 (lossy), as the client does
@@ -476,6 +478,7 @@ fn parse_head(data: &[u8], opts: &ServerOptions) -> Parsed {
             }
             "upgrade" => upgrade = value.eq_ignore_ascii_case("websocket"),
             "expect" => expect = value.eq_ignore_ascii_case("100-continue"),
+            "range" => ranged = true,
             _ => {}
         }
         headers.insert(name, value);
@@ -494,8 +497,9 @@ fn parse_head(data: &[u8], opts: &ServerOptions) -> Parsed {
         return Parsed::Bad(413, "request body too large".into());
     }
     let ws_key = if upgrade { headers.get("sec-websocket-key").cloned() } else { None };
+    let range = if ranged { headers.get("range").map(|r| (r.clone(), headers.get("if-range").cloned())) } else { None };
     let meta = Meta { head_only: method == "HEAD", keep, http10 };
-    Parsed::Done(Box::new(Head { method: method.to_string(), path, query, headers, upgrade, ws_key, expect, body, meta }), used)
+    Parsed::Done(Box::new(Head { method: method.to_string(), path, query, headers, upgrade, ws_key, expect, range, body, meta }), used)
 }
 
 /// Where a chunked body is.
@@ -806,7 +810,7 @@ impl Conn {
             };
             let head = *head;
             let meta = head.meta;
-            let (upgrade, ws_key) = (head.upgrade, head.ws_key);
+            let (upgrade, ws_key, range) = (head.upgrade, head.ws_key, head.range);
             let req = NativeObjectRef::new(RequestValue {
                 method: head.method,
                 path: head.path,
@@ -831,7 +835,7 @@ impl Conn {
                 return Ok(());
             }
             self.shared.arm(Phase::Write, None);
-            if !self.respond(resp, meta, upgrade, ws_key)? {
+            if !self.respond(resp, meta, upgrade, ws_key, range)? {
                 return Ok(());
             }
             // a client that pipelines without end does not keep the thread
@@ -908,7 +912,7 @@ impl Conn {
     }
 
     /// Writes the answer; true when the connection serves another request.
-    fn respond(&mut self, resp: Value, meta: Meta, upgrade: bool, ws_key: Option<String>) -> Result<bool, String> {
+    fn respond(&mut self, resp: Value, meta: Meta, upgrade: bool, ws_key: Option<String>, range: Option<(String, Option<String>)>) -> Result<bool, String> {
         // the usual answer is written straight from the response object
         if let Value::Object(o) = &resp {
             if o.with_name(|n| n == "Response") {
@@ -929,7 +933,7 @@ impl Conn {
         }
         let mut plain = http::plain_of(resp);
         if let Some(path) = plain.file.take() {
-            return self.send_file(path, plain.status, plain.headers, meta);
+            return self.send_file(path, plain.status, plain.headers, meta, range);
         }
         if let Some(stream) = plain.stream.take() {
             return self.send_stream(stream, plain.status, &plain.headers, meta);
@@ -945,17 +949,23 @@ impl Conn {
         Ok(self.flush()? && keep)
     }
 
-    /// `web.file`: read off this thread, a piece at a time.
-    fn send_file(&mut self, path: PathBuf, status: i64, mut headers: HashMap<String, String>, meta: Meta) -> Result<bool, String> {
-        let opened = crate::native::rt::offload(move || -> std::io::Result<(std::fs::File, u64, PathBuf)> {
-            let file = std::fs::File::open(&path)?;
+    /// `web.file`: read off this thread, a piece at a time — the whole file or
+    /// the part the request's `Range` asks for.
+    fn send_file(&mut self, path: PathBuf, status: i64, mut headers: HashMap<String, String>, meta: Meta, range: Option<(String, Option<String>)>) -> Result<bool, String> {
+        let opened = crate::native::rt::offload(move || -> std::io::Result<(std::fs::File, i64, u64, HashMap<String, String>, PathBuf)> {
+            use std::io::Seek;
+            let mut file = std::fs::File::open(&path)?;
             let info = file.metadata()?;
             if info.is_dir() {
                 return Err(ErrorKind::NotFound.into());
             }
-            Ok((file, info.len(), path))
+            let (status, first, count) = http::file_plan(status, &mut headers, range.as_ref().map(|(r, i)| (r.as_str(), i.as_deref())), &info);
+            if first > 0 {
+                file.seek(std::io::SeekFrom::Start(first))?;
+            }
+            Ok((file, status, count, headers, path))
         })?;
-        let Ok((mut file, len, path)) = opened else { return self.text(404, "file not found", meta) };
+        let Ok((mut file, status, len, mut headers, path)) = opened else { return self.text(404, "file not found", meta) };
         if !headers.contains_key("content-type") {
             headers.insert("content-type".into(), http::mime_of(&path).into());
         }

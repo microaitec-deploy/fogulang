@@ -91,6 +91,14 @@ fn files_of(paths: &[String]) -> (Vec<PathBuf>, Vec<String>) {
 }
 
 /// Every error and warning of one file (each prefixed with the file name).
+/// The members of the built-in module `name` (`fs` for `fogu:fs`).
+fn module_exports(name: &str) -> Option<HashSet<String>> {
+    thread_local! {
+        static NATIVES: crate::native::NativeContext = crate::native::NativeContext::new();
+    }
+    NATIVES.with(|n| n.get_module(name).map(|m| m.exports.borrow().keys().map(|k| k.to_string()).collect()))
+}
+
 fn check_file(f: &Path, builtins: &HashSet<String>, natives: &crate::native::NativeContext) -> (Vec<String>, Vec<String>) {
     let name = f.display().to_string();
     let src = match std::fs::read_to_string(f) {
@@ -265,6 +273,8 @@ fn run(o: &Opts) -> i32 {
     let (files, missing) = files_of(&o.paths);
     let natives = crate::native::NativeContext::new();
     let builtins: HashSet<String> = natives.globals().into_iter().map(|(name, _)| name).collect();
+    // the members of `fogu:*` modules, for `fs.nope` (T02)
+    crate::runtime::resolver::set_module_exports(module_exports);
 
     let (mut n_err, mut n_warn, mut bad) = (0usize, 0usize, 0usize);
     let mut diags: Vec<Json> = Vec::new();

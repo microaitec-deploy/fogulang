@@ -209,10 +209,53 @@ fn sha_hex(data: &[u8]) -> String {
     h.finalize().iter().map(|b| format!("{:02x}", b)).collect()
 }
 
+/// Does a link at `entry` (a path inside the archive) pointing to `target` stay inside
+/// the archive? By name: `..` may not climb above its root, absolute targets never do.
+fn link_stays_inside(entry: &Path, target: &Path, hard: bool) -> bool {
+    use std::path::Component;
+    // a hard link names a path from the root of the archive, a symbolic one from its folder
+    let mut depth: i64 = if hard { 0 } else { entry.parent().map_or(0, |p| p.components().filter(|c| matches!(c, Component::Normal(_))).count() as i64) };
+    for c in target.components() {
+        match c {
+            Component::Normal(_) => depth += 1,
+            Component::CurDir => {}
+            Component::ParentDir => {
+                depth -= 1;
+                if depth < 0 {
+                    return false;
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => return false,
+        }
+    }
+    true
+}
+
+/// A package's archive, unpacked into `dest`. Entries with an absolute name or a `..`,
+/// and links that point out of the archive, refuse the whole package (S22): the
+/// archive comes from the network, and a package must not write anywhere else.
 fn extract_tarball(bytes: &[u8], dest: &Path) -> Result<(), String> {
+    use std::path::Component;
     std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
     let gz = flate2::read::GzDecoder::new(bytes);
-    tar::Archive::new(gz).unpack(dest).map_err(|e| format!("invalid archive: {}", e))?;
+    let mut ar = tar::Archive::new(gz);
+    for entry in ar.entries().map_err(|e| format!("invalid archive: {}", e))? {
+        let mut entry = entry.map_err(|e| format!("invalid archive: {}", e))?;
+        let rel = entry.path().map_err(|e| format!("invalid archive: {}", e))?.into_owned();
+        if rel.components().any(|c| !matches!(c, Component::Normal(_) | Component::CurDir)) {
+            return Err(format!("invalid archive: unsafe entry name '{}' (absolute or with '..')", rel.display()));
+        }
+        let kind = entry.header().entry_type();
+        if kind.is_symlink() || kind.is_hard_link() {
+            let link = entry.link_name().map_err(|e| format!("invalid archive: {}", e))?.map(|l| l.into_owned()).unwrap_or_default();
+            if !link_stays_inside(&rel, &link, kind.is_hard_link()) {
+                return Err(format!("invalid archive: link '{}' -> '{}' points out of the package", rel.display(), link.display()));
+            }
+        }
+        if !entry.unpack_in(dest).map_err(|e| format!("invalid archive: {}", e))? {
+            return Err(format!("invalid archive: unsafe entry name '{}'", rel.display()));
+        }
+    }
     // GitHub & co. wrap everything in a single folder
     let entries: Vec<_> = std::fs::read_dir(dest).map_err(|e| e.to_string())?.flatten().collect();
     if entries.len() == 1 && entries[0].path().is_dir() {
@@ -390,11 +433,20 @@ impl Ctx<'_> {
             Source::Local { path } => {
                 let base = local_base.unwrap_or(&self.root);
                 let p = base.join(path);
-                let p = p.canonicalize().map_err(|e| format!("{}: local folder '{}': {}", name, p.display(), e))?;
+                let p = p.canonicalize().map(crate::plain_path).map_err(|e| format!("{}: local folder '{}': {}", name, p.display(), e))?;
                 let tmp = tmp_dir();
-                copy_tree(&p, &tmp).inspect_err(|_| {
-                    let _ = std::fs::remove_dir_all(&tmp);
-                })?;
+                // a local `.tar.gz` / `.tgz` file is unpacked (with the checks of a downloaded one)
+                let lower = p.to_string_lossy().to_lowercase();
+                if p.is_file() && (lower.ends_with(".tar.gz") || lower.ends_with(".tgz")) {
+                    let bytes = std::fs::read(&p).map_err(|e| format!("{}: '{}': {}", name, p.display(), e))?;
+                    extract_tarball(&bytes, &tmp).inspect_err(|_| {
+                        let _ = std::fs::remove_dir_all(&tmp);
+                    })?;
+                } else {
+                    copy_tree(&p, &tmp).inspect_err(|_| {
+                        let _ = std::fs::remove_dir_all(&tmp);
+                    })?;
+                }
                 let h = tree_hash(&tmp)?;
                 let commit = h.trim_start_matches("sha256-").to_string();
                 dir = super::store_dir(name, &commit);
@@ -411,6 +463,18 @@ impl Ctx<'_> {
         // checksum
         let integrity = tree_hash(&dir)?;
         if let Some(l) = &locked {
+            // a local folder or archive edited since it was locked: say that, and what to do
+            if !l.integrity.is_empty() && l.integrity != integrity && matches!(src, Source::Local { .. }) {
+                return Err(format!(
+                    "the local package '{}' changed since {} was written ({})\n  run `fogu update {}` to use the new content\n  expected {}\n  got      {}",
+                    name,
+                    LOCKFILE,
+                    entry.resolved,
+                    name,
+                    l.integrity,
+                    integrity
+                ));
+            }
             if !l.integrity.is_empty() && l.integrity != integrity {
                 return Err(format!(
                     "integrity check of '{}' failed: the content in {} does not match {}\n  expected {}\n  got      {}",
@@ -508,4 +572,20 @@ pub fn dir_size(p: &Path) -> u64 {
         }
     }
     total
+}
+
+#[cfg(test)]
+mod tests {
+    use super::link_stays_inside;
+    use std::path::Path;
+
+    #[test]
+    fn links_must_stay_inside_the_package() {
+        assert!(link_stays_inside(Path::new("pkg/lib/a.fg"), Path::new("../README.md"), false));
+        assert!(link_stays_inside(Path::new("pkg/a"), Path::new("b/c"), false));
+        assert!(!link_stays_inside(Path::new("pkg/a"), Path::new("../../etc/passwd"), false));
+        assert!(!link_stays_inside(Path::new("a"), Path::new("/etc/passwd"), false));
+        assert!(link_stays_inside(Path::new("x/y"), Path::new("pkg/a"), true));
+        assert!(!link_stays_inside(Path::new("x/y"), Path::new("../a"), true));
+    }
 }

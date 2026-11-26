@@ -162,6 +162,20 @@ pub struct ContextValue {
     lock: CtxLock,
 }
 
+impl Drop for ContextValue {
+    /// The scope and the functions it defined hold each other: freed here when
+    /// nothing else holds them (P07: ~1.2 KB was left by every context).
+    fn drop(&mut self) {
+        // a sandbox nobody else holds (`runInNewContext(code)`) has copies of the
+        // context's functions: it goes first, so only the cycle is left
+        if Rc::strong_count(&self.sandbox) == 1 {
+            let values = std::mem::take(&mut *self.sandbox.borrow_mut());
+            drop(values);
+        }
+        Environment::release_context(&self.env, 1);
+    }
+}
+
 /// One run at a time per context. The flag is shared with `ctx.mutex` (a
 /// `sync.Mutex`); the owner task may nest runs.
 #[derive(Clone, Default)]
@@ -293,6 +307,7 @@ fn run_in_new_context(
     ctx.env.borrow_mut().set_module(&o.filename);
     let r = run(interp, program, &ctx.env, o);
     ctx.push();
+    // (the context's own functions are freed when it is dropped: `Drop for ContextValue`)
     r
 }
 

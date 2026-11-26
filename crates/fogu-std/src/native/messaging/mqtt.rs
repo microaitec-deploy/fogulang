@@ -730,7 +730,7 @@ fn connect(args: &[Value]) -> Result<Value, String> {
     let (tls, rest) = match url.split_once("://") {
         Some(("mqtt" | "tcp", r)) => (false, r),
         Some(("mqtts" | "ssl" | "tls", r)) => (true, r),
-        _ => return Err(format!("mqtt.connect: expected mqtt:// or mqtts://, got '{}'", url)),
+        _ => return Err(format!("mqtt.connect: expected mqtt:// or mqtts://, got '{}'", crate::native::util::redact_url(&url))),
     };
     let rest = rest.trim_end_matches('/');
     let (auth, hostport) = match rest.rfind('@') {

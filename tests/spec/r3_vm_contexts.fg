@@ -1,0 +1,30 @@
+// fogu:vm contexts free their functions when they end (P07, 0.8.4) — and a function
+// that left the context (returned, put in the program's sandbox, called later) keeps
+// working: only what nothing outside can reach is freed.
+import vm from "fogu:vm"
+
+let total = 0
+for i in 0..300 {
+    total += vm.runInNewContext("fn f(x) { return x + 1 }\nf(" + str(i) + ")")
+}
+print(total)
+
+// returned from the context
+const g = vm.runInNewContext("fn inc(x) { return x + 10 }\ninc")
+print(g(1), g(2))
+
+// left in the program's own sandbox
+const sb = { base: 100 }
+vm.runInNewContext("fn add(x) { return base + x }\nconst seen = add(1)", sb)
+print(sb.seen, sb.add(5))
+
+// a persistent context keeps its state between runs
+const ctx = vm.createContext({ n: 0 })
+vm.runInContext("fn bump() { n += 1 }", ctx)?
+for i in 0..3 { vm.runInContext("bump()", ctx)? }
+print(ctx.n)
+
+// a closure over the context's variables, called after many other contexts ended
+const counter = vm.runInNewContext("let c = 0\nfn next() { c += 1\nreturn c }\nnext")
+for i in 0..200 { vm.runInNewContext("fn z() { return 0 }\nz()") }
+print(counter(), counter(), counter())

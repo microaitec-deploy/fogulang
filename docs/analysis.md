@@ -544,3 +544,65 @@ loop, 0.1 ms to start the JIT) and the overflow checks Go does not make.
   built-in FUSE implementation.
 - Binary size grew with the new modules (image, tract, smartcore…); Polars was rejected
   for `fogu:dataframe` (+70 MB on its own).
+
+## Round 3 on 0.8.3 (fixed in 0.8.4)
+
+The third external test round (0.8.3 on Windows; reports kept outside the repository) found
+5 release blockers and 27 other new findings; `CHANGELOG.md` lists what 0.8.4 does for each.
+What it showed about the code:
+
+- **Path safety was a property of the URL, not of the file functions.** 0.8.3 canonicalized
+  the route path, but `web.file` and `UploadedFile.save` took any string. The check now lives
+  where the file is opened: `native::util::contained` (components, then the real path of what
+  exists) behind `web.file(…, { root })`, `fs.createReadStream(…, { root })` and
+  `path.safeJoin`; without `root`, `web.file` and `save` refuse `..`. Tests:
+  `tests/spec/r3_file_safety.fg`.
+- **A fix can be the regression**: echoing the request's origin for `credentials: true` (0.8.1,
+  for S15) made a harmless misconfiguration exploitable. `web.cors` now never echoes an origin
+  that is not listed (`r3_cors.fg`, `web_hardening.fg`).
+- **Secrets in messages**: every message that carries a connection URL goes through
+  `native::util::redact_url`. New code that formats a URL into an error must use it.
+- **Silent degradation at a boundary**: the JSON writer's fallbacks (`null` for NaN, `"<fn>"`)
+  are right for a web answer and wrong between a worker and its caller. The writer now notes
+  them in a cold path (`json::take_lossy`), and `sync.Worker` asks: plain values cost nothing
+  more, the others travel marked (`r3_worker_values.fg`).
+- **Exit from a task**: `exit(3)` and `ExitProcess` run the thread-local destructors of the
+  calling thread; from a task, with the scheduler and the servers still alive, a destructor
+  reached a thread-local already destroyed — an access violation on Windows (msvc builds), an
+  abort on Linux when an HTTP server had a request running (found by the soak test, exit code
+  134). `native::exit` now ends the process with `_exit` / `TerminateProcess` after `cleanup` and
+  a flush of the output. `tests/cli.rs` (`exit_in_a_task_ends_the_process_with_its_code`) covers
+  both; the Windows case is still to be confirmed on the msvc release build.
+- **The soak test** (`test/test_fogu/soak30/`, outside the repository) found the exit abort, and
+  its numbers need care: under WSL2 the monotonic clock ran 8 % fast against UTC (durations in its
+  reports are UTC), a refused SQL connection makes `sql.open` wait ~30 s for the pool (as in 0.8.3),
+  and a SIGTERM stops the server without draining the requests in flight (a write may be committed
+  without its answer — never the other way round). With one server process for 30 minutes of
+  active time (no faults): 6.3 M requests, 0 errors, none over 1 s, every confirmed id a row in
+  SQLite once, RSS 18.8 → 34.7 MB (+4.8 MB/h in the second half), descriptors 14 → 14, and the
+  final `Fogu.exit()` from a task ended with code 0. The ~100 ms p99 of its SQLite routes is the
+  queue of 20 writer clients behind one connection that commits (fsyncs) every INSERT (~4.8 ms
+  each on that disk); a route that reads a file had a p99 of 3 ms.
+
+### Known gaps after 0.8.4
+
+- Annotations are checked where a value's type is known statically (`let`, parameters, returns,
+  and since 0.8.4 the reassignment of an annotated variable); a value of unknown type assigned
+  to an annotated variable and struct field annotations (B05) are not; `chan<T>` (§6) and variadic
+  annotations are checked since 0.8.4, and the value type of `map<str, V>` is not checked at run time — that
+  needs the type in the slot, a change of the value representation.
+- An integer beyond the int range in JSON / YAML / TOML is read as a float (2^64 − 1 becomes
+  2^64): `Value` has one 64-bit signed integer.
+- `math.floor(NaN)`, `int(NaN)` and other arithmetic errors stop the program (a task or a
+  request handler only loses that task or request); there is no `try`.
+- `typeof(obj.name)` of a native object is `"fn"` for any name, and `fogu check` does not know
+  the methods of native objects (it knows the members of `fogu:*` modules since 0.8.4).
+- `fogu test --timeout` stops a test that is running code; one blocked for ever in a wait that
+  is not a deadlock (a socket that never answers) is not interrupted.
+- Uploads are buffered (no `ctx.req.stream()`); there is no graceful shutdown that drains
+  requests, no SQL pool, no per-request cancellation.
+- Still open from the earlier rounds: B05, B07, B08, L05, L17 (decisions, documented); C02 (W0005
+  for `json.parse` and functions without annotations); the value type of `map<K, V>` (C03); a
+  `fogu:vm` or test timeout interrupts sleeps but not waits on channels or the network (M45);
+  S20, S21, S23 (documented). Fixed in 0.8.4 but to be confirmed on a Windows (msvc) release
+  build: N01, the `\\?\` paths (B22, §7, §16), 1 ms timers (§8), `Fogu.env` names (§15).

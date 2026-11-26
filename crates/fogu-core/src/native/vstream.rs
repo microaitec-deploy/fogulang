@@ -34,7 +34,7 @@ use std::rc::Rc;
 use ahash::AHashMap as HashMap;
 
 use crate::native::object::{FoguObject, NativeObjectRef};
-use crate::runtime::interpreter::{chan_recv, Interpreter, RecvError};
+use crate::runtime::interpreter::{chan_recv, chan_send, Interpreter, RecvError};
 use crate::runtime::sched;
 use crate::runtime::value::{ChanValue, ErrorValue, ModuleValue, Value};
 
@@ -145,7 +145,7 @@ impl FoguObject for StreamValue {
     fn methods(&self) -> Vec<&'static str> {
         vec![
             "next", "write", "close", "fail", "cancel", "map", "filter", "take", "skip", "takeWhile", "chunk", "tap", "enumerate",
-            "toList", "reduce", "forEach", "count", "first", "find",
+            "toList", "reduce", "forEach", "count", "first", "find", "pipe",
         ]
     }
 
@@ -372,6 +372,8 @@ pub fn pull(it: &Interpreter, n: &Rc<Node>) -> Result<Option<Value>, String> {
             None => {
                 match r.get("error") {
                     Some(Value::Error(e)) => n.fail(e),
+                    // a WebSocket keeps the text of the error that closed it
+                    Some(Value::Str(e)) => n.fail(err(e.to_string())),
                     _ => n.done.set(true),
                 }
                 Ok(None)
@@ -553,6 +555,10 @@ pub fn method(it: &Interpreter, o: &NativeObjectRef, name: &str, args: &[Value])
                 }
                 ended(&n, Value::Int(k))
             }
+            // pipe(dest, { end = true }): every value into a channel, a WebSocket (`send`)
+            // or a writable (`write`); then `dest` is closed, unless `end: false`.
+            // Returns how many values went; an error of `dest` ends the stream with it.
+            "pipe" => return pipe(it, &n, args),
             "forEach" => {
                 let f = func_arg(args, 0, "forEach")?;
                 while let Some(v) = pull(it, &n)? {
@@ -606,12 +612,64 @@ pub fn method(it: &Interpreter, o: &NativeObjectRef, name: &str, args: &[Value])
             }
             other => {
                 return Err(format!(
-                    "method '{}' does not exist on Stream (next write close fail cancel map filter take skip takeWhile chunk tap enumerate toList reduce forEach count first find)",
+                    "method '{}' does not exist on Stream (next write close fail cancel map filter take skip takeWhile chunk tap enumerate toList reduce forEach count first find pipe)",
                     other
                 ))
             }
         })
     })())
+}
+
+/// `stream.pipe(dest, opts)` (a terminal, see `method`).
+fn pipe(it: &Interpreter, n: &Rc<Node>, args: &[Value]) -> Result<Value, String> {
+    crate::native::util::max_args(args, 2, "pipe")?;
+    let end = match args.get(1) {
+        None | Some(Value::Nil) => true,
+        Some(Value::Map(m)) => m.borrow().get("end").is_none_or(|v| v.is_truthy()),
+        Some(other) => return Err(format!("pipe: options must be a map, got '{}'", other.type_name())),
+    };
+    let mut sent = 0i64;
+    match args.first() {
+        Some(Value::Chan(c)) => {
+            while let Some(v) = pull(it, n)? {
+                if c.closed.get() {
+                    n.fail(err("pipe: the channel is closed"));
+                    n.cancel_upstream();
+                    break;
+                }
+                chan_send(c, v)?;
+                sent += 1;
+            }
+            if end {
+                c.close();
+            }
+        }
+        Some(Value::Object(o)) => {
+            let write = if o.with_name(|name| name == "WebSocket") { "send" } else { "write" };
+            while let Some(v) = pull(it, n)? {
+                let failed = match it.call_native_method(o, write, &[v]) {
+                    Ok(Value::Error(e)) => Some(e),
+                    Ok(_) => None,
+                    Err(e) if e.starts_with(crate::runtime::value::ERR_VALUE_PREFIX) => {
+                        Some(err(e.strip_prefix(crate::runtime::value::ERR_VALUE_PREFIX).unwrap_or(&e)))
+                    }
+                    Err(e) => return Err(e),
+                };
+                if let Some(e) = failed {
+                    n.fail(e);
+                    n.cancel_upstream();
+                    break;
+                }
+                sent += 1;
+            }
+            if end {
+                let _ = it.call_native_method(o, "close", &[]);
+            }
+        }
+        Some(other) => return Err(format!("pipe: expects a chan, a WebSocket or a writable stream, got '{}'", other.type_name())),
+        None => return Err("pipe: expects where the values go (a chan, a WebSocket or a writable stream)".into()),
+    }
+    Ok(ended(n, Value::Int(sent)))
 }
 
 // ---------------------------------------------------------------- module
@@ -627,7 +685,7 @@ fn from(args: &[Value]) -> Result<Value, String> {
         Some(Value::Str(s)) => Kind::Items(s.chars().map(|c| Value::Str(c.into())).collect::<Vec<_>>().into_iter()),
         Some(Value::Object(o)) if is_value_stream(o) => return Ok(Value::Object(o.clone())),
         Some(Value::Object(o)) if crate::runtime::interpreter::is_stream(o) => Kind::Readable(o.clone()),
-        Some(other) => return Err(format!("stream.from: expects a list, a range, a chan, a text or a readable, got '{}'", other.type_name())),
+        Some(other) => return Err(format!("stream.from: expects a list, a range, a chan, a text, a readable or a WebSocket, got '{}'", other.type_name())),
         None => Kind::Items(Vec::new().into_iter()),
     };
     Ok(value(Node::new(kind, None)))

@@ -309,7 +309,8 @@ pub(crate) fn csv_parse(text: &str, o: &HashMap<Str, Value>) -> Result<Value, St
 
 /// rows: maps (a header line is written) or lists. `{ header = true, delimiter = ",", columns }`
 pub(crate) fn csv_stringify(rows: &[Value], o: &HashMap<Str, Value>) -> Result<String, String> {
-    let mut w = csv::WriterBuilder::new().delimiter(delimiter(o, None)?).from_writer(Vec::new());
+    // (rows of lists may have different lengths: each line has the cells it was given)
+    let mut w = csv::WriterBuilder::new().delimiter(delimiter(o, None)?).flexible(true).from_writer(Vec::new());
     let maps = rows.iter().any(|r| matches!(r, Value::Map(_)));
     let cols = if maps { columns(rows, o) } else { Vec::new() };
     if maps && flag(o, "header", true) {
@@ -668,6 +669,14 @@ fn xml_node(v: &Value, pretty: bool, depth: usize, out: &mut String) -> Result<(
             } else if children.len() == 1 && matches!(children[0], Value::Str(_)) {
                 out.push('>');
                 out.push_str(&xml_escape(&children[0].to_display_string(), false));
+                out.push_str(&format!("</{}>", name));
+            } else if children.iter().any(|c| matches!(c, Value::Str(_))) {
+                // mixed content (`<p>Hello <b>world</b>!</p>`): whitespace there is text,
+                // so the element is written as it is, without indentation (F02)
+                out.push('>');
+                for c in &children {
+                    xml_node(c, false, 0, out)?;
+                }
                 out.push_str(&format!("</{}>", name));
             } else {
                 out.push('>');

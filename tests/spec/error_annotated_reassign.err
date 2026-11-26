@@ -1,0 +1,1 @@
+type mismatch: variable 'a' is declared as list<int>, got str

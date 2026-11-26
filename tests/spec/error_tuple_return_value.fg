@@ -1,0 +1,3 @@
+// A tuple return that does not fit names the value that does not (B18, 0.8.4).
+fn f(): (int, str) { return 1, 2 }
+print(f())

@@ -1,0 +1,17 @@
+B09 3 4 7
+B03 7.0 float 1.0 float 3.0
+L20 6 0
+L19 15 63 31 5
+§20 x y ` z w
+F03 a,b|c
+F02 <?xml version="1.0" encoding="UTF-8"?>
+<p>Hello <b>world</b>!</p>
+§21 error: json.parse: invalid JSON at line 3, column 8: 'x'
+F13 hi 2 [hi]
+B28 / / true false
+S19 100000 error: zip.gunzip: the data expands beyond maxSize (1000 bytes)
+S13 true true true true false
+S09 text/html; charset=utf-8 nosniff
+S16 DENY strict-origin-when-cross-origin same-origin default-src 'self' max-age=31536000; includeSubDomains
+RA03 200 file body 9
+§6 1

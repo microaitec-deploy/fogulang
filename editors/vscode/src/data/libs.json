@@ -496,7 +496,7 @@
   },
   {
    "name": "desktop",
-   "version": "0.6.1",
+   "version": "0.7.0",
    "summary": "Desktop (and mobile) applications in Fogu: a Rust + Tauri window whose backend is a Fogu program, a plain or Vite (React, Vue, Svelte) UI with HMR, tray icons, window control, frameless windows, and a build command that makes the executable (or an Android/iOS package)",
    "modules": [
     {
@@ -2152,7 +2152,7 @@
   },
   {
    "name": "hardware",
-   "version": "0.1.0",
+   "version": "0.2.0",
    "summary": "Serial ports, Modbus (TCP/RTU, client and server), raw USB and HDMI-CEC for Fogu (native core through fogu:ffi)",
    "modules": [
     {
@@ -2204,8 +2204,20 @@
       {
        "name": "toFloat",
        "signature": "modbus.toFloat(regs, { swap })",
-       "doc": "32-bit values over two registers, big-endian words (`swap: true` for little-endian word order); pure Fogu",
+       "doc": "32-bit values over two registers, big-endian words (`swap: true` for little-endian word order); pure Fogu; `fromFloat`/`fromInt32` give a `list<u16>`",
        "kind": "function"
+      },
+      {
+       "name": "fromFloat",
+       "signature": "modbus.fromFloat",
+       "doc": "`list<u16>` — 48 → 4 bytes per pair — setpoint and sample tables of many pairs",
+       "kind": "property"
+      },
+      {
+       "name": "fromInt32",
+       "signature": "modbus.fromInt32",
+       "doc": "`list<u16>` — 48 → 4 bytes per pair — setpoint and sample tables of many pairs",
+       "kind": "property"
       }
      ]
     },
@@ -2258,7 +2270,13 @@
       {
        "name": "readHolding",
        "signature": "hardware.readHolding(0, 10)",
-       "doc": "115 — 227 — 180",
+       "doc": "115 — 227 — 180\n\n33.1 MB · 1.23 s — 18.8 MB · 0.93 s\n\n17.1 MB · 3.88 s — 16.8 MB · 3.84 s",
+       "kind": "function"
+      },
+      {
+       "name": "readCoils",
+       "signature": "hardware.readCoils(0, 2000)",
+       "doc": "68.3 MB · 1.83 s — 20.1 MB · 0.47 s",
        "kind": "function"
       },
       {
@@ -2338,13 +2356,13 @@
      {
       "name": "readCoils",
       "signature": "c.readCoils(addr, n)",
-      "doc": "list of bool · error",
+      "doc": "list of bool (a compact `list<bool>`, see [Memory](#memory)) · error\n\n`list<bool>` — 24 → 1 byte — up to 2000 coils per read, 65536 per table",
       "kind": "function"
      },
      {
       "name": "readHolding",
       "signature": "c.readHolding(addr, n)",
-      "doc": "list of int · error\n\nprints `[nil, error: …]`; destructure (`const [v, err] = …`) or use `?` — a Fogu function returns `nil, error` as two values",
+      "doc": "list of int 0..65535 (a compact `list<u16>`) · error\n\n`list<u16>` — 24 → 2 bytes — up to 125 registers per read, 65536 per table; poll histories and table snapshots\n\nprints `[nil, error: …]`; destructure (`const [v, err] = …`) or use `?` — a Fogu function returns `nil, error` as two values",
       "kind": "function"
      },
      {
@@ -2357,6 +2375,18 @@
       "name": "close",
       "signature": "c.close()",
       "kind": "function"
+     },
+     {
+      "name": "readInputs",
+      "signature": "c.readInputs",
+      "doc": "`list<u16>` — 24 → 2 bytes — up to 125 registers per read, 65536 per table; poll histories and table snapshots",
+      "kind": "property"
+     },
+     {
+      "name": "readDiscrete",
+      "signature": "c.readDiscrete",
+      "doc": "`list<bool>` — 24 → 1 byte — up to 2000 coils per read, 65536 per table",
+      "kind": "property"
      }
     ],
     "srv": [
@@ -2373,12 +2403,13 @@
      {
       "name": "setHolding",
       "signature": "srv.setHolding(addr, values)",
+      "doc": "`get*`: `list<u16>` (registers) or `list<bool>` (coils, discrete)",
       "kind": "function"
      },
      {
       "name": "changes",
       "signature": "srv.changes()",
-      "doc": "`[{ table, address, values }]` — the writes clients made since the last call",
+      "doc": "`[{ table, address, values }]` — the writes clients made since the last call (`values`: `list<u16>` or `list<bool>`)\n\n`list<u16>` / `list<bool>` — 24 → 2 / 1 bytes — up to 123 registers or 1968 coils per write; change logs",
       "kind": "function"
      },
      {
@@ -2386,6 +2417,30 @@
       "signature": "srv.close()",
       "doc": "after `close()` they return the error value `modbus: the server is closed` — `close()` releases the handle",
       "kind": "function"
+     },
+     {
+      "name": "getHolding",
+      "signature": "srv.getHolding(0, 10000)",
+      "doc": "`list<u16>` — 24 → 2 bytes — up to 125 registers per read, 65536 per table; poll histories and table snapshots\n\n104.6 MB · 1.95 s — 38.0 MB · 0.36 s",
+      "kind": "function"
+     },
+     {
+      "name": "getInputs",
+      "signature": "srv.getInputs",
+      "doc": "`list<u16>` — 24 → 2 bytes — up to 125 registers per read, 65536 per table; poll histories and table snapshots",
+      "kind": "property"
+     },
+     {
+      "name": "getCoils",
+      "signature": "srv.getCoils",
+      "doc": "`list<bool>` — 24 → 1 byte — up to 2000 coils per read, 65536 per table",
+      "kind": "property"
+     },
+     {
+      "name": "getDiscrete",
+      "signature": "srv.getDiscrete",
+      "doc": "`list<bool>` — 24 → 1 byte — up to 2000 coils per read, 65536 per table",
+      "kind": "property"
      }
     ],
     "dev": [
@@ -2505,7 +2560,7 @@
   },
   {
    "name": "mcu",
-   "version": "0.8.0",
+   "version": "0.9.0",
    "summary": "Write microcontroller firmware in a subset of Fogu: STM32 (NUCLEO, Blue/Black Pill), Raspberry Pi Pico, Arduino Uno/Nano, ESP32-C3, ESP32 and the ESP32-2432S028 'Cheap Yellow Display', with GPIO, PWM, ADC, I2C, SPI, strings, pin/timer/serial events (also inside the interrupt), pin gestures (change, click, double click, with or without an interrupt), bit operators and sized numbers, a TFT display with touch, a second UART with RS-485, SPI devices with chip selects, preemptive tasks with priorities, interrupts, deep sleep and watchdogs, USB HID, RFID, LoRa, Zigbee, 38 driver modules for common sensors, displays, motors and radios (written in Fogu, tested against simulated devices), and on the ESP boards Wi-Fi (TCP, UDP, HTTP, WebSocket, MQTT), ESP-NOW and BLE beacons. An Mbed OS 6 backend (fogu mcu mbed) writes a C++ project for the Mbed Enabled boards. Compiles via no_std Rust and flashes through the ST-Link drive, the STM32 serial bootloader, the Pico UF2 drive, the Arduino bootloader (STK500v1) or the ESP ROM bootloader",
    "modules": [
     {
@@ -4868,13 +4923,38 @@
   },
   {
    "name": "robotics",
-   "version": "0.1.0",
+   "version": "0.2.0",
    "summary": "Robotics and embedded toolkit for Fogu: bus abstractions, sensor and display drivers, filters, control, motion and protocol codecs.",
    "modules": [
     {
      "spec": "robotics",
      "alias": "robotics",
-     "members": []
+     "members": [
+      {
+       "name": "MovingAverage",
+       "signature": "robotics.MovingAverage(500000)",
+       "doc": "37.1 -> 26.9 MB — 2.63 -> 2.40 s",
+       "kind": "function"
+      },
+      {
+       "name": "RegisterDevice",
+       "signature": "robotics.RegisterDevice(1000000)",
+       "doc": "72.6 -> 45.2 MB — 1.89 -> 1.68 s",
+       "kind": "function"
+      },
+      {
+       "name": "Strip",
+       "signature": "robotics.Strip(150000)",
+       "doc": "48.8 -> 44.5 MB — 1.60 -> 1.60 s",
+       "kind": "function"
+      },
+      {
+       "name": "Fft",
+       "signature": "robotics.Fft(32768)",
+       "doc": "27.5 -> 26.0 MB — 1.43 -> 1.39 s",
+       "kind": "function"
+      }
+     ]
     }
    ],
    "objects": {

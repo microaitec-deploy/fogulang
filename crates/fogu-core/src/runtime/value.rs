@@ -157,6 +157,9 @@ pub struct ChanValue {
     /// Some task may be parked on this channel: without, a send or a receive
     /// skips the waiter lists altogether.
     pub parked: Cell<bool>,
+    /// The type of its values when declared `chan<int>` / `chan<str>`… (0: any).
+    /// See [`ChanValue::elem_code`].
+    pub elem: Cell<u8>,
 }
 
 /// The `fg` tasks parked on one side of a channel, each behind its gate: a
@@ -218,7 +221,38 @@ impl ChanValue {
             send_waiters: Waiters::default(),
             taken_waiters: RefCell::new(VecDeque::new()),
             parked: Cell::new(false),
+            elem: Cell::new(0),
         }
+    }
+
+    /// The code of a built-in type a channel may be declared to carry (0: none of them).
+    pub fn elem_code(name: &str) -> u8 {
+        match name {
+            "int" => 1,
+            "float" | "float64" | "f64" => 2,
+            "str" | "string" => 3,
+            "bool" => 4,
+            "list" => 5,
+            "map" => 6,
+            _ => 0,
+        }
+    }
+
+    /// Does `v` fit a channel declared with the type `code` (a float one takes ints)?
+    pub fn elem_fits(code: u8, v: &Value) -> bool {
+        match code {
+            1 => matches!(v, Value::Int(_)),
+            2 => matches!(v, Value::Float(_) | Value::Int(_)),
+            3 => matches!(v, Value::Str(_)),
+            4 => matches!(v, Value::Bool(_)),
+            5 => matches!(v, Value::List(_) | Value::Array(_)),
+            6 => matches!(v, Value::Map(_)),
+            _ => true,
+        }
+    }
+
+    pub fn elem_name(code: u8) -> &'static str {
+        ["any", "int", "float", "str", "bool", "list", "map"].get(code as usize).copied().unwrap_or("any")
     }
 
     /// A task is about to park on this channel (its gate is in one of the lists).

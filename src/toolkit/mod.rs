@@ -48,7 +48,7 @@ fn help() -> String {
   pm <path|ls|cache|hash> utilities for the global package store
   check [paths] [--json]  static checks without running (--strict, --watch; see check --help)
   build --compile [file]  build a standalone executable in dist/ (--target linux-arm64,windows-x64,…|all; --targets)
-  test [paths] [-t text]  run the tests of *.test.fg files
+  test [paths] [-t text] [--timeout 30s]  run the tests of *.test.fg files
   fmt [paths] [--check]   format .fg files (- for stdin)
   disasm <file.fg>        print the bytecode of the file's functions and methods
   play <playbook.yml>     run a playbook (-i inventory, --check, -l, -t, -e)
@@ -590,7 +590,13 @@ fn disasm(args: &[String]) -> i32 {
         .and_then(|tokens| crate::runtime::Parser::new(tokens).parse_program());
     match program {
         Ok(program) => {
-            print!("{}", crate::runtime::vm::disasm_program(&program));
+            let text = crate::runtime::vm::disasm_program(&program);
+            if text.trim().is_empty() {
+                // (only top-level code: the VM compiles functions and methods)
+                println!("; {}: no functions or methods to disassemble (top-level code runs on the tree-walker)", path);
+            } else {
+                print!("{}", text);
+            }
             0
         }
         Err(e) => {

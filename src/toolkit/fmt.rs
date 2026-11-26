@@ -297,6 +297,8 @@ pub fn format_source(src: &str) -> String {
     let mut open: Vec<usize> = Vec::new();
     let mut blank_run = 0;
     let mut wrote_any = false;
+    // the previous line ended with a binary operator
+    let mut pending = false;
     for line in &lines {
         if line.is_empty() {
             blank_run += 1;
@@ -314,8 +316,15 @@ pub fn format_source(src: &str) -> String {
         } else {
             open.last().map_or(0, |level| level + 1)
         };
-        let continuation = line[0].kind == Kind::Op && matches!(line[0].text.as_str(), "." | "?.");
+        // the rest of an expression goes one level in: a line that starts with `.` or a
+        // binary operator (a leading `-` is a new statement: unary), or follows a line
+        // that ends with one
+        let leads = line[0].kind == Kind::Op && (matches!(line[0].text.as_str(), "." | "?." | "+") || BINARY.contains(&line[0].text.as_str()));
+        let continuation = leads || std::mem::take(&mut pending);
         let indent = base + usize::from(continuation);
+        pending = line.iter().rev().find(|p| p.kind != Kind::Comment).is_some_and(|last| {
+            last.kind == Kind::Op && (matches!(last.text.as_str(), "+" | "-") || BINARY.contains(&last.text.as_str()))
+        });
         if wrote_any && blank_run > 0 {
             out.push('\n');
         }
@@ -327,6 +336,9 @@ pub fn format_source(src: &str) -> String {
                 // a trailing comment keeps its alignment (at least one space)
                 out.push_str(&" ".repeat(p.gap.max(1)));
             } else if i > 0 && spaced(&line[i - 1], p, if i > 1 { Some(&line[i - 2]) } else { None }) {
+                out.push(' ');
+            } else if i == 1 && line[0].kind == Kind::Op && line[0].text == "+" && p.kind != Kind::Op {
+                // a `+` that starts a line continues the one before: binary, never a sign
                 out.push(' ');
             }
             out.push_str(&p.text);
@@ -553,6 +565,17 @@ mod tests {
         assert_eq!(f("const e = {}\nconst n = -1\nconst d = a - -b\n"), "const e = {}\nconst n = -1\nconst d = a - -b\n");
         assert_eq!(f("const r = f(x)?.y ?? 0\nfor i in 0..10 { g(i) }\n"), "const r = f(x)?.y ?? 0\nfor i in 0..10 { g(i) }\n");
         assert_eq!(f("const g = (a, b) => a+b\nconst h = fn(x) { return !x }\n"), "const g = (a, b) => a + b\nconst h = fn(x) { return !x }\n");
+    }
+
+    #[test]
+    fn continuation_lines_are_indented() {
+        let src = "const total = 1 +\n    2 +\n    3\n\nfn compute(a, b) {\n    let result = a\n        + b\n        * 2\n    return result\n}\n";
+        let want = "const total = 1 +\n    2 +\n    3\n\nfn compute(a, b) {\n    let result = a\n        + b\n        * 2\n    return result\n}\n";
+        assert_eq!(format_source(src), want);
+        // idempotent, and a leading `-` is a statement of its own
+        assert_eq!(format_source(want), want);
+        assert_eq!(format_source("let x = 1\n-2\n"), "let x = 1\n-2\n");
+        assert_eq!(format_source("let ok = a &&\nb\nprint(ok)\n"), "let ok = a &&\n    b\nprint(ok)\n");
     }
 
     #[test]

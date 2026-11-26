@@ -1,2 +1,2 @@
-_data/bad.json: line 3:8: invalid JSON
+_data/bad.json: invalid JSON at line 3, column 8
 error_import_bad_json.fg:2

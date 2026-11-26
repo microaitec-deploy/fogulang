@@ -90,7 +90,7 @@ Integrations [`fogu:mail`](#fogumail) [`fogu:ai`](#foguai) [`fogu:ssh`](#fogussh
 
 ### Conventions
 
-**Errors are values.** Operational failures — a missing file, a refused connection, a server error, malformed input — come back as an `error` value: handle them with `?` (propagate) or `const [value, err] = f()`. Programming mistakes — a wrong argument type, an unknown option — stop the program with a message. **Options** are passed as a last map argument: `f(x, { timeout: 5s })`. **Durations** accept a duration literal (`500ms`, `2s`, `1h`) or an int number of milliseconds. Network operations wait cooperatively: other `fg` tasks keep running while one waits.
+**Errors are values.** Operational failures — a missing file, a refused connection, a server error, malformed input — come back as an `error` value: handle them with `?` (propagate) or `const [value, err] = f()`. Programming mistakes — a wrong argument type, an unknown option — stop the program with a message. **Options** are passed as a last map argument: `f(x, { timeout: 5s })`. **Durations** accept a duration literal (`500ms`, `2s`, `1h`) or an int number of milliseconds; a duration has the fields `ns us ms` (int) and `seconds minutes hours` (float). Network operations wait cooperatively: other `fg` tasks keep running while one waits.
 
 ```fogu
 import json from "fogu:json"
@@ -189,7 +189,7 @@ template: 2 items
 
 ### list
 
-- `l.push(x) · l.pop()` → nil · value — Add to / remove from the end.
+- `l.push(x...) · l.pop()` → list · value — Add to / remove from the end. `push` returns the list itself (chainable: `xs.push(1).push(2)`).
 - `l.unshift(x) · l.shift()` → nil · value — Add to / remove from the start.
 - `l.insert(i, x) · l.remove(i)` → nil · value — At an index.
 - `l.first() · l.last()` → value — `nil` when empty.
@@ -225,7 +225,7 @@ output:
 - `m.keys() · m.values() · m.entries()` → list — Entries are `[key, value]` pairs.
 - `m.has(key)` → bool
 - `m.get(key, default?)` → value — The value, or `default` (nil).
-- `m.set(key, value) · m[key] = value` → nil
+- `m.set(key, value) · m[key] = value` → map — `set` returns the map itself (chainable).
 - `m.remove(key)` → value — Removes and returns the value.
 - `m.merge(other)` → map — A new map; `other` wins on equal keys.
 - `m.len() · m.clear()` → int · nil
@@ -443,7 +443,7 @@ import json from "fogu:json"
 ```
 
 - `json.parse(text)` → value · error — JSON text → maps, lists, str, int, float, bool, nil. Invalid JSON is an error value.
-- `json.stringify(value)` → str — Compact JSON (map keys in order).
+- `json.stringify(value, { strict })` → str · error — Compact JSON (map keys in order). NaN and infinity are written `null` and a value JSON has no form for as its type name; with `strict: true` they are an error instead.
 
 ```fogu
 import json from "fogu:json"
@@ -623,7 +623,7 @@ Files and folders. Failures (missing file, permission) are error values.
 - `fs.removeAll(path)` → nil · error — A folder and everything inside.
 - `fs.glob(pattern)` → list — Paths matching `*`, `?`, `**`, sorted.
 - `fs.cwd() · fs.tempDir()` → str — Working folder · system temp folder.
-- `fs.createReadStream(path, { start, end, lines, bufferSize })` → ReadStream · error — The file read a piece at a time, in constant memory. `end` is inclusive; `lines: true` makes `for` give lines (str) instead of buffers.
+- `fs.createReadStream(path, { start, end, lines, bufferSize, root })` → ReadStream · error — The file read a piece at a time, in constant memory. With `root` the path is a name from outside the program, kept under that folder (as `web.file`). `end` is inclusive; `lines: true` makes `for` give lines (str) instead of buffers.
 - `r.read(n = 64 KiB) · r.readLine() · r.readAll() · r.readText()` → buffer · str · nil · error — `nil` at the end. Reads that would wait run off the interpreter thread: other `fg` tasks keep going.
 - `for chunk in r` — Every chunk (or line) until the end. An error ends the loop and stays in `r.error`.
 - `r.pipe(w)` → int · error — Copies the rest into a `WriteStream` or a `web.stream()` response, off the interpreter thread (the bytes never become values); returns the bytes copied.
@@ -695,7 +695,10 @@ import path from "fogu:path"
 - `path.join(...parts)` → str — Joined with `/` and normalized.
 - `path.dirname(p) · path.basename(p)` → str — Folder · last component.
 - `path.stem(p) · path.extname(p)` → str — Name without extension · extension with the dot.
-- `path.normalize(p)` → str — Resolves `.` and `..`.
+- `path.normalize(p)` → str — Resolves `.` and `..` by name only: the result may start with `..` — neither it nor `join` keeps a path inside a folder.
+- `path.safeJoin(base, name)` → str · error — The path of a name that comes from outside the program under `base`: an error when it has `..`, a drive letter, or leaves the folder through a symbolic link.
+- `path.isInside(base, p)` → bool — Is `p` the folder `base` or under it, with `..` and symbolic links resolved?
+- `path.real(p) · fs.realpath(p)` → str · error — The absolute path with every symbolic link resolved (the file must exist).
 - `path.isAbsolute(p)` → bool
 - `path.absolute(p)` → str — Absolute path from the working folder.
 - `path.sep` → str — The system separator.
@@ -897,11 +900,12 @@ import stream from "fogu:stream"
 Streams of values: a sequence consumed a value at a time, finite or infinite. Streams are **pulled**: the operators work when the consumer asks for the next value, so a chain holds one value per stage and the consumer sets the pace (backpressure). The only buffer is the one of `stream.create`, where tasks push values. Design: `docs/architecture/value-streams.md`.
 
 - `stream.create({ buffer = 16 })` → Stream — Written by tasks, read by a consumer: `s.write(v)` → nil · error waits while `buffer` values are unread; `s.close()` ends it after the values written; `s.fail(err)` ends it with an error.
-- `stream.from(list | range | str | chan | readable | stream) · stream.of(...values)` → Stream — A readable of `fs` / `http` gives its chunks (or lines).
+- `stream.from(list | range | str | chan | readable | WebSocket | stream) · stream.of(...values)` → Stream — A readable of `fs` / `http` gives its chunks (or lines); a [WebSocket](#foguwebsocket) its messages until it closes; a chan its values until it is closed.
 - `stream.range(start, end?, step = 1) · stream.generate(fn(i)) · stream.interval(d)` → Stream — No `end`: infinite · `fn(0), fn(1)…` until it returns `nil` · 0, 1, 2… one every `d`.
 - `s.map(fn) · s.filter(fn) · s.take(n) · s.skip(n) · s.takeWhile(fn) · s.chunk(n) · s.tap(fn) · s.enumerate()` → Stream — A new stream; nothing runs yet. `chunk`: lists of `n`; `enumerate`: `(index, value)`.
 - `for v in s · s.next()` → value · nil · error — One value at a time; `nil` at the end. An error ends a `for` and stays in `s.error`.
 - `s.toList() · s.count() · s.reduce(fn, init) · s.forEach(fn) · s.first() · s.find(fn)` → value · error — Consume the stream; an error it ended with is their error.
+- `s.pipe(dest, { end = true })` → int · error — Every value into `dest`: a chan (`ch <- v`, waiting when it is full), a WebSocket (`send`) or a writable stream (`write`); then `dest` is closed, unless `end: false`. Returns how many values went; an error of `dest` ends the stream with it.
 - `s.cancel()` → nil — Stops the stream and everything upstream: a writer gets an error value, a file is closed. `take`, `takeWhile`, `first` and `find` cancel upstream once they are done.
 - `s.done · s.cancelled · s.error · s.buffered`
 
@@ -1756,7 +1760,7 @@ A minimal HTTP server (one handler for every request) and an HTTP client. For ro
 
 ### Server
 
-- `http.serve(port | "ip:port", fn(req), { tls: { cert, key }, quiet, reusePort, maxBody, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout }?)` → nil — `tls` serves HTTPS (see [fogu:tls](#fogutls)). `reusePort: true` lets several servers share the port: one per `sync.Worker` serves on several cores (the kernel spreads the connections). On Linux a plain HTTP server runs on the interpreter's own thread, one `fg` task per connection. The handler returns a response (`http.text/json/html`), a str (text), any other value (JSON), nil (404) or an `error` (logged; the client gets a 500). Limits (defaults): `maxBody` (10 MB, 413), `maxHeaderBytes` (64 KB for the request line and headers, 431), `headerTimeout` (30s to send the headers; also closes idle keep-alive connections), `readTimeout` (60s for the body, 408), `handlerTimeout` (60s for the program's answer, 504; `0` = none). The request path is made canonical once, before static files, middlewares and routes see it: decoded once (`+` stays `+`), repeated slashes collapsed, `.`/`..` resolved; an encoded `/` or `\`, a raw `\`, a control character or a `..` above the root is a 400. A Rust panic in a handler answers that request with a 500 and the server goes on. Several servers may run in one program. Requests are answered as soon as they arrive while the program is alive — waiting in `Fogu.signal.wait()`, `time.delay`, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or `"0.0.0.0:8080"`, `"[::1]:8080"`, `":8080"`.
+- `http.serve(port | "ip:port", fn(req), { tls: { cert, key }, quiet, reusePort, maxBody, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout }?)` → nil — `tls` serves HTTPS (see [fogu:tls](#fogutls)). `reusePort: true` lets several servers share the port: one per `sync.Worker` serves on several cores (the kernel spreads the connections). On Linux a plain HTTP server runs on the interpreter's own thread, one `fg` task per connection. The handler returns a response (`http.text/json/html`), a str (text), any other value (JSON), nil (404) or an `error` (logged; the client gets a 500). Limits (defaults): `maxBody` (10 MB, 413), `maxHeaderBytes` (64 KB for the request line and headers, 431), `headerTimeout` (30s to send the headers; also closes idle keep-alive connections), `readTimeout` (60s for the body, 408), `handlerTimeout` (60s for the program's answer, 504; `0` = none). The request path is made canonical once, before static files, middlewares and routes see it: decoded once (`+` stays `+`), repeated slashes collapsed, `.`/`..` resolved; an encoded `/` or `\`, a raw `\`, a control character or a `..` above the root is a 400. A Rust panic in a handler answers that request with a 500 and the server goes on. Several servers may run in one program. Requests are answered as soon as they arrive while the program is alive — waiting in `Fogu.signal.wait()`, `time.delay`, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or `"0.0.0.0:8080"`, `"[::1]:8080"`, `":8080"`. `maxBody` (10 MB, 413 beyond it) and `maxHeaderBytes` are a number of bytes or a size written out: `"512kb"`, `"10mb"`, `"1gb"`.
 - `req.method · req.path · req.query · req.headers · req.body` — `query` is the raw query string.
 - `req.header(name) · req.json() · req.form() · req.bytes()` — `form()`: urlencoded and multipart bodies.
 - `http.text(body, opts?) · http.json(value, opts?) · http.html(body, opts?)` → Response — `opts: { status, headers }`.
@@ -1849,7 +1853,7 @@ A web framework: routes with parameters, middleware, static files and SPA builds
 - `app.static(dir) · app.static(prefix, dir, { spa, index, maxAge, dotfiles })` → App — Files served by the server thread: ETag/304, `Cache-Control`; a file under the prefix of an `app.use` middleware is served only after the middlewares let the request through; `spa: true` serves `index.html` for unknown HTML routes (React, Vue, Svelte builds).
 - `app.ws(path, ...middlewares, (ws, ctx) => …, { protocols })` → App — WebSocket routes; the handler runs in its own task with a [WebSocket](#foguwebsocket) on the upgraded HTTP connection.
 - `app.set(key, value) · app.store` → App · map — Shared state (`ctx.store`).
-- `app.listen(port | "ip:port", { host = "127.0.0.1", maxBody = 10 MB, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout, quiet, reusePort, tls: { cert, key } })` → nil · error — Limits, `reusePort` and the canonical path as in `http.serve`; an unknown option stops the program. `tls` serves HTTPS: PEM text or file paths (`tls.selfSigned(["localhost"])` for development; options as `tls.listen`). `app.listen("0.0.0.0:3000")` (or `host: "0.0.0.0"`) accepts other machines; IPv6 as `"[::1]:3000"`. A host in the string wins over `host`.
+- `app.listen(port | "ip:port", { host = "127.0.0.1", maxBody = "10mb", maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout, quiet, reusePort, tls: { cert, key } })` → nil · error — Limits, `reusePort` and the canonical path as in `http.serve`; an unknown option stops the program. `tls` serves HTTPS: PEM text or file paths (`tls.selfSigned(["localhost"])` for development; options as `tls.listen`). `app.listen("0.0.0.0:3000")` (or `host: "0.0.0.0"`) accepts other machines; IPv6 as `"[::1]:3000"`. A host in the string wins over `host`.
 - `app.handler()` → fn — Calls the app without a network (tests): `h({ method, path, headers, body })` → Response.
 - `app.routes()` → list
 
@@ -1862,12 +1866,12 @@ A web framework: routes with parameters, middleware, static files and SPA builds
 - `handler result` — A str (text or HTML), any value (JSON), a response, or nil (204).
 - `web.json/text/html(body, { status, headers })` → Response
 - `web.redirect(url, status = 302)` → Response
-- `web.file(path, { download, contentType, status })` → Response · error — Sent by the server thread, a chunk at a time (binary safe; a large file does not have to fit in memory). `download: true` uses the file's name, `download: "name"` another (non-ASCII names as RFC 6266 `filename*`).
+- `web.file(path, { root, dotfiles, download, contentType, status })` → Response · error — Sent by the server thread, a chunk at a time (binary safe; a large file does not have to fit in memory). A path with `..` is refused. A name that comes from the request (a query, a header, a body) goes with `root`: `web.file(ctx.query.f, { root: "www" })` never leaves that folder (`..`, drive letters and symbolic links out of it are an error; dotfiles are hidden unless `dotfiles: true`). Answers `Range` requests (206, `Accept-Ranges`, `ETag`, `Last-Modified`): downloads resume and media can seek. `download: true` uses the file's name, `download: "name"` another (non-ASCII names as RFC 6266 `filename*`).
 - `web.stream({ status, headers, contentType, highWaterMark })` → ResponseStream — Return it from the handler and write the body a piece at a time from a task: `s.write(data)` · `s.writeLine(data)` → bytes · error, `s.end(data?)` / `s.close()`. Backpressure: `write` waits while more than `highWaterMark` bytes (1 MiB) are queued for a slow client. A readable (`fs.createReadStream`, `http.stream`) returned from a handler, or `pipe`d into the stream, is sent the same way.
 - `web.sse({ retry, headers })` → SseStream — Return it from the handler; `send(data, { event, id })`, `comment(text)`, `close()`, field `open`.
-- `web.cors({ origin, methods, headers, credentials, maxAge })` → middleware — Answers preflight requests, also as a route's own middleware. With `credentials: true` and `origin: "*"` the request's origin is echoed (browsers refuse `*` with credentials).
+- `web.cors({ origin, methods, headers, credentials, maxAge })` → middleware — Answers preflight requests, also as a route's own middleware. `credentials: true` needs the origins listed (`origin: ["https://app.example"]`): with `*` the program stops when the middleware is made, and an origin that is not on the list gets no CORS header.
 - `web.logger()` → middleware — `GET /path 200 0.4ms`.
-- `UploadedFile: filename, contentType, size, text(), bytes(), json(), save(path)` — `save("uploads/")` keeps a sanitized file name.
+- `UploadedFile: filename, contentType, size, text(), bytes(), json(), save(path)` — `save("uploads/")` keeps a sanitized file name (no folders, no leading dot, no trailing dot or space, no Windows device name). A path written out (`save("uploads/" + name)`) is the program's own: it is refused when it has a `..`, but its name is not sanitized — never build it from `filename`.
 
 ```fogu
 import web from "fogu:web"
@@ -2238,12 +2242,15 @@ true TLSv1.3 true C=US, O=SSL Corporation, CN=Cloudflare TLS Issuing ECC CA 3\n[
 import websocket from "fogu:websocket"
 ```
 
-WebSocket client (`ws://`, `wss://`) and a standalone server. The same connection object is used by `app.ws` in `fogu:web`. Each connection runs on the shared runtime (no thread per connection): `next` and `accept` wait cooperatively and wake up when a message or a client arrives.
+WebSocket client (`ws://`, `wss://`) and a standalone server; `fogu:ws` is the short name of the same module. The same connection object is used by `app.ws` in `fogu:web` and by `ws.upgrade` in an `http.serve` handler. Each connection runs on the shared runtime (no thread per connection): `next` and `accept` wait cooperatively and wake up when a message or a client arrives. A connection is a stream of its messages: `for m in ws`, `stream.from(ws)`, and `s.pipe(ws)` sends a [stream](#fogustream) or a channel into it.
 
+- `import ws from "fogu:ws"` — The short name of this module: the same functions and connections (`ws.connect`, `ws.listen`, `ws.upgrade`).
 - `websocket.connect(url, { headers, protocols, timeout })` → WebSocket · error — A rejected handshake (401, 404…) is an error value.
 - `websocket.listen(port, { host })` → Server · error — `port 0` picks a free port; `server.accept(timeout?)` → WebSocket, fields `port url`.
 - `ws.send(data)` → nil · error — str → text frame, [buffer](#values) or list of bytes → binary frame, other values → JSON text.
 - `ws.next(timeout?)` → Message · nil — `{ type: "text" | "binary", data, text, bytes, size, json() }`: `data` is a str for text frames and a buffer for binary ones, `text` always a str, `bytes` always a buffer. nil on timeout or when closed.
+- `for m in ws · for conn in server` — Every message until the connection closes (a network error ends the loop and stays in `ws.error`) · every client, as `accept()`.
+- `websocket.upgrade(req, (ws, req) => …, { protocols })` → response · error — In an [http.serve](#foguhttp) handler: return it to answer a request with `req.upgrade` (101); the function runs in its own task with the connection. `protocols`: the subprotocols accepted (default: the first the client offers). An error value when the request does not ask for a WebSocket.
 - `ws.tryNext() · ws.ping() · ws.close(code = 1000, reason)` — `tryNext`: a queued message or nil, without waiting.
 - `ws.open · ws.closeCode · ws.closeReason · ws.path · ws.url · ws.headers · ws.protocol · ws.pending · ws.error` — `pending`: messages queued; `error`: why the connection failed, or nil.
 
@@ -2279,6 +2286,41 @@ output:
 echo /room?x=1: hello
 echo /room?x=1: {"kind":"json"}
 binary <buffer 3 bytes: 01 02 ff> 3 str
+```
+
+### Streams, channels and http.serve
+
+```fogu
+import ws from "fogu:ws"
+import http from "fogu:http"
+import stream from "fogu:stream"
+
+// http.serve: answer the upgrade, the handler runs in its own task
+http.serve(18471, (req) => {
+    if !req.upgrade { return http.text("a WebSocket endpoint") }
+    // each message, upper-cased, straight back: the socket is a stream
+    return ws.upgrade(req, (conn, r) => stream.from(conn).map((m) => m.data.upper()).pipe(conn))
+}, { quiet: true })?
+
+const conn = ws.connect("ws://127.0.0.1:18471/shout")?
+// a channel written by a task goes into the socket...
+const lines = chan(8)
+fg fn() {
+    for w in ["hello", "streams", "and channels"] { lines <- w }
+    close(lines)
+}()
+print("sent", stream.from(lines).pipe(conn, { end: false })?)
+// ...and the answers come out of it as a stream
+for text in stream.from(conn).map((m) => m.data).take(3) { print(text) }
+```
+
+output:
+
+```text
+sent 3
+HELLO
+STREAMS
+AND CHANNELS
 ```
 
 ## fogu:webrtc
@@ -3717,7 +3759,7 @@ error: html.render: syntax error: unexpected end of block (in <string>:1)
 - `html.sanitize(text, { tags, addTags, removeTags, attributes, stripComments })` → str — Removes scripts, event handlers and dangerous URLs.
 - `html.text(text) · el.toText()` → str — Plain text with paragraphs, bullets and tab-separated cells.
 - `html.toMarkdown(text) · el.toMarkdown()` → str — Headings, emphasis, links, images, lists, code blocks, quotes, tables.
-- `html.fromMarkdown(md)` → str — CommonMark + tables, strikethrough, task lists, footnotes.
+- `html.fromMarkdown(md, { sanitize })` → str — CommonMark + tables, strikethrough, task lists, footnotes. Markdown lets raw HTML through: pass `sanitize: true` for text that is not the program's own (` `, `onerror=`, `javascript:` links are removed).
 
 ```fogu
 import html from "fogu:html"

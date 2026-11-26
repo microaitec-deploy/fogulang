@@ -28,7 +28,7 @@ SECTIONS = [
             {
                 "h3": "Server",
                 "api": [
-                    ("http.serve(port | \"ip:port\", fn(req), { tls: { cert, key }, quiet, reusePort, maxBody, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout }?)", "nil", "<code>tls</code> serves HTTPS (see <a class=\"underline\" href=\"#mod-tls\">fogu:tls</a>). <code>reusePort: true</code> lets several servers share the port: one per <code>sync.Worker</code> serves on several cores (the kernel spreads the connections). On Linux a plain HTTP server runs on the interpreter's own thread, one <code>fg</code> task per connection. The handler returns a response (<code>http.text/json/html</code>), a str (text), any other value (JSON), nil (404) or an <code>error</code> (logged; the client gets a 500). Limits (defaults): <code>maxBody</code> (10 MB, 413), <code>maxHeaderBytes</code> (64 KB for the request line and headers, 431), <code>headerTimeout</code> (30s to send the headers; also closes idle keep-alive connections), <code>readTimeout</code> (60s for the body, 408), <code>handlerTimeout</code> (60s for the program's answer, 504; <code>0</code> = none). The request path is made canonical once, before static files, middlewares and routes see it: decoded once (<code>+</code> stays <code>+</code>), repeated slashes collapsed, <code>.</code>/<code>..</code> resolved; an encoded <code>/</code> or <code>\\</code>, a raw <code>\\</code>, a control character or a <code>..</code> above the root is a 400. A Rust panic in a handler answers that request with a 500 and the server goes on. Several servers may run in one program. Requests are answered as soon as they arrive while the program is alive — waiting in <code>Fogu.signal.wait()</code>, <code>time.delay</code>, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or <code>\"0.0.0.0:8080\"</code>, <code>\"[::1]:8080\"</code>, <code>\":8080\"</code>."),
+                    ("http.serve(port | \"ip:port\", fn(req), { tls: { cert, key }, quiet, reusePort, maxBody, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout }?)", "nil", "<code>tls</code> serves HTTPS (see <a class=\"underline\" href=\"#mod-tls\">fogu:tls</a>). <code>reusePort: true</code> lets several servers share the port: one per <code>sync.Worker</code> serves on several cores (the kernel spreads the connections). On Linux a plain HTTP server runs on the interpreter's own thread, one <code>fg</code> task per connection. The handler returns a response (<code>http.text/json/html</code>), a str (text), any other value (JSON), nil (404) or an <code>error</code> (logged; the client gets a 500). Limits (defaults): <code>maxBody</code> (10 MB, 413), <code>maxHeaderBytes</code> (64 KB for the request line and headers, 431), <code>headerTimeout</code> (30s to send the headers; also closes idle keep-alive connections), <code>readTimeout</code> (60s for the body, 408), <code>handlerTimeout</code> (60s for the program's answer, 504; <code>0</code> = none). The request path is made canonical once, before static files, middlewares and routes see it: decoded once (<code>+</code> stays <code>+</code>), repeated slashes collapsed, <code>.</code>/<code>..</code> resolved; an encoded <code>/</code> or <code>\\</code>, a raw <code>\\</code>, a control character or a <code>..</code> above the root is a 400. A Rust panic in a handler answers that request with a 500 and the server goes on. Several servers may run in one program. Requests are answered as soon as they arrive while the program is alive — waiting in <code>Fogu.signal.wait()</code>, <code>time.delay</code>, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or <code>\"0.0.0.0:8080\"</code>, <code>\"[::1]:8080\"</code>, <code>\":8080\"</code>. <code>maxBody</code> (10 MB, 413 beyond it) and <code>maxHeaderBytes</code> are a number of <b>bytes</b> or a size written out: <code>\"512kb\"</code>, <code>\"10mb\"</code>, <code>\"1gb\"</code>."),
                     ("req.method · req.path · req.query · req.headers · req.body", "", "<code>query</code> is the raw query string."),
                     ("req.header(name) · req.json() · req.form() · req.bytes()", "", "<code>form()</code>: urlencoded and multipart bodies."),
                     ("http.text(body, opts?) · http.json(value, opts?) · http.html(body, opts?)", "Response", "<code>opts: { status, headers }</code>."),
@@ -114,7 +114,7 @@ while !done { Fogu.sleep(10ms) }
                     ("app.static(dir) · app.static(prefix, dir, { spa, index, maxAge, dotfiles })", "App", "Files served by the server thread: ETag/304, <code>Cache-Control</code>; a file under the prefix of an <code>app.use</code> middleware is served only after the middlewares let the request through; <code>spa: true</code> serves <code>index.html</code> for unknown HTML routes (React, Vue, Svelte builds)."),
                     ("app.ws(path, ...middlewares, (ws, ctx) => …, { protocols })", "App", "WebSocket routes; the handler runs in its own task with a <a class=\"underline\" href=\"#mod-websocket\">WebSocket</a> on the upgraded HTTP connection."),
                     ("app.set(key, value) · app.store", "App · map", "Shared state (<code>ctx.store</code>)."),
-                    ("app.listen(port | \"ip:port\", { host = \"127.0.0.1\", maxBody = 10 MB, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout, quiet, reusePort, tls: { cert, key } })", "nil · error", "Limits, <code>reusePort</code> and the canonical path as in <code>http.serve</code>; an unknown option stops the program. <code>tls</code> serves HTTPS: PEM text or file paths (<code>tls.selfSigned([\"localhost\"])</code> for development; options as <code>tls.listen</code>). <code>app.listen(\"0.0.0.0:3000\")</code> (or <code>host: \"0.0.0.0\"</code>) accepts other machines; IPv6 as <code>\"[::1]:3000\"</code>. A host in the string wins over <code>host</code>."),
+                    ("app.listen(port | \"ip:port\", { host = \"127.0.0.1\", maxBody = \"10mb\", maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout, quiet, reusePort, tls: { cert, key } })", "nil · error", "Limits, <code>reusePort</code> and the canonical path as in <code>http.serve</code>; an unknown option stops the program. <code>tls</code> serves HTTPS: PEM text or file paths (<code>tls.selfSigned([\"localhost\"])</code> for development; options as <code>tls.listen</code>). <code>app.listen(\"0.0.0.0:3000\")</code> (or <code>host: \"0.0.0.0\"</code>) accepts other machines; IPv6 as <code>\"[::1]:3000\"</code>. A host in the string wins over <code>host</code>."),
                     ("app.handler()", "fn", "Calls the app without a network (tests): <code>h({ method, path, headers, body })</code> → Response."),
                     ("app.routes()", "list", ""),
                 ],
@@ -129,12 +129,12 @@ while !done { Fogu.sleep(10ms) }
                     ("handler result", "", "A str (text or HTML), any value (JSON), a response, or nil (204)."),
                     ("web.json/text/html(body, { status, headers })", "Response", ""),
                     ("web.redirect(url, status = 302)", "Response", ""),
-                    ("web.file(path, { download, contentType, status })", "Response · error", "Sent by the server thread, a chunk at a time (binary safe; a large file does not have to fit in memory). <code>download: true</code> uses the file's name, <code>download: \"name\"</code> another (non-ASCII names as RFC 6266 <code>filename*</code>)."),
+                    ("web.file(path, { root, dotfiles, download, contentType, status })", "Response · error", "Sent by the server thread, a chunk at a time (binary safe; a large file does not have to fit in memory). A path with <code>..</code> is refused. <b>A name that comes from the request</b> (a query, a header, a body) goes with <code>root</code>: <code>web.file(ctx.query.f, { root: \"www\" })</code> never leaves that folder (<code>..</code>, drive letters and symbolic links out of it are an error; dotfiles are hidden unless <code>dotfiles: true</code>). Answers <code>Range</code> requests (206, <code>Accept-Ranges</code>, <code>ETag</code>, <code>Last-Modified</code>): downloads resume and media can seek. <code>download: true</code> uses the file's name, <code>download: \"name\"</code> another (non-ASCII names as RFC 6266 <code>filename*</code>)."),
                     ("web.stream({ status, headers, contentType, highWaterMark })", "ResponseStream", "Return it from the handler and write the body a piece at a time from a task: <code>s.write(data)</code> · <code>s.writeLine(data)</code> → bytes · error, <code>s.end(data?)</code> / <code>s.close()</code>. Backpressure: <code>write</code> waits while more than <code>highWaterMark</code> bytes (1 MiB) are queued for a slow client. A readable (<code>fs.createReadStream</code>, <code>http.stream</code>) returned from a handler, or <code>pipe</code>d into the stream, is sent the same way."),
                     ("web.sse({ retry, headers })", "SseStream", "Return it from the handler; <code>send(data, { event, id })</code>, <code>comment(text)</code>, <code>close()</code>, field <code>open</code>."),
-                    ("web.cors({ origin, methods, headers, credentials, maxAge })", "middleware", "Answers preflight requests, also as a route's own middleware. With <code>credentials: true</code> and <code>origin: \"*\"</code> the request's origin is echoed (browsers refuse <code>*</code> with credentials)."),
+                    ("web.cors({ origin, methods, headers, credentials, maxAge })", "middleware", "Answers preflight requests, also as a route's own middleware. <code>credentials: true</code> needs the origins listed (<code>origin: [\"https://app.example\"]</code>): with <code>*</code> the program stops when the middleware is made, and an origin that is not on the list gets no CORS header."),
                     ("web.logger()", "middleware", "<code>GET /path 200 0.4ms</code>."),
-                    ("UploadedFile: filename, contentType, size, text(), bytes(), json(), save(path)", "", "<code>save(\"uploads/\")</code> keeps a sanitized file name."),
+                    ("UploadedFile: filename, contentType, size, text(), bytes(), json(), save(path)", "", "<code>save(\"uploads/\")</code> keeps a sanitized file name (no folders, no leading dot, no trailing dot or space, no Windows device name). A path written out (<code>save(\"uploads/\" + name)</code>) is the program's own: it is refused when it has a <code>..</code>, but its name is not sanitized — never build it from <code>filename</code>."),
                 ],
                 "example": r'''
 import web from "fogu:web"
@@ -492,17 +492,23 @@ print(h.grade, h.missing.map(fn(m) { return m.header }))
         "group": W,
         "title": "fogu:websocket",
         "import": 'import websocket from "fogu:websocket"',
-        "intro": "WebSocket client (<code>ws://</code>, <code>wss://</code>) and a standalone server. The same "
-        "connection object is used by <code>app.ws</code> in <code>fogu:web</code>. Each connection runs on the shared "
-        "runtime (no thread per connection): <code>next</code> and <code>accept</code> wait cooperatively and wake up "
-        "when a message or a client arrives.",
+        "intro": "WebSocket client (<code>ws://</code>, <code>wss://</code>) and a standalone server; <code>fogu:ws</code> is "
+        "the short name of the same module. The same connection object is used by <code>app.ws</code> in "
+        "<code>fogu:web</code> and by <code>ws.upgrade</code> in an <code>http.serve</code> handler. Each connection runs on "
+        "the shared runtime (no thread per connection): <code>next</code> and <code>accept</code> wait cooperatively and wake "
+        "up when a message or a client arrives. A connection is a stream of its messages: <code>for m in ws</code>, "
+        "<code>stream.from(ws)</code>, and <code>s.pipe(ws)</code> sends a <a class=\"underline\" href=\"#mod-stream\">stream</a> "
+        "or a channel into it.",
         "blocks": [
             {
                 "api": [
+                    ("import ws from \"fogu:ws\"", "", "The short name of this module: the same functions and connections (<code>ws.connect</code>, <code>ws.listen</code>, <code>ws.upgrade</code>)."),
                     ("websocket.connect(url, { headers, protocols, timeout })", "WebSocket · error", "A rejected handshake (401, 404…) is an error value."),
                     ("websocket.listen(port, { host })", "Server · error", "<code>port 0</code> picks a free port; <code>server.accept(timeout?)</code> → WebSocket, fields <code>port url</code>."),
                     ("ws.send(data)", "nil · error", "str → text frame, <a class=\"underline\" href=\"#values\">buffer</a> or list of bytes → binary frame, other values → JSON text."),
                     ("ws.next(timeout?)", "Message · nil", "<code>{ type: \"text\" | \"binary\", data, text, bytes, size, json() }</code>: <code>data</code> is a str for text frames and a buffer for binary ones, <code>text</code> always a str, <code>bytes</code> always a buffer. nil on timeout or when closed."),
+                    ("for m in ws · for conn in server", "", "Every message until the connection closes (a network error ends the loop and stays in <code>ws.error</code>) · every client, as <code>accept()</code>."),
+                    ("websocket.upgrade(req, (ws, req) => …, { protocols })", "response · error", "In an <a class=\"underline\" href=\"#mod-http\">http.serve</a> handler: return it to answer a request with <code>req.upgrade</code> (101); the function runs in its own task with the connection. <code>protocols</code>: the subprotocols accepted (default: the first the client offers). An error value when the request does not ask for a WebSocket."),
                     ("ws.tryNext() · ws.ping() · ws.close(code = 1000, reason)", "", "<code>tryNext</code>: a queued message or nil, without waiting."),
                     ("ws.open · ws.closeCode · ws.closeReason · ws.path · ws.url · ws.headers · ws.protocol · ws.pending · ws.error", "", "<code>pending</code>: messages queued; <code>error</code>: why the connection failed, or nil."),
                 ],
@@ -530,6 +536,33 @@ ws.send(bytes([1, 2, 255]))
 const m = ws.next(2s)?
 print(m.type, m.data, m.size, typeof(m.text))
 ws.close()
+''',
+                "run": True,
+            },
+            {
+                "h3": "Streams, channels and http.serve",
+                "example": r'''
+import ws from "fogu:ws"
+import http from "fogu:http"
+import stream from "fogu:stream"
+
+// http.serve: answer the upgrade, the handler runs in its own task
+http.serve(18471, (req) => {
+    if !req.upgrade { return http.text("a WebSocket endpoint") }
+    // each message, upper-cased, straight back: the socket is a stream
+    return ws.upgrade(req, (conn, r) => stream.from(conn).map((m) => m.data.upper()).pipe(conn))
+}, { quiet: true })?
+
+const conn = ws.connect("ws://127.0.0.1:18471/shout")?
+// a channel written by a task goes into the socket...
+const lines = chan(8)
+fg fn() {
+    for w in ["hello", "streams", "and channels"] { lines <- w }
+    close(lines)
+}()
+print("sent", stream.from(lines).pipe(conn, { end: false })?)
+// ...and the answers come out of it as a stream
+for text in stream.from(conn).map((m) => m.data).take(3) { print(text) }
 ''',
                 "run": True,
             }

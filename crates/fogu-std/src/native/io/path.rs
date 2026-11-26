@@ -1,4 +1,5 @@
-//! `fogu:path` module — path manipulation (purely lexical, except `absolute`).
+//! `fogu:path` module — path manipulation (purely lexical, except `absolute`, `real`,
+//! `isInside` and `safeJoin`, which look at the disk).
 //!
 //! ```fogu
 //! import path from "fogu:path"
@@ -27,7 +28,13 @@ pub fn build() -> ModuleValue {
     }));
     e.insert("dirname".into(), nfn("dirname", 1, |a| {
         let s = str_arg(a, 0, "path.dirname")?;
-        let d = Path::new(&s).parent().map(path_str).unwrap_or_default();
+        let p = Path::new(&s);
+        let d = match p.parent() {
+            Some(d) => path_str(d),
+            // the folder of a root is the root itself (`/`, `C:/`), not `.`
+            None if p.has_root() => path_str(p),
+            None => String::new(),
+        };
         Ok(Value::Str(if d.is_empty() { ".".into() } else { d.into() }))
     }));
     e.insert("basename".into(), nfn("basename", 1, |a| {
@@ -56,7 +63,9 @@ pub fn build() -> ModuleValue {
         Ok(Value::Str(path_str(&normalize(Path::new(&s))).into()))
     }));
     e.insert("isAbsolute".into(), nfn("isAbsolute", 1, |a| {
-        Ok(Value::Bool(Path::new(&str_arg(a, 0, "path.isAbsolute")?).is_absolute()))
+        // (`/etc` is absolute on Windows too: it names one place on the current drive)
+        let s = str_arg(a, 0, "path.isAbsolute")?;
+        Ok(Value::Bool(Path::new(&s).is_absolute() || s.starts_with('/') || (cfg!(windows) && s.starts_with('\\'))))
     }));
     e.insert("absolute".into(), nfn("absolute", 1, |a| {
         let s = str_arg(a, 0, "path.absolute")?;
@@ -65,9 +74,39 @@ pub fn build() -> ModuleValue {
             .map_err(|err| io_err!("path.absolute: {}: {}", s, err))
     }));
 
+    // isInside(base, p): is `p` the folder `base` or under it, once `..` and links are resolved
+    e.insert("isInside".into(), nfn("isInside", 2, |a| {
+        let base = str_arg(a, 0, "path.isInside")?;
+        let p = str_arg(a, 1, "path.isInside")?;
+        Ok(Value::Bool(crate::native::util::is_inside(&base, &p)))
+    }));
+    // safeJoin(base, name): the path of an untrusted `name` under `base`, or an error
+    e.insert("safeJoin".into(), nfn("safeJoin", 2, |a| {
+        let base = str_arg(a, 0, "path.safeJoin")?;
+        let name = str_arg(a, 1, "path.safeJoin")?;
+        crate::native::util::contained(&base, &name)
+            .map(|p| Value::Str(path_str(&p).into()))
+            .map_err(|err| io_err!("path.safeJoin: {}", err))
+    }));
+    // real(p): the absolute path with every symbolic link resolved (the file must exist)
+    e.insert("real".into(), nfn("real", 1, real));
+
     ModuleValue {
         name: "fogu:path".into(),
         exports: std::cell::RefCell::new(e),
+    }
+}
+
+/// `path.real` / `fs.realpath`: the canonical path of something that exists.
+pub fn real(a: &[Value]) -> Result<Value, String> {
+    let s = str_arg(a, 0, "path.real")?;
+    match Path::new(&s).canonicalize() {
+        // (Windows answers `\\?\C:\…`: the plain form is what programs expect)
+        Ok(p) => {
+            let shown = path_str(&p);
+            Ok(Value::Str(shown.strip_prefix("//?/").unwrap_or(&shown).to_string().into()))
+        }
+        Err(err) => Err(io_err!("path.real: {}: {}", s, err)),
     }
 }
 

@@ -235,6 +235,47 @@ pub fn exit(code: i32) -> ! {
     if let Some(hook) = EXIT_HOOK.get() {
         hook(code);
     }
+    end_process(code)
+}
+
+/// The last step of [`exit`]. `exit(3)` and Windows' `ExitProcess` run the
+/// thread-local destructors of the calling thread — which here may be a task (a
+/// coroutine on its own stack) while the scheduler, the servers and the other tasks
+/// still use that state: `Fogu.exit()` in a `fg` task with the program in
+/// `Fogu.signal.wait()` crashed on Windows (0xC0000005, N01) and, with an HTTP server
+/// running, aborted on Linux (a destructor reached a thread-local already gone:
+/// exit code 134). The process is ended without them, as the program's memory is
+/// already left to the system: the output is flushed first, `cleanup` already ran.
+#[cfg(windows)]
+fn end_process(code: i32) -> ! {
+    use std::io::Write;
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> *mut std::ffi::c_void;
+        fn TerminateProcess(process: *mut std::ffi::c_void, code: u32) -> i32;
+    }
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    // SAFETY: both are plain kernel32 calls on the pseudo-handle of this process
+    unsafe {
+        TerminateProcess(GetCurrentProcess(), code as u32);
+    }
+    std::process::exit(code)
+}
+
+#[cfg(unix)]
+fn end_process(code: i32) -> ! {
+    use std::io::Write;
+    unsafe extern "C" {
+        fn _exit(code: i32) -> !;
+    }
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    // SAFETY: ends the process at once; nothing runs after it
+    unsafe { _exit(code) }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn end_process(code: i32) -> ! {
     std::process::exit(code)
 }
 

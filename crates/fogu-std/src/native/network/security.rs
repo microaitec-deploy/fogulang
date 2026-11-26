@@ -1007,7 +1007,43 @@ fn net_arg(v: &Value, what: &str) -> Result<ipnet::IpNet, String> {
 
 fn ip_arg(v: &Value, what: &str) -> Result<IpAddr, String> {
     let s = v.to_display_string();
-    s.trim().parse().map_err(|_| format!("{}: invalid IP address '{}'", what, s))
+    s.trim()
+        .parse()
+        .or_else(|_| inet_aton(s.trim()).map(IpAddr::V4).ok_or(()))
+        .map_err(|_| format!("{}: invalid IP address '{}'", what, s))
+}
+
+/// The IPv4 forms the C library (and so `curl`, a browser, `ping`) also accepts:
+/// `127.1`, `2130706433`, `0x7f000001`, `0177.0.0.1` — an SSRF check that only knows
+/// the dotted decimal form is walked around with them.
+fn inet_aton(s: &str) -> Option<std::net::Ipv4Addr> {
+    fn part(p: &str) -> Option<u64> {
+        if p.is_empty() {
+            return None;
+        }
+        if let Some(h) = p.strip_prefix("0x").or_else(|| p.strip_prefix("0X")) {
+            return u64::from_str_radix(h, 16).ok();
+        }
+        if p.len() > 1 && p.starts_with('0') {
+            return u64::from_str_radix(&p[1..], 8).ok();
+        }
+        p.parse().ok()
+    }
+    let parts: Vec<u64> = s.split('.').map(part).collect::<Option<_>>()?;
+    let (head, last) = parts.split_at(parts.len().checked_sub(1)?);
+    if head.len() > 3 || head.iter().any(|p| *p > 255) {
+        return None;
+    }
+    // the last part fills the bytes the others left
+    let room = 8 * (4 - head.len() as u32);
+    if room < 64 && last[0] >> room != 0 {
+        return None;
+    }
+    let mut n: u64 = 0;
+    for (i, p) in head.iter().enumerate() {
+        n |= p << (24 - 8 * i as u32);
+    }
+    Some(std::net::Ipv4Addr::from((n | last[0]) as u32))
 }
 
 /// cidr("10.0.0.0/24") → { network, broadcast, netmask, prefix, size, first, last, version }
@@ -1197,6 +1233,18 @@ impl FoguObject for RateLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_ipv4_forms_are_the_addresses_they_name() {
+        let loop4 = Some(std::net::Ipv4Addr::new(127, 0, 0, 1));
+        for s in ["127.1", "2130706433", "0x7f000001", "0177.0.0.1", "0x7f.1", "127.0.1"] {
+            assert_eq!(inet_aton(s), loop4, "{}", s);
+        }
+        assert_eq!(inet_aton("10.1.2.3"), Some(std::net::Ipv4Addr::new(10, 1, 2, 3)));
+        for s in ["", "1..2", "256.1", "1.2.3.4.5", "0x", "1.2.3.256", "4294967296", "a.b"] {
+            assert_eq!(inet_aton(s), None, "{}", s);
+        }
+    }
 
     #[test]
     fn rfc6238_vectors() {

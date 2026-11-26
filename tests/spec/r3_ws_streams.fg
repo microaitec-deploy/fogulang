@@ -1,0 +1,64 @@
+// fogu:ws (0.8.4): the short name of fogu:websocket, and WebSockets as streams —
+// `for msg in ws`, `for conn in server`, `stream.from(ws)`, `s.pipe(ws | chan | writable)` —
+// with the standalone server, `http.serve` (`ws.upgrade`) and `app.ws` of fogu:web.
+import ws from "fogu:ws"
+import stream from "fogu:stream"
+import http from "fogu:http"
+import web from "fogu:web"
+import time from "fogu:time"
+
+// the standalone server: every connection in its own task, every message echoed
+const server = ws.listen(0)?
+fg fn() {
+    for conn in server {
+        fg fn() {
+            for m in conn { conn.send("echo:" + m.data) }
+        }()
+    }
+}()
+
+// a stream into a WebSocket, the WebSocket as a stream into a channel
+const c = ws.connect(server.url)?
+print(stream.of("a", "b", "c").map((x) => x + "!").pipe(c, { end: false }))
+const got = chan(8)
+print(stream.from(c).map((m) => m.data).take(3).pipe(got))
+for v in got { print(v) }
+time.delay(100ms)
+print("closed by take:", c.open)
+
+// a channel written by a task, into a WebSocket; `for m in ws` reads the answers
+const c2 = ws.connect(server.url)?
+const out = chan(4)
+fg fn() {
+    for i in 0..3 { out <- `n${i}` }
+    close(out)
+}()
+print(stream.from(out).pipe(c2, { end: false }))
+let k = 0
+for m in c2 {
+    print(m.data)
+    k += 1
+    if k == 3 { break }
+}
+c2.close()
+
+// http.serve: ws.upgrade answers the upgrade and runs the handler in its own task
+http.serve(18437, (req) => {
+    if req.upgrade { return ws.upgrade(req, (conn, r) => { for m in conn { conn.send(r.path + " " + m.data) } }) }
+    return http.text("plain")
+}, { quiet: true })?
+const h = ws.connect("ws://127.0.0.1:18437/room")?
+h.send("hi")
+print(h.next(2s)?.data)
+h.close()
+print(http.get("http://127.0.0.1:18437/")?.text)
+print(typeof(ws.upgrade({ path: "/", headers: {}, upgrade: false }, (a, b) => nil)))
+
+// fogu:web: a route whose handler is one stream, from the socket back to it
+const app = web.app()
+app.ws("/up", (conn, ctx) => stream.from(conn).map((m) => m.data.upper()).pipe(conn))
+app.listen(18438, { quiet: true })?
+const u = ws.connect("ws://127.0.0.1:18438/up")?
+u.send("loud")
+print(u.next(2s)?.data)
+u.close()

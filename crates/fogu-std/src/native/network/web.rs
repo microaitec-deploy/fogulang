@@ -107,17 +107,30 @@ pub fn build() -> ModuleValue {
     );
 
     exports.insert("cors".into(), nfn_var("cors", 0, cors));
+    exports.insert("securityHeaders".into(), nfn_var("securityHeaders", 0, security_headers));
 
-    // file(path, { download, contentType, status }) — sent by the server thread
+    // file(path, { root, dotfiles, download, contentType, status }) — sent by the server
+    // thread. A path never climbs with `..`; with `root` it is a name from outside the
+    // program (a query, a header) that stays under that folder.
     exports.insert(
         "file".into(),
         nfn_var("file", 1, |args| {
             crate::native::util::max_args(args, 2, "file")?;
-            let path = crate::native::util::str_arg(args, 0, "file")?;
+            let mut path = crate::native::util::str_arg(args, 0, "file")?;
             let mut status = 200;
             let mut headers = HashMap::new();
+            let mut rooted = false;
             if let Some(Value::Map(o)) = args.get(1) {
                 let o = o.borrow();
+                if let Some(Value::Str(root)) = o.get("root") {
+                    let dotfiles = o.get("dotfiles").is_some_and(|v| v.is_truthy());
+                    if !dotfiles && path.split(['/', '\\']).any(|part| part.starts_with('.') && part != ".") {
+                        return Err(io_err!("web.file: {}: no such file", path));
+                    }
+                    let inside = crate::native::util::contained(root, &path).map_err(|e| io_err!("web.file: {}", e))?;
+                    path = crate::native::util::path_str(&inside);
+                    rooted = true;
+                }
                 // download: "name" or true (the file's own name)
                 let name = match o.get("download") {
                     Some(Value::Str(name)) => Some(name.to_string()),
@@ -134,7 +147,10 @@ pub fn build() -> ModuleValue {
                     status = *n;
                 }
             }
-            if !std::path::Path::new(&path).is_file() {
+            if !rooted && path.split(['/', '\\']).any(|part| part == "..") {
+                return Err(io_err!("web.file: {}: '..' is not allowed in a path (name the folder with {{ root }})", path));
+            }
+            if path.contains('\0') || !std::path::Path::new(&path).is_file() {
                 return Err(io_err!("web.file: {}: no such file", path));
             }
             Ok(NativeObjectRef::new(ResponseValue { status, headers, body: String::new(), file: Some(PathBuf::from(path)) }).to_value())
@@ -863,56 +879,8 @@ pub fn dispatch(
     }
     // WebSocket: accept (101) and run the handler in its own task
     if let (Ok(None), Some((handler, _, _, protocols))) = (&outcome, &ws_route) {
-        let requested: Vec<String> = match field_of(&ctx, "headers") {
-            Value::Map(h) => h
-                .borrow()
-                .get("sec-websocket-protocol")
-                .map(|v| v.to_display_string().split(',').map(|p| p.trim().to_string()).collect())
-                .unwrap_or_default(),
-            _ => Vec::new(),
-        };
-        let chosen = if protocols.is_empty() {
-            requested.first().cloned()
-        } else {
-            requested.iter().find(|p| protocols.contains(p)).cloned()
-        };
-        let (tx, rx) = std_mpsc::channel::<crate::native::websocket::WsIo>();
-        let mut headers = HashMap::new();
-        if let Some(p) = &chosen {
-            headers.insert("sec-websocket-protocol".to_string(), p.clone());
-        }
-        let raw_headers: Vec<(String, String)> = match field_of(&ctx, "headers") {
-            Value::Map(h) => h.borrow().iter().map(|(k, v)| (k.to_string(), v.to_display_string())).collect(),
-            _ => Vec::new(),
-        };
-        let host = raw_headers.iter().find(|(k, _)| k == "host").map(|(_, v)| v.clone()).unwrap_or_default();
-        let url = format!("ws://{}{}", host, full_path);
-        let (handler, ctx2, env2, path2) = (handler.clone(), ctx.clone(), Rc::clone(&env), full_path.clone());
-        interp.spawn_task(Box::new(move |it| {
-            // the server sends the upgraded connection (and wakes us) once the 101 is out
-            let deadline = Instant::now() + Duration::from_secs(10);
-            let mut sock: Option<Option<crate::native::websocket::WsIo>> = None;
-            let guard = sched::IoGuard::new();
-            sched::wait_until(|| {
-                if sock.is_none() {
-                    match rx.try_recv() {
-                        Ok(s) => sock = Some(Some(s)),
-                        Err(std_mpsc::TryRecvError::Disconnected) => sock = Some(None),
-                        Err(std_mpsc::TryRecvError::Empty) if Instant::now() >= deadline => sock = Some(None),
-                        Err(std_mpsc::TryRecvError::Empty) => sched::add_timer(deadline),
-                    }
-                }
-                sock.is_some()
-            })?;
-            drop(guard);
-            let Some(Some(tcp)) = sock else { return Ok(()) };
-            let conn = crate::native::websocket::server_conn(tcp, url, path2, raw_headers, chosen);
-            if let Err(e) = it.call_value(handler, vec![conn, ctx2], env2) {
-                eprintln!("[web] websocket handler: {}", e.strip_prefix(ERR_VALUE_PREFIX).unwrap_or(&e));
-            }
-            Ok(())
-        }))?;
-        outcome = Ok(Some(NativeObjectRef::new(WsAccept { tx: Some(tx), headers }).to_value()));
+        let headers_map = field_of(&ctx, "headers");
+        outcome = Ok(Some(accept_websocket(interp, &env, handler.clone(), ctx.clone(), &headers_map, full_path.clone(), protocols, "web")?));
     }
     if upgrade && ws_route.is_none() {
         outcome = Ok(Some(text_response(404, "no websocket route")));
@@ -994,6 +962,10 @@ pub fn dispatch(
                 // the detail is for the log only: it may hold internal paths,
                 // queries or secrets (`app.onError` decides what a client sees)
                 eprintln!("[web] {} {}: {}", method, path, msg);
+                // a file web.file cannot serve (missing, hidden, outside its root) is not found
+                if msg.starts_with("web.file: ") {
+                    return text_response(404, "not found");
+                }
                 text_response(500, "internal error")
             })
         }
@@ -1239,6 +1211,10 @@ fn normalize_response(v: Value, set: &Value) -> Value {
     };
     let mut headers = HashMap::new();
     headers.insert("content-type".to_string(), ctype.to_string());
+    // a str guessed to be HTML: the browser must not guess something else (S09)
+    if ctype.starts_with("text/html") {
+        headers.insert("x-content-type-options".to_string(), "nosniff".to_string());
+    }
     let status = if status == 200 && body.is_empty() { 204 } else { status };
     NativeObjectRef::new(ResponseValue { status, headers, body, file: None }).to_value()
 }
@@ -1344,11 +1320,17 @@ fn cors(args: &[Value]) -> Result<Value, String> {
             _ => d.to_string(),
         }
     };
+    // any origin together with credentials would let every site read the answers a
+    // visitor's cookies unlock: credentials need the origins named
+    let credentials = opts.get("credentials").is_some_and(|v| v.is_truthy());
+    if credentials && s("origin", "*").split(',').any(|o| o.trim() == "*") {
+        return Err("cors: credentials need the allowed origins listed (origin: [\"https://app.example\"]), not '*'".to_string());
+    }
     Ok(NativeObjectRef::new(Cors {
         origin: s("origin", "*"),
         methods: s("methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS"),
         headers: s("headers", "Content-Type, Authorization"),
-        credentials: opts.get("credentials").is_some_and(|v| v.is_truthy()),
+        credentials,
         max_age: match opts.get("maxAge") {
             Some(Value::Int(n)) => Some(*n),
             _ => None,
@@ -1372,13 +1354,11 @@ impl FoguObject for Cors {
             Value::Nil => String::new(),
             v => v.to_display_string(),
         };
-        let origin = if self.origin.contains(',') {
+        // named origins (one or several): the request's own, when it is one of them —
+        // any other origin gets no CORS header at all
+        let origin = if self.origin != "*" {
             let req_origin = req_origin();
             if self.origin.split(',').any(|o| o.trim() == req_origin) { req_origin } else { String::new() }
-        } else if self.origin == "*" && self.credentials {
-            // browsers refuse `*` together with credentials: the request's
-            // origin is echoed instead (and `Vary: Origin` set below)
-            req_origin()
         } else {
             self.origin.clone()
         };
@@ -1387,9 +1367,10 @@ impl FoguObject for Cors {
             if origin != "*" {
                 set_header(&ctx, "vary", "Origin");
             }
-        }
-        if self.credentials {
-            set_header(&ctx, "access-control-allow-credentials", "true");
+            // (never for an origin that is not on the list)
+            if self.credentials {
+                set_header(&ctx, "access-control-allow-credentials", "true");
+            }
         }
         if field_of(&ctx, "method").to_display_string() == "OPTIONS" {
             set_header(&ctx, "access-control-allow-methods", &self.methods);
@@ -1401,6 +1382,83 @@ impl FoguObject for Cors {
             let mut headers = HashMap::new();
             headers.insert("content-length".to_string(), "0".to_string());
             return Ok(NativeObjectRef::new(ResponseValue { status: 204, headers, body: String::new(), file: None }).to_value());
+        }
+        Ok(Value::Nil)
+    }
+
+    fn methods(&self) -> Vec<&'static str> {
+        vec!["handle"]
+    }
+}
+
+/// `web.securityHeaders({ csp, frame, referrer, hsts })` (S16): the headers a site
+/// exposed to the Internet sends with every answer — no type sniffing, no framing by
+/// other sites, no referrer to other origins — plus a Content-Security-Policy and HSTS
+/// when asked for (HSTS only means something over HTTPS). Each value may be replaced
+/// with a str, or left out with `false`.
+struct SecurityHeaders {
+    headers: Vec<(&'static str, String)>,
+}
+
+fn security_headers(args: &[Value]) -> Result<Value, String> {
+    crate::native::util::max_args(args, 1, "securityHeaders")?;
+    let opts = match args.first() {
+        None | Some(Value::Nil) => HashMap::new(),
+        Some(Value::Map(m)) => m.borrow().clone(),
+        Some(other) => return Err(format!("securityHeaders(options?) expects a map, got '{}'", other.type_name())),
+    };
+    let mut headers = vec![("x-content-type-options", "nosniff".to_string())];
+    // a default, replaced by a str, dropped with `false` (an unknown option is a mistake)
+    for k in opts.keys() {
+        if !matches!(&**k, "frame" | "referrer" | "csp" | "hsts" | "coop") {
+            return Err(format!("securityHeaders: unknown option '{}' (expected frame, referrer, coop, csp, hsts)", k));
+        }
+    }
+    let pick = |key: &str, default: Option<&str>| -> Result<Option<String>, String> {
+        match opts.get(key) {
+            None => Ok(default.map(str::to_string)),
+            Some(Value::Bool(false)) | Some(Value::Nil) => Ok(None),
+            Some(Value::Bool(true)) => Ok(default.map(str::to_string)),
+            Some(Value::Str(s)) => Ok(Some(s.to_string())),
+            Some(other) => Err(format!("securityHeaders: '{}' must be a str or false, got '{}'", key, other.type_name())),
+        }
+    };
+    if let Some(v) = pick("frame", Some("DENY"))? {
+        headers.push(("x-frame-options", v));
+    }
+    if let Some(v) = pick("referrer", Some("strict-origin-when-cross-origin"))? {
+        headers.push(("referrer-policy", v));
+    }
+    if let Some(v) = pick("coop", Some("same-origin"))? {
+        headers.push(("cross-origin-opener-policy", v));
+    }
+    // off unless given: a policy that is too strict breaks the site's own scripts
+    if let Some(v) = pick("csp", Some("default-src 'self'; frame-ancestors 'none'; object-src 'none'"))? {
+        if opts.contains_key("csp") {
+            headers.push(("content-security-policy", v));
+        }
+    }
+    match opts.get("hsts") {
+        None | Some(Value::Bool(false)) | Some(Value::Nil) => {}
+        Some(Value::Bool(true)) => headers.push(("strict-transport-security", "max-age=31536000; includeSubDomains".to_string())),
+        Some(Value::Str(s)) => headers.push(("strict-transport-security", s.to_string())),
+        Some(other) => return Err(format!("securityHeaders: 'hsts' must be a bool or a str, got '{}'", other.type_name())),
+    }
+    Ok(NativeObjectRef::new(SecurityHeaders { headers }).to_value())
+}
+
+impl FoguObject for SecurityHeaders {
+    fn name(&self) -> &str {
+        "Middleware"
+    }
+
+    fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
+        if method != "handle" {
+            return Err(format!("method '{}' does not exist on securityHeaders middleware", method));
+        }
+        let ctx = args.first().cloned().unwrap_or(Value::Nil);
+        for (k, v) in &self.headers {
+            set_header(&ctx, k, v);
         }
         Ok(Value::Nil)
     }
@@ -1638,6 +1696,108 @@ impl FoguObject for StaticPass {
     }
 }
 
+/// Accepts a WebSocket upgrade: the 101 answer to return, and `handler(ws, arg)` in its own
+/// task once the server hands over the connection (`app.ws` routes, `ws.upgrade` in an
+/// `http.serve` handler). `protocols`: the subprotocols accepted (empty: the first offered).
+pub(crate) fn accept_websocket(
+    interp: &Interpreter,
+    env: &Rc<RefCell<Environment>>,
+    handler: Value,
+    arg: Value,
+    headers_src: &Value,
+    full_path: String,
+    protocols: &[String],
+    label: &'static str,
+) -> Result<Value, String> {
+    let requested: Vec<String> = match headers_src {
+        Value::Map(h) => h
+            .borrow()
+            .get("sec-websocket-protocol")
+            .map(|v| v.to_display_string().split(',').map(|p| p.trim().to_string()).collect())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    let chosen = if protocols.is_empty() {
+        requested.first().cloned()
+    } else {
+        requested.iter().find(|p| protocols.contains(p)).cloned()
+    };
+    let (tx, rx) = std_mpsc::channel::<crate::native::websocket::WsIo>();
+    let mut headers = HashMap::new();
+    if let Some(p) = &chosen {
+        headers.insert("sec-websocket-protocol".to_string(), p.clone());
+    }
+    let raw_headers: Vec<(String, String)> = match headers_src {
+        Value::Map(h) => h.borrow().iter().map(|(k, v)| (k.to_string(), v.to_display_string())).collect(),
+        _ => Vec::new(),
+    };
+    let host = raw_headers.iter().find(|(k, _)| k == "host").map(|(_, v)| v.clone()).unwrap_or_default();
+    let url = format!("ws://{}{}", host, full_path);
+    let (ctx2, env2, path2) = (arg, Rc::clone(env), full_path);
+    interp.spawn_task(Box::new(move |it| {
+        // the server sends the upgraded connection (and wakes us) once the 101 is out
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut sock: Option<Option<crate::native::websocket::WsIo>> = None;
+        let guard = sched::IoGuard::new();
+        sched::wait_until(|| {
+            if sock.is_none() {
+                match rx.try_recv() {
+                    Ok(s) => sock = Some(Some(s)),
+                    Err(std_mpsc::TryRecvError::Disconnected) => sock = Some(None),
+                    Err(std_mpsc::TryRecvError::Empty) if Instant::now() >= deadline => sock = Some(None),
+                    Err(std_mpsc::TryRecvError::Empty) => sched::add_timer(deadline),
+                }
+            }
+            sock.is_some()
+        })?;
+        drop(guard);
+        let Some(Some(tcp)) = sock else { return Ok(()) };
+        let conn = crate::native::websocket::server_conn(tcp, url, path2, raw_headers, chosen);
+        if let Err(e) = it.call_value(handler, vec![conn, ctx2], env2) {
+            eprintln!("[{}] websocket handler: {}", label, e.strip_prefix(ERR_VALUE_PREFIX).unwrap_or(&e));
+        }
+        Ok(())
+    }))?;
+    Ok(NativeObjectRef::new(WsAccept { tx: Some(tx), headers }).to_value())
+}
+
+/// `ws.upgrade(req, (ws, req) => …, { protocols })` in an `http.serve` handler: the 101
+/// answer to return; the handler runs in its own task with the connection.
+pub fn intercept_upgrade(callee: &Value, args: &[Value], interp: &Interpreter, env: &Rc<RefCell<Environment>>) -> Option<Result<Value, String>> {
+    let Value::NativeFn(f) = callee else { return None };
+    if f.name != "websocket.upgrade" {
+        return None;
+    }
+    Some((|| {
+        crate::native::util::max_args(args, 3, "upgrade")?;
+        let req = args.first().cloned().unwrap_or(Value::Nil);
+        let handler = match args.get(1) {
+            Some(h @ (Value::Fn(_) | Value::NativeFn(_))) => h.clone(),
+            Some(other) => return Err(format!("upgrade: the handler must be a function, got '{}'", other.type_name())),
+            None => return Err("upgrade: expects the request and a handler (ws, req) => …".into()),
+        };
+        let protocols: Vec<String> = match args.get(2) {
+            None | Some(Value::Nil) => Vec::new(),
+            Some(Value::Map(m)) => match m.borrow().get("protocols") {
+                None | Some(Value::Nil) => Vec::new(),
+                Some(Value::List(l)) => l.borrow().iter().map(|v| v.to_display_string()).collect(),
+                Some(other) => return Err(format!("upgrade: protocols must be a list, got '{}'", other.type_name())),
+            },
+            Some(other) => return Err(format!("upgrade: options must be a map, got '{}'", other.type_name())),
+        };
+        if !matches!(req_field(&req, "upgrade"), Some(Value::Bool(true))) {
+            return Ok(Value::Error(Rc::new(crate::runtime::value::ErrorValue {
+                message: "websocket.upgrade: the request does not ask for a WebSocket".into(),
+                cause: Value::Nil,
+                trace: Vec::new(),
+            })));
+        }
+        let headers = req_field(&req, "headers").unwrap_or(Value::Nil);
+        let path = req_str(&req, "path").unwrap_or_else(|| "/".into());
+        accept_websocket(interp, env, handler, req, &headers, path, &protocols, "http")
+    })())
+}
+
 /// The 101 answer of a WebSocket route (internal).
 pub struct WsAccept {
     tx: Option<std_mpsc::Sender<crate::native::websocket::WsIo>>,
@@ -1674,7 +1834,12 @@ impl FoguObject for ResponseValue {
     fn get(&self, field: &str) -> Option<Value> {
         match field {
             "status" => Some(Value::Int(self.status)),
-            "body" => Some(Value::Str(self.body.clone().into())),
+            // a `web.file` answer read by the program (a test through `app.handler()`):
+            // the file's text — the server itself sends the file, never this
+            "body" => Some(match &self.file {
+                Some(path) => Value::Str(String::from_utf8_lossy(&std::fs::read(path).unwrap_or_default()).into_owned().into()),
+                None => Value::Str(self.body.clone().into()),
+            }),
             "headers" => {
                 let mut m = HashMap::new();
                 for (k, v) in &self.headers {
@@ -1689,12 +1854,17 @@ impl FoguObject for ResponseValue {
     fn call(&mut self, method: &str, _args: &[Value]) -> Result<Value, String> {
         match method {
             "json" => crate::native::json::parse_value(&self.body).map_err(|e| io_err!("json: {}", e)),
-            other => Err(format!("method '{}' does not exist on Response", other)),
+            // the body as bytes (the file of a `web.file` answer, exactly)
+            "bytes" => match &self.file {
+                Some(path) => std::fs::read(path).map(Value::buffer).map_err(|e| io_err!("bytes: {}: {}", path.display(), e)),
+                None => Ok(Value::buffer(self.body.as_bytes().to_vec())),
+            },
+            other => Err(format!("method '{}' does not exist on Response (json bytes)", other)),
         }
     }
 
     fn methods(&self) -> Vec<&'static str> {
-        vec!["json"]
+        vec!["json", "bytes"]
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

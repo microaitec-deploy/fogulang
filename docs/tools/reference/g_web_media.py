@@ -61,7 +61,7 @@ print(err)
                     ("html.sanitize(text, { tags, addTags, removeTags, attributes, stripComments })", "str", "Removes scripts, event handlers and dangerous URLs."),
                     ("html.text(text) · el.toText()", "str", "Plain text with paragraphs, bullets and tab-separated cells."),
                     ("html.toMarkdown(text) · el.toMarkdown()", "str", "Headings, emphasis, links, images, lists, code blocks, quotes, tables."),
-                    ("html.fromMarkdown(md)", "str", "CommonMark + tables, strikethrough, task lists, footnotes."),
+                    ("html.fromMarkdown(md, { sanitize })", "str", "CommonMark + tables, strikethrough, task lists, footnotes. Markdown lets raw HTML through: pass <code>sanitize: true</code> for text that is not the program's own (<code>&lt;script&gt;</code>, <code>onerror=</code>, <code>javascript:</code> links are removed)."),
                 ],
                 "example": r'''
 import html from "fogu:html"

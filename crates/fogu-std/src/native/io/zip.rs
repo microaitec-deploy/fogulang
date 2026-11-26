@@ -269,8 +269,11 @@ pub fn build() -> ModuleValue {
                     continue;
                 }
             }
-            // unpack_in refuses `..` names (a leading `/` is dropped: the entry stays inside);
-            // its error says "failed to unpack": the cause is in its source
+            // an absolute name is refused, as `zip.unzip` does (tar would make it relative)
+            if rel.has_root() || rel.components().any(|c| matches!(c, std::path::Component::Prefix(_))) {
+                return Err(io_err!("zip.untar: unsafe entry name '{}' (an absolute path)", path_str(&rel)));
+            }
+            // unpack_in refuses `..` names; its error says "failed to unpack": the cause is in its source
             let ok = entry.unpack_in(&dest).map_err(|e| {
                 let cause = std::error::Error::source(&e).map(|c| format!(" ({})", c)).unwrap_or_default();
                 io_err!("zip.untar: {}: {}{}", path_str(&rel), e, cause)
@@ -313,8 +316,18 @@ pub fn build() -> ModuleValue {
     f("gunzip", 1, |a| {
         let data = bytes_of(&a[0], "zip.gunzip")?;
         let o = opts(opt_arg(a, 1))?;
+        // maxSize: the most the data may expand to (1 GiB unless given) — a few KB of
+        // gzip can hold gigabytes of zeros
+        let limit = match o.get("maxSize") {
+            None | Some(Value::Nil) => 1u64 << 30,
+            Some(Value::Int(n)) if *n > 0 => *n as u64,
+            Some(other) => return Err(format!("zip.gunzip: maxSize must be a number of bytes > 0, got {}", other.to_display_string())),
+        };
         let mut out = Vec::new();
-        flate2::read::GzDecoder::new(&data[..]).read_to_end(&mut out).map_err(|e| io_err!("zip.gunzip: not gzip data ({})", e))?;
+        flate2::read::GzDecoder::new(&data[..]).take(limit + 1).read_to_end(&mut out).map_err(|e| io_err!("zip.gunzip: not gzip data ({})", e))?;
+        if out.len() as u64 > limit {
+            return Err(io_err!("zip.gunzip: the data expands beyond maxSize ({} bytes)", limit));
+        }
         Ok(text_or_bytes(out, &o))
     });
     // gzipFile(src, dest = src + ".gz") · gunzipFile(src, dest = src without ".gz")

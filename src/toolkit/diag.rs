@@ -223,6 +223,7 @@ fn classify_warning(msg: &str) -> (&'static str, Option<&'static str>) {
         ("unused import", "W0002", Some("remove the import, or prefix its name with '_'")),
         ("unreachable code", "W0003", Some("remove it, or move it before the statement that ends the block")),
         ("shadows the one declared", "W0004", Some("rename one of them (or prefix it with '_' to silence this)")),
+        ("unreachable match arm", "W0006", Some("move the catch-all arm to the end, or remove the arms after it")),
         ("destructuring a list", "W0005", Some("index the list (xs[0], xs[1]), or return the values as a tuple: return a, b")),
     ];
     for (needle, code, help) in TABLE {
