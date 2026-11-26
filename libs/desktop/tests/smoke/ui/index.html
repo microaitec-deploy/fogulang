@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fogu smoke test</title>
+    <style>
+      body { font: 15px system-ui, sans-serif; margin: 24px; }
+      li { margin: 6px 0; }
+      .ok { color: #15803d; }
+    </style>
+  </head>
+  <body>
+    <h3>Fogu smoke test</h3>
+    <ul id="steps"></ul>
+    <script>
+      const steps = document.getElementById("steps");
+      const say = (text) => {
+        const li = document.createElement("li");
+        li.className = "ok";
+        li.textContent = text;
+        steps.appendChild(li);
+      };
+      (async () => {
+        say("page loaded");
+        const pong = new Promise((resolve) => fogu.on("pong", resolve));
+        const answer = await fogu.call("hello", { agent: navigator.userAgent });
+        say("command answered: " + answer);
+        const event = await pong;
+        say("event received: " + JSON.stringify(event));
+        // (time for a screenshot of the window)
+        await new Promise((r) => setTimeout(r, 4000));
+        await fogu.call("done", { answer, event, title: document.title, agent: navigator.userAgent });
+      })();
+    </script>
+  </body>
+</html>

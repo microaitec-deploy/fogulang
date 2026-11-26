@@ -31,16 +31,13 @@ jobs:
           - name: macos-arm64
             os: macos-latest
             target: aarch64-apple-darwin
-            smoke: true
           - name: macos-x64
             os: macos-latest
             target: x86_64-apple-darwin
-            smoke: false
           # (the oldest supported Ubuntu: the host then runs on newer systems too)
           - name: linux-x64
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            smoke: false
     steps:
       # the library builds against ../../../lang (the layout of the project:
       # lang/ next to libs/), so the repository is checked out as lang/
@@ -89,36 +86,76 @@ jobs:
             (cd out && sha256sum fogu-desktop > SHA256SUMS && cat SHA256SUMS)
           fi
 
-      # Does an app made with this host (the app is appended to it, no Rust)
-      # start on this Mac? Informative: a runner without a usable window
-      # session must not fail the build of the host.
-      - name: Smoke test (an app built without Rust)
-        if: matrix.smoke
+      # Does an app made with this host work on this system? libs/desktop/tests/smoke
+      # is built with the fresh host and no Rust, then started: its page calls a
+      # command, waits for the event the command emits, reports to a file and
+      # closes the app. The report on disk is the proof. Informative (a runner
+      # without a usable window session must not fail the build of the host);
+      # the result is in the job summary and in the artifact.
+      - name: Smoke test (a window, a command, an event)
+        id: smoke
         continue-on-error: true
         run: |
+          flag=""
+          runner=""
+          case "${{ matrix.name }}" in
+            macos-x64)
+              # the Intel host on an Apple Silicon runner
+              softwareupdate --install-rosetta --agree-to-license || true
+              flag="--target x86_64-apple-darwin" ;;
+            linux-x64)
+              sudo apt-get install -y -q xvfb
+              runner="xvfb-run -a" ;;
+          esac
           (cd lang && cargo build --release --locked)
           FOGU="$PWD/lang/target/release/fogu"
           "$FOGU" --version
-          mkdir -p hosts/${{ matrix.name }}
+          mkdir -p hosts/${{ matrix.name }} smoke
           cp out/fogu-desktop hosts/${{ matrix.name }}/fogu-desktop
-          cd libs/desktop/examples/01-counter
-          FOGU_BIN="$FOGU" FOGU_DESKTOP_HOSTS="$GITHUB_WORKSPACE/hosts" "$FOGU" ../../build.fg .
-          find dist -maxdepth 4 | head -n 30
-          exe=$(find dist -path '*.app/Contents/MacOS/*' -type f | head -n 1)
-          [ -n "$exe" ] || { echo "no app bundle in dist/"; exit 1; }
-          codesign -v "$exe" 2>&1 | head -n 3 || true
-          "$exe" > app.log 2>&1 &
-          pid=$!
-          sleep 10
-          if kill -0 "$pid" 2>/dev/null; then
-            echo "the app is running after 10 s"
-            kill "$pid"
+          cd libs/desktop/tests/smoke
+          FOGU_BIN="$FOGU" FOGU_DESKTOP_HOSTS="$GITHUB_WORKSPACE/hosts" "$FOGU" ../../build.fg . $flag | grep -v '^  + '
+          if [ "$RUNNER_OS" = macOS ]; then
+            exe=$(find dist -path '*.app/Contents/MacOS/*' -type f | head -n 1)
           else
-            wait "$pid" && code=0 || code=$?
-            echo "the app ended early (exit code $code)"
-            cat app.log
+            exe=dist/smoke
+          fi
+          [ -n "$exe" ] && [ -f "$exe" ] || { echo "no executable in dist/"; find dist -maxdepth 4; exit 1; }
+          file "$exe"
+          export FOGU_SMOKE_OUT="$GITHUB_WORKSPACE/smoke/report.json"
+          $runner "$exe" > "$GITHUB_WORKSPACE/smoke/app.log" 2>&1 &
+          pid=$!
+          for i in $(seq 1 60); do
+            [ -f "$FOGU_SMOKE_OUT" ] && break
+            if [ "$i" = 5 ] && [ "$RUNNER_OS" = macOS ]; then
+              screencapture -x "$GITHUB_WORKSPACE/smoke/window.png" || true
+            fi
+            sleep 1
+          done
+          kill "$pid" 2>/dev/null || true
+          if [ ! -f "$FOGU_SMOKE_OUT" ]; then
+            echo "no report after 60 s"
+            cat "$GITHUB_WORKSPACE/smoke/app.log"
             exit 1
           fi
+          cat "$FOGU_SMOKE_OUT"; echo
+          grep -q '"n":42' "$FOGU_SMOKE_OUT" && grep -q 'hello from Fogu' "$FOGU_SMOKE_OUT"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.name }}"
+            echo "- host: $(cat out/SHA256SUMS 2>/dev/null)"
+            echo "- smoke test: ${{ steps.smoke.outcome }}"
+            if [ -f smoke/report.json ]; then echo '```'; cat smoke/report.json; echo; echo '```'; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-${{ matrix.name }}
+          path: smoke/
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         with:

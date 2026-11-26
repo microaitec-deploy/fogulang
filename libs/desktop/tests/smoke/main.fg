@@ -1,0 +1,35 @@
+// The smoke test of a host (tests/smoke): a real window, used to check a
+// prebuilt host on its platform (.github/workflows/desktop-hosts.yml in the
+// Fogu repository runs it on macOS).
+//
+// The page loads, calls `hello`, waits for the `pong` event that command
+// emits, then calls `done` with what it saw. `done` writes that report to
+// $FOGU_SMOKE_OUT (default smoke.json) and closes the app. A report on disk
+// therefore means: the webview loaded the page, the page API was injected,
+// commands and their results cross both ways, events reach the page, and the
+// Fogu runtime inside the host runs the program.
+import desktop from "desktop"
+import fs from "fogu:fs"
+import json from "fogu:json"
+import process from "fogu:process"
+
+const out = process.env("FOGU_SMOKE_OUT") ?? "smoke.json"
+const app = desktop.app({ name: "smoke", title: "Fogu smoke test", identifier: "dev.fogu.tests.smoke" })
+app.createBrowser({ width: 460, height: 280 })
+
+app.command("hello", fn(info) {
+    app.emit("pong", { n: 42 })
+    return "hello from Fogu " + Fogu.version + " on " + Fogu.os
+})
+
+app.command("done", fn(report) {
+    report.fogu = Fogu.version
+    report.os = Fogu.os
+    fs.writeText(out, json.stringify(report))?
+    app.quit(0)
+    return true
+})
+
+if !app.run() {
+    print("smoke: no window (run it with `fogu desktop dev` or build it)")
+}

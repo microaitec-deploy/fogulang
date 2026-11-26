@@ -1,0 +1,12 @@
+{
+  "name": "smoke",
+  "version": "0.1.0",
+  "description": "A window that proves the host works: the page calls a command, gets an event back, reports and the app quits",
+  "entry": "main.fg",
+  "desktop": {
+    "title": "Fogu smoke test",
+    "identifier": "dev.fogu.tests.smoke",
+    "ui": "ui"
+  },
+  "dependencies": {}
+}
