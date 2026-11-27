@@ -400,6 +400,13 @@ print(typeof(bytes("hi")))  // buffer  — mutable bytes: b[0], b.hex(), b.readU
       upload policies, and gRPC streams in both directions. No benchmark is slower than in 0.8.4;
       the full list is in the <a class="underline" href="https://github.com/microaitec-deploy/fogulang/blob/main/CHANGELOG.md">changelog</a>.</p>
 
+      <p class="mt-4">Also in 0.8.5: <code>if c { a } else { b }</code> as a value, computed map keys <code>{ [k]: v }</code>,
+      <code>_</code> in <code>for</code>, <code>slice</code> bounds kept in range, <code>f()?.field</code> on a value-and-error function and
+      <code>error(msg, { data })</code> (see <a class="underline" href="#control">Control flow</a> and <a class="underline" href="#errors">Errors</a>);
+      request bodies written to disk as they arrive (<code>bodyToDisk</code>, <code>req.stream()</code>, <code>req.form({ toDisk })</code>) and
+      binary answers (<code>http.bytes</code>); Socket.IO <code>io.use</code> middlewares; <code>fogu:image</code> off the interpreter's thread;
+      nested local packages and <code>link:</code>.</p>
+
       <h3 class="text-lg font-semibold mt-10" id="new-grpc">gRPC streams in both directions</h3>
       <p>A bidirectional handler reads each request as it arrives and answers before the next one; <code>c.stream(method)</code> sends with <code>send</code> and reads with <code>next</code> or <code>for</code>. A <code>GrpcStream</code> is a <code>fogu:stream</code> source, <code>pipe</code> sends a channel into a call, and the server adds interceptors (<code>srv.use</code>), health checks, reflection for <code>grpcurl</code> and mTLS. See <a class="underline" href="#mod-grpc">fogu:grpc</a>.</p>
       <script type="text/x-fogu">import grpc from "fogu:grpc"
