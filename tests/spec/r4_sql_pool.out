@@ -1,0 +1,13 @@
+3000000
+timer ran during the query: true true
+notes: 8 true
+after rollback: 8
+{count: 2} 10
+4 false
+tx open in its task: true
+inserted
+another task, meanwhile: false 0
+committed
+after commit: 1
+error: sql.commit: no transaction is open in this task
+1

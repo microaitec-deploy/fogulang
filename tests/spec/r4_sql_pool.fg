@@ -1,0 +1,68 @@
+// fogu:sql pools with a transaction per task, and fogu:orm queries that do not
+// stop the other tasks
+import sql from "fogu:sql"
+import orm from "fogu:orm"
+import time from "fogu:time"
+
+// --- the ORM waits cooperatively: a timer task runs during a slow query
+const client = orm.create_client({ schema: { provider: "sqlite", url: "sqlite://r4_orm.tmp.db",
+    models: { Note: { fields: { id: { type: "Int", primary: true, autoincrement: true }, text: { type: "String" } } } } },
+    migrate: "auto" })
+let ticks = 0
+let running = true
+fg fn() {
+    while running {
+        time.delay(5ms)
+        ticks += 1
+    }
+}()
+const slow = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 3000000) SELECT count(*) AS n FROM c"
+const t0 = time.monotonic()
+print(client.query(slow)[0].n)
+const took = time.monotonic() - t0
+print("timer ran during the query:", ticks >= 3, took > 0.05)
+running = false
+
+// the same model, from several tasks at once
+const done = chan(8)
+for i in 0..8 {
+    fg fn() {
+        client.note.create({ data: { text: "n" + str(i) } })
+        done <- client.note.count()
+    }()
+}
+let last = 0
+for _i in 0..8 { last = <-done }
+print("notes:", client.note.count(), last <= 8)
+
+// ORM transactions belong to their task
+client.begin()
+client.note.create({ data: { text: "in tx" } })
+client.rollback()
+print("after rollback:", client.note.count())
+print(client.note.createMany({ data: [{ text: "a" }, { text: "b" }] }), client.note.count())
+client.disconnect()
+
+// --- fogu:sql with a pool: a transaction holds a connection, the others go on
+const db = sql.open("sqlite://r4_pool.tmp.db", { pool: 4 })?
+print(db.pool, db.inTransaction)
+db.run("CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, v TEXT)")
+const step = chan()
+const back = chan()
+fg fn() {
+    db.begin()?
+    print("tx open in its task:", db.inTransaction)
+    db.run("INSERT INTO t (v) VALUES (?)", ["inside"])
+    step <- "inserted"
+    <-back
+    db.commit()?
+    step <- "committed"
+}()
+print(<-step)
+print("another task, meanwhile:", db.inTransaction, db.one("SELECT count(*) AS n FROM t").n)
+back <- true
+print(<-step)
+print("after commit:", db.one("SELECT count(*) AS n FROM t").n)
+print(db.commit())
+print(sql.open("sqlite::memory:", { pool: 4 })?.pool)
+db.close()

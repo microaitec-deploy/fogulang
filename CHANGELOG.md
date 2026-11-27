@@ -6,6 +6,111 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-11-27
+
+The limits the Fogu Chat project ran into (a backend with Keycloak, PostgreSQL, Socket.IO, Redis and
+S3), and gRPC streams.
+
+### Added
+
+- **`fogu:grpc` streams in both directions, message by message.** The handler of a
+  client-streaming or bidirectional method gets its requests as a `GrpcStream` while they arrive
+  (`for m in msgs`, `msgs.next()`, `stream.from(msgs)`, `msgs.toList()`), and can answer each one
+  before the next; `c.stream(method)` without requests opens the call on the client: `send(msg)`,
+  `end()`, and `next()` / `for` for the responses. A `GrpcStream` is a `fogu:stream` source,
+  `pipe` sends a stream or a channel into a call (`stream.from(ch).pipe(s)`, `s.pipe(call)`), and
+  a server-streaming handler may return a stream. Also:
+  - `srv.use(fn(call))`: interceptors run before every handler; an error fails the call
+    (`grpc.status("UNAUTHENTICATED", …)`).
+  - Health checking: the server answers `grpc.health.v1.Health/Check` itself (`srv.health(service,
+    status)`; `grpc.server(schema, { health: false })` turns it off).
+  - Server reflection with `grpc.server(schema, { reflection: true })` (`grpc.reflection.v1` and
+    v1alpha): `grpcurl list`, `describe` and calls work without the `.proto` (checked with grpcurl
+    1.9: unary, bidirectional, health).
+  - mTLS: `listen(port, { cert, key, clientCa })` asks clients for a certificate signed by
+    `clientCa`; `grpc.connect(url, schema, { cert, key })` presents one.
+  - `c.close()` closes the client (it did nothing): no new calls, the connection goes when the open
+    ones end; `c.closed`.
+- **Public-key signatures**: `crypto.sign(alg, privateKey, data)`, `crypto.verify(alg, publicKey,
+  data, signature)` and `crypto.jwk(key, { kid, alg, use })` — RS256/384/512, PS256/384/512,
+  ES256/384 and EdDSA, keys as PEM (public key, PKCS#1, certificate, PKCS#8) or JWK, computed by
+  `ring` (already linked through rustls; constant-time signing). RSA keys under 2048 bits are
+  refused.
+- **`fogu:jwt` with public keys and OpenID Connect**: `jwt.sign` with a PEM private key (`keyid`
+  → `kid`), `jwt.verify` / `jwt.middleware` with a PEM key, a JWK, a JWK set (the token's `kid`
+  picks the key; `use: enc` keys are skipped), `jwt.jwks(url, { ttl, minRefresh })` (fetched on
+  first use, after `ttl` and on key rotation, at most once per `minRefresh`; the old keys stay if a
+  refresh fails) and `jwt.oidc(issuer)` (discovery; tokens must carry `iss: issuer`). The key
+  decides the algorithms: a secret accepts only HS*, a public key only those of its type, `alg:
+  none` never — an HS256 token made with the public key as its secret is refused. Fetching waits
+  cooperatively, in `jwt.verify` and in the middleware (`fogu:web` now lets a native middleware
+  wait). Tokens made by OpenSSL (RS256, PS256) verify; a native verification takes tens of
+  microseconds (a pure-Fogu RS256 took ~47 ms on the interpreter's thread).
+- **`fogu:sql` pools**: `sql.open(url, { pool: n })` opens up to `n` connections, so the statements
+  of different tasks run at the same time. A transaction belongs to the task that began it, on a
+  connection of its own: its statements run there, other tasks use the rest of the pool (with one
+  connection they wait for the commit, as before). Each task may have its own transaction; fields
+  `db.pool`, `db.inTransaction`. `create_client({ ..., pool })` in `fogu:orm` too.
+- `fogu:s3`: multipart uploads (`createMultipartUpload`, `uploadPart`, `completeMultipartUpload`,
+  `abortMultipartUpload`; `presign(key, { method: "PUT", uploadId, partNumber })` for a part), and
+  `upload(path)` of a file bigger than `partSize` (16mb) goes in parts, one in memory at a time,
+  aborted on failure. `get` / `getBytes` / `download` take `{ range }` (`[start, end]`, `[-n]`,
+  `"bytes=…"`); `download` writes the body to the file as it arrives. `presign` signs a
+  `contentType` (a PUT must send that type); `presignPost(key | { keyPrefix }, { maxSize,
+  contentType, contentTypePrefix })` makes a browser upload form whose size, type and key S3
+  itself enforces.
+- `fogu:http` client: `formData` (multipart/form-data, the browser's name for `multipart`) and
+  `protobuf: { schema, message, value }` bodies; `res.protobuf(schema, message)` and, on the server,
+  `req.protobuf(schema, message)` decode one.
+- Buffers cross a `sync.Worker` as their bytes and arrive as buffers (they arrived as lists of
+  ints).
+
+### Changed
+
+- **`fogu:orm` no longer stops the program during a query.** Each query ran with `block_on` on
+  the interpreter's thread, so no other task (HTTP requests, Socket.IO, timers) moved meanwhile.
+  A client's and a model's methods now run with no object borrowed and wait cooperatively: other
+  tasks go on, and may call the same models. ORM transactions are per task, on their own
+  connection; `createMany` runs in one (or in a savepoint of the open one).
+- `fogu:scylla`: `execute`, `query` and `one` run on the shared runtime while other tasks go on (a
+  statement with parameters is still prepared once, on the interpreter's thread).
+- The handler of a client-streaming gRPC method gets a `GrpcStream` of its requests instead of a
+  list: `for m in req` works as before, `req.toList()` gives the list.
+- `store.getBytes` returns a buffer (it returned a list of ints).
+- A native `fogu:web` middleware may wait cooperatively (only `jwt.middleware` does; the others
+  keep the direct call).
+
+### Fixed
+
+- `fogu:grpc`: the last `next()` of `c.stream(...)` could wait for ever (about 1 run in 20 of
+  `tests/spec/grpc.fg`): the reading task woke the scheduler before it dropped its sender, so the
+  end of the stream could arrive after the scheduler looked and went back to sleep. The sender
+  goes first now. (Present in 0.8.3.)
+- `crypto.fromBase64` reads text without its `=` padding in the standard alphabet too
+  (`"aGVsbG8"` was "Invalid padding").
+- `tests/spec/grpc.fg` timed its concurrency check with `clock()`, the wall clock, which can jump
+  (it went backwards on WSL); it uses `time.monotonic()`.
+- `fogu:sql` / `fogu:orm` on PostgreSQL: a `nil` parameter into a TEXT, BYTEA or BOOLEAN column
+  failed with "incorrect binary data format in bind parameter" (the `Any` driver binds NULL as a
+  BIGINT). A NULL parameter is written as `NULL` in the statement, the later placeholders
+  renumbered (quoted text, names and comments untouched).
+- `fogu:s3`: `put(key, buffer)` stored the buffer as JSON (6 bytes became 20); it stores the bytes.
+- `fogu:s3`: requests that may carry a body send `Content-Length`, also when it is 0
+  (`createBucket`, `DELETE`): servers that check every signed header (RustFS) refused a signed
+  length that was not sent ("missing signed header: content-length").
+- `fogu:sql`: `commit()` / `rollback()` with no transaction open in the task is an error value.
+
+### Known gaps
+
+- An `http.serve` / `fogu:web` response body is text: a binary answer (an image, a protobuf
+  message that is not UTF-8) needs `web.file`. HTTP request bodies are still read whole
+  (`maxBody`); streaming request bodies, Socket.IO `io.use` and connection state recovery, the
+  language items of the Chat report (`f()?.x` on a tuple, `slice` bounds, a conditional
+  expression, computed keys, `_` in `for`) and nested `file:` packages are for the next releases.
+- Not checked against a live server here: PostgreSQL (the NULL rewriting is unit-tested), S3
+  services (tested against an S3 stand-in that records the requests; the signatures against the
+  AWS documentation's examples) and ScyllaDB.
+
 ## [0.8.4] - 2026-11-26
 
 Closes the findings of the third test round on 0.8.3 (five release blockers first), with the
@@ -140,40 +245,6 @@ direct HTTP server below. No benchmark of `bench/` is slower than in 0.8.3.
   and a socket into a channel with `stream.from(ws).pipe(ch)`. `ws.upgrade(req, (ws, req) => …)`
   answers a WebSocket upgrade from an `http.serve` handler, as `app.ws` does in `fogu:web` (both
   run the same code, on the direct and the hyper server).
-- **`fogu:grpc` streams in both directions, message by message.** The handler of a
-  client-streaming or bidirectional method gets its requests as a `GrpcStream` while they arrive
-  (`for m in msgs`, `msgs.next()`, `stream.from(msgs)`, `msgs.toList()`), and can answer each one
-  before the next; `c.stream(method)` without requests opens the call on the client: `send(msg)`,
-  `end()`, and `next()` / `for` for the responses. A `GrpcStream` is a `fogu:stream` source,
-  `pipe` sends a stream or a channel into a call (`stream.from(ch).pipe(s)`, `s.pipe(call)`), and
-  a server-streaming handler may return a stream. Also:
-  - `srv.use(fn(call))`: interceptors run before every handler; an error fails the call
-    (`grpc.status("UNAUTHENTICATED", …)`).
-  - Health checking: the server answers `grpc.health.v1.Health/Check` itself (`srv.health(service,
-    status)`; `grpc.server(schema, { health: false })` turns it off).
-  - Server reflection with `grpc.server(schema, { reflection: true })` (`grpc.reflection.v1` and
-    v1alpha): `grpcurl list`, `describe` and calls work without the `.proto` (checked with grpcurl
-    1.9: unary, bidirectional, health).
-  - mTLS: `listen(port, { cert, key, clientCa })` asks clients for a certificate signed by
-    `clientCa`; `grpc.connect(url, schema, { cert, key })` presents one.
-  - `c.close()` closes the client (it did nothing): no new calls, the connection goes when the open
-    ones end; `c.closed`.
-- **Public-key signatures**: `crypto.sign(alg, privateKey, data)`, `crypto.verify(alg, publicKey,
-  data, signature)` and `crypto.jwk(key, { kid, alg, use })` — RS256/384/512, PS256/384/512,
-  ES256/384 and EdDSA, keys as PEM (public key, PKCS#1, certificate, PKCS#8) or JWK, computed by
-  `ring` (already linked through rustls; constant-time signing). RSA keys under 2048 bits are
-  refused.
-- **`fogu:jwt` with public keys and OpenID Connect**: `jwt.sign` with a PEM private key (`keyid`
-  → `kid`), `jwt.verify` / `jwt.middleware` with a PEM key, a JWK, a JWK set (the token's `kid`
-  picks the key; `use: enc` keys are skipped), `jwt.jwks(url, { ttl, minRefresh })` (fetched on
-  first use, after `ttl` and on key rotation, at most once per `minRefresh`; the old keys stay if a
-  refresh fails) and `jwt.oidc(issuer)` (discovery; tokens must carry `iss: issuer`). The key
-  decides the algorithms: a secret accepts only HS*, a public key only those of its type, `alg:
-  none` never — an HS256 token made with the public key as its secret is refused. Fetching waits
-  cooperatively, in `jwt.verify` and in the middleware (`fogu:web` now lets a native middleware
-  wait). Tokens made by OpenSSL (RS256, PS256) verify; a native verification takes tens of
-  microseconds (a pure-Fogu RS256 took ~47 ms on the interpreter's thread).
-
 ### Not changed, and why
 
 - Recursion depth (C01): the JIT compiles `1 + depth(n - 1)` into a loop, so it has no depth to
@@ -238,14 +309,6 @@ direct HTTP server below. No benchmark of `bench/` is slower than in 0.8.3.
 
 ### Fixed
 
-- `fogu:grpc`: the last `next()` of `c.stream(...)` could wait for ever (about 1 run in 20 of
-  `tests/spec/grpc.fg`): the reading task woke the scheduler before it dropped its sender, so the
-  end of the stream could arrive after the scheduler looked and went back to sleep. The sender
-  goes first now. (Present in 0.8.3.)
-- `crypto.fromBase64` reads text without its `=` padding in the standard alphabet too
-  (`"aGVsbG8"` was "Invalid padding").
-- `tests/spec/grpc.fg` timed its concurrency check with `clock()`, the wall clock, which can jump
-  (it went backwards on WSL); it uses `time.monotonic()`.
 - `fogu:net` (Linux): a read could wait for ever at the end of a stream when the peer's last
   bytes and its close arrived together — the receive that took the bytes looked like one that
   emptied the socket, and no further event announced the end. The reactor now remembers a

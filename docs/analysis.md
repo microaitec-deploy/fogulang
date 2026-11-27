@@ -606,3 +606,28 @@ What it showed about the code:
   `fogu:vm` or test timeout interrupts sleeps but not waits on channels or the network (M45);
   S20, S21, S23 (documented). Fixed in 0.8.4 but to be confirmed on a Windows (msvc) release
   build: N01, the `\\?\` paths (B22, §7, §16), 1 ms timers (§8), `Fogu.env` names (§15).
+
+## The Chat project's limits (0.8.5)
+
+A backend in Fogu (Keycloak, PostgreSQL, Socket.IO, Redis, S3) and its reports listed what blocked it.
+Fixed in 0.8.5:
+
+- `fogu:orm` ran each query with `block_on` on the interpreter's thread: with it a read endpoint did
+  230 req/s and timed out, with async `fogu:sql` 931. ORM calls are now intercepted
+  (`orm::intercept`): the method runs on a copy of the model (same shared state), no object stays
+  borrowed, and queries wait cooperatively (`SqlConn::run` → `rt::block_on`).
+- One connection per database: `{ pool: n }` on `sql.open` and `create_client`; transactions are per
+  task on a connection taken out of the pool (`sql::Txs`, `Held`). With one connection the old
+  cooperative wait for another task's transaction is kept (no acquire timeout).
+- PostgreSQL NULL parameters (`inline_nulls`), `fogu:s3` buffers, ranges, multipart, signed content
+  types and POST policies, `Content-Length: 0` on empty requests.
+- Asymmetric JWT (RS/PS/ES/EdDSA, JWKS, OIDC discovery) natively through ring: the pure-Fogu RS256 of
+  `libs/oidc` took ~47 ms on the interpreter's thread per cold token.
+- gRPC streams both ways; buffers across `sync.Worker`; `formData` and protobuf in the HTTP client.
+
+Still open (in "Known gaps" order of priority): request bodies read whole (`maxBody`) and binary
+response bodies of `http.serve`; Socket.IO `io.use`, connection state recovery and a Redis adapter;
+CPU-heavy natives (`fogu:image`) still run on the interpreter's thread; the language items
+(`f()?.x` on a tuple read as optional chaining, `slice` out of range stops the program, no
+conditional expression, no computed keys, no `_` in `for`, `error(msg, cause)` takes no data); nested
+`file:` packages and a link mode; a minimal linux-x64 runtime for `--compile`.

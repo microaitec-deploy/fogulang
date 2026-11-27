@@ -203,6 +203,51 @@ fn multipart_parts(v: &Value) -> Result<Vec<Part>, String> {
     Ok(out)
 }
 
+/// `protobuf: { schema, message, value }` → the encoded message.
+fn protobuf_body(v: &Value, what: &str) -> Result<Vec<u8>, String> {
+    #[cfg(feature = "rpc")]
+    {
+        let Value::Map(m) = v else { return Err(format!("{}: 'protobuf' must be {{ schema, message, value }}", what)) };
+        let m = m.borrow();
+        let desc = protobuf_message(m.get("schema"), m.get("message"), what)?;
+        let msg = crate::native::protobuf::message_from_value(desc, m.get("value").unwrap_or(&Value::Nil))?;
+        Ok(crate::native::protobuf::encode_message(&msg))
+    }
+    #[cfg(not(feature = "rpc"))]
+    {
+        let _ = v;
+        Err(format!("{}: protobuf bodies need the 'rpc' feature", what))
+    }
+}
+
+#[cfg(feature = "rpc")]
+fn protobuf_message(schema: Option<&Value>, name: Option<&Value>, what: &str) -> Result<prost_reflect::MessageDescriptor, String> {
+    let pool = crate::native::protobuf::pool_of(schema.unwrap_or(&Value::Nil)).map_err(|e| format!("{}: {}", what, e))?;
+    let name = match name {
+        Some(Value::Str(n)) => n.to_string(),
+        _ => return Err(format!("{}: protobuf needs 'message', the full name of the message type", what)),
+    };
+    pool.get_message_by_name(name.trim_start_matches('.')).ok_or_else(|| format!("{}: no message '{}' in the schema", what, name))
+}
+
+/// `x.protobuf(schema, message)` of a response or a request: the body decoded
+/// as that message, every field present.
+pub(crate) fn decode_protobuf(args: &[Value], body: &[u8]) -> Result<Value, String> {
+    max_args(args, 2, "protobuf")?;
+    #[cfg(feature = "rpc")]
+    {
+        let desc = protobuf_message(args.first(), args.get(1), "protobuf")?;
+        let m = crate::native::protobuf::decode_message(desc, body)?;
+        let o = crate::native::util::map(vec![("defaults", Value::Bool(true))]);
+        crate::native::protobuf::message_to_value(&m, Some(&o))
+    }
+    #[cfg(not(feature = "rpc"))]
+    {
+        let _ = body;
+        Err("protobuf: needs the 'rpc' feature".into())
+    }
+}
+
 /// `(method, url, body?, options?)` → the plan.
 fn plan(method: &str, url: &Value, body: Option<&Value>, o: Option<&Value>) -> Result<Plan, String> {
     let what = format!("http.{}", method.to_ascii_lowercase());
@@ -243,7 +288,7 @@ fn plan(method: &str, url: &Value, body: Option<&Value>, o: Option<&Value>) -> R
         Some(Value::Map(m)) => {
             let m = m.borrow();
             const KNOWN: &[&str] =
-                &["headers", "query", "json", "form", "multipart", "body", "timeout", "redirects", "basicAuth", "bearer", "method", "url", "ca", "insecure"];
+                &["headers", "query", "json", "form", "multipart", "formData", "protobuf", "body", "timeout", "redirects", "basicAuth", "bearer", "method", "url", "ca", "insecure"];
             for k in m.keys() {
                 if !KNOWN.contains(&k.as_str()) {
                     return Err(format!("{}: unknown option '{}' ({})", what, k, KNOWN.join(" ")));
@@ -264,8 +309,14 @@ fn plan(method: &str, url: &Value, body: Option<&Value>, o: Option<&Value>) -> R
             if let Some(f) = m.get("form") {
                 p.body = Body::Form(pairs(f, "form")?);
             }
-            if let Some(mp) = m.get("multipart") {
+            // multipart/form-data (`formData`, as the browser names it): text fields,
+            // http.file(path) and { data, filename, type } parts
+            if let Some(mp) = m.get("multipart").or_else(|| m.get("formData")) {
                 p.body = Body::Multipart(multipart_parts(mp)?);
+            }
+            // { schema, message, value }: a protobuf message (application/x-protobuf)
+            if let Some(pb) = m.get("protobuf") {
+                p.body = Body::Raw { data: protobuf_body(pb, &what)?, content_type: "application/x-protobuf" };
             }
             if let Some(t) = m.get("timeout") {
                 p.timeout = Some(duration_arg(t, &format!("{}: timeout", what))?);
@@ -519,6 +570,8 @@ impl FoguObject for ClientResponse {
         match method {
             "json" => crate::native::json::parse_value(&String::from_utf8_lossy(&self.body)).map_err(|e| io_err!("json: {}", e)),
             "bytes" => Ok(crate::native::util::bytes_value(self.body.as_ref().clone())),
+            // protobuf(schema, message) → the body decoded as that message (every field present)
+            "protobuf" => decode_protobuf(args, &self.body),
             // header(name) → all its values joined by ", " (nil when missing)
             "header" => {
                 max_args(args, 1, "header")?;
@@ -529,12 +582,12 @@ impl FoguObject for ClientResponse {
             "cookies" => Ok(list(
                 self.headers.iter().filter(|(k, _)| k == "set-cookie").map(|(_, v)| Value::Str(v.clone().into())).collect(),
             )),
-            other => Err(format!("method '{}' does not exist on Response (json bytes header cookies)", other)),
+            other => Err(format!("method '{}' does not exist on Response (json bytes protobuf header cookies)", other)),
         }
     }
 
     fn methods(&self) -> Vec<&'static str> {
-        vec!["json", "bytes", "header", "cookies"]
+        vec!["json", "bytes", "protobuf", "header", "cookies"]
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

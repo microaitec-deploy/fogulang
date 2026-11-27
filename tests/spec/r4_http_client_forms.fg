@@ -1,0 +1,23 @@
+// fogu:http client: formData (multipart/form-data) and protobuf bodies
+import http from "fogu:http"
+import protobuf from "fogu:protobuf"
+
+const schema = protobuf.parse("syntax = \"proto3\"; package demo; message Hello { string name = 1; int32 n = 2; }")?
+http.serve(18471, (req) => {
+    if req.path == "/form" {
+        const f = req.form()?
+        return http.json({ type: req.header("content-type").split(";")[0], name: f.name, file: f.avatar.filename, size: f.avatar.size })
+    }
+    if req.path == "/pb" {
+        const m = req.protobuf(schema, "demo.Hello")?
+        print("server got", m, req.header("content-type"))
+        // a reply in the same encoding (these bytes are also UTF-8 text)
+        return http.text(req.body, { headers: { "content-type": "application/x-protobuf" } })
+    }
+    return http.text("?", { status: 404 })
+}, { quiet: true })?
+
+const r = http.post("http://127.0.0.1:18471/form", nil, { formData: { name: "ana", avatar: { data: bytes([1, 2, 3, 4]), filename: "a.png" } } })?
+print(r.json()?)
+const p = http.post("http://127.0.0.1:18471/pb", nil, { protobuf: { schema: schema, message: "demo.Hello", value: { name: "Ana", n: 7 } } })?
+print(p.protobuf(schema, "demo.Hello")?)

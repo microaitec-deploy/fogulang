@@ -301,24 +301,95 @@ fn sign(
     headers
 }
 
-/// A pre-signed URL (query string authentication).
-fn presign(cfg: &Cfg, method: &str, bucket: &str, key: &str, expires: u64, now: u64) -> String {
+/// A pre-signed URL (query string authentication). `content_type`, when
+/// given, is signed too: the upload must send exactly that `Content-Type`.
+/// `extra` joins the query (`uploadId` and `partNumber` of a multipart part).
+#[allow(clippy::too_many_arguments)]
+fn presign(cfg: &Cfg, method: &str, bucket: &str, key: &str, expires: u64, now: u64, content_type: Option<&str>, extra: &BTreeMap<String, String>) -> String {
     let t = target(cfg, Some(bucket), Some(key));
     let (amz_date, date) = amz_dates(now);
     let scope = format!("{}/{}/s3/aws4_request", date, cfg.region);
-    let mut q: BTreeMap<String, String> = BTreeMap::new();
+    let mut q: BTreeMap<String, String> = extra.clone();
     q.insert("X-Amz-Algorithm".into(), "AWS4-HMAC-SHA256".into());
     q.insert("X-Amz-Credential".into(), format!("{}/{}", cfg.access_key, scope));
     q.insert("X-Amz-Date".into(), amz_date.clone());
     q.insert("X-Amz-Expires".into(), expires.to_string());
-    q.insert("X-Amz-SignedHeaders".into(), "host".into());
+    q.insert("X-Amz-SignedHeaders".into(), if content_type.is_some() { "content-type;host" } else { "host" }.into());
     if let Some(tok) = &cfg.session_token {
         q.insert("X-Amz-Security-Token".into(), tok.clone());
     }
-    let canonical = format!("{}\n{}\n{}\nhost:{}\n\nhost\nUNSIGNED-PAYLOAD", method, t.path, canonical_query(&q), t.host);
+    let headers = match content_type {
+        Some(ct) => format!("content-type:{}\nhost:{}\n", ct.trim(), t.host),
+        None => format!("host:{}\n", t.host),
+    };
+    let signed = if content_type.is_some() { "content-type;host" } else { "host" };
+    let canonical = format!("{}\n{}\n{}\n{}\n{}\nUNSIGNED-PAYLOAD", method, t.path, canonical_query(&q), headers, signed);
     let to_sign = format!("AWS4-HMAC-SHA256\n{}\n{}\n{}", amz_date, scope, sha256_hex(canonical.as_bytes()));
     let signature = hex(&hmac(&signing_key(cfg, &date), &to_sign));
     format!("{}{}?{}&X-Amz-Signature={}", t.origin, t.path, canonical_query(&q), signature)
+}
+
+/// `20261127T101500Z` → `2026-11-27T10:15:00.000Z` (a POST policy's expiration).
+fn iso_of_amz(amz: &str) -> String {
+    let d = amz.as_bytes();
+    let s = |a: usize, b: usize| std::str::from_utf8(&d[a..b]).unwrap_or("00");
+    format!("{}-{}-{}T{}:{}:{}.000Z", s(0, 4), s(4, 6), s(6, 8), s(9, 11), s(11, 13), s(13, 15))
+}
+
+/// What a browser form may upload with a pre-signed POST.
+struct PostPolicy {
+    key: Option<String>,
+    key_prefix: Option<String>,
+    content_type: Option<String>,
+    content_type_prefix: Option<String>,
+    min_size: i64,
+    max_size: Option<i64>,
+}
+
+/// A pre-signed POST (SigV4 POST policy): the URL and the form fields. S3
+/// itself refuses an upload outside the policy (size, type, key).
+fn presign_post(cfg: &Cfg, bucket: &str, p: &PostPolicy, expires: u64, now: u64) -> (String, Vec<(String, String)>) {
+    use base64::Engine;
+    let t = target(cfg, Some(bucket), None);
+    let (amz_date, date) = amz_dates(now);
+    let (exp_amz, _) = amz_dates(now + expires);
+    let credential = format!("{}/{}/{}/s3/aws4_request", cfg.access_key, date, cfg.region);
+    let mut conditions = vec![serde_json::json!({ "bucket": bucket })];
+    match (&p.key, &p.key_prefix) {
+        (Some(k), _) => conditions.push(serde_json::json!(["eq", "$key", k])),
+        (None, Some(pre)) => conditions.push(serde_json::json!(["starts-with", "$key", pre])),
+        (None, None) => conditions.push(serde_json::json!(["starts-with", "$key", ""])),
+    }
+    conditions.push(serde_json::json!({ "x-amz-algorithm": "AWS4-HMAC-SHA256" }));
+    conditions.push(serde_json::json!({ "x-amz-credential": credential }));
+    conditions.push(serde_json::json!({ "x-amz-date": amz_date }));
+    if let Some(tok) = &cfg.session_token {
+        conditions.push(serde_json::json!({ "x-amz-security-token": tok }));
+    }
+    if let Some(max) = p.max_size {
+        conditions.push(serde_json::json!(["content-length-range", p.min_size, max]));
+    }
+    match (&p.content_type, &p.content_type_prefix) {
+        (Some(ct), _) => conditions.push(serde_json::json!(["eq", "$Content-Type", ct])),
+        (None, Some(pre)) => conditions.push(serde_json::json!(["starts-with", "$Content-Type", pre])),
+        _ => {}
+    }
+    let policy = serde_json::json!({ "expiration": iso_of_amz(&exp_amz), "conditions": conditions }).to_string();
+    let policy_b64 = base64::engine::general_purpose::STANDARD.encode(policy.as_bytes());
+    let signature = hex(&hmac(&signing_key(cfg, &date), &policy_b64));
+    let mut fields = vec![("key".to_string(), p.key.clone().unwrap_or_else(|| format!("{}${{filename}}", p.key_prefix.clone().unwrap_or_default())))];
+    if let Some(ct) = &p.content_type {
+        fields.push(("Content-Type".into(), ct.clone()));
+    }
+    fields.push(("policy".into(), policy_b64));
+    fields.push(("x-amz-algorithm".into(), "AWS4-HMAC-SHA256".into()));
+    fields.push(("x-amz-credential".into(), credential));
+    fields.push(("x-amz-date".into(), amz_date));
+    if let Some(tok) = &cfg.session_token {
+        fields.push(("x-amz-security-token".into(), tok.clone()));
+    }
+    fields.push(("x-amz-signature".into(), signature));
+    (format!("{}{}", t.origin, t.path), fields)
 }
 
 // ---------------------------------------------------------------------
@@ -338,13 +409,35 @@ fn request(
     bucket: Option<&str>,
     key: Option<&str>,
     query: BTreeMap<String, String>,
-    mut extra: BTreeMap<String, String>,
+    extra: BTreeMap<String, String>,
     body: Vec<u8>,
 ) -> Result<Resp, String> {
+    request_to(cfg, method, bucket, key, query, extra, body, None)
+}
+
+/// A request; with `sink`, a successful answer's body goes into that file as
+/// it arrives (a download never sits whole in memory).
+#[allow(clippy::too_many_arguments)]
+fn request_to(
+    cfg: &Cfg,
+    method: &str,
+    bucket: Option<&str>,
+    key: Option<&str>,
+    query: BTreeMap<String, String>,
+    mut extra: BTreeMap<String, String>,
+    body: Vec<u8>,
+    sink: Option<&str>,
+) -> Result<Resp, String> {
     let t = target(cfg, bucket, key);
-    // Envia Content-Length explícito — evita 411/502 em PUT/DELETE vazios
-    // atrás de proxies (nginx, MinIO gateway, Cloudflare).
-    extra.entry("content-length".to_string()).or_insert_with(|| body.len().to_string());
+    // A request that may carry a body says its length, and signs it — also
+    // when it is 0 (PUT of a bucket, DELETE): proxies answer 411/502 without
+    // one, and servers that check signed headers (RustFS) refuse a signed
+    // length that was not sent. GET and HEAD carry none.
+    let has_body = !matches!(method, "GET" | "HEAD");
+    if has_body {
+        extra.entry("content-length".to_string()).or_insert_with(|| body.len().to_string());
+    }
+    let empty = body.is_empty();
 
     let payload_hash = sha256_hex(&body);
     let headers = sign(cfg, method, &t, &query, &extra, &payload_hash, now_secs());
@@ -356,19 +449,27 @@ fn request(
         .map_err(|e| format!("s3: invalid HTTP method '{}': {}", method, e))?;
     let mut rb = client.request(http_method, &url);
     for (k, v) in &headers {
-        // `host` e `content-length` são definidos pelo reqwest; pular para
-        // não duplicar (duplicar Content-Length gera 502 em vários proxies).
-        if k == "host" || k == "content-length" {
+        // `host` is reqwest's; so is `content-length` when there is a body
+        // (sending it twice makes several proxies answer 502)
+        if k == "host" || (k == "content-length" && !empty) {
             continue;
         }
         rb = rb.header(k.as_str(), v.as_str());
     }
-    if !body.is_empty() {
+    if !empty {
         rb = rb.body(body);
     }
-    let resp = rb.send().map_err(|e| io_err!("s3: {} {} → {}", method, url, e))?;
+    let mut resp = rb.send().map_err(|e| io_err!("s3: {} {} → {}", method, url, e))?;
     let status = resp.status().as_u16();
     let headers = resp.headers().clone();
+    if let (Some(path), true) = (sink, (200..300).contains(&status)) {
+        if let Some(dir) = std::path::Path::new(path).parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir).map_err(|e| io_err!("s3.download: {}: {}", path, e))?;
+        }
+        let mut f = std::fs::File::create(path).map_err(|e| io_err!("s3.download: {}: {}", path, e))?;
+        resp.copy_to(&mut f).map_err(|e| io_err!("s3.download: {}: {}", path, e))?;
+        return Ok(Resp { status, headers, body: Vec::new() });
+    }
     let body = resp.bytes().map_err(|e| io_err!("s3: reading response body: {}", e))?.to_vec();
     Ok(Resp { status, headers, body })
 }
@@ -495,11 +596,12 @@ pub struct S3Value {
     cfg: Cfg,
 }
 
-/// Bytes to upload: a str as is, a list of byte ints (0..255) as binary,
-/// anything else as JSON. Files go through `upload(path, key)`.
+/// Bytes to upload: a str as is, a buffer or a list of byte ints (0..255) as
+/// binary, anything else as JSON. Files go through `upload(path, key)`.
 fn body_of(v: &Value) -> Vec<u8> {
     match v {
         Value::Str(s) => s.as_bytes().to_vec(),
+        Value::Buffer(_) => crate::native::util::bytes_of(v, "s3.put").unwrap_or_default(),
         Value::List(l) => {
             let items = l.borrow();
             let bytes: Option<Vec<u8>> = items
@@ -535,6 +637,124 @@ fn guess_type(key: &str) -> &'static str {
         "wasm" => "application/wasm",
         "mp4" => "video/mp4",
         _ => "application/octet-stream",
+    }
+}
+
+/// Headers of an upload: type, cache, ACL, metadata.
+fn put_headers(o: &HashMap<Str, Value>, key: &str) -> BTreeMap<String, String> {
+    let mut h = BTreeMap::new();
+    h.insert("content-type".to_string(), get_s(o, "contentType").unwrap_or_else(|| guess_type(key).into()));
+    if let Some(c) = get_s(o, "cacheControl") {
+        h.insert("cache-control".into(), c);
+    }
+    if let Some(a) = get_s(o, "acl") {
+        h.insert("x-amz-acl".into(), a);
+    }
+    if let Some(Value::Map(meta)) = o.get("metadata") {
+        for (k, v) in meta.borrow().iter() {
+            h.insert(format!("x-amz-meta-{}", k.to_lowercase()), v.to_display_string());
+        }
+    }
+    h
+}
+
+/// S3 parts: 5 MiB at least (but the last), 10 000 at most.
+const MIN_PART: u64 = 5 * 1024 * 1024;
+const DEFAULT_PART: u64 = 16 * 1024 * 1024;
+
+fn part_number(n: i64, what: &str) -> Result<u32, String> {
+    if (1..=10_000).contains(&n) { Ok(n as u32) } else { Err(format!("{}: partNumber must be between 1 and 10000, got {}", what, n)) }
+}
+
+/// `{ range }` → a `Range` header.
+fn range_header(v: Option<&Value>, what: &str) -> Result<Option<String>, String> {
+    let n = |v: &Value| match v {
+        Value::Int(n) => Ok(*n),
+        other => Err(format!("{}: range values must be ints, got '{}'", what, other.type_name())),
+    };
+    Ok(Some(match v {
+        None | Some(Value::Nil) => return Ok(None),
+        Some(Value::Str(s)) if s.starts_with("bytes=") => s.to_string(),
+        Some(Value::List(l)) => {
+            let l = l.borrow();
+            match l.as_slice() {
+                [a] if n(a)? < 0 => format!("bytes={}", n(a)?),
+                [a] | [a, Value::Nil] if n(a)? >= 0 => format!("bytes={}-", n(a)?),
+                [a, b] if n(a)? >= 0 && n(b)? >= n(a)? => format!("bytes={}-{}", n(a)?, n(b)?),
+                _ => return Err(format!("{}: range is [start, end], [start] or [-lastBytes]", what)),
+            }
+        }
+        Some(_) => return Err(format!("{}: range is [start, end], [-lastBytes] or \"bytes=…\"", what)),
+    }))
+}
+
+fn create_multipart(cfg: &Cfg, bucket: &str, key: &str, h: BTreeMap<String, String>) -> Result<String, String> {
+    let mut q = BTreeMap::new();
+    q.insert("uploads".to_string(), String::new());
+    let r = ok_or(&format!("createMultipartUpload {}", key), request(cfg, "POST", Some(bucket), Some(key), q, h, Vec::new())?)?;
+    tag(&String::from_utf8_lossy(&r.body), "UploadId").ok_or_else(|| io_err!("s3: createMultipartUpload {}: no UploadId in the answer", key))
+}
+
+fn upload_part(cfg: &Cfg, bucket: &str, key: &str, id: &str, n: u32, body: Vec<u8>) -> Result<String, String> {
+    let mut q = BTreeMap::new();
+    q.insert("partNumber".to_string(), n.to_string());
+    q.insert("uploadId".to_string(), id.to_string());
+    let r = ok_or(&format!("uploadPart {} #{}", key, n), request(cfg, "PUT", Some(bucket), Some(key), q, BTreeMap::new(), body)?)?;
+    Ok(header(&r, "etag").unwrap_or_default().trim_matches('"').to_string())
+}
+
+fn complete_multipart(cfg: &Cfg, bucket: &str, key: &str, id: &str, parts: &[(u32, String)]) -> Result<String, String> {
+    let mut q = BTreeMap::new();
+    q.insert("uploadId".to_string(), id.to_string());
+    let mut xml = String::from("<CompleteMultipartUpload>");
+    for (n, etag) in parts {
+        xml.push_str(&format!("<Part><PartNumber>{}</PartNumber><ETag>\"{}\"</ETag></Part>", n, etag.trim_matches('"')));
+    }
+    xml.push_str("</CompleteMultipartUpload>");
+    let mut h = BTreeMap::new();
+    h.insert("content-type".to_string(), "application/xml".to_string());
+    let r = ok_or(&format!("completeMultipartUpload {}", key), request(cfg, "POST", Some(bucket), Some(key), q, h, xml.into_bytes())?)?;
+    // S3 may answer 200 with an error document
+    let text = String::from_utf8_lossy(&r.body).to_string();
+    if text.contains("<Error>") {
+        return Err(s3_error(&format!("completeMultipartUpload {}", key), &r));
+    }
+    Ok(tag(&text, "ETag").unwrap_or_default().replace("&quot;", "").trim_matches('"').to_string())
+}
+
+fn abort_multipart(cfg: &Cfg, bucket: &str, key: &str, id: &str) -> Result<(), String> {
+    let mut q = BTreeMap::new();
+    q.insert("uploadId".to_string(), id.to_string());
+    let r = request(cfg, "DELETE", Some(bucket), Some(key), q, BTreeMap::new(), Vec::new())?;
+    if r.status == 404 { Ok(()) } else { ok_or(&format!("abortMultipartUpload {}", key), r).map(|_| ()) }
+}
+
+/// A file in parts, one in memory at a time; any failure aborts the upload
+/// (no orphan parts are left to pay for). Returns (etag, parts).
+fn upload_parts(cfg: &Cfg, bucket: &str, key: &str, path: &str, len: u64, part: u64, h: BTreeMap<String, String>) -> Result<(String, i64), String> {
+    use std::io::Read;
+    let id = create_multipart(cfg, bucket, key, h)?;
+    let run = || -> Result<String, String> {
+        let mut f = std::fs::File::open(path).map_err(|e| io_err!("s3.upload: cannot read {}: {}", path, e))?;
+        let mut parts = Vec::new();
+        let mut left = len;
+        let mut n = 1u32;
+        while left > 0 {
+            let size = left.min(part);
+            let mut buf = vec![0u8; size as usize];
+            f.read_exact(&mut buf).map_err(|e| io_err!("s3.upload: cannot read {}: {}", path, e))?;
+            parts.push((n, upload_part(cfg, bucket, key, &id, n, buf)?));
+            left -= size;
+            n += 1;
+        }
+        complete_multipart(cfg, bucket, key, &id, &parts)
+    };
+    match run() {
+        Ok(etag) => Ok((etag, len.div_ceil(part) as i64)),
+        Err(e) => {
+            let _ = abort_multipart(cfg, bucket, key, &id);
+            Err(e)
+        }
     }
 }
 
@@ -589,7 +809,7 @@ impl FoguObject for S3Value {
                 cfg.bucket = Some(str_arg(args, 0, "withBucket")?);
                 Ok(NativeObjectRef::new(S3Value { cfg }).to_value())
             }
-            // presign(key, { method = "GET", expires = 1h, bucket }) → URL
+            // presign(key, { method = "GET", expires = 1h, bucket, contentType, uploadId, partNumber }) → URL
             "presign" => {
                 max_args(args, 2, "presign")?;
                 let key = str_arg(args, 0, "presign")?;
@@ -606,7 +826,55 @@ impl FoguObject for S3Value {
                 if !(1..=604_800).contains(&expires) {
                     return Err("presign: expires must be between 1s and 7 days".into());
                 }
-                Ok(Value::Str(presign(&self.cfg, &method, &bucket, &key, expires, now_secs()).into()))
+                let content_type = get_s(&o, "contentType");
+                let mut extra = BTreeMap::new();
+                match (o.get("uploadId"), o.get("partNumber")) {
+                    (Some(Value::Str(id)), Some(Value::Int(n))) if method == "PUT" => {
+                        extra.insert("partNumber".to_string(), part_number(*n, "presign")?.to_string());
+                        extra.insert("uploadId".to_string(), id.to_string());
+                    }
+                    (None, None) => {}
+                    _ => return Err("presign: a part needs method PUT, 'uploadId' (str) and 'partNumber' (int)".into()),
+                }
+                Ok(Value::Str(presign(&self.cfg, &method, &bucket, &key, expires, now_secs(), content_type.as_deref(), &extra).into()))
+            }
+            // presignPost(key | { keyPrefix }, { expires = 1h, maxSize, minSize, contentType, contentTypePrefix, bucket })
+            //   → { url, fields }: a browser form posts the fields and then the file
+            "presignPost" => {
+                max_args(args, 2, "presignPost")?;
+                let o = opts(args, 1, "presignPost")?;
+                let (key, key_prefix) = match args.first() {
+                    Some(Value::Str(k)) => (Some(k.to_string()), None),
+                    Some(Value::Map(m)) => (None, Some(get_s(&m.borrow(), "keyPrefix").ok_or("presignPost: expects a key or { keyPrefix }")?)),
+                    _ => return Err("presignPost: expects a key or { keyPrefix }".into()),
+                };
+                let bucket = self.bucket(&o, "presignPost")?;
+                let expires = match o.get("expires") {
+                    None | Some(Value::Nil) => 3600,
+                    Some(v) => duration_arg(v, "presignPost: expires")?.as_secs(),
+                };
+                if !(1..=604_800).contains(&expires) {
+                    return Err("presignPost: expires must be between 1s and 7 days".into());
+                }
+                let size = |k: &str| -> Result<Option<i64>, String> {
+                    match o.get(k) {
+                        None | Some(Value::Nil) => Ok(None),
+                        Some(v) => crate::native::util::size_arg(v, &format!("presignPost: {}", k)).map(|n| Some(n as i64)),
+                    }
+                };
+                let policy = PostPolicy {
+                    key,
+                    key_prefix,
+                    content_type: get_s(&o, "contentType"),
+                    content_type_prefix: get_s(&o, "contentTypePrefix"),
+                    min_size: size("minSize")?.unwrap_or(0),
+                    max_size: size("maxSize")?,
+                };
+                let (url, fields) = presign_post(&self.cfg, &bucket, &policy, expires, now_secs());
+                Ok(map(vec![
+                    ("url", Value::Str(url.into())),
+                    ("fields", map(fields.iter().map(|(k, v)| (k.as_str(), Value::Str(v.clone().into()))).collect())),
+                ]))
             }
             // url(key) → the plain (unsigned) URL of an object
             "url" => {
@@ -617,7 +885,7 @@ impl FoguObject for S3Value {
                 Ok(Value::Str(format!("{}{}", t.origin, t.path).into()))
             }
             other => Err(format!(
-                "method '{}' does not exist on S3 (put get getBytes download upload head exists delete list copy presign url withBucket createBucket deleteBucket listBuckets)",
+                "method '{}' does not exist on S3 (put get getBytes download upload head exists delete list copy presign presignPost url withBucket createBucket deleteBucket listBuckets createMultipartUpload uploadPart completeMultipartUpload abortMultipartUpload)",
                 other
             )),
         }
@@ -643,27 +911,33 @@ impl FoguObject for S3Value {
                                 return Err(format!("upload: second argument must be a key or options map, got '{}'", other.type_name()));
                             }
                         };
+                        let o = opts(args, opt_idx, "upload")?;
+                        let part_size = match o.get("partSize") {
+                            None | Some(Value::Nil) => DEFAULT_PART,
+                            Some(v) => crate::native::util::size_arg(v, "upload: partSize")? as u64,
+                        };
+                        if part_size < MIN_PART {
+                            return Err("upload: partSize must be at least 5mb (the S3 minimum)".into());
+                        }
+                        let len = std::fs::metadata(&path).map_err(|e| io_err!("s3.upload: cannot read {}: {}", path, e))?.len();
+                        // a big file goes in parts, read one at a time: memory stays at one part
+                        if len > part_size {
+                            let bucket = self.bucket(&o, "upload")?;
+                            let h = put_headers(&o, &key);
+                            return Ok(Some(thread_poller(
+                                move || upload_parts(&cfg, &bucket, &key, &path, len, part_size, h),
+                                |(etag, parts)| Ok(map(vec![("etag", Value::Str(etag.into())), ("parts", Value::Int(parts))])),
+                            )));
+                        }
                         let body = std::fs::read(&path).map_err(|e| io_err!("s3.upload: cannot read {}: {}", path, e))?;
-                        (key, body, opts(args, opt_idx, "upload")?)
+                        (key, body, o)
                     } else {
                         let key = str_arg(args, 0, "put")?;
                         let body = body_of(args.get(1).unwrap_or(&Value::Nil));
                         (key, body, opts(args, 2, "put")?)
                     };
                     let bucket = self.bucket(&o, method)?;
-                    let mut h = BTreeMap::new();
-                    h.insert("content-type".to_string(), get_s(&o, "contentType").unwrap_or_else(|| guess_type(&key).into()));
-                    if let Some(c) = get_s(&o, "cacheControl") {
-                        h.insert("cache-control".into(), c);
-                    }
-                    if let Some(a) = get_s(&o, "acl") {
-                        h.insert("x-amz-acl".into(), a);
-                    }
-                    if let Some(Value::Map(meta)) = o.get("metadata") {
-                        for (k, v) in meta.borrow().iter() {
-                            h.insert(format!("x-amz-meta-{}", k.to_lowercase()), v.to_display_string());
-                        }
-                    }
+                    let h = put_headers(&o, &key);
                     thread_poller(
                         move || {
                             let r = ok_or(&format!("put {}", key), request(&cfg, "PUT", Some(&bucket), Some(&key), BTreeMap::new(), h, body)?)?;
@@ -672,33 +946,90 @@ impl FoguObject for S3Value {
                         |etag| Ok(map(vec![("etag", Value::Str(etag.into()))])),
                     )
                 }
-                // get(key) → str · getBytes(key) → [int] · download(key, path)
+                // get(key, { range }) → str · getBytes(key, { range }) → buffer · download(key, path, { range })
+                // range: [start, end] (inclusive; end nil = to the end), [-n] (the last n bytes) or "bytes=…"
                 "get" | "getBytes" | "download" => {
                     max_args(args, if method == "download" { 3 } else { 2 }, method)?;
                     let key = str_arg(args, 0, method)?;
                     let path = if method == "download" { Some(str_arg(args, 1, "download")?) } else { None };
                     let o = opts(args, if method == "download" { 2 } else { 1 }, method)?;
                     let bucket = self.bucket(&o, method)?;
+                    let mut h = BTreeMap::new();
+                    if let Some(r) = range_header(o.get("range"), method)? {
+                        h.insert("range".to_string(), r);
+                    }
                     let kind = method.to_string();
                     thread_poller(
                         move || {
-                            let r = ok_or(&format!("get {}", key), request(&cfg, "GET", Some(&bucket), Some(&key), BTreeMap::new(), BTreeMap::new(), Vec::new())?)?;
-                            if let Some(p) = &path {
-                                if let Some(dir) = std::path::Path::new(p).parent().filter(|d| !d.as_os_str().is_empty()) {
-                                    std::fs::create_dir_all(dir).map_err(|e| io_err!("s3.download: {}: {}", p, e))?;
-                                }
-                                std::fs::write(p, &r.body).map_err(|e| io_err!("s3.download: {}: {}", p, e))?;
+                            let r = request_to(&cfg, "GET", Some(&bucket), Some(&key), BTreeMap::new(), h, Vec::new(), path.as_deref())?;
+                            if r.status == 416 {
+                                return Err(io_err!("s3: get {}: the range is outside the object", key));
                             }
-                            Ok(r.body)
+                            Ok(ok_or(&format!("get {}", key), r)?.body)
                         },
                         move |body| {
                             Ok(match kind.as_str() {
                                 "get" => Value::Str(String::from_utf8_lossy(&body).into_owned().into()),
-                                "getBytes" => list(body.into_iter().map(|b| Value::Int(b as i64)).collect()),
+                                "getBytes" => Value::buffer(body),
                                 _ => Value::Nil,
                             })
                         },
                     )
+                }
+                // multipart uploads, one step at a time (a browser can PUT each part to presign(key, { uploadId, partNumber }))
+                "createMultipartUpload" => {
+                    max_args(args, 2, method)?;
+                    let key = str_arg(args, 0, method)?;
+                    let o = opts(args, 1, method)?;
+                    let bucket = self.bucket(&o, method)?;
+                    let h = put_headers(&o, &key);
+                    thread_poller(move || create_multipart(&cfg, &bucket, &key, h), |id| Ok(Value::Str(id.into())))
+                }
+                "uploadPart" => {
+                    max_args(args, 5, method)?;
+                    let key = str_arg(args, 0, method)?;
+                    let id = str_arg(args, 1, method)?;
+                    let n = match args.get(2) {
+                        Some(Value::Int(n)) => part_number(*n, "uploadPart")?,
+                        _ => return Err("uploadPart(key, uploadId, partNumber, body)".into()),
+                    };
+                    let body = body_of(args.get(3).unwrap_or(&Value::Nil));
+                    let bucket = self.bucket(&opts(args, 4, method)?, method)?;
+                    thread_poller(
+                        move || upload_part(&cfg, &bucket, &key, &id, n, body),
+                        move |etag| Ok(map(vec![("partNumber", Value::Int(n as i64)), ("etag", Value::Str(etag.into()))])),
+                    )
+                }
+                "completeMultipartUpload" => {
+                    max_args(args, 4, method)?;
+                    let key = str_arg(args, 0, method)?;
+                    let id = str_arg(args, 1, method)?;
+                    let parts = match args.get(2) {
+                        Some(Value::List(l)) => l
+                            .borrow()
+                            .iter()
+                            .map(|p| match p {
+                                Value::Map(m) => {
+                                    let m = m.borrow();
+                                    match (m.get("partNumber"), m.get("etag")) {
+                                        (Some(Value::Int(n)), Some(e)) => Ok((part_number(*n, method)?, e.to_display_string())),
+                                        _ => Err(format!("{}: each part is {{ partNumber, etag }}", method)),
+                                    }
+                                }
+                                _ => Err(format!("{}: each part is {{ partNumber, etag }}", method)),
+                            })
+                            .collect::<Result<Vec<_>, _>>()?,
+                        _ => return Err(format!("{}(key, uploadId, [{{ partNumber, etag }}])", method)),
+                    };
+                    let bucket = self.bucket(&opts(args, 3, method)?, method)?;
+                    thread_poller(move || complete_multipart(&cfg, &bucket, &key, &id, &parts), |etag| Ok(map(vec![("etag", Value::Str(etag.into()))])))
+                }
+                "abortMultipartUpload" => {
+                    max_args(args, 3, method)?;
+                    let key = str_arg(args, 0, method)?;
+                    let id = str_arg(args, 1, method)?;
+                    let bucket = self.bucket(&opts(args, 2, method)?, method)?;
+                    thread_poller(move || abort_multipart(&cfg, &bucket, &key, &id), |_| Ok(Value::Nil))
                 }
                 // head(key) → { size, etag, contentType, lastModified, metadata } or nil · exists(key) → bool
                 "head" | "exists" => {
@@ -867,8 +1198,9 @@ impl FoguObject for S3Value {
 
     fn methods(&self) -> Vec<&'static str> {
         vec![
-            "put", "get", "getBytes", "download", "upload", "head", "exists", "delete", "list", "copy", "presign", "url",
+            "put", "get", "getBytes", "download", "upload", "head", "exists", "delete", "list", "copy", "presign", "presignPost", "url",
             "withBucket", "createBucket", "deleteBucket", "listBuckets",
+            "createMultipartUpload", "uploadPart", "completeMultipartUpload", "abortMultipartUpload",
         ]
     }
 }
@@ -905,7 +1237,7 @@ mod tests {
              Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41"
         );
         // presigned URL example of the same documentation page set
-        let url = presign(&cfg, "GET", "examplebucket", "test.txt", 86_400, 1_369_353_600);
+        let url = presign(&cfg, "GET", "examplebucket", "test.txt", 86_400, 1_369_353_600, None, &BTreeMap::new());
         assert!(url.ends_with("X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"));
     }
 

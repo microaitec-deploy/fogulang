@@ -1,0 +1,20 @@
+// Buffers cross a sync.Worker as buffers (they arrived as lists of ints)
+import sync from "fogu:sync"
+import crypto from "fogu:crypto"
+
+const w = sync.Worker(`
+import crypto from "fogu:crypto"
+fn info(b) { return [typeof(b), len(b), b[0], b[len(b) - 1]] }
+fn make(n) { return crypto.randomBytes(n) }
+fn nested(b) { return { data: b, parts: [b, "text", [1, 2]] } }
+fn sign(data) { return crypto.hash("sha256", data) }
+`)?
+const b = bytes([0, 1, 254, 255])
+print(w.call("info", b)?)
+const r = w.call("make", 16)?
+print(typeof(r), len(r))
+const n = w.call("nested", b)?
+print(typeof(n.data), typeof(n.parts[0]), n.parts[1], n.parts[2], n.data == b)
+print(w.call("sign", bytes([104, 105]))? == crypto.hash("sha256", "hi"))
+print(w.call("info", [1, 2, 3])?)
+w.close()

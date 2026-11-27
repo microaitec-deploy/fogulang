@@ -1,0 +1,15 @@
+[137, 80, 78, 71, 0, 255]
+buffer 11 world world
+world 5
+[PUT /fresh,   content-length: 0]
+up1 {etag: etag-1, partNumber: 1} {etag: etag-2, partNumber: 2}
+{etag: done} aaabb
+{etag: done, parts: 3}
+5 POST /b/file.txt?uploads= POST /b/file.txt?uploadId=up2
+11534336 true
+yyy
+true true
+true
+http://127.0.0.1:18461/b [key, policy, x-amz-algorithm, x-amz-credential, x-amz-date, x-amz-signature]
+true true true
+uploads/${filename}

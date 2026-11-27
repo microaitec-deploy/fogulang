@@ -1409,12 +1409,14 @@ impl FoguObject for RequestValue {
                 let ct = self.headers.get("content-type").cloned().unwrap_or_default();
                 form_value(&ct, &self.body)
             }
-            other => Err(format!("method '{}' does not exist on Request (header json bytes form)", other)),
+            // protobuf(schema, message) → the body decoded as that message
+            "protobuf" => crate::native::http_client::decode_protobuf(args, &self.body),
+            other => Err(format!("method '{}' does not exist on Request (header json bytes form protobuf)", other)),
         }
     }
 
     fn methods(&self) -> Vec<&'static str> {
-        vec!["header", "json", "bytes", "form"]
+        vec!["header", "json", "bytes", "form", "protobuf"]
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

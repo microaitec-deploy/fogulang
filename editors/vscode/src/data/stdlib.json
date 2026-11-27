@@ -1221,7 +1221,7 @@
      "name": "Worker",
      "signature": "sync.Worker(file | code | fn, { core }?)",
      "returns": "Worker · error",
-     "doc": "From a function: its source is sent (never the value), `w.call(...args)` runs it; what it uses must be a `fogu:` module, a top-level function or a constant — a captured local is an error naming it. A program of its own on another OS thread, with its own interpreter — on CPU `core` if given: the way to use several cores (`fg` tasks share one thread). `w.call(name, ...args)` calls a global function of the worker and waits without stopping the other tasks; arguments and results cross as JSON (numbers, texts, bools, nil, lists, maps) and nothing else is shared. A failure of the call comes back as an error value. Each worker is a thread of the same process, not a separate process: its own interpreter, heap of Fogu values, task scheduler and socket reactor, so workers scale over cores without locks. With `net.tcpListen(addr, { reusePort: true })` in each, a TCP server uses every core (`bench/net/tcp_workers.fg`). `w.close()`, fields `core source closed`.",
+     "doc": "From a function: its source is sent (never the value), `w.call(...args)` runs it; what it uses must be a `fogu:` module, a top-level function or a constant — a captured local is an error naming it. A program of its own on another OS thread, with its own interpreter — on CPU `core` if given: the way to use several cores (`fg` tasks share one thread). `w.call(name, ...args)` calls a global function of the worker and waits without stopping the other tasks; arguments and results cross as JSON (numbers, texts, bools, nil, lists, maps; buffers as their bytes, and they arrive as buffers) and nothing else is shared. A failure of the call comes back as an error value. Each worker is a thread of the same process, not a separate process: its own interpreter, heap of Fogu values, task scheduler and socket reactor, so workers scale over cores without locks. With `net.tcpListen(addr, { reusePort: true })` in each, a TCP server uses every core (`bench/net/tcp_workers.fg`). `w.close()`, fields `core source closed`.",
      "kind": "function"
     }
    ]
@@ -1635,6 +1635,27 @@
      "kind": "function"
     },
     {
+     "name": "sign",
+     "signature": "crypto.sign(alg, privateKey, data)",
+     "returns": "buffer · error",
+     "doc": "A signature with a PEM private key (PKCS#8 or `RSA PRIVATE KEY`): `RS256 RS384 RS512` (RSA PKCS#1 v1.5), `PS256 PS384 PS512` (RSA-PSS), `ES256 ES384` (ECDSA, as `r || s`), `EdDSA` (Ed25519). Constant-time (ring).",
+     "kind": "function"
+    },
+    {
+     "name": "verify",
+     "signature": "crypto.verify(alg, publicKey, data, signature)",
+     "returns": "bool · error",
+     "doc": "`publicKey`: PEM (`PUBLIC KEY`, `RSA PUBLIC KEY`, a certificate, or a private key's public half) or a JWK map. `signature`: a buffer or base64 / base64url text; ECDSA as `r || s` or DER. A key of another type, or RSA under 2048 bits, is an error value.",
+     "kind": "function"
+    },
+    {
+     "name": "jwk",
+     "signature": "crypto.jwk(key, { kid, alg, use })",
+     "returns": "map · error",
+     "doc": "The public JWK of a key (PEM or JWK): `{ kty, n, e }`, `{ kty: EC, crv, x, y }`, `{ kty: OKP, crv: Ed25519, x }` — to publish a JWK set.",
+     "kind": "function"
+    },
+    {
      "name": "randomInt",
      "signature": "crypto.randomInt(min, max)",
      "returns": "int",
@@ -1680,14 +1701,14 @@
      "name": "base64",
      "signature": "crypto.base64(data, { url })",
      "returns": "str",
-     "doc": "`data`: str or list of bytes.",
+     "doc": "`data`: str or list of bytes. `fromBase64` reads both alphabets, with or without `=` padding.",
      "kind": "function"
     },
     {
      "name": "fromBase64",
      "signature": "crypto.fromBase64(text, { bytes })",
      "returns": "str",
-     "doc": "`data`: str or list of bytes.",
+     "doc": "`data`: str or list of bytes. `fromBase64` reads both alphabets, with or without `=` padding.",
      "kind": "function"
     },
     {
@@ -2050,8 +2071,9 @@
    "members": [
     {
      "name": "open",
-     "signature": "sql.open(url)",
+     "signature": "sql.open(url, { pool = 1 })",
      "returns": "Database · error",
+     "doc": "`pool`: up to that many connections, so statements of different tasks run at the same time (an in-memory SQLite database is always one). A NULL parameter works on any PostgreSQL column type.",
      "kind": "function"
     }
    ]
@@ -2059,13 +2081,13 @@
   {
    "name": "orm",
    "alias": "",
-   "summary": "A Prisma-style ORM for SQLite, PostgreSQL and MySQL. Models are described in a map; `migrate: \"auto\"` creates tables (with foreign keys) and adds new columns. Each model is reached as `db. `. Relations load with one query per level.",
+   "summary": "A Prisma-style ORM for SQLite, PostgreSQL and MySQL. Models are described in a map; `migrate: \"auto\"` creates tables (with foreign keys) and adds new columns. Each model is reached as `db. `. Relations load with one query per level. A query waits cooperatively: other tasks (HTTP requests, timers) go on meanwhile, and may call the same models.",
    "members": [
     {
      "name": "create_client",
-     "signature": "create_client({ schema, migrate, log })",
+     "signature": "create_client({ schema, migrate, log, pool = 1 })",
      "returns": "Client · error",
-     "doc": "`schema: { provider, url, models }`; `log: true` prints every SQL statement.",
+     "doc": "`schema: { provider, url, models }`; `log: true` prints every SQL statement; `pool`: connections, as in `sql.open`.",
      "kind": "function"
     },
     {
@@ -2083,7 +2105,7 @@
     {
      "name": "db",
      "signature": "db",
-     "doc": "`db.query(sql, params?)` → list · int — Raw SQL. · `db.execute(sql, params?)` → list · int\n\n`db.begin()`\n\n`db.commit()`\n\n`db.rollback()`\n\n`db.migrate()`\n\n`db.disconnect()`",
+     "doc": "`db.query(sql, params?)` → list · int — Raw SQL. · `db.execute(sql, params?)` → list · int\n\n`db.begin()` — A transaction is the calling task's, on its own connection; `createMany` runs in one (or in a savepoint of the open one). · `db.commit()` · `db.rollback()` · `db.migrate()` · `db.disconnect()`",
      "kind": "property"
     },
     {
@@ -2195,6 +2217,27 @@
      "signature": "s3.connect({ endpoint, region, accessKey, secretKey, sessionToken, bucket, pathStyle, timeout })",
      "returns": "S3",
      "doc": "Path-style URLs when an `endpoint` is given.",
+     "kind": "function"
+    },
+    {
+     "name": "uploadPart",
+     "signature": "s3.uploadPart(key, uploadId, n, body)",
+     "returns": "str · { partNumber, etag } · { etag }",
+     "doc": "Multipart uploads step by step: a resumable upload keeps the parts done; a browser can PUT each part to `presign(key, { method: \"PUT\", uploadId, partNumber })`.",
+     "kind": "function"
+    },
+    {
+     "name": "completeMultipartUpload",
+     "signature": "s3.completeMultipartUpload(key, uploadId, parts)",
+     "returns": "str · { partNumber, etag } · { etag }",
+     "doc": "Multipart uploads step by step: a resumable upload keeps the parts done; a browser can PUT each part to `presign(key, { method: \"PUT\", uploadId, partNumber })`.",
+     "kind": "function"
+    },
+    {
+     "name": "abortMultipartUpload",
+     "signature": "s3.abortMultipartUpload(key, uploadId)",
+     "returns": "str · { partNumber, etag } · { etag }",
+     "doc": "Multipart uploads step by step: a resumable upload keeps the parts done; a browser can PUT each part to `presign(key, { method: \"PUT\", uploadId, partNumber })`.",
      "kind": "function"
     }
    ]
@@ -2655,20 +2698,34 @@
   {
    "name": "jwt",
    "alias": "jwt",
-   "summary": "JSON Web Tokens with HMAC (HS256/HS384/HS512). A token that fails verification is an error value.",
+   "summary": "JSON Web Tokens signed with HMAC (HS256/HS384/HS512) or a public key (RS256/384/512, PS256/384/512, ES256/384, EdDSA), with JWK sets fetched from a URL or found by OpenID Connect discovery (Keycloak, Auth0, Entra ID, Google…). A token that fails verification is an error value. The key decides the algorithms: a secret accepts only HS*, a public key only those of its type (and a JWK's own `alg`); `alg: none` is never accepted.",
    "members": [
     {
      "name": "sign",
-     "signature": "jwt.sign(payload, secret, { algorithm, expiresIn, notBefore, issuer, audience, subject, jwtid, header, noTimestamp })",
+     "signature": "jwt.sign(payload, key, { algorithm, keyid, expiresIn, notBefore, issuer, audience, subject, jwtid, header, noTimestamp })",
      "returns": "str",
-     "doc": "`iat` is added; durations or seconds for times.",
+     "doc": "`key`: a secret (HS256 by default) or a PEM private key (its own algorithm by default: RS256, ES256, ES384 or EdDSA). `keyid` goes in the header as `kid`. `iat` is added; durations or seconds for times.",
      "kind": "function"
     },
     {
      "name": "verify",
-     "signature": "jwt.verify(token, secret, { algorithms, issuer, audience, subject, leeway, maxAge, ignoreExpiration })",
+     "signature": "jwt.verify(token, key, { algorithms, issuer, audience, subject, leeway, maxAge, ignoreExpiration })",
      "returns": "map · error",
-     "doc": "The claims.",
+     "doc": "The claims. `key`: a secret, a PEM public key or certificate, a JWK, a JWK set (`{ keys }` or a list: the token's `kid` picks the key; `use: enc` keys are skipped), or `jwt.jwks` / `jwt.oidc`.",
+     "kind": "function"
+    },
+    {
+     "name": "jwks",
+     "signature": "jwt.jwks(url, { ttl = 10m, minRefresh = 30s, timeout = 5s, issuer })",
+     "returns": "Jwks",
+     "doc": "Keys fetched on first use (waiting cooperatively: other tasks go on), again after `ttl`, and when a token names a key id they lack (key rotation) — at most once per `minRefresh`. If a refresh fails the old keys stay in use. Fields: `url issuer kids size error`.",
+     "kind": "function"
+    },
+    {
+     "name": "oidc",
+     "signature": "jwt.oidc(issuer, opts)",
+     "returns": "Jwks · error",
+     "doc": "OpenID Connect discovery: reads `issuer/.well-known/openid-configuration`, then its `jwks_uri`. Tokens must also carry `iss: issuer`.",
      "kind": "function"
     },
     {
@@ -2680,9 +2737,9 @@
     },
     {
      "name": "middleware",
-     "signature": "jwt.middleware(secret, { property = \"user\", optional, …verify options })",
+     "signature": "jwt.middleware(key, { property = \"user\", optional, …verify options })",
      "returns": "middleware",
-     "doc": "For `fogu:web`: `Authorization: Bearer` → `ctx.user`, otherwise 401.",
+     "doc": "For `fogu:web`: `Authorization: Bearer` → `ctx.user`, otherwise 401. Any `key` `verify` takes; with `jwt.jwks` the request waits for the keys without holding up the server.",
      "kind": "function"
     }
    ]
@@ -2728,19 +2785,20 @@
   {
    "name": "grpc",
    "alias": "grpc",
-   "summary": "gRPC servers and clients without code generation: the messages are described by a [fogu:protobuf](#foguprotobuf) schema (`.proto` compiled at run time) and travel as maps. Unary, server streaming, client streaming and bidirectional methods (the requests of a bidirectional call are all received before the handler runs). Each request runs as its own `fg` task.",
+   "summary": "gRPC servers and clients without code generation: the messages are described by a [fogu:protobuf](#foguprotobuf) schema (`.proto` compiled at run time) and travel as maps. Unary, server streaming, client streaming and bidirectional methods, with each message handled as it arrives; a stream of messages is a [fogu:stream](#fogustream) source and `pipe` sends into one. Each request runs as its own `fg` task. The server answers health checks (`grpc.health.v1`) and, when asked, server reflection, so `grpcurl` works without the `.proto`.",
    "members": [
     {
      "name": "server",
-     "signature": "grpc.server(schema)",
+     "signature": "grpc.server(schema, { health = true, reflection = false })",
      "returns": "GrpcServer",
+     "doc": "`health`: answer `grpc.health.v1.Health/Check`; `reflection`: serve `grpc.reflection.v1` (and v1alpha).",
      "kind": "function"
     },
     {
      "name": "connect",
-     "signature": "grpc.connect(url, schema, { timeout, metadata, ca, domain })",
+     "signature": "grpc.connect(url, schema, { timeout, metadata, ca, domain, cert, key })",
      "returns": "GrpcClient",
-     "doc": "`https://` uses TLS (system roots or `ca`). Connects on the first call.",
+     "doc": "`https://` uses TLS (system roots or `ca`; `cert`/`key`: a client certificate). Connects on the first call.",
      "kind": "function"
     }
    ]

@@ -240,13 +240,13 @@ db.close()
         "blocks": [
             {
                 "api": [
-                    ("sql.open(url)", "Database · error", ""),
+                    ("sql.open(url, { pool = 1 })", "Database · error", "<code>pool</code>: up to that many connections, so statements of different tasks run at the same time (an in-memory SQLite database is always one). A NULL parameter works on any PostgreSQL column type."),
                     ("db.run(sql, params?)", "int · error", "One statement with parameters; returns the affected rows (alias <code>execute</code>)."),
                     ("db.query(sql, params?)", "list · error", "Rows as maps."),
                     ("db.one(sql, params?)", "map · nil · error", "The first row."),
                     ("db.exec(sql)", "nil · error", "Raw SQL without parameters — may hold several statements (migrations)."),
-                    ("db.begin() · db.commit() · db.rollback()", "nil · error", "Transactions. A transaction belongs to the task that began it: statements of other tasks wait for its commit or rollback."),
-                    ("db.driver · db.url · db.close()", "", ""),
+                    ("db.begin() · db.commit() · db.rollback()", "nil · error", "Transactions. A transaction belongs to the task that began it, on a connection of its own: its statements run there, while the statements of other tasks use the rest of the pool (with <code>pool: 1</code> they wait for its commit or rollback). Each task may have one open."),
+                    ("db.driver · db.url · db.pool · db.inTransaction · db.close()", "", "<code>inTransaction</code>: whether the calling task has one open."),
                 ],
                 "example": r'''
 import sql from "fogu:sql"
@@ -271,16 +271,17 @@ print(err != nil)
         "import": 'import { create_client } from "fogu:orm"',
         "intro": "A Prisma-style ORM for SQLite, PostgreSQL and MySQL. Models are described in a map; "
         "<code>migrate: \"auto\"</code> creates tables (with foreign keys) and adds new columns. Each model is "
-        "reached as <code>db.&lt;model in camelCase&gt;</code>. Relations load with one query per level.",
+        "reached as <code>db.&lt;model in camelCase&gt;</code>. Relations load with one query per level. A query waits "
+        "cooperatively: other tasks (HTTP requests, timers) go on meanwhile, and may call the same models.",
         "blocks": [
             {
                 "h3": "Client and schema",
                 "api": [
-                    ("create_client({ schema, migrate, log })", "Client · error", "<code>schema: { provider, url, models }</code>; <code>log: true</code> prints every SQL statement."),
+                    ("create_client({ schema, migrate, log, pool = 1 })", "Client · error", "<code>schema: { provider, url, models }</code>; <code>log: true</code> prints every SQL statement; <code>pool</code>: connections, as in <code>sql.open</code>."),
                     ("field: { type, primary, autoincrement, required, unique, defaultValue }", "", "Types <code>Int BigInt String Bool Float DateTime Json</code>; defaults <code>\"now\"</code>, <code>\"uuid\"</code> or a value."),
                     ("relation: { model, kind, foreignKey, references }", "", "<code>one-to-many</code>, <code>many-to-one</code>, <code>one-to-one</code>."),
                     ("db.query(sql, params?) · db.execute(sql, params?)", "list · int", "Raw SQL."),
-                    ("db.begin() · db.commit() · db.rollback() · db.migrate() · db.disconnect()", "", ""),
+                    ("db.begin() · db.commit() · db.rollback() · db.migrate() · db.disconnect()", "", "A transaction is the calling task's, on its own connection; <code>createMany</code> runs in one (or in a savepoint of the open one)."),
                 ],
             },
             {
@@ -439,13 +440,15 @@ print(sub.next(1s)?)
             {
                 "api": [
                     ("s3.connect({ endpoint, region, accessKey, secretKey, sessionToken, bucket, pathStyle, timeout })", "S3", "Path-style URLs when an <code>endpoint</code> is given."),
-                    ("store.put(key, body, { contentType, metadata, cacheControl, acl })", "{ etag } · error", "<code>body</code>: str, list of bytes, or any value (JSON)."),
-                    ("store.upload(path, key?, opts?)", "{ etag } · error", "A local file."),
-                    ("store.get(key) · store.getBytes(key) · store.download(key, path)", "str · list · nil", ""),
+                    ("store.put(key, body, { contentType, metadata, cacheControl, acl })", "{ etag } · error", "<code>body</code>: str, a buffer or list of bytes (stored as those bytes), or any other value (JSON)."),
+                    ("store.upload(path, key?, { partSize = 16mb, … })", "{ etag, parts? } · error", "A local file. Bigger than <code>partSize</code> (at least 5mb), it goes as a multipart upload, one part in memory at a time; a failure aborts the upload."),
+                    ("store.get(key, { range }) · store.getBytes(key, { range }) · store.download(key, path, { range })", "str · buffer · nil", "<code>range</code>: <code>[start, end]</code> (inclusive), <code>[start]</code>, <code>[-lastBytes]</code> or <code>\"bytes=…\"</code>. <code>download</code> writes the body to the file as it arrives."),
+                    ("store.createMultipartUpload(key, opts) · uploadPart(key, uploadId, n, body) · completeMultipartUpload(key, uploadId, parts) · abortMultipartUpload(key, uploadId)", "str · { partNumber, etag } · { etag }", "Multipart uploads step by step: a resumable upload keeps the parts done; a browser can PUT each part to <code>presign(key, { method: \"PUT\", uploadId, partNumber })</code>."),
                     ("store.head(key) · store.exists(key)", "map · nil · bool", "<code>{ size, etag, contentType, lastModified, metadata }</code>."),
                     ("store.list(prefix?, { delimiter, max })", "list", "<code>{ key, size, etag, lastModified }</code>; folders <code>{ key, dir: true }</code>."),
                     ("store.copy(from, to, { fromBucket }) · store.delete(key | keys)", "", ""),
-                    ("store.presign(key, { method = \"GET\", expires = 1h })", "str", "A temporary URL that needs no credentials."),
+                    ("store.presign(key, { method = \"GET\", expires = 1h, contentType, uploadId, partNumber })", "str", "A temporary URL that needs no credentials. With <code>contentType</code> the type is signed: a PUT must send exactly it."),
+                    ("store.presignPost(key | { keyPrefix }, { expires = 1h, maxSize, minSize, contentType, contentTypePrefix })", "{ url, fields }", "A browser form upload (POST policy): S3 itself refuses a file over <code>maxSize</code>, of another type or under another key. Post the <code>fields</code>, then <code>file</code>."),
                     ("store.url(key) · store.withBucket(name)", "str · S3", ""),
                     ("store.createBucket(name?) · store.deleteBucket(name?) · store.listBuckets()", "", ""),
                 ],

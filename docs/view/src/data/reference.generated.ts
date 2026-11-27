@@ -1168,7 +1168,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "sync.Worker(file | code | fn, { core }?)",
       "Worker · error",
-      "From a function: its source is sent (never the value), <code>w.call(...args)</code> runs it; what it uses must be a <code>fogu:</code> module, a top-level function or a constant — a captured local is an error naming it. A program of its own on another OS thread, with its own interpreter — on CPU <code>core</code> if given: the way to use several cores (<code>fg</code> tasks share one thread). <code>w.call(name, ...args)</code> calls a global function of the worker and waits without stopping the other tasks; arguments and results cross as JSON (numbers, texts, bools, nil, lists, maps) and nothing else is shared. A failure of the call comes back as an error value. Each worker is a thread of the same process, not a separate process: its own interpreter, heap of Fogu values, task scheduler and socket reactor, so workers scale over cores without locks. With <code>net.tcpListen(addr, { reusePort: true })</code> in each, a TCP server uses every core (<code>bench/net/tcp_workers.fg</code>). <code>w.close()</code>, fields <code>core source closed</code>."
+      "From a function: its source is sent (never the value), <code>w.call(...args)</code> runs it; what it uses must be a <code>fogu:</code> module, a top-level function or a constant — a captured local is an error naming it. A program of its own on another OS thread, with its own interpreter — on CPU <code>core</code> if given: the way to use several cores (<code>fg</code> tasks share one thread). <code>w.call(name, ...args)</code> calls a global function of the worker and waits without stopping the other tasks; arguments and results cross as JSON (numbers, texts, bools, nil, lists, maps; buffers as their bytes, and they arrive as buffers) and nothing else is shared. A failure of the call comes back as an error value. Each worker is a thread of the same process, not a separate process: its own interpreter, heap of Fogu values, task scheduler and socket reactor, so workers scale over cores without locks. With <code>net.tcpListen(addr, { reusePort: true })</code> in each, a TCP server uses every core (<code>bench/net/tcp_workers.fg</code>). <code>w.close()</code>, fields <code>core source closed</code>."
      ]
     ],
     "example": "import sync from \"fogu:sync\"\nconst wg = sync.WaitGroup()\nconst total = sync.Atomic(0)\nconst once = sync.Once()\nfor i in 1..5 {\n    wg.add(1)\n    fg fn() {\n        once.do(() => print(\"first task\"))\n        total.add(i)\n        wg.done()\n    }()\n}\nwg.wait()\nprint(total.get())\n\n// at most two tasks inside at a time\nconst sem = sync.Semaphore(2)\nlet inside = 0\nlet peak = 0\nconst done = sync.WaitGroup()\nfor i in 0..5 {\n    done.add(1)\n    fg fn() {\n        sem.acquire()\n        inside += 1\n        if inside > peak { peak = inside }\n        Fogu.sleep(5ms)\n        inside -= 1\n        sem.release()\n        done.done()\n    }()\n}\ndone.wait()\nprint(\"peak\", peak, \"free\", sem.available)",
@@ -1905,9 +1905,9 @@ export const REFERENCE: Record<string, RefData> = {
    {
     "api": [
      [
-      "sql.open(url)",
+      "sql.open(url, { pool = 1 })",
       "Database · error",
-      ""
+      "<code>pool</code>: up to that many connections, so statements of different tasks run at the same time (an in-memory SQLite database is always one). A NULL parameter works on any PostgreSQL column type."
      ],
      [
       "db.run(sql, params?)",
@@ -1932,12 +1932,12 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "db.begin() · db.commit() · db.rollback()",
       "nil · error",
-      "Transactions. A transaction belongs to the task that began it: statements of other tasks wait for its commit or rollback."
+      "Transactions. A transaction belongs to the task that began it, on a connection of its own: its statements run there, while the statements of other tasks use the rest of the pool (with <code>pool: 1</code> they wait for its commit or rollback). Each task may have one open."
      ],
      [
-      "db.driver · db.url · db.close()",
+      "db.driver · db.url · db.pool · db.inTransaction · db.close()",
       "",
-      ""
+      "<code>inTransaction</code>: whether the calling task has one open."
      ]
     ],
     "example": "import sql from \"fogu:sql\"\nconst db = sql.open(\"sqlite::memory:\")?\ndb.exec(\"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INT)\")?\nconst n = db.run(\"INSERT INTO users (name, age) VALUES (?, ?)\", [\"Ana\", 30])?\ndb.run(\"INSERT INTO users (name, age) VALUES (?, ?)\", [\"Bob\", 25])?\nprint(\"inserted:\", n)\nprint(db.query(\"SELECT * FROM users WHERE age > ? ORDER BY name\", [20])?)\nprint(db.one(\"SELECT COUNT(*) AS n FROM users\")?.n, db.driver)\nconst [_, err] = db.query(\"SELECT * FROM nope\")\nprint(err != nil)",
@@ -1951,15 +1951,15 @@ export const REFERENCE: Record<string, RefData> = {
   "group": "Storage",
   "title": "fogu:orm",
   "import": "import { create_client } from \"fogu:orm\"",
-  "intro": "A Prisma-style ORM for SQLite, PostgreSQL and MySQL. Models are described in a map; <code>migrate: \"auto\"</code> creates tables (with foreign keys) and adds new columns. Each model is reached as <code>db.&lt;model in camelCase&gt;</code>. Relations load with one query per level.",
+  "intro": "A Prisma-style ORM for SQLite, PostgreSQL and MySQL. Models are described in a map; <code>migrate: \"auto\"</code> creates tables (with foreign keys) and adds new columns. Each model is reached as <code>db.&lt;model in camelCase&gt;</code>. Relations load with one query per level. A query waits cooperatively: other tasks (HTTP requests, timers) go on meanwhile, and may call the same models.",
   "blocks": [
    {
     "h3": "Client and schema",
     "api": [
      [
-      "create_client({ schema, migrate, log })",
+      "create_client({ schema, migrate, log, pool = 1 })",
       "Client · error",
-      "<code>schema: { provider, url, models }</code>; <code>log: true</code> prints every SQL statement."
+      "<code>schema: { provider, url, models }</code>; <code>log: true</code> prints every SQL statement; <code>pool</code>: connections, as in <code>sql.open</code>."
      ],
      [
       "field: { type, primary, autoincrement, required, unique, defaultValue }",
@@ -1979,7 +1979,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "db.begin() · db.commit() · db.rollback() · db.migrate() · db.disconnect()",
       "",
-      ""
+      "A transaction is the calling task's, on its own connection; <code>createMany</code> runs in one (or in a savepoint of the open one)."
      ]
     ]
    },
@@ -2189,17 +2189,22 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "store.put(key, body, { contentType, metadata, cacheControl, acl })",
       "{ etag } · error",
-      "<code>body</code>: str, list of bytes, or any value (JSON)."
+      "<code>body</code>: str, a buffer or list of bytes (stored as those bytes), or any other value (JSON)."
      ],
      [
-      "store.upload(path, key?, opts?)",
-      "{ etag } · error",
-      "A local file."
+      "store.upload(path, key?, { partSize = 16mb, … })",
+      "{ etag, parts? } · error",
+      "A local file. Bigger than <code>partSize</code> (at least 5mb), it goes as a multipart upload, one part in memory at a time; a failure aborts the upload."
      ],
      [
-      "store.get(key) · store.getBytes(key) · store.download(key, path)",
-      "str · list · nil",
-      ""
+      "store.get(key, { range }) · store.getBytes(key, { range }) · store.download(key, path, { range })",
+      "str · buffer · nil",
+      "<code>range</code>: <code>[start, end]</code> (inclusive), <code>[start]</code>, <code>[-lastBytes]</code> or <code>\"bytes=…\"</code>. <code>download</code> writes the body to the file as it arrives."
+     ],
+     [
+      "store.createMultipartUpload(key, opts) · uploadPart(key, uploadId, n, body) · completeMultipartUpload(key, uploadId, parts) · abortMultipartUpload(key, uploadId)",
+      "str · { partNumber, etag } · { etag }",
+      "Multipart uploads step by step: a resumable upload keeps the parts done; a browser can PUT each part to <code>presign(key, { method: \"PUT\", uploadId, partNumber })</code>."
      ],
      [
       "store.head(key) · store.exists(key)",
@@ -2217,9 +2222,14 @@ export const REFERENCE: Record<string, RefData> = {
       ""
      ],
      [
-      "store.presign(key, { method = \"GET\", expires = 1h })",
+      "store.presign(key, { method = \"GET\", expires = 1h, contentType, uploadId, partNumber })",
       "str",
-      "A temporary URL that needs no credentials."
+      "A temporary URL that needs no credentials. With <code>contentType</code> the type is signed: a PUT must send exactly it."
+     ],
+     [
+      "store.presignPost(key | { keyPrefix }, { expires = 1h, maxSize, minSize, contentType, contentTypePrefix })",
+      "{ url, fields }",
+      "A browser form upload (POST policy): S3 itself refuses a file over <code>maxSize</code>, of another type or under another key. Post the <code>fields</code>, then <code>file</code>."
      ],
      [
       "store.url(key) · store.withBucket(name)",
@@ -2412,9 +2422,9 @@ export const REFERENCE: Record<string, RefData> = {
       ""
      ],
      [
-      "opts: { headers, query, json, form, multipart, body, timeout, redirects = true, basicAuth: [user, pass], bearer, ca, insecure }",
+      "opts: { headers, query, json, form, multipart | formData, protobuf, body, timeout, redirects = true, basicAuth: [user, pass], bearer, ca, insecure }",
       "",
-      "<code>ca</code>: a PEM certificate (or its path) trusted for HTTPS, e.g. a self-signed one; <code>insecure: true</code> accepts any certificate (development only). <code>form</code>: urlencoded fields. <code>multipart</code>: a map of fields — text values, <code>http.file(path)</code> (streamed from disk), <code>{ data, filename, type }</code> bytes, or a list (a repeated field). Map keys are sent in alphabetical order."
+      "<code>ca</code>: a PEM certificate (or its path) trusted for HTTPS, e.g. a self-signed one; <code>insecure: true</code> accepts any certificate (development only). <code>form</code>: urlencoded fields. <code>multipart</code> (or <code>formData</code>): a map of fields — text values, <code>http.file(path)</code> (streamed from disk), <code>{ data, filename, type }</code> bytes, or a list (a repeated field). Map keys are sent in alphabetical order. <code>protobuf: { schema, message, value }</code>: the message encoded with a <a class=\"underline\" href=\"#mod-protobuf\">fogu:protobuf</a> schema (<code>application/x-protobuf</code>)."
      ],
      [
       "http.file(path, { filename, type })",
@@ -2437,9 +2447,9 @@ export const REFERENCE: Record<string, RefData> = {
       "<code>headers</code>: the first value of each (lower case)."
      ],
      [
-      "res.json() · res.bytes() · res.header(name) · res.cookies()",
+      "res.json() · res.bytes() · res.protobuf(schema, message) · res.header(name) · res.cookies()",
       "",
-      "<code>bytes()</code>: the body as a <a class=\"underline\" href=\"#values\">buffer</a>; <code>header</code> joins repeated values."
+      "<code>bytes()</code>: the body as a <a class=\"underline\" href=\"#values\">buffer</a>; <code>protobuf</code>: the body decoded as that message; <code>header</code> joins repeated values."
      ]
     ]
    },
@@ -2458,7 +2468,7 @@ export const REFERENCE: Record<string, RefData> = {
       "<code>query</code> is the raw query string."
      ],
      [
-      "req.header(name) · req.json() · req.form() · req.bytes()",
+      "req.header(name) · req.json() · req.form() · req.bytes() · req.protobuf(schema, message)",
       "",
       "<code>form()</code>: urlencoded and multipart bodies."
      ],

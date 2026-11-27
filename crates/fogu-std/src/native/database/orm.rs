@@ -234,25 +234,15 @@ fn fk_on_self(m: &Model, r: &Relation) -> bool {
 // Client
 // ---------------------------------------------------------------------
 
+/// A client's state, shared by its models. Its methods run with no object
+/// borrowed (`intercept`): a query waits cooperatively and other tasks go on,
+/// calling the same models too. `begin()` gives the calling task a
+/// transaction on a connection of its own (`SqlConn`).
 struct Inner {
-    conn: RefCell<SqlConn>,
+    conn: SqlConn,
     dialect: Dialect,
     models: HashMap<String, Model>,
     log: bool,
-    /// The task that ran `begin()` (`sched::task_id`), until its `commit()` /
-    /// `rollback()`: the one connection is inside its transaction, so the
-    /// calls of other tasks wait for it instead of running inside it.
-    tx_owner: Rc<std::cell::Cell<Option<usize>>>,
-}
-
-impl Inner {
-    /// `FoguObject::wait_for` of the client and its models: while another
-    /// task's transaction is open, wait (cooperatively) for it to end.
-    fn wait_tx(&self) -> Option<Box<dyn Fn() -> bool>> {
-        self.tx_owner.get()?;
-        let owner = Rc::clone(&self.tx_owner);
-        Some(Box::new(move || owner.get().is_none_or(|o| o == crate::runtime::sched::task_id())))
-    }
 }
 
 fn create_client(a: &[Value]) -> Result<Value, String> {
@@ -286,13 +276,14 @@ fn create_client(a: &[Value]) -> Result<Value, String> {
         Some(Value::Bool(true)) => "auto".into(),
         _ => "none".into(),
     };
-    let conn = SqlConn::open(&url).map_err(|e| io_err!("orm: cannot connect: {}", e))?;
+    let size = crate::native::sql::pool_option(Some(&a[0]), "create_client")?;
+    let conn = SqlConn::open(&url, size).map_err(|e| io_err!("orm: cannot connect: {}", e))?;
     // text filters distinguish case unless `mode: "insensitive"` asks
     // otherwise, as on PostgreSQL (SQLite's LIKE ignores ASCII case by default)
     if dialect == Dialect::Sqlite {
         conn.execute("PRAGMA case_sensitive_like = ON", &[]).map_err(|e| io_err!("orm: {}", e))?;
     }
-    let inner = Rc::new(Inner { conn: RefCell::new(conn), dialect, models, log, tx_owner: Rc::new(std::cell::Cell::new(None)) });
+    let inner = Rc::new(Inner { conn, dialect, models, log });
     if migrate == "auto" {
         migrate_all(&inner)?;
     }
@@ -317,10 +308,6 @@ impl FoguObject for ClientValue {
         "OrmClient"
     }
 
-    fn wait_for(&self, _method: &str) -> Option<Box<dyn Fn() -> bool>> {
-        self.inner.wait_tx()
-    }
-
     fn get(&self, field: &str) -> Option<Value> {
         let model = self.inner.models.keys().find(|m| accessor(m) == field || *m == field)?;
         Some(NativeObjectRef::new(ModelValue { inner: Rc::clone(&self.inner), model: model.clone() }).to_value())
@@ -329,7 +316,7 @@ impl FoguObject for ClientValue {
     fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
         match method {
             "disconnect" | "close" => {
-                self.inner.conn.borrow_mut().close();
+                self.inner.conn.close();
                 Ok(Value::Nil)
             }
             "migrate" => migrate_all(&self.inner).map(|_| Value::Nil),
@@ -349,8 +336,9 @@ impl FoguObject for ClientValue {
                     ("commit", _) => "COMMIT",
                     _ => "ROLLBACK",
                 };
-                self.inner.exec(sql, &[])?;
-                self.inner.tx_owner.set((method == "begin").then(crate::runtime::sched::task_id));
+                self.inner.logq(sql, &[]);
+                let r = if method == "begin" { self.inner.conn.begin(sql) } else { self.inner.conn.end(sql) };
+                r.map_err(|e| io_err!("orm: {}", e))?;
                 Ok(Value::Nil)
             }
             other => Err(format!(
@@ -367,6 +355,10 @@ impl FoguObject for ClientValue {
 
     fn methods(&self) -> Vec<&'static str> {
         vec!["disconnect", "migrate", "query", "execute", "begin", "commit", "rollback"]
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -390,12 +382,12 @@ impl Inner {
 
     fn query(&self, sql: &str, params: &[Value]) -> Result<Vec<Value>, String> {
         self.logq(sql, params);
-        self.conn.borrow().query(sql, params).map_err(|e| io_err!("orm: {}", e))
+        self.conn.query(sql, params).map_err(|e| io_err!("orm: {}", e))
     }
 
     fn exec(&self, sql: &str, params: &[Value]) -> Result<(u64, Option<i64>), String> {
         self.logq(sql, params);
-        self.conn.borrow().execute(sql, params).map_err(|e| io_err!("orm: {}", e))
+        self.conn.execute(sql, params).map_err(|e| io_err!("orm: {}", e))
     }
 
     fn q(&self, ident: &str) -> String {
@@ -808,6 +800,34 @@ fn order_sql(inner: &Inner, m: &Model, o: Option<&Value>) -> Result<String, Stri
     Ok(if parts.is_empty() { String::new() } else { format!(" ORDER BY {}", parts.join(", ")) })
 }
 
+/// A method of a client or a model, run on a copy (the same shared state)
+/// so that no object stays borrowed while its queries wait: other tasks run
+/// meanwhile and may call the same model. Called by `Host::intercept_method`.
+pub fn intercept(receiver: &NativeObjectRef, method: &str, args: &[Value]) -> Option<Result<Value, String>> {
+    if !receiver.with_name(|n| n == "OrmModel" || n == "OrmClient") {
+        return None;
+    }
+    enum Copy {
+        Model(ModelValue),
+        Client(ClientValue),
+    }
+    let copy = {
+        let inner = receiver.inner();
+        let b = inner.borrow();
+        if let Some(m) = b.as_any().downcast_ref::<ModelValue>() {
+            Copy::Model(ModelValue { inner: Rc::clone(&m.inner), model: m.model.clone() })
+        } else if let Some(c) = b.as_any().downcast_ref::<ClientValue>() {
+            Copy::Client(ClientValue { inner: Rc::clone(&c.inner) })
+        } else {
+            return None;
+        }
+    };
+    Some(match copy {
+        Copy::Model(mut m) => m.call(method, args),
+        Copy::Client(mut c) => c.call(method, args),
+    })
+}
+
 // ---------------------------------------------------------------------
 // Models
 // ---------------------------------------------------------------------
@@ -1139,10 +1159,6 @@ impl FoguObject for ModelValue {
         "OrmModel"
     }
 
-    fn wait_for(&self, _method: &str) -> Option<Box<dyn Fn() -> bool>> {
-        self.inner.wait_tx()
-    }
-
     fn get(&self, field: &str) -> Option<Value> {
         (field == "name").then(|| Value::Str(self.model.clone().into()))
     }
@@ -1181,29 +1197,37 @@ impl FoguObject for ModelValue {
                 };
                 // all or nothing: in a transaction of its own, or in a
                 // savepoint of the program's open transaction
-                let nested = self.inner.tx_owner.get().is_some();
-                let (open, ok, undo) = match (nested, self.inner.dialect) {
-                    (true, _) => ("SAVEPOINT fogu_create_many", "RELEASE SAVEPOINT fogu_create_many", "ROLLBACK TO SAVEPOINT fogu_create_many"),
-                    (false, Dialect::Mysql) => ("START TRANSACTION", "COMMIT", "ROLLBACK"),
-                    (false, _) => ("BEGIN", "COMMIT", "ROLLBACK"),
-                };
-                self.inner.exec(open, &[])?;
+                // (the transaction is this task's, on its own connection)
+                let nested = self.inner.conn.in_tx();
+                let conn_err = |e: String| io_err!("orm: {}", e);
+                if nested {
+                    self.inner.exec("SAVEPOINT fogu_create_many", &[])?;
+                } else {
+                    let begin = if self.inner.dialect == Dialect::Mysql { "START TRANSACTION" } else { "BEGIN" };
+                    self.inner.conn.begin(begin).map_err(conn_err)?;
+                }
                 let all = (|| -> Result<(), String> {
                     for it in &items {
                         self.insert(as_map(it, "data item")?.borrow().clone())?;
                     }
                     Ok(())
                 })();
-                match all {
-                    Ok(()) => {
-                        self.inner.exec(ok, &[])?;
+                match (all, nested) {
+                    (Ok(()), true) => {
+                        self.inner.exec("RELEASE SAVEPOINT fogu_create_many", &[])?;
                         Ok(count_map(items.len() as u64))
                     }
-                    Err(e) => {
-                        let _ = self.inner.exec(undo, &[]);
-                        if nested {
-                            let _ = self.inner.exec(ok, &[]);
-                        }
+                    (Ok(()), false) => {
+                        self.inner.conn.end("COMMIT").map_err(conn_err)?;
+                        Ok(count_map(items.len() as u64))
+                    }
+                    (Err(e), true) => {
+                        let _ = self.inner.exec("ROLLBACK TO SAVEPOINT fogu_create_many", &[]);
+                        let _ = self.inner.exec("RELEASE SAVEPOINT fogu_create_many", &[]);
+                        Err(e)
+                    }
+                    (Err(e), false) => {
+                        let _ = self.inner.conn.end("ROLLBACK");
                         Err(e)
                     }
                 }
@@ -1278,6 +1302,10 @@ impl FoguObject for ModelValue {
             "create", "createMany", "findMany", "findFirst", "findUnique", "update", "updateMany", "upsert",
             "delete", "deleteMany", "count",
         ]
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 

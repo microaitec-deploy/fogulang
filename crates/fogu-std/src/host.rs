@@ -137,6 +137,11 @@ impl Host for Std {
         if crate::native::ai::is_agent_run(receiver, method) {
             return Some(crate::native::ai::agent_run(receiver, args, it, env.clone()));
         }
+        // fogu:orm: queries wait cooperatively, with no object borrowed meanwhile
+        #[cfg(all(feature = "database", not(target_family = "wasm")))]
+        if let Some(r) = crate::native::orm::intercept(receiver, method, args) {
+            return Some(r);
+        }
         // `GrpcServer.serve` runs the Fogu handlers of incoming requests
         #[cfg(all(feature = "rpc", not(target_family = "wasm")))]
         if crate::native::grpc::is_serve(receiver, method) {

@@ -468,3 +468,28 @@ pub fn pid() -> u32 {
 pub use fogu_pkg::net::error_chain;
 #[cfg(not(target_family = "wasm"))]
 pub use fogu_pkg::net::{blocking_client, redirect_policy};
+
+/// A size in bytes: an int, or text such as `"512kb"`, `"16mb"`, `"1gb"`
+/// (powers of 1024, any case). Negative sizes are refused.
+pub fn size_arg(v: &Value, what: &str) -> Result<u64, String> {
+    let n = match v {
+        Value::Int(n) => Some(*n),
+        Value::Str(s) => {
+            let t = s.trim().to_ascii_lowercase();
+            let digits = t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len());
+            let unit: i64 = match t[digits..].trim() {
+                "" | "b" => 1,
+                "k" | "kb" | "kib" => 1 << 10,
+                "m" | "mb" | "mib" => 1 << 20,
+                "g" | "gb" | "gib" => 1 << 30,
+                _ => 0,
+            };
+            t[..digits].parse::<i64>().ok().and_then(|n| n.checked_mul(unit)).filter(|_| unit > 0)
+        }
+        _ => None,
+    };
+    match n {
+        Some(n) if n >= 0 => Ok(n as u64),
+        _ => Err(format!("{}: expects a size in bytes (an int or text such as \"16mb\"), got {}", what, v.to_display_string())),
+    }
+}

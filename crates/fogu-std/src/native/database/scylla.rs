@@ -37,7 +37,7 @@ use tokio::runtime::Runtime;
 use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
-use crate::native::object::{FoguObject, NativeObjectRef};
+use crate::native::object::{FoguObject, NativeObjectRef, Poller};
 use crate::native::util::{list, map, max_args, nfn_var, opt_arg, str_arg};
 
 pub fn build() -> ModuleValue {
@@ -132,7 +132,7 @@ fn connect(a: &[Value]) -> Result<Value, String> {
         .map_err(|e| io_err!("scylla.connect: {}: {}", hosts.join(", "), e))?;
     Ok(NativeObjectRef::new(ScyllaValue {
         rt: Some(rt),
-        session: Some(session),
+        session: Some(Arc::new(session)),
         prepared: HashMap::new(),
         hosts,
     })
@@ -156,22 +156,25 @@ impl AddressTranslator for Translator {
 pub struct ScyllaValue {
     /// the shared runtime (the session's background tasks live there)
     rt: Option<&'static Runtime>,
-    session: Option<Session>,
+    session: Option<Arc<Session>>,
     prepared: HashMap<String, PreparedStatement>,
     hosts: Vec<String>,
 }
 
 impl ScyllaValue {
-    fn parts(&self) -> Result<(&Runtime, &Session), String> {
+    fn parts(&self) -> Result<(&Runtime, &Arc<Session>), String> {
         match (&self.rt, &self.session) {
             (Some(rt), Some(s)) => Ok((*rt, s)),
             _ => Err("scylla: the session is closed".into()),
         }
     }
 
-    /// Runs a statement; with parameters it is prepared (cached) and each
-    /// value is converted to the CQL type of its column.
-    fn run(&mut self, what: &str, args: &[Value]) -> Result<QueryResult, String> {
+    /// A statement, ready to run on the runtime: with parameters it is
+    /// prepared (once, then cached) and each value converted to the CQL type
+    /// of its column — the conversion needs the interpreter's values, so it
+    /// happens here; the round trip itself does not wait on this thread.
+    #[allow(clippy::type_complexity)]
+    fn statement(&mut self, what: &str, args: &[Value]) -> Result<std::pin::Pin<Box<dyn std::future::Future<Output = Result<QueryResult, String>> + Send>>, String> {
         if args.is_empty() || args.len() > 2 {
             return Err(format!("{}(cql [, params]) expects 1 or 2 arguments", what));
         }
@@ -181,11 +184,13 @@ impl ScyllaValue {
             Some(Value::List(l)) => l.borrow().clone(),
             Some(other) => return Err(format!("{}: params must be a list, got '{}'", what, other.type_name())),
         };
+        let w = what.to_string();
         if params.is_empty() {
-            let (rt, s) = self.parts()?;
-            return rt
-                .block_on(s.query_unpaged(cql.as_str(), &[] as &[CqlValue]))
-                .map_err(|e| io_err!("scylla.{}: {}", what, e));
+            let (_, s) = self.parts()?;
+            let s = Arc::clone(s);
+            return Ok(Box::pin(async move {
+                s.query_unpaged(cql.as_str(), &[] as &[CqlValue]).await.map_err(|e| io_err!("scylla.{}: {}", w, e))
+            }));
         }
         if !self.prepared.contains_key(&cql) {
             let (rt, s) = self.parts()?;
@@ -194,8 +199,9 @@ impl ScyllaValue {
                 .map_err(|e| io_err!("scylla.{}: {}", what, e))?;
             self.prepared.insert(cql.clone(), p);
         }
-        let (rt, s) = self.parts()?;
-        let p = &self.prepared[&cql];
+        let (_, s) = self.parts()?;
+        let s = Arc::clone(s);
+        let p = self.prepared[&cql].clone();
         let specs = p.get_variable_col_specs();
         if specs.len() != params.len() {
             return Err(format!(
@@ -211,8 +217,22 @@ impl ScyllaValue {
                 to_cql(v, spec.typ()).map_err(|e| format!("scylla.{}: column '{}': {}", what, spec.name(), e))?,
             );
         }
-        rt.block_on(s.execute_unpaged(p, values))
-            .map_err(|e| io_err!("scylla.{}: {}", what, e))
+        Ok(Box::pin(async move { s.execute_unpaged(&p, values).await.map_err(|e| io_err!("scylla.{}: {}", w, e)) }))
+    }
+
+    /// Runs a statement and waits on this thread (no other task to run).
+    fn run(&mut self, what: &str, args: &[Value]) -> Result<QueryResult, String> {
+        let fut = self.statement(what, args)?;
+        let (rt, _) = self.parts()?;
+        rt.block_on(fut)
+    }
+
+    fn finish(method: &str, res: QueryResult) -> Result<Value, String> {
+        match method {
+            "execute" => Ok(Value::Nil),
+            "query" => Ok(list(Self::rows(res, "query")?)),
+            _ => Ok(Self::rows(res, "one")?.into_iter().next().unwrap_or(Value::Nil)),
+        }
     }
 
     fn rows(res: QueryResult, what: &str) -> Result<Vec<Value>, String> {
@@ -254,17 +274,26 @@ impl FoguObject for ScyllaValue {
         }
     }
 
+    /// Statements run on the shared runtime while the other tasks go on.
+    fn start_async(&mut self, method: &str, args: &[Value]) -> Option<Result<Poller, String>> {
+        if !matches!(method, "execute" | "query" | "one") || !crate::native::rt::concurrent() {
+            return None;
+        }
+        let fut = match self.statement(method, args) {
+            Ok(f) => f,
+            Err(e) => return Some(Err(e)),
+        };
+        let pending = crate::native::rt::spawn(fut);
+        let method = method.to_string();
+        Some(Ok(Box::new(move || pending.try_take().map(|r| r.and_then(|res| Self::finish(&method, res))))))
+    }
+
     fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
         match method {
             // statements without results (DDL, INSERT, UPDATE, DELETE)
-            "execute" => self.run("execute", args).map(|_| Value::Nil),
-            "query" => {
-                let res = self.run("query", args)?;
-                Ok(list(Self::rows(res, "query")?))
-            }
-            "one" => {
-                let res = self.run("one", args)?;
-                Ok(Self::rows(res, "one")?.into_iter().next().unwrap_or(Value::Nil))
+            "execute" | "query" | "one" => {
+                let res = self.run(method, args)?;
+                Self::finish(method, res)
             }
             "use" => {
                 let ks = str_arg(args, 0, "use")?;

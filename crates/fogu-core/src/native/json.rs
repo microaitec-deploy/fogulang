@@ -116,6 +116,7 @@ fn write_value(v: &Value, out: &mut String, path: &mut WalkPath, on_cycle: Optio
             out.push(']');
         }
         Value::Buffer(b) => {
+            saw_buffer();
             out.push('[');
             for (i, x) in b.borrow().iter().enumerate() {
                 if i > 0 {
@@ -167,6 +168,23 @@ thread_local! {
 #[inline(never)]
 fn lossy(what: &'static str) {
     LOSSY.with(|l| l.set(Some(what)));
+}
+
+thread_local! {
+    /// Whether a buffer was written (as a list of byte ints) since [`take_saw_buffer`].
+    static SAW_BUFFER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cold]
+#[inline(never)]
+fn saw_buffer() {
+    SAW_BUFFER.with(|b| b.set(true));
+}
+
+/// Whether a buffer was written since the last call: the boundary of a
+/// `sync.Worker` sends buffers as bytes, so they arrive as buffers.
+pub fn take_saw_buffer() -> bool {
+    SAW_BUFFER.with(|b| b.replace(false))
 }
 
 /// What was written as something else since the last call — `null` for NaN and

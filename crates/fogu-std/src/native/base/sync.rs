@@ -50,13 +50,17 @@ const TUPLE_MARK: &str = "\u{1}tuple:";
 const RICH_MARK: &str = "\u{1}rich:";
 const RICH_ERROR: &str = "\u{1}error";
 const RICH_FLOAT: &str = "\u{1}float";
+/// `{"\u{1}bytes": base64}`: a buffer, which arrives as a buffer (not a list of ints).
+const RICH_BYTES: &str = "\u{1}bytes";
 
 /// `v` as the text that crosses to another thread. What cannot cross (a function,
 /// a channel, a native object) is an error — never its printed form.
 fn pack(v: &fogu_core::runtime::value::Value) -> Result<String, String> {
     crate::native::json::take_lossy();
+    crate::native::json::take_saw_buffer();
     let plain = crate::native::json::stringify_value(v);
-    if crate::native::json::take_lossy().is_none() {
+    let buffers = crate::native::json::take_saw_buffer();
+    if crate::native::json::take_lossy().is_none() && !buffers {
         return Ok(plain);
     }
     Ok(format!("{}{}", RICH_MARK, crate::native::json::stringify_value(&portable(v)?)))
@@ -83,7 +87,11 @@ fn portable(v: &fogu_core::runtime::value::Value) -> Result<fogu_core::runtime::
             }
             Value::Map(Rc::new(std::cell::RefCell::new(out)))
         }
-        Value::Nil | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_) | Value::Buffer(_) | Value::Array(_) => v.clone(),
+        Value::Buffer(b) => {
+            use base64::Engine;
+            crate::native::util::map(vec![(RICH_BYTES, Value::str(base64::engine::general_purpose::STANDARD.encode(&*b.borrow())))])
+        }
+        Value::Nil | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_) | Value::Array(_) => v.clone(),
         other => {
             return Err(format!(
                 "a value of type '{}' cannot cross to another thread (numbers, text, bools, nil, lists, maps and errors do)",
@@ -113,6 +121,12 @@ fn restore(v: fogu_core::runtime::value::Value) -> fogu_core::runtime::value::Va
             let single = {
                 let b = m.borrow();
                 if b.len() == 1 {
+                    if let Some(Value::Str(data)) = b.get(RICH_BYTES) {
+                        use base64::Engine;
+                        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data.as_bytes()) {
+                            return Value::buffer(bytes);
+                        }
+                    }
                     match (b.get(RICH_ERROR), b.get(RICH_FLOAT)) {
                         (Some(Value::Str(msg)), _) => Some(Value::Error(Rc::new(ErrorValue { message: msg.to_string(), cause: Value::Nil, trace: Vec::new() }))),
                         (_, Some(Value::Str(name))) => Some(Value::Float(match &**name {

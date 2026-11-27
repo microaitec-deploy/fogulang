@@ -761,7 +761,7 @@ Coordination of `fg` tasks. Waiting operations yield to the other tasks; waiting
 - `sync.Once()` → Once — `do(fn)` runs `fn` only the first time.
 - `sync.Atomic(value)` → Atomic — `get()` `set(v)` `add(n = 1)` → new value, `compareAndSwap(old, new)` → bool.
 - `sync.Semaphore(n)` → Semaphore — `acquire()` (waits for a permit) `tryAcquire()` → bool `release()`, fields `available size`. Also limits [fogu:vm](#foguvm) tasks (`{ semaphore }`).
-- `sync.Worker(file | code | fn, { core }?)` → Worker · error — From a function: its source is sent (never the value), `w.call(...args)` runs it; what it uses must be a `fogu:` module, a top-level function or a constant — a captured local is an error naming it. A program of its own on another OS thread, with its own interpreter — on CPU `core` if given: the way to use several cores (`fg` tasks share one thread). `w.call(name, ...args)` calls a global function of the worker and waits without stopping the other tasks; arguments and results cross as JSON (numbers, texts, bools, nil, lists, maps) and nothing else is shared. A failure of the call comes back as an error value. Each worker is a thread of the same process, not a separate process: its own interpreter, heap of Fogu values, task scheduler and socket reactor, so workers scale over cores without locks. With `net.tcpListen(addr, { reusePort: true })` in each, a TCP server uses every core (`bench/net/tcp_workers.fg`). `w.close()`, fields `core source closed`.
+- `sync.Worker(file | code | fn, { core }?)` → Worker · error — From a function: its source is sent (never the value), `w.call(...args)` runs it; what it uses must be a `fogu:` module, a top-level function or a constant — a captured local is an error naming it. A program of its own on another OS thread, with its own interpreter — on CPU `core` if given: the way to use several cores (`fg` tasks share one thread). `w.call(name, ...args)` calls a global function of the worker and waits without stopping the other tasks; arguments and results cross as JSON (numbers, texts, bools, nil, lists, maps; buffers as their bytes, and they arrive as buffers) and nothing else is shared. A failure of the call comes back as an error value. Each worker is a thread of the same process, not a separate process: its own interpreter, heap of Fogu values, task scheduler and socket reactor, so workers scale over cores without locks. With `net.tcpListen(addr, { reusePort: true })` in each, a TCP server uses every core (`bench/net/tcp_workers.fg`). `w.close()`, fields `core source closed`.
 
 ```fogu
 import sync from "fogu:sync"
@@ -1402,13 +1402,13 @@ import sql from "fogu:sql"
 
 SQLite, PostgreSQL and MySQL/MariaDB by URL: `sqlite://app.db`, `sqlite::memory:`, `postgres://user:pass@host/db`, `mysql://user:pass@host/db`. Parameters: `?` (SQLite/MySQL) or `$1` (PostgreSQL).
 
-- `sql.open(url)` → Database · error
+- `sql.open(url, { pool = 1 })` → Database · error — `pool`: up to that many connections, so statements of different tasks run at the same time (an in-memory SQLite database is always one). A NULL parameter works on any PostgreSQL column type.
 - `db.run(sql, params?)` → int · error — One statement with parameters; returns the affected rows (alias `execute`).
 - `db.query(sql, params?)` → list · error — Rows as maps.
 - `db.one(sql, params?)` → map · nil · error — The first row.
 - `db.exec(sql)` → nil · error — Raw SQL without parameters — may hold several statements (migrations).
-- `db.begin() · db.commit() · db.rollback()` → nil · error — Transactions. A transaction belongs to the task that began it: statements of other tasks wait for its commit or rollback.
-- `db.driver · db.url · db.close()`
+- `db.begin() · db.commit() · db.rollback()` → nil · error — Transactions. A transaction belongs to the task that began it, on a connection of its own: its statements run there, while the statements of other tasks use the rest of the pool (with `pool: 1` they wait for its commit or rollback). Each task may have one open.
+- `db.driver · db.url · db.pool · db.inTransaction · db.close()` — `inTransaction`: whether the calling task has one open.
 
 ```fogu
 import sql from "fogu:sql"
@@ -1438,15 +1438,15 @@ true
 import { create_client } from "fogu:orm"
 ```
 
-A Prisma-style ORM for SQLite, PostgreSQL and MySQL. Models are described in a map; `migrate: "auto"` creates tables (with foreign keys) and adds new columns. Each model is reached as `db. `. Relations load with one query per level.
+A Prisma-style ORM for SQLite, PostgreSQL and MySQL. Models are described in a map; `migrate: "auto"` creates tables (with foreign keys) and adds new columns. Each model is reached as `db. `. Relations load with one query per level. A query waits cooperatively: other tasks (HTTP requests, timers) go on meanwhile, and may call the same models.
 
 ### Client and schema
 
-- `create_client({ schema, migrate, log })` → Client · error — `schema: { provider, url, models }`; `log: true` prints every SQL statement.
+- `create_client({ schema, migrate, log, pool = 1 })` → Client · error — `schema: { provider, url, models }`; `log: true` prints every SQL statement; `pool`: connections, as in `sql.open`.
 - `field: { type, primary, autoincrement, required, unique, defaultValue }` — Types `Int BigInt String Bool Float DateTime Json`; defaults `"now"`, `"uuid"` or a value.
 - `relation: { model, kind, foreignKey, references }` — `one-to-many`, `many-to-one`, `one-to-one`.
 - `db.query(sql, params?) · db.execute(sql, params?)` → list · int — Raw SQL.
-- `db.begin() · db.commit() · db.rollback() · db.migrate() · db.disconnect()`
+- `db.begin() · db.commit() · db.rollback() · db.migrate() · db.disconnect()` — A transaction is the calling task's, on its own connection; `createMany` runs in one (or in a savepoint of the open one).
 
 ### Model methods
 
@@ -1612,13 +1612,15 @@ AWS S3 and compatible storage (MinIO, Cloudflare R2, Backblaze B2, DigitalOcean 
 Every method also takes `{ bucket }` in its options.
 
 - `s3.connect({ endpoint, region, accessKey, secretKey, sessionToken, bucket, pathStyle, timeout })` → S3 — Path-style URLs when an `endpoint` is given.
-- `store.put(key, body, { contentType, metadata, cacheControl, acl })` → { etag } · error — `body`: str, list of bytes, or any value (JSON).
-- `store.upload(path, key?, opts?)` → { etag } · error — A local file.
-- `store.get(key) · store.getBytes(key) · store.download(key, path)` → str · list · nil
+- `store.put(key, body, { contentType, metadata, cacheControl, acl })` → { etag } · error — `body`: str, a buffer or list of bytes (stored as those bytes), or any other value (JSON).
+- `store.upload(path, key?, { partSize = 16mb, … })` → { etag, parts? } · error — A local file. Bigger than `partSize` (at least 5mb), it goes as a multipart upload, one part in memory at a time; a failure aborts the upload.
+- `store.get(key, { range }) · store.getBytes(key, { range }) · store.download(key, path, { range })` → str · buffer · nil — `range`: `[start, end]` (inclusive), `[start]`, `[-lastBytes]` or `"bytes=…"`. `download` writes the body to the file as it arrives.
+- `store.createMultipartUpload(key, opts) · uploadPart(key, uploadId, n, body) · completeMultipartUpload(key, uploadId, parts) · abortMultipartUpload(key, uploadId)` → str · { partNumber, etag } · { etag } — Multipart uploads step by step: a resumable upload keeps the parts done; a browser can PUT each part to `presign(key, { method: "PUT", uploadId, partNumber })`.
 - `store.head(key) · store.exists(key)` → map · nil · bool — `{ size, etag, contentType, lastModified, metadata }`.
 - `store.list(prefix?, { delimiter, max })` → list — `{ key, size, etag, lastModified }`; folders `{ key, dir: true }`.
 - `store.copy(from, to, { fromBucket }) · store.delete(key | keys)`
-- `store.presign(key, { method = "GET", expires = 1h })` → str — A temporary URL that needs no credentials.
+- `store.presign(key, { method = "GET", expires = 1h, contentType, uploadId, partNumber })` → str — A temporary URL that needs no credentials. With `contentType` the type is signed: a PUT must send exactly it.
+- `store.presignPost(key | { keyPrefix }, { expires = 1h, maxSize, minSize, contentType, contentTypePrefix })` → { url, fields } — A browser form upload (POST policy): S3 itself refuses a file over `maxSize`, of another type or under another key. Post the `fields`, then `file`.
 - `store.url(key) · store.withBucket(name)` → str · S3
 - `store.createBucket(name?) · store.deleteBucket(name?) · store.listBuckets()`
 
@@ -1760,18 +1762,18 @@ A minimal HTTP server (one handler for every request) and an HTTP client. For ro
 - `http.get(url, opts?) · http.delete(url, opts?) · http.head(url, opts?)` → Response · error — Network failures are error values; HTTP 4xx/5xx are normal responses (`res.ok` is false).
 - `http.post(url, body?, opts?) · http.put(…) · http.patch(…)` → Response · error — `body`: a str (text/plain), a map or list (JSON), bytes (octet-stream).
 - `http.request({ method, url, ...opts })` → Response · error
-- `opts: { headers, query, json, form, multipart, body, timeout, redirects = true, basicAuth: [user, pass], bearer, ca, insecure }` — `ca`: a PEM certificate (or its path) trusted for HTTPS, e.g. a self-signed one; `insecure: true` accepts any certificate (development only). `form`: urlencoded fields. `multipart`: a map of fields — text values, `http.file(path)` (streamed from disk), `{ data, filename, type }` bytes, or a list (a repeated field). Map keys are sent in alphabetical order.
+- `opts: { headers, query, json, form, multipart | formData, protobuf, body, timeout, redirects = true, basicAuth: [user, pass], bearer, ca, insecure }` — `ca`: a PEM certificate (or its path) trusted for HTTPS, e.g. a self-signed one; `insecure: true` accepts any certificate (development only). `form`: urlencoded fields. `multipart` (or `formData`): a map of fields — text values, `http.file(path)` (streamed from disk), `{ data, filename, type }` bytes, or a list (a repeated field). Map keys are sent in alphabetical order. `protobuf: { schema, message, value }`: the message encoded with a [fogu:protobuf](#foguprotobuf) schema (`application/x-protobuf`).
 - `http.file(path, { filename, type })` → HttpFile · error — A file to upload; the type comes from the extension.
 - `http.download(url, path, opts?)` → int · error — Streams the body to a file; returns the bytes written (non-2xx is an error).
 - `http.stream(url, { method, body, headers, lines, … })` → HttpStream · error — The response with its body read a piece at a time (a stream of [fogu:fs](#fogufs): `read readLine readAll readText pipe close`, `for chunk in s`), and `s.status · s.ok · s.headers · s.url`. Any status is a stream; a network failure is an error value. `lines: true`: `for` gives lines.
 - `res.status · res.ok · res.url · res.headers · res.body` — `headers`: the first value of each (lower case).
-- `res.json() · res.bytes() · res.header(name) · res.cookies()` — `bytes()`: the body as a [buffer](#values); `header` joins repeated values.
+- `res.json() · res.bytes() · res.protobuf(schema, message) · res.header(name) · res.cookies()` — `bytes()`: the body as a [buffer](#values); `protobuf`: the body decoded as that message; `header` joins repeated values.
 
 ### Server
 
 - `http.serve(port | "ip:port", fn(req), { tls: { cert, key }, quiet, reusePort, maxBody, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout }?)` → nil — `tls` serves HTTPS (see [fogu:tls](#fogutls)). `reusePort: true` lets several servers share the port: one per `sync.Worker` serves on several cores (the kernel spreads the connections). On Linux a plain HTTP server runs on the interpreter's own thread, one `fg` task per connection. The handler returns a response (`http.text/json/html`), a str (text), any other value (JSON), nil (404) or an `error` (logged; the client gets a 500). Limits (defaults): `maxBody` (10 MB, 413), `maxHeaderBytes` (64 KB for the request line and headers, 431), `headerTimeout` (30s to send the headers; also closes idle keep-alive connections), `readTimeout` (60s for the body, 408), `handlerTimeout` (60s for the program's answer, 504; `0` = none). The request path is made canonical once, before static files, middlewares and routes see it: decoded once (`+` stays `+`), repeated slashes collapsed, `.`/`..` resolved; an encoded `/` or `\`, a raw `\`, a control character or a `..` above the root is a 400. A Rust panic in a handler answers that request with a 500 and the server goes on. Several servers may run in one program. Requests are answered as soon as they arrive while the program is alive — waiting in `Fogu.signal.wait()`, `time.delay`, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or `"0.0.0.0:8080"`, `"[::1]:8080"`, `":8080"`. `maxBody` (10 MB, 413 beyond it) and `maxHeaderBytes` are a number of bytes or a size written out: `"512kb"`, `"10mb"`, `"1gb"`.
 - `req.method · req.path · req.query · req.headers · req.body` — `query` is the raw query string.
-- `req.header(name) · req.json() · req.form() · req.bytes()` — `form()`: urlencoded and multipart bodies.
+- `req.header(name) · req.json() · req.form() · req.bytes() · req.protobuf(schema, message)` — `form()`: urlencoded and multipart bodies.
 - `http.text(body, opts?) · http.json(value, opts?) · http.html(body, opts?)` → Response — `opts: { status, headers }`.
 
 ```fogu

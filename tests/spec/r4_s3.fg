@@ -1,0 +1,100 @@
+// fogu:s3 against a small S3 stand-in: binary bodies, ranges, multipart
+// uploads, empty PUTs that say their length, pre-signed PUT and POST
+import s3 from "fogu:s3"
+import http from "fogu:http"
+import fs from "fogu:fs"
+import crypto from "fogu:crypto"
+
+let objects = {}         // path → text
+let rawBytes = {}        // path → the bytes received, as a list
+let parts = {}           // uploadId/partNumber → text
+let seen = []
+let nextId = 0
+fn withQuery(q) {
+    if q == "" { return "" }
+    return "?" + q
+}
+http.serve(18461, (req) => {
+    const q = req.query ?? ""
+    seen.push(req.method + " " + req.path + withQuery(q))
+    if req.method == "PUT" && q.contains("partNumber=") {
+        const n = q.split("partNumber=")[1].split("&")[0]
+        parts[n] = req.body
+        return http.text("", { headers: { etag: "\"etag-" + n + "\"" } })
+    }
+    if req.method == "PUT" && req.size == 0 { seen.push("  content-length: " + (req.header("content-length") ?? "none")) }
+    if req.method == "PUT" {
+        objects[req.path] = req.body
+        rawBytes[req.path] = req.bytes()
+        return http.text("", { headers: { etag: "\"e1\"", "x-length": req.header("content-length") ?? "none" } })
+    }
+    if req.method == "POST" && q.contains("uploads") {
+        nextId += 1
+        return http.text("<InitiateMultipartUploadResult><UploadId>up" + str(nextId) + "</UploadId></InitiateMultipartUploadResult>")
+    }
+    if req.method == "POST" && q.contains("uploadId=") {
+        let all = ""
+        for n in ["1", "2", "3"] { all += parts[n] ?? "" }
+        objects[req.path] = all
+        return http.text("<CompleteMultipartUploadResult><ETag>&quot;done&quot;</ETag></CompleteMultipartUploadResult>")
+    }
+    if req.method == "GET" {
+        const body = objects[req.path] ?? ""
+        const r = req.header("range")
+        if r == nil { return http.text(body) }
+        const span = r.replace("bytes=", "").split("-")
+        let start = 0
+        let end = len(body) - 1
+        if span[0] == "" { start = len(body) - int(span[1]) } else {
+            start = int(span[0])
+            if span[1] != "" { end = int(span[1]) }
+        }
+        return http.text(body.slice(start, end + 1), { status: 206 })
+    }
+    if req.method == "DELETE" { return http.text("", { status: 204 }) }
+    return http.text("?", { status: 400 })
+}, { quiet: true })?
+
+const c = s3.connect({ endpoint: "http://127.0.0.1:18461", region: "us-east-1", accessKey: "AK", secretKey: "SK",
+                       bucket: "b", pathStyle: true })
+
+// a buffer is stored as its bytes (it was written as JSON)
+c.put("bin", bytes([137, 80, 78, 71, 0, 255]))?
+print(rawBytes["/b/bin"])
+c.put("text.txt", "hello world")?
+const got = c.getBytes("text.txt")?
+print(typeof(got), len(got), c.get("text.txt", { range: [6, 10] })?, c.get("text.txt", { range: [-5] })?)
+print(c.get("text.txt", { range: [6] })?, c.getBytes("text.txt", { range: "bytes=0-4" })?.len())
+
+// an empty PUT (a bucket) sends Content-Length: 0
+seen = []
+c.createBucket("fresh")?
+print(seen)
+
+// multipart, step by step
+const id = c.createMultipartUpload("big.bin")?
+const p1 = c.uploadPart("big.bin", id, 1, "aaa")?
+const p2 = c.uploadPart("big.bin", id, 2, bytes([98, 98]))?
+print(id, p1, p2)
+print(c.completeMultipartUpload("big.bin", id, [p1, p2])?, objects["/b/big.bin"])
+c.abortMultipartUpload("big.bin", id)?
+
+// upload of a file bigger than partSize goes in parts, one in memory at a time
+fs.writeText("r4_s3_upload.tmp.txt", "x".repeat(6 * 1024 * 1024) + "y".repeat(5 * 1024 * 1024))?
+seen = []
+print(c.upload("r4_s3_upload.tmp.txt", "file.txt", { partSize: "5mb" })?)
+print(seen.len(), seen[0], seen[seen.len() - 1])
+print(len(objects["/b/file.txt"]), objects["/b/file.txt"].ends_with("yyy"))
+c.download("file.txt", "r4_s3_down.tmp.txt", { range: [-3] })?
+print(fs.readText("r4_s3_down.tmp.txt")?)
+
+// pre-signed URLs: a PUT that signs its content type, a part, a POST policy
+const u = c.presign("up.png", { method: "PUT", contentType: "image/png", expires: 10m })
+print(u.contains("X-Amz-SignedHeaders=content-type%3Bhost"), u.contains("X-Amz-Expires=600"))
+print(c.presign("big.bin", { method: "PUT", uploadId: "up9", partNumber: 2 }).contains("partNumber=2&uploadId=up9"))
+const post = c.presignPost("avatars/1.png", { maxSize: "2mb", contentTypePrefix: "image/", expires: 5m })
+print(post.url, post.fields.keys().sort())
+const policy = crypto.fromBase64(post.fields.policy)
+print(policy.contains("[\"content-length-range\",0,2097152]"), policy.contains("[\"starts-with\",\"$Content-Type\",\"image/\"]"),
+      policy.contains("[\"eq\",\"$key\",\"avatars/1.png\"]"))
+print(c.presignPost({ keyPrefix: "uploads/" }).fields.key)

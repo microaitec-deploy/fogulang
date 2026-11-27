@@ -1,0 +1,5 @@
+[buffer, 4, 0, 255]
+buffer 16
+buffer buffer text [1, 2] true
+true
+[list, 3, 1, 3]
