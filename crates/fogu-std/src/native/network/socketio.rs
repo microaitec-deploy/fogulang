@@ -140,6 +140,8 @@ fn run_handler(it: &Interpreter, env: &Rc<RefCell<Environment>>, f: Value, args:
 // ---------------------------------------------------------------------
 
 enum SJob {
+    /// `io.use` middlewares to run before a connection is accepted
+    Use { ns: String, socket: SocketRef, auth: serde_json::Value, reply: tokio::sync::oneshot::Sender<Result<(), String>> },
     Connect { ns: String, socket: SocketRef, auth: serde_json::Value },
     Event { sid: String, seq: u64, event: String, args: Vec<serde_json::Value>, ack: Option<AckSender> },
     Disconnect { sid: String, reason: String },
@@ -208,6 +210,11 @@ struct ServerState {
     guard: RefCell<Option<IoGuard>>,
     /// per socket: the next message number, and messages that came early
     order: RefCell<HashMap<String, (u64, std::collections::BTreeMap<u64, SJob>)>>,
+    /// namespace → `use` middlewares, and whether it has any (read by the network side)
+    uses: RefCell<HashMap<String, Vec<Value>>>,
+    has_uses: RefCell<HashMap<String, Arc<AtomicBool>>>,
+    /// sockets a middleware saw, until their connection (so `socket.data` carries over)
+    admitted: RefCell<HashMap<String, NativeObjectRef>>,
 }
 
 impl ServerState {
@@ -219,7 +226,25 @@ impl ServerState {
         self.conn.borrow_mut().insert(ns.to_string(), Vec::new());
         let q = Arc::clone(&self.queue);
         let name = ns.to_string();
-        self.io.ns(ns.to_string(), async move |s: SocketRef, auth: TryData<serde_json::Value>| {
+        // `io.use`: the network side asks the program (and waits) before connecting;
+        // without middlewares it does not ask at all
+        let flag = Arc::clone(self.has_uses.borrow_mut().entry(ns.to_string()).or_default());
+        let (qm, ns_m) = (Arc::clone(&self.queue), ns.to_string());
+        let middleware = move |s: SocketRef, auth: TryData<serde_json::Value>| {
+            let (q, flag, ns) = (Arc::clone(&qm), Arc::clone(&flag), ns_m.clone());
+            async move {
+                if !flag.load(Ordering::SeqCst) {
+                    return Ok::<(), String>(());
+                }
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                q.push(SJob::Use { ns, socket: s, auth: auth.0.unwrap_or(serde_json::Value::Null), reply: tx });
+                match rx.await {
+                    Ok(r) => r,
+                    Err(_) => Err("the server is closing".to_string()),
+                }
+            }
+        };
+        let handler = async move |s: SocketRef, auth: TryData<serde_json::Value>| {
             // every event goes through the queue, so none is lost before the
             // Fogu "connection" handler has registered its `socket.on`s
             let qe = Arc::clone(&q);
@@ -232,8 +257,19 @@ impl ServerState {
                 qd.push(SJob::Disconnect { sid: s.id.to_string(), reason: reason.to_string() });
             });
             q.push(SJob::Connect { ns: name.clone(), socket: s, auth: auth.0.unwrap_or(serde_json::Value::Null) });
-        });
+        };
+        use socketioxide::handler::ConnectHandler;
+        self.io.ns(ns.to_string(), handler.with(middleware));
         self.serving();
+    }
+
+    /// `io.use(fn)` / `io.of(ns).use(fn)`.
+    fn add_use(&self, ns: &str, f: Value) {
+        self.uses.borrow_mut().entry(ns.to_string()).or_default().push(f);
+        self.open_ns(ns);
+        if let Some(flag) = self.has_uses.borrow().get(ns) {
+            flag.store(true, Ordering::SeqCst);
+        }
     }
 
     fn serving(&self) {
@@ -290,6 +326,9 @@ fn server(args: &[Value], interp: &Interpreter, env: &Rc<RefCell<Environment>>) 
         sockets: RefCell::new(HashMap::new()),
         listener: RefCell::new(None),
         order: RefCell::new(HashMap::new()),
+        uses: RefCell::new(HashMap::new()),
+        has_uses: RefCell::new(HashMap::new()),
+        admitted: RefCell::new(HashMap::new()),
         port: Cell::new(None),
         guard: RefCell::new(None),
     });
@@ -333,11 +372,44 @@ fn handle_server_job(st: &Rc<ServerState>, it: &Interpreter, env: &Rc<RefCell<En
     }
 }
 
+fn new_socket(st: &Rc<ServerState>, socket: SocketRef, auth: &serde_json::Value) -> NativeObjectRef {
+    NativeObjectRef::new(SioSocket { st: Rc::clone(st), sock: socket, handlers: Rc::default(), auth: json_to_value(auth), data: map(vec![]) })
+}
+
 fn dispatch_job(st: &Rc<ServerState>, it: &Interpreter, env: &Rc<RefCell<Environment>>, job: SJob) {
     match job {
+        // the middlewares, in order, in a task of their own: an error refuses the connection
+        SJob::Use { ns, socket, auth, reply } => {
+            let sid = socket.id.to_string();
+            let sock = new_socket(st, socket, &auth);
+            let uses = st.uses.borrow().get(&ns).cloned().unwrap_or_default();
+            let (st2, env) = (Rc::clone(st), Rc::clone(env));
+            let _ = it.spawn_task(Box::new(move |it| {
+                let mut verdict = Ok(());
+                for f in uses {
+                    let r = it.call_value(f, vec![sock.to_value()], Rc::clone(&env));
+                    let r = match r {
+                        Ok(v) => v.into_result().map(|_| ()).map_err(|e| e.message.clone()),
+                        Err(e) => {
+                            eprintln!("[socketio] middleware: {}", e.strip_prefix(crate::runtime::value::ERR_VALUE_PREFIX).unwrap_or(&e));
+                            Err("server error".to_string())
+                        }
+                    };
+                    if r.is_err() {
+                        verdict = r;
+                        break;
+                    }
+                }
+                if verdict.is_ok() {
+                    st2.admitted.borrow_mut().insert(sid, sock);
+                }
+                let _ = reply.send(verdict);
+                Ok(())
+            }));
+        }
         SJob::Connect { ns, socket, auth } => {
             let sid = socket.id.to_string();
-            let sock = NativeObjectRef::new(SioSocket { st: Rc::clone(st), sock: socket, handlers: Rc::default(), auth: json_to_value(&auth) });
+            let sock = st.admitted.borrow_mut().remove(&sid).unwrap_or_else(|| new_socket(st, socket, &auth));
             st.sockets.borrow_mut().insert(sid, sock.clone());
             let hs = st.conn.borrow().get(&ns).cloned().unwrap_or_default();
             for h in hs {
@@ -584,6 +656,18 @@ impl FoguObject for SioServer {
                 self.st.conn.borrow_mut().entry("/".into()).or_default().push(args[1].clone());
                 Ok(Value::Nil)
             }
+            // use(fn(socket)): runs before "connection"; returning an error refuses the
+            // socket (the client gets connect_error with its message)
+            "use" => {
+                max_args(args, 1, "use")?;
+                let f = args.first().cloned().unwrap_or(Value::Nil);
+                if !matches!(f, Value::Fn(_) | Value::NativeFn(_) | Value::BoundMethod(_) | Value::StructBoundMethod(_)) {
+                    return Err(format!("use: expects a function, got '{}'", f.type_name()));
+                }
+                let _rt = crate::native::rt::tokio().enter();
+                self.st.add_use("/", f);
+                Ok(Value::Nil)
+            }
             // of("/admin") → a namespace (on, emit, to)
             "of" => {
                 max_args(args, 1, "of")?;
@@ -646,7 +730,7 @@ impl FoguObject for SioServer {
     }
 
     fn methods(&self) -> Vec<&'static str> {
-        vec!["on", "of", "emit", "to", "except", "listen", "close"]
+        vec!["on", "use", "of", "emit", "to", "except", "listen", "close"]
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -684,18 +768,27 @@ impl FoguObject for SioNamespace {
                 self.st.conn.borrow_mut().entry(self.ns.clone()).or_default().push(args[1].clone());
                 Ok(Value::Nil)
             }
+            "use" => {
+                max_args(args, 1, "use")?;
+                let f = args.first().cloned().unwrap_or(Value::Nil);
+                if !matches!(f, Value::Fn(_) | Value::NativeFn(_) | Value::BoundMethod(_) | Value::StructBoundMethod(_)) {
+                    return Err(format!("use: expects a function, got '{}'", f.type_name()));
+                }
+                self.st.add_use(&self.ns, f);
+                Ok(Value::Nil)
+            }
             "emit" => {
                 let (event, data) = emit_args(args, "emit")?;
                 b.emit(event, data)?;
                 Ok(Value::Nil)
             }
             "to" | "in" | "except" => b.clone_self().call(method, args),
-            other => Err(format!("method '{}' does not exist on SocketIoNamespace (on emit to except)", other)),
+            other => Err(format!("method '{}' does not exist on SocketIoNamespace (on use emit to except)", other)),
         }
     }
 
     fn methods(&self) -> Vec<&'static str> {
-        vec!["on", "emit", "to", "except"]
+        vec!["on", "use", "emit", "to", "except"]
     }
 }
 
@@ -705,6 +798,8 @@ pub struct SioSocket {
     sock: SocketRef,
     handlers: Rc<RefCell<HashMap<String, Vec<Value>>>>,
     auth: Value,
+    /// `socket.data`: what the program keeps about the socket (set by a middleware…)
+    data: Value,
 }
 
 impl FoguObject for SioSocket {
@@ -720,6 +815,7 @@ impl FoguObject for SioSocket {
             "connected" => Value::Bool(self.sock.connected()),
             "rooms" => list(self.sock.rooms().into_iter().map(|r| Value::Str(r.to_string().into())).collect()),
             "auth" => self.auth.clone(),
+            "data" => self.data.clone(),
             "handshake" => map(vec![
                 ("headers", {
                     let mut pairs: Vec<(String, Value)> =

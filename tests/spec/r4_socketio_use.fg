@@ -1,0 +1,33 @@
+// socketio io.use: middlewares run before "connection"; an error refuses the
+// socket (connect_error), and socket.data carries what they found
+import socketio from "fogu:socketio"
+import time from "fogu:time"
+
+const io = socketio.server()
+const order = []
+io.use((socket) => { order.push("log " + str(socket.auth?.token ?? "none")) })
+io.use((socket) => {
+    if socket.auth?.token != "s3cret" { return error("unauthorized") }
+    socket.data.user = "ana"
+})
+io.on("connection", (socket) => {
+    order.push("connection")
+    socket.emit("welcome", "hello " + socket.data.user)
+})
+const admin = io.of("/admin")
+admin.use((socket) => error("admins only"))
+admin.on("connection", (socket) => { order.push("admin connection") })
+io.listen(18495)?
+
+const got = chan(4)
+const c = socketio.connect("http://127.0.0.1:18495", { auth: { token: "s3cret" } })?
+c.on("welcome", (msg) => { got <- msg })
+print(<-got)
+const [_, refused] = socketio.connect("http://127.0.0.1:18495", { auth: { token: "nope" }, reconnect: false, timeout: 2s })
+print(refused)
+const [_, noAdmin] = socketio.connect("http://127.0.0.1:18495/admin", { auth: { token: "s3cret" }, reconnect: false, timeout: 2s })
+print(noAdmin)
+time.delay(50ms)
+print(order)
+c.close()
+io.close()

@@ -357,12 +357,13 @@ print(jwt.verify(jwt.sign({ sub: "mallory" }, "a guessed secret"), k.publicKey))
                 "api": [
                     ("socketio.server({ path = \"/socket.io\", pingInterval, pingTimeout, ackTimeout, maxPayload })", "SocketIoServer", ""),
                     ("io.on(\"connection\", fn(socket)) · io.of(\"/ns\").on(\"connection\", fn)", "nil", "Namespaces."),
+                    ("io.use(fn(socket)) · io.of(\"/ns\").use(fn)", "nil", "Handshake middlewares, in order, before <code>connection</code>: check <code>socket.auth</code> (a token…) and keep what you found in <code>socket.data</code>. Returning an error refuses the socket: the client gets <code>connect_error</code> with its message (also the official JavaScript client). Without middlewares no connection waits for the program."),
                     ("io.listen(port | \"host:port\") · app.listen(port, { socketio: io })", "int · nil", "Standalone, or on a fogu:web app (same port). An int port listens on 127.0.0.1; <code>\"0.0.0.0:port\"</code> for other machines."),
                     ("io.emit(event, ...args) · io.to(room).emit(…) · io.except(room) · io.of(ns).emit(…) · io.close()", "", "Several arguments travel as several arguments."),
                     ("socket.on(event, fn(...args, ack?)) · socket.on(\"disconnect\", fn(reason)) · socket.off(event)", "nil", "<code>ack</code> is passed when the client asked for one: <code>ack(value)</code>."),
                     ("socket.emit(event, ...args) · socket.emitWithAck(event, data, { timeout })", "nil · value", ""),
                     ("socket.join(room) · leave(room) · to(room).emit(…) · broadcast.emit(…) · disconnect()", "", "<code>to</code>/<code>broadcast</code> exclude the socket itself."),
-                    ("socket.id · ns · rooms · auth · handshake · connected", "", "<code>auth</code>: what the client sent; <code>handshake</code>: headers and query."),
+                    ("socket.id · ns · rooms · auth · data · handshake · connected", "", "<code>auth</code>: what the client sent; <code>data</code>: a map the program keeps for the socket (from <code>use</code> on); <code>handshake</code>: headers and query."),
                 ],
             },
             {

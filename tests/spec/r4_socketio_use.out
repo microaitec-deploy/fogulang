@@ -1,0 +1,4 @@
+hello ana
+error: socketio.connect: http://127.0.0.1:18495: connection refused: unauthorized
+error: socketio.connect: http://127.0.0.1:18495/admin: connection refused: admins only
+[log s3cret, connection, log nope]
