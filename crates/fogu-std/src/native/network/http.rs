@@ -46,12 +46,69 @@ pub struct PlainRequest {
     pub query: Option<String>,
     pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
+    /// the body, when it went to a file (`bodyToDisk`); `body` is then empty
+    pub spool: Option<std::sync::Arc<Spool>>,
     /// `Upgrade: websocket`
     pub upgrade: bool,
     pub remote: String,
     /// a static file a middleware guards: the program runs the middlewares
     /// and answers `serve_static` when they let it through
     pub static_guard: bool,
+}
+
+/// A request body written to a temporary file as it arrived (`bodyToDisk`):
+/// memory stays at the threshold whatever the size. The file goes with the
+/// request, unless `req.save(path)` moved it.
+#[derive(Debug)]
+pub struct Spool {
+    pub path: std::sync::Mutex<PathBuf>,
+    pub len: u64,
+    /// moved by `save`: no longer ours to delete
+    pub kept: std::sync::atomic::AtomicBool,
+}
+
+impl Spool {
+    pub fn path(&self) -> PathBuf {
+        self.path.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+impl Drop for Spool {
+    fn drop(&mut self) {
+        if !self.kept.load(std::sync::atomic::Ordering::Relaxed) {
+            let _ = std::fs::remove_file(self.path());
+        }
+    }
+}
+
+/// A new temporary file for a body or an uploaded part, readable only by this user.
+pub fn spool_file(dir: Option<&Path>) -> std::io::Result<(std::fs::File, PathBuf)> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = dir.map(Path::to_path_buf).unwrap_or_else(std::env::temp_dir);
+    std::fs::create_dir_all(&dir)?;
+    loop {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = dir.join(format!("fogu-body-{}-{}-{:08x}", std::process::id(), n, rand_u32()));
+        let mut o = std::fs::OpenOptions::new();
+        o.write(true).read(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            o.mode(0o600);
+        }
+        match o.open(&path) {
+            Ok(f) => return Ok((f, path)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+fn rand_u32() -> u32 {
+    let mut b = [0u8; 4];
+    let _ = getrandom::getrandom(&mut b);
+    u32::from_le_bytes(b)
 }
 
 /// HTTP response without `Value` — every field is `Send`.
@@ -163,6 +220,20 @@ pub struct ServerOptions {
     /// `reusePort`: several listeners share the port (one server per
     /// `sync.Worker`); the kernel spreads the connections over them
     pub reuse_port: bool,
+    /// `bodyToDisk`: a body bigger than this goes to a temporary file as it
+    /// arrives (`req.stream()`, `req.save()`, `req.form({ toDisk })`); `None`: in memory
+    pub body_to_disk: Option<usize>,
+    /// `maxDiskBody`: the largest body that goes to disk (413 beyond it)
+    pub max_disk_body: u64,
+    /// `bodyDir`: where those files go (the system's temporary folder)
+    pub body_dir: Option<PathBuf>,
+}
+
+impl ServerOptions {
+    /// The largest body a request may have.
+    pub fn body_limit(&self) -> u64 {
+        if self.body_to_disk.is_some() { self.max_disk_body.max(self.max_body as u64) } else { self.max_body as u64 }
+    }
 }
 
 impl Default for ServerOptions {
@@ -178,6 +249,9 @@ impl Default for ServerOptions {
             guards: Guards::default(),
             quiet: false,
             socketio: None,
+            body_to_disk: None,
+            max_disk_body: 2 << 30,
+            body_dir: None,
             tls: None,
             reuse_port: false,
         }
@@ -201,7 +275,7 @@ pub(crate) fn size_of(text: &str) -> Option<i64> {
 }
 
 /// The options `http.serve` and `app.listen` share.
-pub const SERVER_OPTIONS: &str = "tls quiet reusePort maxBody maxHeaderBytes headerTimeout readTimeout handlerTimeout";
+pub const SERVER_OPTIONS: &str = "tls quiet reusePort maxBody maxHeaderBytes headerTimeout readTimeout handlerTimeout bodyToDisk maxDiskBody bodyDir";
 
 impl ServerOptions {
     /// Reads one of [`SERVER_OPTIONS`]; false for a key it does not know.
@@ -220,6 +294,9 @@ impl ServerOptions {
         };
         match key {
             "maxBody" => self.max_body = bytes(v, 1)?,
+            "bodyToDisk" => self.body_to_disk = if matches!(v, Value::Nil | Value::Bool(false)) { None } else { Some(bytes(v, 0)?) },
+            "maxDiskBody" => self.max_disk_body = bytes(v, 1)? as u64,
+            "bodyDir" => self.body_dir = Some(PathBuf::from(v.to_display_string())),
             // hyper refuses a read buffer under 8 KB
             "maxHeaderBytes" => self.max_header = bytes(v, 8192)?,
             "headerTimeout" | "readTimeout" | "handlerTimeout" => {
@@ -341,6 +418,7 @@ pub fn take_pending_request() -> Option<(u64, Value, Reply)> {
             query: plain.query,
             headers: plain.headers,
             body: plain.body,
+            spool: plain.spool,
             upgrade: plain.upgrade,
             remote: plain.remote,
             static_guard: plain.static_guard,
@@ -435,6 +513,62 @@ pub fn plain_of(resp: Value) -> PlainResponse {
     }
 }
 
+/// A binary answer (`http.bytes`, `web.bytes`, or a buffer a handler returns):
+/// the text responses keep their body as a string.
+pub struct BytesResponse {
+    pub status: i64,
+    pub headers: HashMap<String, String>,
+    pub body: Vec<u8>,
+}
+
+impl BytesResponse {
+    /// A buffer as `application/octet-stream`.
+    pub fn octets(v: &Value) -> Value {
+        let mut headers = HashMap::new();
+        headers.insert("content-type".to_string(), "application/octet-stream".to_string());
+        let body = crate::native::util::bytes_of(v, "response").unwrap_or_default();
+        NativeObjectRef::new(BytesResponse { status: 200, headers, body }).to_value()
+    }
+}
+
+impl FoguObject for BytesResponse {
+    fn name(&self) -> &str {
+        "BytesResponse"
+    }
+
+    fn get(&self, field: &str) -> Option<Value> {
+        match field {
+            "status" => Some(Value::Int(self.status)),
+            "body" => Some(Value::buffer(self.body.clone())),
+            "headers" => Some(Value::Map(Rc::new(RefCell::new(self.headers.iter().map(|(k, v)| (k.as_str().into(), Value::Str(v.clone().into()))).collect())))),
+            _ => None,
+        }
+    }
+
+    fn call(&mut self, method: &str, _args: &[Value]) -> Result<Value, String> {
+        Err(format!("method '{}' does not exist on BytesResponse", method))
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+/// `bytes(body, { status, headers, type })`: a buffer (or a list of byte ints, or text) as is.
+pub(crate) fn bytes_response(args: &[Value]) -> Result<Value, String> {
+    let body = crate::native::util::bytes_of(&args[0], "bytes")?;
+    let ctype = match args.get(1) {
+        Some(Value::Map(m)) => m.borrow().get("type").map(|v| v.to_display_string()),
+        _ => None,
+    };
+    let (status, headers) = response_opts(ctype.as_deref().unwrap_or("application/octet-stream"), args)?;
+    Ok(NativeObjectRef::new(BytesResponse { status, headers, body }).to_value())
+}
+
 /// Native function with 1 required argument and 1 optional one (options).
 pub(crate) fn nfn_opts(name: &str, f: fn(&[Value]) -> Result<Value, String>) -> Value {
     Value::NativeFn(Rc::new(NativeFnValue {
@@ -497,6 +631,8 @@ fn response(body: String, content_type: &str, args: &[Value]) -> Result<Value, S
 pub fn build() -> ModuleValue {
     let mut exports = HashMap::new();
 
+    // bytes(buffer, { status, headers, type }) — a binary answer
+    exports.insert("bytes".into(), nfn_opts("bytes", bytes_response));
     // text/json/html(body, options?) — options: { status: 404, headers: {...} }
     exports.insert(
         "text".into(),
@@ -776,6 +912,51 @@ pub fn canonical_path(raw: &str) -> Result<String, &'static str> {
     Ok(path)
 }
 
+/// A request body: in memory, or — past `bodyToDisk` — in a temporary file
+/// written as the frames arrive. Errors are HTTP statuses.
+async fn read_body(body: Incoming, opts: &ServerOptions) -> Result<(Vec<u8>, Option<std::sync::Arc<Spool>>), u16> {
+    let Some(threshold) = opts.body_to_disk else {
+        return match Limited::new(body, opts.max_body).collect().await {
+            Ok(c) => Ok((c.to_bytes().to_vec(), None)),
+            Err(_) => Err(413),
+        };
+    };
+    use tokio::io::AsyncWriteExt;
+    let mut body = body;
+    let mut mem: Vec<u8> = Vec::new();
+    let mut file: Option<(tokio::fs::File, Spool)> = None;
+    let mut total: u64 = 0;
+    while let Some(frame) = body.frame().await {
+        let Ok(data) = frame.map_err(|_| 400u16)?.into_data() else { continue };
+        total += data.len() as u64;
+        if total > opts.body_limit() {
+            return Err(413);
+        }
+        match &mut file {
+            Some((f, _)) => f.write_all(&data).await.map_err(|_| 500u16)?,
+            None => {
+                mem.extend_from_slice(&data);
+                if mem.len() > threshold {
+                    let (f, path) = spool_file(opts.body_dir.as_deref()).map_err(|_| 500u16)?;
+                    let spool = Spool { path: std::sync::Mutex::new(path), len: 0, kept: Default::default() };
+                    let mut f = tokio::fs::File::from_std(f);
+                    f.write_all(&mem).await.map_err(|_| 500u16)?;
+                    mem = Vec::new();
+                    file = Some((f, spool));
+                }
+            }
+        }
+    }
+    match file {
+        Some((mut f, mut spool)) => {
+            f.flush().await.map_err(|_| 500u16)?;
+            spool.len = total;
+            Ok((Vec::new(), Some(std::sync::Arc::new(spool))))
+        }
+        None => Ok((mem, None)),
+    }
+}
+
 async fn handle_request(
     mut req: HyperRequest<Incoming>,
     server: u64,
@@ -822,9 +1003,16 @@ async fn handle_request(
     }
 
     let on_upgrade = if upgrade { Some(hyper::upgrade::on(&mut req)) } else { None };
-    let body = match tokio::time::timeout(opts.read_timeout, Limited::new(req.into_body(), opts.max_body).collect()).await {
-        Ok(Ok(c)) => c.to_bytes().to_vec(),
-        Ok(Err(_)) => return Ok(plain_response(PlainResponse::text(413, "request body too large")).await),
+    let (body, spool) = match tokio::time::timeout(opts.read_timeout, read_body(req.into_body(), &opts)).await {
+        Ok(Ok(b)) => b,
+        Ok(Err(code)) => {
+            let msg = match code {
+                413 => "request body too large",
+                500 => "cannot store the request body",
+                _ => "bad request",
+            };
+            return Ok(plain_response(PlainResponse::text(code as i64, msg)).await);
+        }
         Err(_) => return Ok(plain_response(PlainResponse::text(408, "request timeout")).await),
     };
     // what the answer may still need of the request: the headers for a static
@@ -840,6 +1028,7 @@ async fn handle_request(
         query,
         headers,
         body,
+        spool,
         upgrade,
         remote: remote.to_string(),
         static_guard,
@@ -1318,8 +1507,9 @@ pub fn answer(it: &Interpreter, handler: Value, req: Value, env: Rc<RefCell<Envi
             eprintln!("[http] {}: {}", what(), msg);
             text(500, "internal error")
         }
-        // a str is text, other values JSON (as in fogu:web)
+        // a str is text, a buffer bytes, other values JSON (as in fogu:web)
         Ok(Value::Str(s)) => text(200, &s),
+        Ok(v @ Value::Buffer(_)) => BytesResponse::octets(&v),
         Ok(v @ Value::Object(_)) => v,
         Ok(v) => {
             let mut r = ResponseValue::text(200, &crate::native::json::stringify_value(&v));
@@ -1363,10 +1553,26 @@ pub struct RequestValue {
     pub query: Option<String>,
     pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
+    /// the body in a temporary file (`bodyToDisk`)
+    pub spool: Option<std::sync::Arc<Spool>>,
     pub upgrade: bool,
     pub remote: String,
     /// see [`PlainRequest::static_guard`]
     pub static_guard: bool,
+}
+
+impl RequestValue {
+    /// The whole body (read from its file when it went to disk).
+    fn whole(&self) -> Result<std::borrow::Cow<'_, [u8]>, String> {
+        match &self.spool {
+            None => Ok(std::borrow::Cow::Borrowed(&self.body)),
+            Some(s) => std::fs::read(s.path()).map(std::borrow::Cow::Owned).map_err(|e| io_err!("request body: {}", e)),
+        }
+    }
+
+    fn size(&self) -> u64 {
+        self.spool.as_ref().map_or(self.body.len() as u64, |s| s.len)
+    }
 }
 
 impl FoguObject for RequestValue {
@@ -1379,8 +1585,10 @@ impl FoguObject for RequestValue {
             "method" => Some(Value::Str(self.method.clone().into())),
             "path" => Some(Value::Str(self.path.clone().into())),
             "query" => Some(self.query.clone().map_or(Value::Nil, Value::str)),
-            "body" => Some(Value::Str(String::from_utf8_lossy(&self.body).into_owned().into())),
-            "size" => Some(Value::Int(self.body.len() as i64)),
+            "body" => Some(Value::Str(String::from_utf8_lossy(&self.whole().unwrap_or_default()).into_owned().into())),
+            "size" => Some(Value::Int(self.size() as i64)),
+            "spooled" => Some(Value::Bool(self.spool.is_some())),
+            "bodyPath" => Some(self.spool.as_ref().map_or(Value::Nil, |s| Value::Str(crate::native::util::path_str(&s.path()).into()))),
             "upgrade" => Some(Value::Bool(self.upgrade)),
             "remote" => Some(Value::Str(self.remote.clone().into())),
             "headers" => {
@@ -1402,21 +1610,83 @@ impl FoguObject for RequestValue {
                     other => Err(format!("header expects str, got '{}'", other.type_name())),
                 }
             }
-            "json" => crate::native::json::parse_value(&String::from_utf8_lossy(&self.body)).map_err(|e| io_err!("json: {}", e)),
-            "bytes" => Ok(crate::native::util::list(self.body.iter().map(|b| Value::Int(*b as i64)).collect())),
-            // form() → { field: value | UploadedFile | [..] } for multipart and urlencoded bodies
+            "json" => crate::native::json::parse_value(&String::from_utf8_lossy(&self.whole()?)).map_err(|e| io_err!("json: {}", e)),
+            "bytes" => Ok(crate::native::util::list(self.whole()?.iter().map(|b| Value::Int(*b as i64)).collect())),
+            // form({ toDisk }) → { field: value | UploadedFile | [..] } for multipart and urlencoded
+            // bodies; a body on disk, or `toDisk: dir`, is read in blocks and its files written
+            // to disk (only text fields are kept in memory)
             "form" => {
+                crate::native::util::max_args(args, 1, "form")?;
                 let ct = self.headers.get("content-type").cloned().unwrap_or_default();
-                form_value(&ct, &self.body)
+                let to_disk = match args.first() {
+                    None | Some(Value::Nil) => None,
+                    Some(Value::Map(m)) => m.borrow().get("toDisk").filter(|v| !matches!(v, Value::Nil)).map(|v| PathBuf::from(v.to_display_string())),
+                    Some(other) => return Err(format!("form: options must be a map, got '{}'", other.type_name())),
+                };
+                let multipart = ct.to_ascii_lowercase().starts_with("multipart/form-data");
+                match (&self.spool, to_disk) {
+                    (None, None) => form_value(&ct, &self.body),
+                    (spool, dir) if multipart => {
+                        let boundary = boundary_of(&ct)?;
+                        let keep = dir.is_some();
+                        let dir = dir.or_else(|| spool.as_ref().and_then(|s| s.path().parent().map(Path::to_path_buf)));
+                        let parts = match spool {
+                            Some(s) => {
+                                let f = std::fs::File::open(s.path()).map_err(|e| io_err!("form: {}", e))?;
+                                multipart_to_disk(f, &boundary, dir.as_deref(), keep)
+                            }
+                            None => multipart_to_disk(std::io::Cursor::new(&self.body[..]), &boundary, dir.as_deref(), keep),
+                        };
+                        Ok(form_of_parts(parts.map_err(|e| io_err!("{}", e))?))
+                    }
+                    _ => form_value(&ct, &self.whole()?),
+                }
+            }
+            // stream() → a ReadStream of the body (from its file, or from memory)
+            "stream" => {
+                crate::native::util::max_args(args, 1, "stream")?;
+                let lines = matches!(args.first(), Some(Value::Map(m)) if m.borrow().get("lines").is_some_and(|v| v.is_truthy()));
+                let src: crate::native::stream::Source = match &self.spool {
+                    Some(s) => {
+                        let f = std::fs::File::open(s.path()).map_err(|e| io_err!("stream: {}", e))?;
+                        crate::native::stream::source(f, 64 * 1024)
+                    }
+                    None => crate::native::stream::source(std::io::Cursor::new(self.body.clone()), 64 * 1024),
+                };
+                Ok(crate::native::stream::ReadStreamValue::new("ReadStream", src, None, lines, vec![("size", Value::Int(self.size() as i64))]))
+            }
+            // save(path) → the path: the body into a file (a body on disk is moved there)
+            "save" => {
+                let target = crate::native::util::str_arg(args, 0, "save")?;
+                if target.split(['/', '\\']).any(|part| part == "..") || target.contains('\0') {
+                    return Err(io_err!("save: {}: '..' is not allowed in a path", target));
+                }
+                let path = PathBuf::from(&target);
+                if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+                    std::fs::create_dir_all(dir).map_err(|e| io_err!("save: {}: {}", dir.display(), e))?;
+                }
+                match &self.spool {
+                    Some(s) => {
+                        let from = s.path();
+                        if std::fs::rename(&from, &path).is_err() {
+                            std::fs::copy(&from, &path).map_err(|e| io_err!("save: {}: {}", path.display(), e))?;
+                            let _ = std::fs::remove_file(&from);
+                        }
+                        *s.path.lock().unwrap_or_else(|e| e.into_inner()) = path.clone();
+                        s.kept.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    None => std::fs::write(&path, &self.body).map_err(|e| io_err!("save: {}: {}", path.display(), e))?,
+                }
+                Ok(Value::Str(crate::native::util::path_str(&path).into()))
             }
             // protobuf(schema, message) → the body decoded as that message
-            "protobuf" => crate::native::http_client::decode_protobuf(args, &self.body),
-            other => Err(format!("method '{}' does not exist on Request (header json bytes form protobuf)", other)),
+            "protobuf" => crate::native::http_client::decode_protobuf(args, &self.whole()?),
+            other => Err(format!("method '{}' does not exist on Request (header json bytes form stream save protobuf)", other)),
         }
     }
 
     fn methods(&self) -> Vec<&'static str> {
-        vec!["header", "json", "bytes", "form", "protobuf"]
+        vec!["header", "json", "bytes", "form", "stream", "save", "protobuf"]
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -1502,6 +1772,160 @@ pub fn parse_multipart(body: &[u8], boundary: &str) -> Result<Vec<Part>, String>
     Ok(parts)
 }
 
+fn boundary_of(content_type: &str) -> Result<String, String> {
+    content_type
+        .split(';')
+        .find_map(|p| p.trim().strip_prefix("boundary=").or_else(|| p.trim().strip_prefix("BOUNDARY=")))
+        .map(|b| b.trim_matches('"').to_string())
+        .ok_or_else(|| io_err!("form: multipart without boundary"))
+}
+
+/// A part read by [`multipart_to_disk`]: a text field in memory, or a file on disk.
+struct DiskPart {
+    part: Part,
+    file: Option<std::sync::Arc<Spool>>,
+}
+
+/// Parses a multipart body read in blocks from `src`: the files go to `dir` as
+/// they are read (kept there when `keep`, else deleted with the request), text
+/// fields stay in memory (1 MiB each at most). Memory stays at a few blocks.
+fn multipart_to_disk(mut src: impl std::io::Read, boundary: &str, dir: Option<&Path>, keep: bool) -> Result<Vec<DiskPart>, String> {
+    use std::io::Write;
+    const BLOCK: usize = 64 * 1024;
+    const MAX_FIELD: usize = 1 << 20;
+    const MAX_HEAD: usize = 16 * 1024;
+    const MAX_PARTS: usize = 1000;
+    let delim = format!("--{}", boundary).into_bytes();
+    let sep = [b"\r\n".as_slice(), &delim].concat();
+    let mut buf: Vec<u8> = Vec::with_capacity(2 * BLOCK);
+    let mut eof = false;
+    // more bytes; false at the end of the body
+    let mut fill = |buf: &mut Vec<u8>, eof: &mut bool| -> Result<bool, String> {
+        if *eof {
+            return Ok(false);
+        }
+        let start = buf.len();
+        buf.resize(start + BLOCK, 0);
+        let n = src.read(&mut buf[start..]).map_err(|e| format!("form: {}", e))?;
+        buf.truncate(start + n);
+        if n == 0 {
+            *eof = true;
+        }
+        Ok(n > 0)
+    };
+    // the first boundary
+    let mut pos = loop {
+        if let Some(i) = find(&buf, &delim, 0) {
+            break i + delim.len();
+        }
+        if buf.len() > MAX_HEAD || !fill(&mut buf, &mut eof)? {
+            return Err("form: multipart boundary not found".into());
+        }
+    };
+    let mut parts = Vec::new();
+    loop {
+        while buf.len() < pos + 2 && fill(&mut buf, &mut eof)? {}
+        if buf.get(pos..pos + 2) == Some(b"--") || buf.len() < pos + 2 {
+            break;
+        }
+        if buf.get(pos..pos + 2) == Some(b"\r\n") {
+            pos += 2;
+        }
+        // the part's headers
+        let head_end = loop {
+            if let Some(i) = find(&buf, b"\r\n\r\n", pos) {
+                break i;
+            }
+            if buf.len() - pos > MAX_HEAD || !fill(&mut buf, &mut eof)? {
+                return Err("form: malformed part headers".into());
+            }
+        };
+        let head = String::from_utf8_lossy(&buf[pos..head_end]).to_string();
+        let (mut name, mut filename, mut content_type) = (String::new(), None, None);
+        for line in head.split("\r\n") {
+            let (k, v) = line.split_once(':').unwrap_or((line, ""));
+            match k.trim().to_lowercase().as_str() {
+                "content-disposition" => {
+                    name = disposition_param(v, "name").unwrap_or_default();
+                    filename = disposition_param(v, "filename");
+                }
+                "content-type" => content_type = Some(v.trim().to_string()),
+                _ => {}
+            }
+        }
+        buf.drain(..head_end + 4);
+        // the data, up to the next boundary
+        let mut file = match &filename {
+            Some(_) => {
+                let (f, path) = spool_file(dir).map_err(|e| format!("form: {}", e))?;
+                let spool = Spool { path: std::sync::Mutex::new(path), len: 0, kept: std::sync::atomic::AtomicBool::new(keep) };
+                Some((f, spool))
+            }
+            None => None,
+        };
+        let mut text = Vec::new();
+        let mut written = 0u64;
+        let end = loop {
+            if let Some(i) = find(&buf, &sep, 0) {
+                break i;
+            }
+            // all but what could be the start of the boundary goes out
+            let safe = buf.len().saturating_sub(sep.len());
+            if safe > 0 {
+                match &mut file {
+                    Some((f, _)) => f.write_all(&buf[..safe]).map_err(|e| format!("form: {}", e))?,
+                    None => text.extend_from_slice(&buf[..safe]),
+                }
+                written += safe as u64;
+                buf.drain(..safe);
+            }
+            if text.len() > MAX_FIELD {
+                return Err(format!("form: the field '{}' is larger than 1 MiB", name));
+            }
+            if !fill(&mut buf, &mut eof)? {
+                return Err("form: unterminated part".into());
+            }
+        };
+        match &mut file {
+            Some((f, _)) => f.write_all(&buf[..end]).map_err(|e| format!("form: {}", e))?,
+            None => text.extend_from_slice(&buf[..end]),
+        }
+        written += end as u64;
+        buf.drain(..end + sep.len());
+        pos = 0;
+        let file = file.map(|(_, mut s)| {
+            s.len = written;
+            std::sync::Arc::new(s)
+        });
+        parts.push(DiskPart { part: Part { name, filename, content_type, data: text }, file });
+        if parts.len() > MAX_PARTS {
+            return Err("form: more than 1000 parts".into());
+        }
+    }
+    Ok(parts)
+}
+
+fn form_of_parts(parts: Vec<DiskPart>) -> Value {
+    let mut out: HashMap<Str, Value> = HashMap::new();
+    for p in parts {
+        let v = match &p.part.filename {
+            Some(_) => NativeObjectRef::new(UploadedFile { part: p.part.clone(), file: p.file }).to_value(),
+            None => Value::Str(String::from_utf8_lossy(&p.part.data).into_owned().into()),
+        };
+        match out.get_mut(p.part.name.as_str()) {
+            Some(Value::List(l)) => l.borrow_mut().push(v),
+            Some(existing) => {
+                let first = existing.clone();
+                *existing = crate::native::util::list(vec![first, v]);
+            }
+            None => {
+                out.insert(p.part.name.as_str().into(), v);
+            }
+        }
+    }
+    Value::Map(Rc::new(RefCell::new(out)))
+}
+
 fn form_value(content_type: &str, body: &[u8]) -> Result<Value, String> {
     let mut out: HashMap<Str, Value> = HashMap::new();
     let mut add = |name: String, v: Value| match out.get_mut(name.as_str()) {
@@ -1523,7 +1947,7 @@ fn form_value(content_type: &str, body: &[u8]) -> Result<Value, String> {
             .ok_or_else(|| io_err!("form: multipart without boundary"))?;
         for p in parse_multipart(body, &boundary).map_err(|e| io_err!("{}", e))? {
             let v = match &p.filename {
-                Some(_) => NativeObjectRef::new(UploadedFile { part: p.clone() }).to_value(),
+                Some(_) => NativeObjectRef::new(UploadedFile { part: p.clone(), file: None }).to_value(),
                 None => Value::Str(String::from_utf8_lossy(&p.data).into_owned().into()),
             };
             add(p.name, v);
@@ -1537,9 +1961,19 @@ fn form_value(content_type: &str, body: &[u8]) -> Result<Value, String> {
     Ok(Value::Map(Rc::new(RefCell::new(out))))
 }
 
-/// A file sent in a multipart form.
+/// A file sent in a multipart form: in memory, or on disk (`form({ toDisk })`).
 pub struct UploadedFile {
     part: Part,
+    file: Option<std::sync::Arc<Spool>>,
+}
+
+impl UploadedFile {
+    fn data(&self) -> Result<std::borrow::Cow<'_, [u8]>, String> {
+        match &self.file {
+            None => Ok(std::borrow::Cow::Borrowed(&self.part.data)),
+            Some(s) => std::fs::read(s.path()).map(std::borrow::Cow::Owned).map_err(|e| io_err!("upload: {}", e)),
+        }
+    }
 }
 
 impl FoguObject for UploadedFile {
@@ -1552,16 +1986,17 @@ impl FoguObject for UploadedFile {
             "field" => Value::Str(self.part.name.clone().into()),
             "filename" | "name" => Value::Str(self.part.filename.clone().unwrap_or_default().into()),
             "contentType" | "type" => self.part.content_type.clone().map_or(Value::Nil, Value::str),
-            "size" => Value::Int(self.part.data.len() as i64),
+            "size" => Value::Int(self.file.as_ref().map_or(self.part.data.len() as u64, |s| s.len) as i64),
+            "path" => self.file.as_ref().map_or(Value::Nil, |s| Value::Str(crate::native::util::path_str(&s.path()).into())),
             _ => return None,
         })
     }
 
     fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
         match method {
-            "text" => Ok(Value::Str(String::from_utf8_lossy(&self.part.data).into_owned().into())),
-            "bytes" => Ok(crate::native::util::list(self.part.data.iter().map(|b| Value::Int(*b as i64)).collect())),
-            "json" => crate::native::json::parse_value(&String::from_utf8_lossy(&self.part.data)).map_err(|e| io_err!("json: {}", e)),
+            "text" => Ok(Value::Str(String::from_utf8_lossy(&self.data()?).into_owned().into())),
+            "bytes" => Ok(crate::native::util::list(self.data()?.iter().map(|b| Value::Int(*b as i64)).collect())),
+            "json" => crate::native::json::parse_value(&String::from_utf8_lossy(&self.data()?)).map_err(|e| io_err!("json: {}", e)),
             // save(path): a folder keeps the original (sanitized) file name; returns the path.
             // A path written out is the program's own, but the client's file name often
             // ends up in it: it never climbs with `..`
@@ -1576,7 +2011,21 @@ impl FoguObject for UploadedFile {
                 if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
                     std::fs::create_dir_all(dir).map_err(|e| io_err!("save: {}: {}", dir.display(), e))?;
                 }
-                std::fs::write(&path, &self.part.data).map_err(|e| io_err!("save: {}: {}", path.display(), e))?;
+                match &self.file {
+                    // a file on disk is moved (copied across file systems)
+                    Some(s) => {
+                        let from = s.path();
+                        if std::fs::rename(&from, &path).is_err() {
+                            std::fs::copy(&from, &path).map_err(|e| io_err!("save: {}: {}", path.display(), e))?;
+                            if !s.kept.load(std::sync::atomic::Ordering::Relaxed) {
+                                let _ = std::fs::remove_file(&from);
+                            }
+                        }
+                        *s.path.lock().unwrap_or_else(|e| e.into_inner()) = path.clone();
+                        s.kept.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    None => std::fs::write(&path, &self.part.data).map_err(|e| io_err!("save: {}: {}", path.display(), e))?,
+                }
                 Ok(Value::Str(crate::native::util::path_str(&path).into()))
             }
             other => Err(format!("method '{}' does not exist on UploadedFile (text bytes json save)", other)),

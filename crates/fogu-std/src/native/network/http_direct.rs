@@ -493,7 +493,7 @@ fn parse_head(data: &[u8], opts: &ServerOptions) -> Parsed {
     } else {
         BodyKind::Len(len.unwrap_or(0))
     };
-    if matches!(body, BodyKind::Len(n) if n > opts.max_body) {
+    if matches!(body, BodyKind::Len(n) if n as u64 > opts.body_limit()) {
         return Parsed::Bad(413, "request body too large".into());
     }
     let ws_key = if upgrade { headers.get("sec-websocket-key").cloned() } else { None };
@@ -516,7 +516,8 @@ enum Chunk {
     TrailerLf(bool),
 }
 
-/// Collects a request body from the bytes received.
+/// Collects a request body from the bytes received — in memory, or past
+/// `bodyToDisk` in a temporary file (memory then stays at the threshold).
 struct BodyReader {
     body: Vec<u8>,
     /// bytes still expected (a body with a length)
@@ -525,13 +526,53 @@ struct BodyReader {
     /// bytes of chunk framing and trailers read (bounded)
     framing: usize,
     max: usize,
+    /// `bodyToDisk`, and the file once the body went there
+    to_disk: Option<(usize, Option<std::path::PathBuf>)>,
+    file: Option<(std::fs::File, http::Spool)>,
+    /// bytes of body so far (in memory and on disk)
+    total: u64,
 }
 
 impl BodyReader {
-    fn new(kind: &BodyKind, max: usize) -> BodyReader {
-        match kind {
-            BodyKind::Len(n) => BodyReader { body: Vec::new(), left: *n, chunk: None, framing: 0, max },
-            BodyKind::Chunked => BodyReader { body: Vec::new(), left: 0, chunk: Some(Chunk::Size(0, 0, false)), framing: 0, max },
+    fn new(kind: &BodyKind, opts: &ServerOptions) -> BodyReader {
+        let to_disk = opts.body_to_disk.map(|t| (t, opts.body_dir.clone()));
+        let max = opts.body_limit() as usize;
+        let (left, chunk) = match kind {
+            BodyKind::Len(n) => (*n, None),
+            BodyKind::Chunked => (0, Some(Chunk::Size(0, 0, false))),
+        };
+        BodyReader { body: Vec::new(), left, chunk, framing: 0, max, to_disk, file: None, total: 0 }
+    }
+
+    /// Bytes of the body: into memory, or the file.
+    fn push(&mut self, data: &[u8]) -> Result<(), (u16, &'static str)> {
+        use std::io::Write;
+        const STORE: (u16, &str) = (500, "cannot store the request body");
+        self.total += data.len() as u64;
+        if let Some((f, _)) = &mut self.file {
+            return f.write_all(data).map_err(|_| STORE);
+        }
+        self.body.extend_from_slice(data);
+        if let Some((threshold, dir)) = &self.to_disk {
+            if self.body.len() > *threshold {
+                let (mut f, path) = http::spool_file(dir.as_deref()).map_err(|_| STORE)?;
+                let spool = http::Spool { path: std::sync::Mutex::new(path), len: 0, kept: Default::default() };
+                f.write_all(&self.body).map_err(|_| STORE)?;
+                self.body = Vec::new();
+                self.file = Some((f, spool));
+            }
+        }
+        Ok(())
+    }
+
+    /// The body: in memory, or its file.
+    fn finish(self) -> (Vec<u8>, Option<http::Spool>) {
+        match self.file {
+            Some((_, mut s)) => {
+                s.len = self.total;
+                (Vec::new(), Some(s))
+            }
+            None => (self.body, None),
         }
     }
 
@@ -541,10 +582,14 @@ impl BodyReader {
         let Some(mut state) = self.chunk else {
             let n = self.left.min(data.len());
             if n > 0 {
-                if self.body.is_empty() {
-                    self.body.reserve_exact(self.left);
+                if self.to_disk.is_some() {
+                    self.push(&data[..n])?;
+                } else {
+                    if self.body.is_empty() {
+                        self.body.reserve_exact(self.left);
+                    }
+                    self.body.extend_from_slice(&data[..n]);
                 }
-                self.body.extend_from_slice(&data[..n]);
                 self.left -= n;
             }
             return Ok((n, self.left == 0));
@@ -555,14 +600,14 @@ impl BodyReader {
             let b = data[i];
             if let Chunk::Data(left) = state {
                 let n = left.min(data.len() - i);
-                self.body.extend_from_slice(&data[i..i + n]);
+                self.push(&data[i..i + n])?;
                 i += n;
                 state = if n == left { Chunk::DataCr } else { Chunk::Data(left - n) };
                 continue;
             }
             i += 1;
             self.framing += 1;
-            if self.framing > 64 * 1024 + self.body.len() / 4 {
+            if self.framing as u64 > 64 * 1024 + self.total / 4 {
                 return Err(BAD);
             }
             state = match (state, b) {
@@ -572,7 +617,7 @@ impl BodyReader {
                 (Chunk::Size(v, d, true), _) if b != b'\n' => Chunk::Size(v, d, true),
                 (Chunk::SizeLf(0), b'\n') => Chunk::Trailer(true),
                 (Chunk::SizeLf(v), b'\n') => {
-                    if self.body.len().saturating_add(v) > self.max {
+                    if (self.total as usize).saturating_add(v) > self.max {
                         return Err((413, "request body too large"));
                     }
                     Chunk::Data(v)
@@ -674,7 +719,7 @@ impl Conn {
 
     /// A head was parsed; `rest` is what came after it.
     fn begin_body(&mut self, head: Box<Head>, rest: &[u8]) -> Step {
-        let mut reader = BodyReader::new(&head.body, self.opts.max_body);
+        let mut reader = BodyReader::new(&head.body, &self.opts);
         match reader.feed(rest) {
             Ok((used, done)) => {
                 // what follows the body is the next request
@@ -715,7 +760,7 @@ impl Conn {
     }
 
     /// The next request of the connection and its body.
-    fn read_request(&mut self) -> Result<Result<(Box<Head>, Vec<u8>), Fail>, String> {
+    fn read_request(&mut self) -> Result<Result<(Box<Head>, Vec<u8>, Option<http::Spool>), Fail>, String> {
         self.shared.arm(Phase::Head, Some(self.opts.header_timeout));
         let mut first = true;
         let mut step = if self.buf.is_empty() { Step::More } else { self.on_buffer() };
@@ -776,7 +821,8 @@ impl Conn {
                 }
             }
         }
-        Ok(Ok((head, reader.body)))
+        let (body, spool) = reader.finish();
+        Ok(Ok((head, body, spool)))
     }
 
     /// Serves the requests the connection has; it ends, or goes aside (`park`)
@@ -791,7 +837,7 @@ impl Conn {
             }
         }
         loop {
-            let (head, body) = match self.read_request()? {
+            let (head, body, spool) = match self.read_request()? {
                 Ok(r) => r,
                 Err(Fail::Close) => return Ok(()),
                 Err(Fail::Idle) => {
@@ -817,6 +863,7 @@ impl Conn {
                 query: head.query,
                 headers: head.headers,
                 body,
+                spool: spool.map(std::sync::Arc::new),
                 upgrade,
                 remote: self.remote.clone(),
                 static_guard: false,

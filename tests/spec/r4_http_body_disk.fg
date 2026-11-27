@@ -1,0 +1,45 @@
+// Request bodies past bodyToDisk go to a temporary file as they arrive:
+// req.stream(), req.save(), req.form({ toDisk }), on both servers
+import http from "fogu:http"
+import fs from "fogu:fs"
+
+fn handler(req) {
+    if req.path == "/echo" {
+        return { spooled: req.spooled, size: req.size, inMemory: len(req.body) == req.size }
+    }
+    if req.path == "/stream" {
+        let n = 0
+        let chunks = 0
+        for c in req.stream() {
+            n += len(c)
+            chunks += 1
+        }
+        return { spooled: req.spooled, read: n, several: chunks > 1 }
+    }
+    if req.path == "/save" {
+        const tmp = req.bodyPath
+        const p = req.save("r4_body_saved.tmp.bin")?
+        return { saved: p, size: fs.stat(p)?.size, tempGone: !fs.exists(tmp) }
+    }
+    if req.path == "/form" {
+        const f = req.form({ toDisk: "r4_uploads.tmp" })?
+        const file = f.doc
+        return { title: f.title, name: file.filename, size: file.size, onDisk: file.path != nil, starts: file.text().slice(0, 5) }
+    }
+    return http.text("?", { status: 404 })
+}
+
+const big = "a".repeat(300 * 1024)
+{
+    http.serve(18481, handler, { quiet: true, bodyToDisk: "64kb", maxDiskBody: "10mb" })?
+    const base = "http://127.0.0.1:18481"
+    print(http.post(base + "/echo", "small")?.json()?)
+    print(http.post(base + "/echo", big)?.json()?)
+    print(http.post(base + "/stream", big)?.json()?)
+    print(http.post(base + "/save", big)?.json()?)
+    const r = http.post(base + "/form", nil, { formData: { title: "report", doc: { data: "hello" + "x".repeat(200 * 1024), filename: "big.txt" } } })?
+    print(r.json()?)
+    // past maxDiskBody: 413 (or the connection cut while the client still sends)
+    const [tooBig, cut] = http.post(base + "/echo", "b".repeat(11 * 1024 * 1024))
+    print(cut != nil || tooBig.status == 413)
+}

@@ -58,6 +58,8 @@ pub fn build() -> ModuleValue {
         nfn("app", 0, |_| Ok(NativeObjectRef::new(AppValue::new()).to_value())),
     );
 
+    // bytes(buffer, { status, headers, type }) — a binary answer
+    exports.insert("bytes".into(), fogu_http::nfn_opts("bytes", fogu_http::bytes_response));
     // json/text/html(body, options?) — options: { status: 404, headers: {...} }
     exports.insert(
         "json".into(),
@@ -1059,6 +1061,7 @@ fn test_request(req: &Value) -> Result<Option<Value>, &'static str> {
             query,
             headers,
             body,
+            spool: None,
             upgrade: matches!(m.get("upgrade"), Some(Value::Bool(true))),
             remote: text("remote").unwrap_or_else(|| "127.0.0.1:0".into()),
             static_guard: false,
@@ -1207,6 +1210,9 @@ fn normalize_response(v: Value, set: &Value) -> Value {
         Value::Int(n) => n,
         _ => 200,
     };
+    if let Value::Buffer(_) = &v {
+        return fogu_http::BytesResponse::octets(&v);
+    }
     let (ctype, body) = match v {
         Value::Nil => ("text/plain; charset=utf-8", String::new()),
         Value::Str(s) => (content_type_of(&s), s.to_string()),
@@ -1536,7 +1542,7 @@ pub struct ResponseValue {
 /// The values a handler may return that are not turned into JSON: responses,
 /// streams, accepted upgrades.
 fn is_special(name: &str) -> bool {
-    matches!(name, "Response" | "SseStream" | "WsAccept" | "StaticPass" | "ResponseStream" | "ReadStream" | "HttpStream")
+    matches!(name, "Response" | "SseStream" | "WsAccept" | "StaticPass" | "ResponseStream" | "ReadStream" | "HttpStream" | "BytesResponse")
 }
 
 /// The payload of special responses for the server thread (see `http::send_response`).
@@ -1548,6 +1554,17 @@ pub fn take_special(o: &NativeObjectRef) -> Option<fogu_http::PlainResponse> {
     let inner = o.inner();
     let mut b = inner.borrow_mut();
     let any = b.as_any_mut();
+    if let Some(r) = any.downcast_mut::<fogu_http::BytesResponse>() {
+        return Some(fogu_http::PlainResponse {
+            status: r.status,
+            headers: std::mem::take(&mut r.headers),
+            body: std::mem::take(&mut r.body),
+            file: None,
+            stream: None,
+            upgrade: None,
+            serve_static: false,
+        });
+    }
     if let Some(r) = any.downcast_mut::<ResponseValue>() {
         // straight to what the server sends: no map of values built from the
         // headers and turned back into headers

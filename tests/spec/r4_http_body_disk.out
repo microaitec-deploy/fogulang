@@ -1,0 +1,6 @@
+{inMemory: true, size: 5, spooled: false}
+{inMemory: true, size: 307200, spooled: true}
+{read: 307200, several: true, spooled: true}
+{saved: r4_body_saved.tmp.bin, size: 307200, tempGone: true}
+{name: big.txt, onDisk: true, size: 204805, starts: hello, title: report}
+true

@@ -1,0 +1,21 @@
+// Binary answers: http.bytes / web.bytes, or a buffer returned by a handler
+import http from "fogu:http"
+import web from "fogu:web"
+
+const png = bytes([137, 80, 78, 71, 13, 10, 26, 10, 0, 255])
+http.serve(18491, (req) => {
+    if req.path == "/raw" { return png }
+    return http.bytes(png, { type: "image/png", headers: { "cache-control": "max-age=60" }, status: 201 })
+}, { quiet: true })?
+const a = http.get("http://127.0.0.1:18491/raw")?
+print(a.status, a.headers["content-type"], a.bytes() == png)
+const b = http.get("http://127.0.0.1:18491/img")?
+print(b.status, b.headers["content-type"], b.headers["cache-control"], b.bytes() == png, len(b.bytes()))
+
+const app = web.app()
+app.get("/raw", (ctx) => png)
+app.get("/img", (ctx) => web.bytes(png, { type: "image/png" }))
+app.listen(18492, { quiet: true })?
+const c = http.get("http://127.0.0.1:18492/raw")?
+const d = http.get("http://127.0.0.1:18492/img")?
+print(c.headers["content-type"], c.bytes() == png, d.headers["content-type"], d.bytes() == png)
