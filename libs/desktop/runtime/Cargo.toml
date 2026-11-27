@@ -1,6 +1,6 @@
 [package]
 name = "fogu-desktop"
-version = "0.1.0"
+version = "0.7.1"
 edition = "2024"
 description = "Desktop host for Fogu programs: a Tauri window whose backend is a Fogu program"
 authors = ["Edmilson Soares"]
@@ -37,7 +37,8 @@ tauri-plugin-global-shortcut = "2"
 
 # window opacity: native calls per OS (Tauri 2 has no opacity setting)
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+# (and the processes a hot reload ends: ToolHelp, Threading)
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -71,6 +72,12 @@ lto = "thin"
 
 # standalone: not part of the lang/ workspace
 [workspace]
+
+# the patches of the lang/ workspace apply only there: repeated here (the Fogu
+# runtime needs its socketioxide, see lang/vendor/socketioxide/FOGU.md).
+# tools/build.fg (sourcesPaths) points both paths at the Fogu sources in use.
+[patch.crates-io]
+socketioxide = { path = "../../../lang/vendor/socketioxide" }
 
 # debug builds (build.fg --debug, dev.fg): no debug info. The Windows/Tauri
 # crates with full debug info need several GB of RAM to compile (rustc was

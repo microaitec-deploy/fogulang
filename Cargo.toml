@@ -1,6 +1,6 @@
 [package]
 name = "fogu"
-version = "0.8.5"
+version = "0.8.6"
 edition = "2024"
 description = "Reference implementation of the Fogu language: interpreter, Cranelift JIT, REPL and package manager"
 authors = ["Edmilson Soares"]
@@ -216,3 +216,8 @@ members = [".", "ffi", "crates/*"]
 default-members = [".", "crates/fogu-core", "crates/fogu-std", "crates/fogu-pkg"]
 exclude = ["fogu"]
 
+
+# socketioxide with one change: the CONNECT packet carries the private session id of
+# Socket.IO's connection state recovery (`Socket::set_recovery_pid`); see vendor/socketioxide/FOGU.md
+[patch.crates-io]
+socketioxide = { path = "vendor/socketioxide" }

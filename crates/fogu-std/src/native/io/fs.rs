@@ -50,6 +50,18 @@ pub fn build() -> ModuleValue {
             .map(|_| Value::Nil)
             .map_err(|err| io_err!("fs.writeText: {}: {}", p, err))
     }));
+    // binary files: a buffer in, a buffer out (writeBytes also takes a str or a list of bytes)
+    e.insert("readBytes".into(), nfn("readBytes", 1, |a| {
+        let p = str_arg(a, 0, "fs.readBytes")?;
+        std::fs::read(&p).map(Value::buffer).map_err(|err| io_err!("fs.readBytes: {}: {}", p, err))
+    }));
+    e.insert("writeBytes".into(), nfn("writeBytes", 2, |a| {
+        let p = str_arg(a, 0, "fs.writeBytes")?;
+        let data = crate::native::util::bytes_of(a.get(1).unwrap_or(&Value::Nil), "fs.writeBytes")?;
+        std::fs::write(&p, &data[..])
+            .map(|_| Value::Nil)
+            .map_err(|err| io_err!("fs.writeBytes: {}: {}", p, err))
+    }));
     e.insert("append".into(), nfn("append", 2, |a| {
         use std::io::Write;
         let p = str_arg(a, 0, "fs.append")?;

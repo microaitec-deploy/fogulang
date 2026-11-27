@@ -6,6 +6,71 @@ be incompatible changes (spec §75).
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-11-27
+
+Socket.IO across several servers and across lost connections, and the limits the FoguOne (an IoT
+platform and an SSH-tunnel desktop app) and MicroAITec projects ran into.
+
+### Added
+
+- **`fogu:socketio` Redis adapter**: `socketio.server({ redis: "redis://host:6379", redisPrefix })`.
+  Several servers (processes, machines) share rooms and broadcasts: `io.to(room).emit` on one
+  reaches the sockets of all (socketioxide-redis 0.4, Redis 6+ over RESP3). It speaks
+  socketioxide's protocol, not the one of the JavaScript `@socket.io/redis-adapter`. `io.adapter`
+  is `"local"` or `"redis"`; a Redis that cannot be reached is an error value.
+- **`fogu:socketio` connection state recovery**: `socketio.server({ recovery: true | {
+  maxDisconnection = 2m, skipMiddlewares = true } })`, as the official servers'
+  `connectionStateRecovery`. A client that lost its connection and comes back in time gets its
+  rooms, its `socket.data` and the broadcasts it missed; `socket.recovered` is true. Works with the
+  official JavaScript client (checked with socket.io-client 4.8) and with `socketio.connect`
+  (`c.recovered`, `c.id`; the offset each broadcast carries as its last argument is not passed to
+  a handler with fewer parameters). socketioxide is vendored (`vendor/socketioxide`, 0.18.9) with
+  one change: the CONNECT packet carries the session's `pid`.
+- TLS on the standalone servers: `io.listen(port, { tls: { cert, key } })` (HTTPS and `wss://`),
+  `websocket.listen(port, { tls })` (`server.url` is `wss://…`), and `websocket.connect(url, { ca })`
+  to trust a certificate of the server's own.
+- `\u{...}` escapes in strings and templates (`"\u{FEFF}"`, `"\u{1F600}"`).
+- `map.clone()`: a shallow copy.
+- `fs.readBytes(path)` → buffer, `fs.writeBytes(path, data)`.
+- `"exclude"` in a package's fogu.json: files and folders (`"build.fg"`, `"tools/"`, `"*.gen.fg"`)
+  left out of `fogu build --compile`.
+- `fogu:ssh` tunnels: `forward(port, host, hostPort, { bind })` / `reverse(…, { bind })` (the bind
+  address), `t.pid()`, `t.bind`; `reverse(0, …)` reports the port the server allocated
+  (`r.port`).
+- `process.run(…, { hidden: true })` and `shell` commands: no console window on Windows (also when
+  the parent has none, as a desktop app).
+
+### Changed
+
+- `fogu build --compile` no longer embeds a package's `tests/`, `examples/`, `bench/`, `docs/` and
+  `*.test.fg` files, nor what its `"exclude"` lists, unless an import reaches them.
+- socketioxide 0.18.9 and socketioxide-core 0.20 (engineioxide 0.17.9).
+
+### Fixed
+
+- `fogu:ssh` tunnels no longer outlive the program (however it ends: `process.exit`, an error, the
+  window closed): Linux `PR_SET_PDEATHSIG`, a watcher on macOS, a Job Object on Windows; `close()`
+  and dropping the tunnel stop it. They no longer hold the program's stdout (`fogu x.fg | head`
+  ends).
+- `s.forward()` returned a tunnel when the local port was taken (ssh died a second later): it now
+  returns once the port accepts connections, or an error value with ssh's message. `forward` and
+  `reverse` no longer stop the other tasks while ssh connects.
+- `-o` option values with spaces were cut (a known-hosts file in "Application Support").
+- The "method does not exist" errors of `Ssh` and `Tunnel` list the methods.
+- Windows: `shell.which("npm")` and `shell.exec("npm …")` / `process.run("npm")` found the
+  extension-less bash script (os error 193): PATHEXT extensions (`npm.cmd`) are tried first.
+- Windows: each `process.run` of a desktop app flashed a console window.
+- `process.setEnv` did not update `Fogu.env`.
+- Temporary upload files of a test run were committed (`tests/spec/*.tmp/` is ignored now).
+
+### Known gaps
+
+- Socket.IO recovery gives the socket a new `socket.id` (Node keeps the old one); with the Redis
+  adapter only the broadcasts of the same server are replayed.
+- No cycle collector, by design: a map that refers back to its parent through another map is
+  never freed — per-request data must not build such cycles.
+- Unknown members of native objects give a bound method until it is called.
+
 ## [0.8.5] - 2026-11-27
 
 The limits the Fogu Chat project ran into (a backend with Keycloak, PostgreSQL, Socket.IO, Redis and

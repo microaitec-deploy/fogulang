@@ -1,0 +1,27 @@
+// \u{...} escapes, map.clone(), binary files with fs.readBytes / fs.writeBytes,
+// process.setEnv seen by Fogu.env
+import fs from "fogu:fs"
+import process from "fogu:process"
+
+const bom = "\u{FEFF}"
+print(bom.len(), bom.code(), "\u{41}\u{1F600}".len(), `t\u{e9}`)
+print("A".code() == "\u{41}".code())
+
+const a = { n: 1, list: [1] }
+const b = a.clone()
+b.n = 2
+b.list.push(2)
+print(a, b)
+
+const data = bytes([0, 255, 16, 32])
+fs.writeBytes("small_fixes.tmp.bin", data)?
+const back = fs.readBytes("small_fixes.tmp.bin")?
+print(typeof(back), back.toList(), back.equals(data))
+fs.writeBytes("small_fixes.tmp.bin", "hi")?
+print(fs.readBytes("small_fixes.tmp.bin")?.toList())
+const [_, missing] = fs.readBytes("no/such/file.bin")
+print(typeof(missing))
+fs.remove("small_fixes.tmp.bin")?
+
+process.setEnv("FOGU_SMALL_FIXES", "on")
+print(process.env("FOGU_SMALL_FIXES"), Fogu.env.FOGU_SMALL_FIXES)

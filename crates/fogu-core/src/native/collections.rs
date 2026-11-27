@@ -496,6 +496,8 @@ fn map_method(
             }
             "remove" => m.borrow_mut().remove(&key(args)?).unwrap_or(Value::Nil),
             "clear" => { m.borrow_mut().clear(); Value::Nil }
+            // clone(): a new map with the same entries (the values themselves are shared)
+            "clone" => Value::Map(Rc::new(RefCell::new(m.borrow().clone()))),
             "merge" => {
                 let mut out = m.borrow().clone();
                 for a in args {

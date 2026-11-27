@@ -1,0 +1,67 @@
+// fogu:ssh tunnels against a fake ssh client (FOGU_SSH; Unix): a failing
+// tunnel is an error value with ssh's message, a busy local port is caught,
+// reverse(0) learns the port the server allocated, -o values with spaces stay
+// one value, and a tunnel ends with the program that opened it
+import ssh from "fogu:ssh"
+import fs from "fogu:fs"
+import net from "fogu:net"
+import process from "fogu:process"
+import time from "fogu:time"
+
+const dir = process.cwd()?
+const fake = dir + "/ssh_tunnel.tmp.fake"
+fs.writeText(fake, [
+    "#!/bin/sh",
+    "for a in \"$@\"; do last=\"$a\"; done",
+    "case \" $* \" in",
+    "*\" -R 0:\"*|*\" -R 127.0.0.1:0:\"*) echo 'debug1: Authenticated to fake' >&2; echo 'Allocated port 43210 for remote forward to localhost:3000' >&2; exec sleep 30;;",
+    "*\" -R \"*) echo 'debug1: remote forward failure for: listen 2222' >&2; echo 'Error: remote port forwarding failed for listen port 2222' >&2; exit 255;;",
+    "*\" -L \"*) echo 'bind [127.0.0.1]:1: Address already in use' >&2; echo 'Could not request local forwarding.' >&2; exit 255;;",
+    "esac",
+    "if [ \"$last\" = args ]; then for a in \"$@\"; do echo \"$a\"; done; fi",
+    "exit 0",
+].join("\n") + "\n")?
+process.run("chmod", ["+x", fake])?
+process.setEnv("FOGU_SSH", fake)
+
+const s = ssh.connect("fake@host", { knownHosts: "/tmp/Application Support/kh" })?
+// the value with a space reaches ssh quoted, as one -o argument
+for a in s.run("args")?.stdout.split("\n") {
+    if a.starts_with("UserKnownHostsFile") { print(a) }
+}
+
+// ssh exits: an error value with its own words, not a dead tunnel
+const [t1, e1] = s.forward(0, "127.0.0.1", 80)
+print(t1, str(e1).contains("ssh.forward: "), str(e1).split(" via ")[1])
+const [t2, e2] = s.reverse(2222, "127.0.0.1", 3000)
+print(t2, e2)
+
+// a local port another program holds: caught before ssh starts
+const busy = net.tcpListen("127.0.0.1:0")?
+const port = int(busy.addr.split(":")[1])
+const [t3, e3] = s.forward(port, "127.0.0.1", 80, { bind: "127.0.0.1" })
+print(t3, str(e3).contains("is already in use"))
+busy.close()
+
+// reverse(0): the port the server picked
+const r = s.reverse(0, "127.0.0.1", 3000, { bind: "127.0.0.1" })?
+print(r.kind, r.port, r.remotePort, r.bind, r.target, r.alive(), typeof(r.pid()))
+r.close()
+print(r.alive(), r.pid())
+
+// a tunnel ends with its program (process.exit: no destructor runs), and
+// its ssh does not keep the program's stdout open
+const child = dir + "/ssh_tunnel.tmp.child.fg"
+fs.writeText(child, [
+    "import ssh from \"fogu:ssh\"",
+    "import process from \"fogu:process\"",
+    "const t = ssh.connect(\"fake@host\")?.reverse(0, \"127.0.0.1\", 3000)?",
+    "print(t.pid())",
+    "process.exit(0)",
+].join("\n") + "\n")?
+const t0 = time.monotonic()
+const c = process.run(Fogu.execPath, [child])?
+print(c.ok, time.monotonic() - t0 < 10)
+const pid = c.stdout.trim()
+time.delay(300ms)
+print(process.run("kill", ["-0", pid])?.ok)

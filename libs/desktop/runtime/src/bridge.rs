@@ -60,6 +60,8 @@ fn new_runtime() -> Result<(usize, Arc<Runtime>), String> {
 /// A worker: one or more runtimes that loaded the same module.
 struct Worker {
     file: String,
+    /// The runtime that started it (a hot reload stops the old program's workers).
+    owner: usize,
     rts: Vec<(usize, Arc<Runtime>)>,
     next: AtomicUsize,
 }
@@ -87,6 +89,9 @@ pub struct Bridge {
     notify_tx: Mutex<mpsc::Sender<(String, String)>>,
     /// The entry file (for reloads).
     entry: Mutex<String>,
+    /// The processes below the host when the program started: a hot reload
+    /// ends the ones the old program started since (crate::children).
+    before: Mutex<std::collections::HashSet<u32>>,
 }
 
 impl Bridge {
@@ -110,6 +115,7 @@ impl Bridge {
             log_file,
             notify_tx: Mutex::new(ntx),
             entry: Mutex::new(String::new()),
+            before: Mutex::new(std::collections::HashSet::new()),
         });
         let n = Arc::clone(&bridge);
         std::thread::Builder::new()
@@ -143,6 +149,9 @@ impl Bridge {
     /// Runs the program's entry file (its top level registers the commands).
     pub fn run_main(self: &Arc<Self>, app: &AppHandle, path: &str) {
         *self.entry.lock().unwrap() = path.to_string();
+        if reloads() {
+            *self.before.lock().unwrap() = crate::children::snapshot();
+        }
         if let Err(e) = self.main().run_file(path) {
             self.fail(app, format!("{}: {}", path, e));
         }
@@ -174,8 +183,23 @@ impl Bridge {
         }
         *self.fatal.lock().unwrap() = None;
         crate::window::reset_program();
-        // the old runtime stops on its own thread (its tasks end there)
-        std::thread::spawn(move || drop(old));
+        // the old program's workers go with it
+        let old_workers: Vec<Worker> = {
+            let mut ws = self.workers.lock().unwrap();
+            let ids: Vec<u64> = ws.iter().filter(|(_, w)| w.owner == old_id).map(|(k, _)| *k).collect();
+            let gone: Vec<Worker> = ids.iter().filter_map(|k| ws.remove(k)).collect();
+            let mut all = self.runtimes.lock().unwrap();
+            for w in &gone {
+                for (rid, _) in &w.rts {
+                    all.remove(rid);
+                }
+            }
+            gone
+        };
+        // the old program stops before the new one starts: what it holds (a
+        // tunnel's local port, a server's port) must be free again
+        self.stop_old(old, old_workers);
+        *self.before.lock().unwrap() = crate::children::snapshot();
         self.log(&format!("reloaded {}", entry));
         if let Err(e) = self.main().run_file(&entry) {
             self.fail(app, format!("{}: {}", entry, e));
@@ -184,10 +208,45 @@ impl Bridge {
         self.send_event(app, "desktop:reloaded".to_string(), json!({ "entry": entry }), None);
     }
 
+    /// Stops the runtime of the program a hot reload replaced (and its
+    /// workers), then ends the processes it started that are still running:
+    /// a runtime that stops does not free what a suspended task or a
+    /// reference cycle holds, and a child process (`ssh -N` of a tunnel)
+    /// would outlive it.
+    fn stop_old(&self, old: Arc<Runtime>, workers: Vec<Worker>) {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            // a call in flight may still hold the runtime for a moment
+            let mut old = old;
+            for _ in 0..100 {
+                match Arc::try_unwrap(old) {
+                    Ok(rt) => {
+                        drop(rt);
+                        break;
+                    }
+                    Err(rt) => {
+                        old = rt;
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                }
+            }
+            drop(workers);
+            let _ = tx.send(());
+        });
+        if rx.recv_timeout(std::time::Duration::from_secs(5)).is_err() {
+            self.log("reload: the old program did not stop within 5 s; ending its processes anyway");
+        }
+        let before = self.before.lock().unwrap().clone();
+        let stopped = crate::children::stop_new(&before);
+        if !stopped.is_empty() {
+            self.log(&format!("reload: ended {} process(es) the old program started: {}", stopped.len(), stopped.join(", ")));
+        }
+    }
+
     // ---------- workers ----------
 
     /// `desktop.worker(file, { threads })`: `threads` runtimes load `file`.
-    fn worker_start(&self, a: &Value) -> Result<Value, String> {
+    fn worker_start(&self, owner: usize, a: &Value) -> Result<Value, String> {
         let file = a.get("file").and_then(Value::as_str).ok_or("desktop.worker: a file is required")?.to_string();
         // a relative path is in the program's folder (the host's working directory)
         let file = if std::path::Path::new(&file).is_relative() {
@@ -204,7 +263,7 @@ impl Bridge {
             rts.push((id, rt));
         }
         let wid = self.next_worker.fetch_add(1, Ordering::Relaxed);
-        self.workers.lock().unwrap().insert(wid, Worker { file, rts, next: AtomicUsize::new(0) });
+        self.workers.lock().unwrap().insert(wid, Worker { file, owner, rts, next: AtomicUsize::new(0) });
         Ok(json!(wid))
     }
 
@@ -249,6 +308,10 @@ impl Bridge {
     }
 
     fn fail(&self, app: &AppHandle, msg: String) {
+        let msg = match area_hint(&msg) {
+            Some(hint) => format!("{}\n{}", msg, hint),
+            None => msg,
+        };
         self.log(&msg);
         *self.fatal.lock().unwrap() = Some(msg.clone());
         for (_, p) in self.pending.lock().unwrap().drain() {
@@ -440,7 +503,7 @@ impl Bridge {
                     let op = data.get("op").and_then(Value::as_str).unwrap_or("").to_string();
                     let args = data.get("args").cloned().unwrap_or(Value::Null);
                     let r = match op.as_str() {
-                        "worker.start" => b.worker_start(&args),
+                        "worker.start" => b.worker_start(from, &args),
                         "worker.call" => b.worker_call(&args),
                         "worker.stop" => b.worker_stop(&args),
                         _ => crate::window::request(&app, &op, &args),
@@ -493,6 +556,36 @@ impl Bridge {
             q.push(ev.clone());
         }
     }
+}
+
+/// Whether the program is hot-reloaded (`fogu desktop dev`).
+fn reloads() -> bool {
+    std::env::var("FOGU_DESKTOP_RELOAD").map(|v| !v.trim().is_empty()).unwrap_or(false)
+}
+
+/// The modules of the standard library areas a host may be built without (as
+/// MODULE_AREAS in tools/build.fg): (area, modules).
+const MODULE_AREAS: &[(&str, &[&str])] = &[
+    ("database", &["etcd", "kv", "surrealkv", "surrealdb", "sql", "orm", "redis", "scylla"]),
+    ("rpc", &["grpc", "protobuf"]),
+    ("network", &["security", "tls", "socketio", "http", "web", "topcoat", "jwt", "mail", "websocket", "webrtc", "html"]),
+    ("messaging", &["broker", "kafka", "mq", "fogumq", "foguMQ-client", "nats", "rabbitmq", "mqtt", "bullmq"]),
+    ("ai", &["ai", "plot"]),
+    ("ops", &["s3", "docker", "service", "playbook", "ssh"]),
+    ("media", &["image", "webview"]),
+];
+
+/// For "unknown built-in module: 'fogu:ssh'" (the module is in an area this
+/// host was built without): which area, and how to add it.
+pub fn area_hint(msg: &str) -> Option<String> {
+    const KEY: &str = "unknown built-in module: 'fogu:";
+    let at = msg.find(KEY)?;
+    let module = msg[at + KEY.len()..].split('\'').next()?;
+    let (area, _) = MODULE_AREAS.iter().find(|(_, ms)| ms.contains(&module))?;
+    Some(format!(
+        "fogu:{} is in the '{}' area, which this desktop host was built without: add \"{}\" to \"desktop.features\" in fogu.json (e.g. \"desktop\": {{ \"features\": [\"network\", \"{}\"] }}) and start the app again",
+        module, area, area, area
+    ))
 }
 
 /// Runs JavaScript in a window; false when there is none.

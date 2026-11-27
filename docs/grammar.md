@@ -3,7 +3,7 @@
 This grammar is derived from the reference implementation, not from the
 specification: `lexer.rs`, `token.rs`, `parser.rs` and `ast.rs` in
 `lang/crates/fogu-core/src/runtime/`. It describes what the parser accepts
-(Fogu 0.8.5). Constructs the parser does not accept are listed at the end
+(Fogu 0.8.6). Constructs the parser does not accept are listed at the end
 under "Not part of the grammar".
 
 ## Notation
@@ -78,11 +78,12 @@ STRING        = '"' { str_char | escape } '"'
                /* both quote styles produce the same string token; there is no
                   character literal; a raw line break inside is allowed */
 str_char      = /* any char except "\" and the closing quote */ ;
-escape        = "\" ( "n" | "t" | "r" | "0" | "\" | "'" | '"' ) ;
+escape        = "\" ( "n" | "t" | "r" | "0" | "\" | "'" | '"' | unicode ) ;
+unicode       = "u{" hex_digit { hex_digit } "}" ;   /* 1 to 6 digits: "\u{FEFF}", "\u{1F600}" */
 
 TEMPLATE      = "`" { tpl_char | tpl_escape | interpolation } "`" ;
 tpl_char      = /* any char except "`", "\", and "$" when followed by "{" */ ;
-tpl_escape    = "\" ( "n" | "t" | "r" | "0" | "\" | "`" | "$" | "'" | '"' ) ;
+tpl_escape    = "\" ( "n" | "t" | "r" | "0" | "\" | "`" | "$" | "'" | '"' | unicode ) ;
 interpolation = "${" expr "}" ;
                /* the text up to the matching "}" (nested braces and quoted
                   strings are skipped) is lexed on its own and must be exactly

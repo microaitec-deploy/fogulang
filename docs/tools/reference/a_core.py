@@ -162,6 +162,7 @@ print(nums.slice(1, 3), nums.first(), nums.last(), nums.join(" | "))
                     ("m.set(key, value) · m[key] = value", "map", "<code>set</code> returns the map itself (chainable)."),
                     ("m.remove(key)", "value", "Removes and returns the value."),
                     ("m.merge(other)", "map", "A new map; <code>other</code> wins on equal keys."),
+                    ("m.clone()", "map", "A new map with the same entries (a shallow copy: the values inside are shared)."),
                     ("m.len() · m.clear()", "int · nil", ""),
                 ],
                 "example": r'''
@@ -505,6 +506,7 @@ print(info.env("FOGU_DOES_NOT_EXIST"), system.time() > 0)
                     ("fs.readText(path)", "str · error", "Whole file as UTF-8 text."),
                     ("fs.readLines(path)", "list · error", "Lines without line endings."),
                     ("fs.writeText(path, text)", "nil · error", "Creates or replaces."),
+                    ("fs.readBytes(path) · fs.writeBytes(path, data)", "buffer · nil · error", "Binary files (an <code>.ico</code>, an image…): the whole file as a <code>buffer</code>; <code>writeBytes</code> takes a buffer, a str or a list of byte ints and creates or replaces."),
                     ("fs.append(path, text)", "nil · error", "Adds to the end (creates the file)."),
                     ("fs.exists(path) · fs.isFile(path) · fs.isDir(path)", "bool", ""),
                     ("fs.mkdir(path)", "nil · error", "Creates the folder and its parents."),
@@ -605,7 +607,7 @@ print(path.normalize("a/./b/../c"), path.isAbsolute("/etc"), path.isAbsolute("et
         "blocks": [
             {
                 "api": [
-                    ("process.run(cmd, args?, { cwd, env, input })", "map · error", "<code>{ ok, code, stdout, stderr }</code>. <code>input</code> is a str or a buffer; a missing <code>cwd</code> folder or a program that cannot start → error value; an unknown option stops the program."),
+                    ("process.run(cmd, args?, { cwd, env, input, timeout, hidden })", "map · error", "<code>{ ok, code, stdout, stderr, timedOut }</code>. <code>input</code> is a str or a buffer; <code>timeout</code> kills the program when it runs longer (<code>timedOut: true</code>); a missing <code>cwd</code> folder or a program that cannot start → error value; an unknown option stops the program. On Windows a name without an extension is looked up with <code>PATHEXT</code> (<code>npm</code> → <code>npm.cmd</code>, run through cmd.exe with escaped arguments), and the program starts without a console window when this program has none (a GUI, the desktop host) or with <code>hidden: true</code>."),
                     ("process.shell(command)", "map", "Through <code>sh -c</code> / <code>cmd /C</code>."),
                     ("process.env(name) · process.setEnv(name, value)", "str · nil", ""),
                     ("process.cwd() · process.chdir(path)", "str · nil", ""),

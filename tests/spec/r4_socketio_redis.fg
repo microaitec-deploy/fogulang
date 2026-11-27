@@ -1,0 +1,91 @@
+// socketio redis adapter: two servers share rooms and broadcasts through Redis
+// (here a few lines of fogu:net that speak enough RESP3 pub/sub to stand for it)
+import socketio from "fogu:socketio"
+import net from "fogu:net"
+import time from "fogu:time"
+
+// ---------- a stand-in for Redis: HELLO, SUBSCRIBE, PUBLISH, PUBSUB NUMSUB ----------
+const subs = {}
+fn bulk(b) { return bytes("$" + str(b.len()) + "\r\n").concat(bytes(b)).concat(bytes("\r\n")) }
+fn readCommand(c) {
+    const head = c.readLine()?
+    if head == nil { return nil }
+    const parts = []
+    for _ in 0..int(head.slice(1)) {
+        const n = int(c.readLine()?.slice(1))
+        parts.push(c.readExact(n)?)
+        c.readExact(2)?
+    }
+    return parts
+}
+fn serveRedis(c) {
+    while true {
+        const [cmd, err] = readCommand(c)
+        if cmd == nil || err != nil { return }
+        const name = cmd[0].toString().upper()
+        if name == "HELLO" {
+            c.write(bytes("%1\r\n").concat(bulk("proto")).concat(bytes(":3\r\n")))?
+        } else if name == "SUBSCRIBE" {
+            for ch in cmd.slice(1) {
+                const key = ch.toString()
+                if subs[key] == nil { subs[key] = [] }
+                subs[key].push(c)
+                c.write(bytes(">3\r\n").concat(bulk("subscribe")).concat(bulk(ch)).concat(bytes(":1\r\n")))?
+            }
+        } else if name == "PUBLISH" {
+            const to = subs[cmd[1].toString()] ?? []
+            for s in to { s.write(bytes(">3\r\n").concat(bulk("message")).concat(bulk(cmd[1])).concat(bulk(cmd[2])))? }
+            c.write(":" + str(to.len()) + "\r\n")?
+        } else if name == "PUBSUB" {
+            let out = bytes("*" + str(2 * (cmd.len() - 2)) + "\r\n")
+            for ch in cmd.slice(2) { out = out.concat(bulk(ch)).concat(bytes(":" + str((subs[ch.toString()] ?? []).len()) + "\r\n")) }
+            c.write(out)?
+        } else {
+            c.write("+OK\r\n")?
+        }
+    }
+}
+const redis = net.tcpListen("127.0.0.1:0")?
+fg fn() {
+    while true {
+        const [c, err] = redis.accept()
+        if err != nil { return }
+        fg serveRedis(c)
+    }
+}()
+const url = "redis://" + redis.addr
+
+// ---------- two servers, one client on each ----------
+fn node(name) {
+    const io = socketio.server({ redis: url, redisPrefix: "chat" })?
+    io.on("connection", (socket) => {
+        socket.join("room")
+        socket.on("say", (msg) => { io.to("room").emit("said", name + " relayed " + msg) })
+    })
+    return io, io.listen(0)?
+}
+const [one, p1] = node("one")
+const [two, p2] = node("two")
+print("adapter", one.adapter, two.adapter)
+time.delay(200ms)
+
+const got = chan(4)
+const a = socketio.connect("http://127.0.0.1:" + str(p1))?
+const b = socketio.connect("http://127.0.0.1:" + str(p2))?
+a.on("said", (m) => { got <- "a: " + m })
+b.on("said", (m) => { got <- "b: " + m })
+time.delay(100ms)
+a.emit("say", "hello")
+const seen = [<-got, <-got]
+print(seen.sort())
+b.emit("say", "hi")
+print([<-got, <-got].sort())
+
+// no Redis there: an error value
+const [_, down] = socketio.server({ redis: "redis://127.0.0.1:1" })
+print(typeof(down), str(down).contains("redis"))
+a.close()
+b.close()
+one.close()
+two.close()
+redis.close()

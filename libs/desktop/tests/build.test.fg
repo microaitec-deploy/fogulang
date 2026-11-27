@@ -125,6 +125,14 @@ test("cargo tauri build gets --no-default-features after --", () => {
     expect(cmd).toBe("cargo tauri build --debug --target x86_64-pc-windows-gnu --features 'network,database' --config '{}' -- --no-default-features")
 })
 
+test("a copied crate points at the Fogu sources, its patches too", () => {
+    const cargo = fs.readText(path.join(tools.libRoot(), "runtime", "Cargo.toml"))?
+    const out = tools.sourcesPaths(cargo, "C:\\src\\lang")
+    expect(out).toContain("fogu = { path = 'C:/src/lang', default-features = false }")
+    expect(out).toContain("socketioxide = { path = 'C:/src/lang/vendor/socketioxide' }")
+    expect(out.contains("../../../lang")).toBe(false)
+})
+
 test("an executable in use is renamed, not lost", () => {
     const dir = path.join(tmp, "dist")
     fs.mkdir(dir)?

@@ -1,0 +1,4 @@
+adapter redis redis
+[a: one relayed hello, b: one relayed hello]
+[a: two relayed hi, b: two relayed hi]
+error true

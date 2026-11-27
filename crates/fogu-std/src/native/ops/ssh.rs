@@ -123,7 +123,7 @@ impl Target {
     /// `ssh -W %h:%p …` through this host, with its key, port and host-key settings
     /// (OpenSSH's ProxyJump would not inherit them).
     pub(crate) fn proxy_command(&self) -> String {
-        let q = |s: &str| if s.contains(' ') { format!("\"{}\"", s) } else { s.to_string() };
+        let q = proxy_arg;
         let mut c = String::from("ssh -W %h:%p");
         if let Some(p) = self.port {
             c.push_str(&format!(" -p {}", p));
@@ -137,13 +137,13 @@ impl Target {
             };
             c.push_str(&format!(" -i {}", q(&k)));
         }
-        c.push_str(&format!(" -o StrictHostKeyChecking={} -o BatchMode=yes -o LogLevel=ERROR", self.strict));
+        c.push_str(&format!(" -o {} -o BatchMode=yes -o LogLevel=ERROR", q(&ssh_option("StrictHostKeyChecking", &self.strict))));
         if let Some(kh) = &self.known_hosts {
-            c.push_str(&format!(" -o UserKnownHostsFile={}", q(&expand_home(kh))));
+            c.push_str(&format!(" -o {}", q(&ssh_option("UserKnownHostsFile", &expand_home(kh)))));
         }
         for (k, v) in &self.options {
             if k != "ProxyCommand" {
-                c.push_str(&format!(" -o {}={}", k, q(v)));
+                c.push_str(&format!(" -o {}", q(&ssh_option(k, v))));
             }
         }
         c.push(' ');
@@ -165,15 +165,23 @@ impl Target {
     }
 
     fn command(&self, program: &str) -> Command {
+        self.command_with(program, "ERROR")
+    }
+
+    /// The ssh/scp client with this target's options; `log` is its `LogLevel`
+    /// (ssh keeps the first value given, so it cannot be changed afterwards).
+    fn command_with(&self, program: &str, log: &str) -> Command {
         // FOGU_SSH: the ssh client to use (another build, a wrapper, tests)
         let exe = match std::env::var("FOGU_SSH") {
             Ok(p) if program == "ssh" && !p.is_empty() => p,
             _ => program.to_string(),
         };
         let mut c = Command::new(exe);
+        // a GUI program (the desktop host) on Windows: no console window per ssh call
+        crate::native::process::hide_window(&mut c, false);
         let scp = program == "scp";
         let opt = |c: &mut Command, k: &str, v: &str| {
-            c.arg("-o").arg(format!("{}={}", k, v));
+            c.arg("-o").arg(ssh_option(k, v));
         };
         if let Some(p) = self.port {
             c.arg(if scp { "-P" } else { "-p" }).arg(p.to_string());
@@ -183,7 +191,7 @@ impl Target {
         }
         opt(&mut c, "StrictHostKeyChecking", &self.strict);
         opt(&mut c, "ConnectTimeout", &self.timeout.to_string());
-        opt(&mut c, "LogLevel", "ERROR");
+        opt(&mut c, "LogLevel", log);
         if let Some(kh) = &self.known_hosts {
             opt(&mut c, "UserKnownHostsFile", &expand_home(kh));
         }
@@ -213,6 +221,47 @@ pub(crate) fn expand_home(p: &str) -> String {
         }
     }
     p.to_string()
+}
+
+/// `Key=value` for ssh's `-o`. ssh's config parser splits values at spaces
+/// (`UserKnownHostsFile=/Users/me/Library/Application Support/kh` is two files,
+/// the first `~/Library/Application`), so a value with spaces, quotes or `#` is
+/// double-quoted, `"` escaped. A trailing `\` is doubled so it does not escape
+/// the closing quote (a Windows folder). The commands (`ProxyCommand`…) take
+/// the rest of the line as it is: never quoted.
+fn ssh_option(k: &str, v: &str) -> String {
+    const VERBATIM: &[&str] = &["proxycommand", "localcommand", "remotecommand", "knownhostscommand"];
+    let special = |c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '#';
+    if VERBATIM.contains(&k.to_ascii_lowercase().as_str()) || !v.contains(special) {
+        return format!("{}={}", k, v);
+    }
+    let mut q = String::with_capacity(k.len() + v.len() + 4);
+    q.push_str(k);
+    q.push_str("=\"");
+    for c in v.chars() {
+        if c == '"' {
+            q.push('\\');
+        }
+        q.push(c);
+    }
+    if v.ends_with('\\') {
+        q.push('\\');
+    }
+    q.push('"');
+    q
+}
+
+/// One argument of the `ProxyCommand` line, which ssh runs through the shell
+/// (`sh -c` on Unix; on Windows it is split like a command line).
+fn proxy_arg(s: &str) -> String {
+    let plain = !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_./=:@%+,".contains(c) || (cfg!(windows) && c == '\\'));
+    if plain {
+        s.to_string()
+    } else if cfg!(windows) {
+        format!("\"{}\"", s.replace('"', "\\\""))
+    } else {
+        sh_quote(s)
+    }
 }
 
 /// `"user@host:port"` → (user, host, port).
@@ -399,10 +448,13 @@ impl SshValue {
         format!("{}:{}", self.target.dest(true), path)
     }
 
-    /// Starts `ssh -N -L/-R …` and waits until the tunnel is ready.
-    fn tunnel(&self, kind: &'static str, args: &[Value]) -> Result<Value, String> {
-        if args.len() != 3 {
-            return Err(format!("{}(port, host, hostPort) expects 3 arguments", kind));
+    /// Starts `ssh -N -L/-R …`; the poller yields the `Tunnel` once it is ready
+    /// (a forward's local port accepts connections, the server accepted a reverse),
+    /// or an error value with ssh's own message when it exits first (a busy port,
+    /// a refused forward). The interpreter keeps running other tasks meanwhile.
+    fn tunnel(&self, kind: &'static str, args: &[Value]) -> Result<Poller, String> {
+        if args.len() < 3 || args.len() > 4 {
+            return Err(format!("{}(port, host, hostPort, {{ bind }}) expects 3 or 4 arguments", kind));
         }
         let port = |v: &Value, what: &str| -> Result<u16, String> {
             match v {
@@ -413,60 +465,338 @@ impl SshValue {
         let mut listen = port(&args[0], kind)?;
         let host = str_arg(args, 1, kind)?;
         let to = port(&args[2], kind)?;
-        if kind == "forward" && listen == 0 {
-            // pick a free local port
-            listen = TcpListener::bind("127.0.0.1:0")
-                .and_then(|l| l.local_addr())
-                .map(|a| a.port())
-                .map_err(|e| io_err!("ssh.forward: no free local port: {}", e))?;
+        let bind = tunnel_opts(kind, args.get(3))?;
+        let forward = kind == "forward";
+        let (check, connect) = local_addrs(bind.as_deref(), listen);
+        if forward {
+            if listen == 0 {
+                // pick a free local port
+                listen = TcpListener::bind(check)
+                    .and_then(|l| l.local_addr())
+                    .map(|a| a.port())
+                    .map_err(|e| io_err!("ssh.forward: no free local port: {}", e))?;
+            } else if let Err(e) = TcpListener::bind(check) {
+                // another program has it: connecting to it would look like a working tunnel
+                if e.kind() == std::io::ErrorKind::AddrInUse {
+                    return Err(io_err!("ssh.forward: local port {} ({}) is already in use", listen, check.ip()));
+                }
+            }
         }
-        let spec = format!("{}:{}:{}", listen, host, to);
-        let mut c = self.target.command("ssh");
+        let connect = std::net::SocketAddr::new(connect.ip(), listen);
+        let spec = forward_spec(bind.as_deref(), listen, &host, to);
+        let via = self.target.dest(false);
+        // a reverse forward is confirmed only in ssh's debug messages ("remote forward
+        // success", "Allocated port N" for port 0); they are read from its stderr
+        let mut c = self.target.command_with("ssh", if forward { "ERROR" } else { "DEBUG1" });
         c.arg("-N")
             .arg("-o")
             .arg("ExitOnForwardFailure=yes")
             .arg("-o")
             .arg("ServerAliveInterval=30")
-            .arg(if kind == "forward" { "-L" } else { "-R" })
+            .arg(if forward { "-L" } else { "-R" })
             .arg(&spec)
-            .arg(self.target.dest(false));
+            .arg(&via);
+        // stdout never inherited: `fogu x.fg | head` must not wait for the tunnel
         c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
-        let mut child = c.spawn().map_err(|e| io_err!("ssh.{}: cannot start ssh: {}", kind, e))?;
-
-        let deadline = Instant::now() + Duration::from_secs(self.target.timeout + 5);
-        let settle = Instant::now() + Duration::from_millis(1500);
-        loop {
-            if let Ok(Some(_)) = child.try_wait() {
-                let mut err = String::new();
-                if let Some(mut e) = child.stderr.take() {
-                    let _ = e.read_to_string(&mut err);
-                }
-                return Err(io_err!("ssh.{}: {} via {}: {}", kind, spec, self.target.dest(false), err.trim()));
-            }
-            let ready = if kind == "forward" {
-                TcpStream::connect_timeout(&([127, 0, 0, 1], listen).into(), Duration::from_millis(200)).is_ok()
-            } else {
-                // a failed remote forward makes ssh exit (ExitOnForwardFailure)
-                Instant::now() >= settle
-            };
-            if ready {
-                break;
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                return Err(io_err!("ssh.{}: {}: timed out waiting for the tunnel", kind, spec));
-            }
-            std::thread::sleep(Duration::from_millis(100));
+        let (mut child, stdin) = spawn_owned(c).map_err(|e| io_err!("ssh.{}: cannot start ssh: {}", kind, e))?;
+        let log = SharedPipe::default();
+        if let Some(e) = child.stderr.take() {
+            log_reader(e, log.clone());
         }
-        Ok(NativeObjectRef::new(TunnelValue {
-            child: Some(child),
-            kind,
-            listen,
-            host,
-            to,
-            via: self.target.dest(false),
+        let mut pending = Some(TunnelValue { child: Some(child), stdin, log, kind, listen, bind, host, to, via: via.clone() });
+        let deadline = Instant::now() + Duration::from_secs(self.target.timeout + 5);
+        let mut since: Option<Instant> = None;
+        Ok(poll_until(
+            Some(deadline),
+            move |late| {
+                let t = pending.as_mut()?;
+                let (text, eof) = t.log_text();
+                let exited = t.child.as_mut().is_none_or(|c| matches!(c.try_wait(), Ok(Some(_)) | Err(_)));
+                // its last words arrive when the pipe closes
+                if exited && (eof || late) {
+                    let mut t = pending.take()?;
+                    let code = t.child.as_mut().and_then(|c| c.try_wait().ok().flatten()).and_then(|s| s.code());
+                    t.stop();
+                    let msg = ssh_errors(&text);
+                    let msg = if msg.is_empty() { format!("ssh exited (code {})", code.map_or("?".into(), |c| c.to_string())) } else { msg };
+                    return Some(Err(io_err!("ssh.{}: {} via {}: {}", kind, spec, via, msg)));
+                }
+                let ready = if exited {
+                    false
+                } else if forward {
+                    TcpStream::connect_timeout(&connect, Duration::from_millis(100)).is_ok()
+                } else if let Some(p) = allocated_port(&text) {
+                    t.listen = p;
+                    true
+                } else {
+                    // a fixed port: the success line; port 0 without the "Allocated" line
+                    // (an old server) or a client that does not log it: shortly after
+                    // the session started
+                    let started = text.contains("remote forward success") || text.contains("Entering interactive session");
+                    if started && since.is_none() {
+                        since = Some(Instant::now());
+                    }
+                    let wait = if t.listen == 0 || !text.contains("remote forward success") { 1500 } else { 0 };
+                    since.is_some_and(|s| s.elapsed() >= Duration::from_millis(wait))
+                };
+                if ready {
+                    return pending.take().map(Ok);
+                }
+                if late {
+                    let mut t = pending.take()?;
+                    t.stop();
+                    let msg = ssh_errors(&text);
+                    return Some(Err(io_err!(
+                        "ssh.{}: {}: timed out waiting for the tunnel{}",
+                        kind,
+                        spec,
+                        if msg.is_empty() { String::new() } else { format!(" ({})", msg) }
+                    )));
+                }
+                None
+            },
+            |t: TunnelValue| Ok(NativeObjectRef::new(t).to_value()),
+        ))
+    }
+}
+
+/// `{ bind }` of `forward` / `reverse`: the address the tunnel listens on (local for
+/// `forward`, on the server for `reverse`).
+fn tunnel_opts(kind: &str, v: Option<&Value>) -> Result<Option<String>, String> {
+    match v {
+        None | Some(Value::Nil) => Ok(None),
+        Some(Value::Map(m)) => {
+            let m = m.borrow();
+            let mut keys: Vec<&str> = m.keys().map(|k| &**k).collect();
+            keys.sort_unstable();
+            if let Some(k) = keys.into_iter().find(|k| *k != "bind") {
+                return Err(format!("{}: unknown option '{}' (bind)", kind, k));
+            }
+            match m.get("bind") {
+                None | Some(Value::Nil) => Ok(None),
+                Some(Value::Str(s)) if !s.trim().is_empty() => Ok(Some(s.trim().to_string())),
+                Some(other) => Err(format!("{}: 'bind' must be an address, got '{}'", kind, other.to_display_string())),
+            }
+        }
+        Some(other) => Err(format!("{}: options must be a map, got '{}'", kind, other.type_name())),
+    }
+}
+
+/// `[bind:]port:host:hostPort` for `-L` / `-R` (IPv6 addresses in brackets).
+fn forward_spec(bind: Option<&str>, port: u16, host: &str, to: u16) -> String {
+    let b = |h: &str| if h.contains(':') && !h.starts_with('[') { format!("[{}]", h) } else { h.to_string() };
+    match bind {
+        Some(a) => format!("{}:{}:{}:{}", b(a), port, b(host), to),
+        None => format!("{}:{}:{}", port, b(host), to),
+    }
+}
+
+/// Where a `forward` listens: the address to check it is free (ssh's default
+/// `localhost` → 127.0.0.1, `*` → every address) and the one to connect to.
+fn local_addrs(bind: Option<&str>, port: u16) -> (std::net::SocketAddr, std::net::SocketAddr) {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
+    let check = match bind.map(|b| b.trim_start_matches('[').trim_end_matches(']')) {
+        None | Some("localhost") => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        Some("*") | Some("") => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        Some(b) => match b.parse::<IpAddr>() {
+            Ok(ip) => ip,
+            Err(_) => (b, port).to_socket_addrs().ok().and_then(|mut a| a.next()).map_or(IpAddr::V4(Ipv4Addr::LOCALHOST), |a| a.ip()),
+        },
+    };
+    let connect = match check {
+        IpAddr::V4(a) if a.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V6(a) if a.is_unspecified() => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        ip => ip,
+    };
+    ((check, port).into(), (connect, port).into())
+}
+
+/// The port of "Allocated port 43210 for remote forward to localhost:3000" (`-R 0:…`).
+fn allocated_port(log: &str) -> Option<u16> {
+    let i = log.find("Allocated port ")?;
+    log[i + "Allocated port ".len()..].split(|c: char| !c.is_ascii_digit()).next()?.parse().ok().filter(|p| *p > 0)
+}
+
+/// ssh's messages for an error value: without its debug and progress lines.
+fn ssh_errors(log: &str) -> String {
+    log.lines()
+        .map(str::trim)
+        .filter(|l| {
+            !l.is_empty()
+                && !l.starts_with("debug")
+                && !l.starts_with("Authenticated to")
+                && !l.starts_with("Allocated port")
+                && !l.starts_with("Transferred:")
         })
-        .to_value())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Reads a tunnel's stderr for its whole life (a full pipe would block ssh),
+/// keeping the last 64 KiB.
+fn log_reader(mut from: impl Read + Send + 'static, into: SharedPipe) {
+    std::thread::spawn(move || {
+        let mut chunk = [0u8; 4096];
+        loop {
+            let n = from.read(&mut chunk).unwrap_or(0);
+            let mut p = into.lock().unwrap_or_else(|e| e.into_inner());
+            if n == 0 {
+                p.eof = true;
+                return;
+            }
+            p.buf.extend_from_slice(&chunk[..n]);
+            if p.buf.len() > 64 * 1024 {
+                let cut = p.buf.len() - 32 * 1024;
+                p.buf.drain(..cut);
+            }
+        }
+    });
+}
+
+/// macOS and the BSDs have no parent-death signal: ssh runs under this sh, whose
+/// stdin is a pipe only `fogu` holds. When `fogu` ends — however it ends — the
+/// pipe closes, `read` returns and ssh is stopped; a SIGTERM to the watcher stops
+/// it too. Its exit code is ssh's.
+#[cfg(all(unix, not(target_os = "linux")))]
+const WATCHER: &str = "trap 'kill $p 2>/dev/null; exit 143' TERM INT HUP; exec 3<&0; \"$@\" </dev/null & p=$!; \
+    { read _ <&3; kill $p 2>/dev/null; } & w=$!; wait $p; c=$?; kill $w 2>/dev/null; exit $c";
+
+/// Starts a long-lived ssh (a tunnel) that ends with this program however the
+/// program ends (`process.exit`, an uncaught error, a closed window: `Drop`
+/// does not run then). Linux: `PR_SET_PDEATHSIG` (sent when the thread that
+/// started it ends: the interpreter's); macOS/BSD: the [`WATCHER`] (its stdin
+/// pipe is returned: dropping it stops ssh); Windows: a kill-on-close job.
+fn spawn_owned(c: Command) -> std::io::Result<(Child, Option<std::process::ChildStdin>)> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe extern "C" {
+            fn prctl(option: std::ffi::c_int, arg2: std::ffi::c_ulong, arg3: std::ffi::c_ulong, arg4: std::ffi::c_ulong, arg5: std::ffi::c_ulong) -> std::ffi::c_int;
+            fn getppid() -> std::ffi::c_int;
+        }
+        const PR_SET_PDEATHSIG: std::ffi::c_int = 1;
+        const SIGTERM: std::ffi::c_ulong = 15;
+        let mut c = c;
+        let parent = std::process::id() as std::ffi::c_int;
+        // SAFETY: between fork and exec only async-signal-safe system calls, no allocation
+        unsafe {
+            c.pre_exec(move || {
+                prctl(PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0);
+                // the parent already gone (before prctl): do not start at all
+                if getppid() != parent {
+                    return Err(std::io::Error::from_raw_os_error(3));
+                }
+                Ok(())
+            });
+        }
+        c.spawn().map(|child| (child, None))
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        let mut w = Command::new("/bin/sh");
+        w.arg("-c").arg(WATCHER).arg("fogu-ssh").arg(c.get_program()).args(c.get_args());
+        for (k, v) in c.get_envs() {
+            match v {
+                Some(v) => w.env(k, v),
+                None => w.env_remove(k),
+            };
+        }
+        if let Some(d) = c.get_current_dir() {
+            w.current_dir(d);
+        }
+        w.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
+        let mut child = w.spawn()?;
+        let stdin = child.stdin.take();
+        Ok((child, stdin))
+    }
+    #[cfg(windows)]
+    {
+        let mut c = c;
+        let child = c.spawn()?;
+        job::adopt(&child);
+        Ok((child, None))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let mut c = c;
+        c.spawn().map(|child| (child, None))
+    }
+}
+
+/// One job object for the tunnels of this process, with
+/// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`: Windows closes its handle when the
+/// process ends, and every process in it is ended.
+#[cfg(windows)]
+mod job {
+    use std::ffi::c_void;
+    use std::os::windows::io::AsRawHandle;
+
+    #[repr(C)]
+    struct BasicLimits {
+        per_process_user_time_limit: i64,
+        per_job_user_time_limit: i64,
+        limit_flags: u32,
+        minimum_working_set_size: usize,
+        maximum_working_set_size: usize,
+        active_process_limit: u32,
+        affinity: usize,
+        priority_class: u32,
+        scheduling_class: u32,
+    }
+
+    /// `JOBOBJECT_EXTENDED_LIMIT_INFORMATION`
+    #[repr(C)]
+    struct ExtendedLimits {
+        basic: BasicLimits,
+        io: [u64; 6],
+        process_memory_limit: usize,
+        job_memory_limit: usize,
+        peak_process_memory_used: usize,
+        peak_job_memory_used: usize,
+    }
+
+    unsafe extern "system" {
+        fn CreateJobObjectW(attributes: *mut c_void, name: *const u16) -> *mut c_void;
+        fn SetInformationJobObject(job: *mut c_void, class: i32, info: *mut c_void, len: u32) -> i32;
+        fn AssignProcessToJobObject(job: *mut c_void, process: *mut c_void) -> i32;
+    }
+
+    const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: i32 = 9;
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x2000;
+
+    /// The job's handle (as an address: a raw pointer is not `Sync`); 0 when it could not be made.
+    fn handle() -> usize {
+        static JOB: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        *JOB.get_or_init(|| {
+            // SAFETY: plain kernel32 calls; the structure is zeroed and has the C layout
+            unsafe {
+                let job = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
+                if job.is_null() {
+                    return 0;
+                }
+                let mut info: ExtendedLimits = std::mem::zeroed();
+                info.basic.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let ok = SetInformationJobObject(
+                    job,
+                    JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                    &mut info as *mut ExtendedLimits as *mut c_void,
+                    std::mem::size_of::<ExtendedLimits>() as u32,
+                );
+                // the handle is never closed: it closes when the process ends
+                if ok == 0 { 0 } else { job as usize }
+            }
+        })
+    }
+
+    /// Puts `child` in the job (best effort: without it the tunnel only ends on `close`/drop).
+    pub(super) fn adopt(child: &std::process::Child) {
+        let job = handle();
+        if job != 0 {
+            // SAFETY: the job handle lives for the whole process; the child's handle is valid
+            unsafe {
+                AssignProcessToJobObject(job as *mut c_void, child.as_raw_handle() as *mut c_void);
+            }
+        }
     }
 }
 
@@ -517,6 +847,10 @@ impl FoguObject for SshValue {
                         },
                     )
                 }
+                // local → remote: connections to [bind:]port here go to host:hostPort on the server
+                "forward" => self.tunnel("forward", args)?,
+                // remote → local: connections to the server's [bind:]port come to host:hostPort here
+                "reverse" => self.tunnel("reverse", args)?,
                 "upload" => {
                     let local = str_arg(args, 0, "upload")?;
                     let remote = self.remote(&str_arg(args, 1, "upload")?);
@@ -599,8 +933,6 @@ impl FoguObject for SshValue {
 
     fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
         match method {
-            // local → remote: connections to localhost:port go to host:hostPort on the server
-            "forward" => self.tunnel("forward", args),
             // shell({ pty, shell, cwd, env }) → SshShell: one persistent remote shell
             "shell" => {
                 max_args(args, 1, "shell")?;
@@ -611,10 +943,8 @@ impl FoguObject for SshValue {
                 };
                 Ok(NativeObjectRef::new(SshShell::open(&self.target, &o)?).to_value())
             }
-            // remote → local: connections to the server's port come to host:hostPort here
-            "reverse" => self.tunnel("reverse", args),
             "close" => Ok(Value::Nil),
-            other => Err(format!("method '{}' does not exist on Ssh", other)),
+            other => Err(format!("method '{}' does not exist on Ssh ({})", other, self.methods().join(" "))),
         }
     }
 
@@ -652,11 +982,18 @@ pub(crate) fn upload_file(t: &Target, local: &str, remote: &str) -> Result<(), S
     scp(t, "upload", local.to_string(), format!("{}:{}", t.dest(true), remote)).map(|_| ())
 }
 
-/// A running `ssh -L` / `ssh -R` process; closed on `close()` or when dropped.
+/// A running `ssh -L` / `ssh -R` process; closed on `close()`, when dropped and
+/// when the program ends (see [`spawn_owned`]).
 pub struct TunnelValue {
     child: Option<Child>,
+    /// macOS/BSD: the watcher's stdin (see [`WATCHER`]); dropping it stops ssh.
+    stdin: Option<std::process::ChildStdin>,
+    /// ssh's stderr.
+    log: SharedPipe,
     kind: &'static str,
+    /// The listening port (for `reverse(0, …)`, the one the server allocated).
     listen: u16,
+    bind: Option<String>,
     host: String,
     to: u16,
     via: String,
@@ -679,10 +1016,28 @@ fn tunnel_port(v: &Value) -> Result<u16, String> {
 
 impl TunnelValue {
     fn stop(&mut self) {
+        let watched = self.stdin.take().is_some();
         if let Some(mut c) = self.child.take() {
+            if watched {
+                // the watcher stops ssh when its stdin closes; killing it first would leave ssh running
+                let deadline = Instant::now() + Duration::from_millis(1000);
+                while Instant::now() < deadline && matches!(c.try_wait(), Ok(None)) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
             let _ = c.kill();
             let _ = c.wait();
         }
+    }
+
+    /// What ssh wrote to stderr so far, and whether it closed it.
+    fn log_text(&self) -> (String, bool) {
+        let p = self.log.lock().unwrap_or_else(|e| e.into_inner());
+        (String::from_utf8_lossy(&p.buf).into_owned(), p.eof)
+    }
+
+    fn pid(&self) -> Value {
+        self.child.as_ref().map_or(Value::Nil, |c| Value::Int(c.id() as i64))
     }
 }
 
@@ -698,6 +1053,7 @@ impl FoguObject for TunnelValue {
             "port" | "remotePort" if self.kind == "reverse" => Some(Value::Int(self.listen as i64)),
             "target" => Some(Value::Str(format!("{}:{}", self.host, self.to).into())),
             "via" => Some(Value::Str(self.via.clone().into())),
+            "bind" => Some(self.bind.clone().map(Value::str).unwrap_or(Value::Nil)),
             _ => None,
         }
     }
@@ -708,16 +1064,18 @@ impl FoguObject for TunnelValue {
                 Some(c) => matches!(c.try_wait(), Ok(None)),
                 None => false,
             })),
+            // the ssh process (macOS/BSD: its watcher; ending either ends the tunnel); nil once closed
+            "pid" => Ok(self.pid()),
             "close" => {
                 self.stop();
                 Ok(Value::Nil)
             }
-            other => Err(format!("method '{}' does not exist on Tunnel", other)),
+            other => Err(format!("method '{}' does not exist on Tunnel ({})", other, self.methods().join(" "))),
         }
     }
 
     fn methods(&self) -> Vec<&'static str> {
-        vec!["alive", "close"]
+        vec!["alive", "pid", "close"]
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -1085,6 +1443,42 @@ mod tests {
     #[test]
     fn quotes() {
         assert_eq!(super::sh_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn option_quoting() {
+        use super::ssh_option;
+        assert_eq!(ssh_option("LogLevel", "ERROR"), "LogLevel=ERROR");
+        assert_eq!(
+            ssh_option("UserKnownHostsFile", "/Users/me/Library/Application Support/app/kh"),
+            "UserKnownHostsFile=\"/Users/me/Library/Application Support/app/kh\""
+        );
+        assert_eq!(ssh_option("X", "a \"b\""), "X=\"a \\\"b\\\"\"");
+        assert_eq!(ssh_option("X", "C:\\My Dir\\"), "X=\"C:\\My Dir\\\\\"");
+        assert_eq!(ssh_option("ProxyCommand", "ssh -W %h:%p bastion"), "ProxyCommand=ssh -W %h:%p bastion");
+        if !cfg!(windows) {
+            assert_eq!(super::proxy_arg("UserKnownHostsFile=\"/a b\""), "'UserKnownHostsFile=\"/a b\"'");
+            assert_eq!(super::proxy_arg("LogLevel=ERROR"), "LogLevel=ERROR");
+        }
+    }
+
+    #[test]
+    fn tunnel_specs() {
+        use super::{allocated_port, forward_spec, local_addrs, ssh_errors};
+        assert_eq!(forward_spec(None, 5433, "localhost", 5432), "5433:localhost:5432");
+        assert_eq!(forward_spec(Some("127.0.0.1"), 0, "::1", 80), "127.0.0.1:0:[::1]:80");
+        assert_eq!(forward_spec(Some("::"), 8080, "db", 5432), "[::]:8080:db:5432");
+        assert_eq!(allocated_port("debug1: x\nAllocated port 43210 for remote forward to localhost:3000\n"), Some(43210));
+        assert_eq!(allocated_port("Allocated port 0 for"), None);
+        assert_eq!(allocated_port("remote forward success"), None);
+        assert_eq!(
+            ssh_errors("debug1: Connecting\nbind [127.0.0.1]:5433: Address already in use\r\nCould not request local forwarding.\n"),
+            "bind [127.0.0.1]:5433: Address already in use; Could not request local forwarding."
+        );
+        let (check, connect) = local_addrs(Some("0.0.0.0"), 80);
+        assert_eq!((check.to_string(), connect.to_string()), ("0.0.0.0:80".into(), "127.0.0.1:80".into()));
+        assert_eq!(local_addrs(None, 1).0.to_string(), "127.0.0.1:1");
+        assert_eq!(local_addrs(Some("[::1]"), 2).1.to_string(), "[::1]:2");
     }
 
     #[test]

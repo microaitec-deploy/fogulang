@@ -262,6 +262,11 @@ export const REFERENCE: Record<string, RefData> = {
       "A new map; <code>other</code> wins on equal keys."
      ],
      [
+      "m.clone()",
+      "map",
+      "A new map with the same entries (a shallow copy: the values inside are shared)."
+     ],
+     [
       "m.len() · m.clear()",
       "int · nil",
       ""
@@ -921,6 +926,11 @@ export const REFERENCE: Record<string, RefData> = {
       "Creates or replaces."
      ],
      [
+      "fs.readBytes(path) · fs.writeBytes(path, data)",
+      "buffer · nil · error",
+      "Binary files (an <code>.ico</code>, an image…): the whole file as a <code>buffer</code>; <code>writeBytes</code> takes a buffer, a str or a list of byte ints and creates or replaces."
+     ],
+     [
       "fs.append(path, text)",
       "nil · error",
       "Adds to the end (creates the file)."
@@ -1095,9 +1105,9 @@ export const REFERENCE: Record<string, RefData> = {
    {
     "api": [
      [
-      "process.run(cmd, args?, { cwd, env, input })",
+      "process.run(cmd, args?, { cwd, env, input, timeout, hidden })",
       "map · error",
-      "<code>{ ok, code, stdout, stderr }</code>. <code>input</code> is a str or a buffer; a missing <code>cwd</code> folder or a program that cannot start → error value; an unknown option stops the program."
+      "<code>{ ok, code, stdout, stderr, timedOut }</code>. <code>input</code> is a str or a buffer; <code>timeout</code> kills the program when it runs longer (<code>timedOut: true</code>); a missing <code>cwd</code> folder or a program that cannot start → error value; an unknown option stops the program. On Windows a name without an extension is looked up with <code>PATHEXT</code> (<code>npm</code> → <code>npm.cmd</code>, run through cmd.exe with escaped arguments), and the program starts without a console window when this program has none (a GUI, the desktop host) or with <code>hidden: true</code>."
      ],
      [
       "process.shell(command)",
@@ -2846,9 +2856,14 @@ export const REFERENCE: Record<string, RefData> = {
     "h3": "Server",
     "api": [
      [
-      "socketio.server({ path = \"/socket.io\", pingInterval, pingTimeout, ackTimeout, maxPayload })",
+      "socketio.server({ path = \"/socket.io\", pingInterval, pingTimeout, ackTimeout, maxPayload, recovery, redis, redisPrefix })",
+      "SocketIoServer · error",
+      "<code>redis: \"redis://host:6379\"</code>: the Redis adapter — several servers (processes, machines) share rooms and broadcasts: <code>io.to(room).emit</code> on one reaches the sockets of every server (<code>redisPrefix</code> names the channels, default <code>\"socket.io\"</code>; Redis 6 or later, RESP3). It speaks socketioxide's protocol, not the one of the JavaScript <code>@socket.io/redis-adapter</code>: do not mix with Node servers. A Redis that cannot be reached is an error value. <code>io.adapter</code>: <code>\"local\"</code> or <code>\"redis\"</code>."
+     ],
+     [
+      "socketio.server({ recovery: true | { maxDisconnection = 2m, skipMiddlewares = true } })",
       "SocketIoServer",
-      ""
+      "Connection state recovery, as the official servers' <code>connectionStateRecovery</code>: a client that lost its connection (network, transport closed, ping timeout) and comes back within <code>maxDisconnection</code> gets its rooms, its <code>socket.data</code> and the broadcasts it missed, and <code>socket.recovered</code> is true (the middlewares are skipped unless <code>skipMiddlewares: false</code>). Each broadcast then carries an offset as its last argument (the official clients and <code>socketio.connect</code> keep it; a handler with fewer parameters does not get it). <code>socket.id</code> is a new one. A client that left on purpose (<code>disconnect()</code>) starts over. Broadcasts are kept for <code>maxDisconnection</code>; with the Redis adapter, the broadcasts of the same server."
      ],
      [
       "io.on(\"connection\", fn(socket)) · io.of(\"/ns\").on(\"connection\", fn)",
@@ -2861,9 +2876,9 @@ export const REFERENCE: Record<string, RefData> = {
       "Handshake middlewares, in order, before <code>connection</code>: check <code>socket.auth</code> (a token…) and keep what you found in <code>socket.data</code>. Returning an error refuses the socket: the client gets <code>connect_error</code> with its message (also the official JavaScript client). Without middlewares no connection waits for the program."
      ],
      [
-      "io.listen(port | \"host:port\") · app.listen(port, { socketio: io })",
+      "io.listen(port | \"host:port\", { tls: { cert, key } }) · app.listen(port, { socketio: io, tls })",
       "int · nil",
-      "Standalone, or on a fogu:web app (same port). An int port listens on 127.0.0.1; <code>\"0.0.0.0:port\"</code> for other machines."
+      "Standalone, or on a fogu:web app (same port). An int port listens on 127.0.0.1; <code>\"0.0.0.0:port\"</code> for other machines. <code>tls</code> serves HTTPS and <code>wss://</code> (both ways)."
      ],
      [
       "io.emit(event, ...args) · io.to(room).emit(…) · io.except(room) · io.of(ns).emit(…) · io.close()",
@@ -2886,9 +2901,9 @@ export const REFERENCE: Record<string, RefData> = {
       "<code>to</code>/<code>broadcast</code> exclude the socket itself."
      ],
      [
-      "socket.id · ns · rooms · auth · data · handshake · connected",
+      "socket.id · ns · rooms · auth · data · handshake · connected · recovered",
       "",
-      "<code>auth</code>: what the client sent; <code>data</code>: a map the program keeps for the socket (from <code>use</code> on); <code>handshake</code>: headers and query."
+      "<code>recovered</code>: the session came back (<code>recovery</code>). <code>auth</code>: what the client sent; <code>data</code>: a map the program keeps for the socket (from <code>use</code> on); <code>handshake</code>: headers and query."
      ]
     ]
    },
@@ -2909,6 +2924,11 @@ export const REFERENCE: Record<string, RefData> = {
       "c.emit(event, ...args) · c.emitWithAck(event, data, { timeout = 5s }) · c.disconnect()",
       "",
       ""
+     ],
+     [
+      "c.id · c.connected · c.recovered",
+      "str · bool · bool",
+      "After a reconnection to a server with <code>recovery</code>, <code>c.recovered</code> says whether the session came back (the missed broadcasts arrive before the next ones)."
      ]
     ],
     "example": "import socketio from \"fogu:socketio\"\nconst log = []\nconst io = socketio.server()\nio.on(\"connection\", fn(socket) {\n    socket.join(\"lobby\")\n    socket.on(\"chat\", fn(msg, ack) {\n        io.to(\"lobby\").emit(\"chat\", \"echo:\" + msg)\n        if ack != nil { ack({ ok: true }) }\n    })\n    socket.on(\"disconnect\", fn(reason) { log.push(\"bye\") })\n})\nconst port = io.listen(\"127.0.0.1:0\")\n\nconst got = []\nconst c = socketio.connect(\"http://127.0.0.1:\" + str(port), { auth: { token: \"t1\" } })?\nc.on(\"chat\", fn(m) { got.push(m) })\nc.emit(\"chat\", \"hi\")\nprint(c.emitWithAck(\"chat\", \"ack me\", { timeout: 2s })?)\nFogu.sleep(200ms)\nc.disconnect()\nFogu.sleep(200ms)\nprint(got, log)\nio.close()",
@@ -3025,9 +3045,9 @@ export const REFERENCE: Record<string, RefData> = {
       "<code>subject commonName issuer names serial notBefore notAfter daysLeft expired selfSigned ca signature keyType keyBits sha256</code>."
      ],
      [
-      "security.scan(host, ports = \"common\", { timeout = 500ms, concurrency = 200, banner })",
+      "security.scan(host, ports = \"common\", { timeout = 500ms, concurrency = 200, banner = false })",
       "list · error",
-      "Ports: an int, a list, a range or <code>\"22,80,8000-8100\"</code>. → <code>[{ port, service, banner }]</code>."
+      "TCP connect scan. Ports: an int, a list, a range (<code>1..1025</code>, end excluded), <code>\"22,80,8000-8100\"</code> (ends included) or <code>\"common\"</code> (about 50 well-known ports). <code>timeout</code>: per connection attempt (a duration or int ms); <code>concurrency</code>: attempts at a time (1–2000). A name with IPv4 and IPv6 addresses is scanned on IPv4. → only the <b>open</b> ports, ascending: <code>[{ port, service, banner }]</code> — <code>service</code> is the well-known name or nil, <code>banner</code> nil unless <code>banner: true</code> and the server sent something within 400 ms (first 256 bytes, trimmed). A name that does not resolve is an error value; closed or filtered ports are just left out."
      ],
      [
       "security.dns(name, type = \"A\", { server, timeout = 3s }) · security.reverseDns(ip, opts?)",
@@ -3101,14 +3121,14 @@ export const REFERENCE: Record<string, RefData> = {
       "The short name of this module: the same functions and connections (<code>ws.connect</code>, <code>ws.listen</code>, <code>ws.upgrade</code>)."
      ],
      [
-      "websocket.connect(url, { headers, protocols, timeout })",
+      "websocket.connect(url, { headers, protocols, timeout, ca })",
       "WebSocket · error",
-      "A rejected handshake (401, 404…) is an error value."
+      "A rejected handshake (401, 404…) is an error value. <code>ca</code>: a certificate (PEM text or file) to trust for <code>wss://</code>, besides the system's (a self-signed server)."
      ],
      [
-      "websocket.listen(port, { host })",
+      "websocket.listen(port, { host, tls: { cert, key } })",
       "Server · error",
-      "<code>port 0</code> picks a free port; <code>server.accept(timeout?)</code> → WebSocket, fields <code>port url</code>."
+      "<code>port 0</code> picks a free port; <code>server.accept(timeout?)</code> → WebSocket, fields <code>port url</code>. <code>tls</code> serves <code>wss://</code> (PEM text or files; <code>tls.selfSigned([\"localhost\"])</code> for development)."
      ],
      [
       "ws.send(data)",
@@ -4302,7 +4322,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "ssh.connect(\"user@host:port\" | { host, user, port, key, password, strictHostKey, knownHosts, timeout, options, jump })",
       "Ssh · error",
-      "Checks the connection; <code>strictHostKey</code> defaults to <code>accept-new</code>; <code>jump</code> (another connection or <code>\"user@host\"</code>) goes through a bastion with that connection's key and settings."
+      "Checks the connection; <code>strictHostKey</code> defaults to <code>accept-new</code>; <code>jump</code> (another connection or <code>\"user@host\"</code>) goes through a bastion with that connection's key and settings. <code>options</code>: extra <code>-o</code> settings (<code>{ ServerAliveInterval: 15 }</code>); values with spaces — a <code>knownHosts</code> in <code>Application Support</code> — are quoted for ssh. On Windows, in a program without a console (the desktop host), ssh starts without a console window."
      ],
      [
       "s.run(command, { input })",
@@ -4315,19 +4335,19 @@ export const REFERENCE: Record<string, RefData> = {
       "scp, folders included."
      ],
      [
-      "s.forward(localPort | 0, host, port)",
+      "s.forward(localPort | 0, host, port, { bind })",
       "Tunnel · error",
-      "<code>-L</code>: a local port that reaches <code>host:port</code> through the server."
+      "<code>-L</code>: a local port that reaches <code>host:port</code> through the server. Returns once the local port accepts connections (other tasks keep running meanwhile); a local port already in use, or ssh exiting first, is an error value with ssh's message (<code>bind [127.0.0.1]:5433: Address already in use</code>…). <code>0</code> picks a free port. <code>bind</code>: the local address to listen on (default ssh's <code>localhost</code>; <code>\"0.0.0.0\"</code> or <code>\"*\"</code> for every interface)."
      ],
      [
-      "s.reverse(remotePort, host, localPort)",
+      "s.reverse(remotePort | 0, host, localPort, { bind })",
       "Tunnel · error",
-      "<code>-R</code>: a port on the server that reaches a local service."
+      "<code>-R</code>: a port on the server that reaches a local service. Returns once the server accepted the forward; a port the server refuses (already taken) is an error value. With <code>0</code> the server picks the port: <code>tunnel.port</code> is the one it allocated. <code>bind</code>: the address on the server (the server's <code>GatewayPorts</code> decides whether a non-loopback one is honoured; give <code>\"127.0.0.1\"</code> to avoid a forward that silently binds only <code>[::1]</code> when the IPv4 port is taken)."
      ],
      [
-      "tunnel.localPort · .remotePort · .alive() · .close()",
+      "tunnel.port · .localPort · .remotePort · .kind · .target · .via · .bind · .alive() · .pid() · .close()",
       "",
-      ""
+      "<code>kind</code> is <code>\"local\"</code> or <code>\"remote\"</code>; <code>pid()</code> is the ssh process (nil once closed; on macOS its small <code>sh</code> watcher: ending either ends the tunnel). A tunnel is closed by <code>close()</code>, when the value is dropped and when the program ends in any way (<code>process.exit</code>, an uncaught error, a closed window): Linux <code>PR_SET_PDEATHSIG</code>, macOS a watcher on a pipe, Windows a kill-on-close job. ssh's stdout is not inherited (<code>fogu x.fg | head</code> ends)."
      ],
      [
       "s.mount(remote, local, { readonly, keep, options, tunnel, jump })",
@@ -4365,8 +4385,8 @@ export const REFERENCE: Record<string, RefData> = {
       ""
      ]
     ],
-    "example": "import ssh from \"fogu:ssh\"\nimport fs from \"fogu:fs\"\nconst s = ssh.connect(\"deploy@server.example.com:22\", { key: \"~/.ssh/id_ed25519\" })?\nprint(s.run(\"uname -s\")?.stdout.trim())\ns.upload(\"dist/app\", \"/srv/app\")?\nconst db = s.forward(0, \"127.0.0.1\", 5432)?          // the server's PostgreSQL, locally\nprint(\"postgres://app@127.0.0.1:\" + str(db.localPort) + \"/app\")\ndb.close()\nconst www = s.mount(\"/var/www\", \"./www\", { readonly: true })?   // a local folder backed by the server\nprint(fs.list(\"./www\")?)\nwww.unmount()?\ns.close()",
-    "output": "Linux\npostgres://app@127.0.0.1:53110/app\n[index.html, static]",
+    "example": "import ssh from \"fogu:ssh\"\nimport fs from \"fogu:fs\"\nconst s = ssh.connect(\"deploy@server.example.com:22\", { key: \"~/.ssh/id_ed25519\" })?\nprint(s.run(\"uname -s\")?.stdout.trim())\ns.upload(\"dist/app\", \"/srv/app\")?\nconst db = s.forward(0, \"127.0.0.1\", 5432)?          // the server's PostgreSQL, locally\nprint(\"postgres://app@127.0.0.1:\" + str(db.localPort) + \"/app\")\ndb.close()\nconst [_, busy] = s.forward(8080, \"127.0.0.1\", 80, { bind: \"127.0.0.1\" })\nprint(busy)                                          // 8080 is taken on this machine\nconst r = s.reverse(0, \"127.0.0.1\", 3000)?                 // the server picks the port\nprint(\"server port\", r.port, \"pid\", r.pid())\nr.close()\nconst www = s.mount(\"/var/www\", \"./www\", { readonly: true })?   // a local folder backed by the server\nprint(fs.list(\"./www\")?)\nwww.unmount()?\ns.close()",
+    "output": "Linux\npostgres://app@127.0.0.1:53110/app\nssh.forward: local port 8080 (127.0.0.1) is already in use\nserver port 41873 pid 23116\n[index.html, static]",
     "outputTitle": "output (with an SSH server)"
    },
    {
@@ -4386,9 +4406,9 @@ export const REFERENCE: Record<string, RefData> = {
    {
     "api": [
      [
-      "shell.run(command, { cwd, env, input, native = true })",
+      "shell.run(command, { cwd, env, input, native = true, hidden })",
       "{ ok, code, stdout, stderr }",
-      "A non-zero exit is not an error; <code>native: false</code> uses system programs only."
+      "A non-zero exit is not an error; <code>native: false</code> uses system programs only. On Windows a program name is looked up with <code>PATHEXT</code> (<code>npm</code> → <code>npm.cmd</code>; a <code>.cmd</code>/<code>.bat</code> runs through cmd.exe with its arguments escaped) and starts without a console window when this program has no console (a GUI) or with <code>hidden: true</code>."
      ],
      [
       "shell.exec(command, opts?)",
@@ -4418,7 +4438,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "shell.which(program) · shell.builtins",
       "str · list",
-      ""
+      "<code>which</code>: the full path or nil; on Windows with the <code>PATHEXT</code> extension (<code>C:/Program Files/nodejs/npm.cmd</code>)."
      ]
     ],
     "example": "import shell from \"fogu:shell\"\nshell.run(\"mkdir -p data && echo banana > data/fruits.txt && echo apple >> data/fruits.txt\")?\nprint(shell.text(\"cat data/fruits.txt | sort | head -n 1\")?)\nprint(shell.lines(\"ls data\")?, shell.text(\"cat data/*.txt | wc -l\")?)\nconst name = \"file with spaces.txt\"\nshell.run(`echo ok > data/${shell.quote(name)}`)?\nprint(shell.text(\"echo \\\"$WHO has $(cat data/fruits.txt | wc -l) fruits\\\"\", { env: { WHO: \"Ana\" } })?)\nconst r = shell.run(\"grep kiwi data/fruits.txt || echo 'no kiwi'\")?\nprint(r.ok, r.stdout.trim())\nconst [_, err] = shell.text(\"cat missing.txt\")\nprint(err)",

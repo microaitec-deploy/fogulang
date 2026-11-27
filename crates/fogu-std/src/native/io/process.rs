@@ -50,7 +50,21 @@ pub fn build() -> ModuleValue {
         let k = str_arg(a, 0, "process.setEnv")?;
         let v = str_arg(a, 1, "process.setEnv")?;
         // SAFETY: Fogu programs run on a single interpreter thread.
-        unsafe { std::env::set_var(k, v) };
+        unsafe { std::env::set_var(&k, &v) };
+        // `Fogu.env` follows (it is a map made at startup)
+        ENV_MAPS.with(|maps| {
+            maps.borrow_mut().retain(|w| match w.upgrade() {
+                Some(m) => {
+                    let mut m = m.borrow_mut();
+                    if cfg!(windows) && k.to_ascii_uppercase() != k {
+                        m.insert(Str::from(k.to_ascii_uppercase()), Value::Str(v.clone().into()));
+                    }
+                    m.insert(Str::from(k.clone()), Value::Str(v.clone().into()));
+                    true
+                }
+                None => false,
+            })
+        });
         Ok(Value::Nil)
     }));
     e.insert("cwd".into(), nfn("cwd", 0, |_| {
@@ -81,6 +95,63 @@ pub fn build() -> ModuleValue {
         name: "fogu:process".into(),
         exports: std::cell::RefCell::new(e),
     }
+}
+
+/// Windows: whether this process has no console of its own (a GUI program, the
+/// desktop host). Console programs started from it would each open a window.
+#[cfg(windows)]
+fn without_console() -> bool {
+    static NONE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *NONE.get_or_init(|| {
+        unsafe extern "system" {
+            fn GetConsoleWindow() -> *mut std::ffi::c_void;
+        }
+        // SAFETY: a kernel32 call without arguments
+        unsafe { GetConsoleWindow().is_null() }
+    })
+}
+
+/// Windows: starts the child without a console window (`CREATE_NO_WINDOW`) when
+/// `hidden` is asked for or this process has no console; elsewhere nothing.
+pub(crate) fn hide_window(c: &mut Command, hidden: bool) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        if hidden || without_console() {
+            c.creation_flags(CREATE_NO_WINDOW);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (c, hidden);
+}
+
+/// The program `process.run` starts. On Windows a name without an extension is
+/// looked up with `PATHEXT` (`npm` → `npm.cmd`), as cmd.exe does; `Command`
+/// alone only tries `.exe`, and an extension-less file found first (the
+/// `npm` shell script next to `npm.cmd`) fails with "%1 is not a valid Win32
+/// application" (os error 193). A `.cmd`/`.bat` is then run by `Command`
+/// through cmd.exe with its arguments escaped for cmd. Elsewhere: unchanged.
+fn program_for(cmd: &str, opts: Option<&Value>) -> std::ffi::OsString {
+    #[cfg(windows)]
+    {
+        if std::path::Path::new(cmd).extension().is_none() {
+            let mut env: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+            if let Some(Value::Map(m)) = opts {
+                if let Some(Value::Map(e)) = m.borrow().get("env") {
+                    for (k, v) in e.borrow().iter() {
+                        env.retain(|name, _| !name.eq_ignore_ascii_case(k));
+                        env.insert(k.to_string(), v.to_display_string());
+                    }
+                }
+            }
+            if let Some(p) = crate::native::shell::find_program_in(cmd, &env) {
+                return p.into_os_string();
+            }
+        }
+    }
+    let _ = opts;
+    cmd.into()
 }
 
 /// Environment variables as a map.
@@ -116,6 +187,11 @@ fn kill_pid(pid: u32) {
     let _ = pid;
 }
 
+thread_local! {
+    /// The `Fogu.env` maps made on this thread: `process.setEnv` updates them too.
+    static ENV_MAPS: std::cell::RefCell<Vec<std::rc::Weak<std::cell::RefCell<HashMap<Str, Value>>>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 pub fn env_map() -> Value {
     let mut pairs: Vec<(String, Value)> = std::env::vars().map(|(k, v)| (k, Value::Str(v.into()))).collect();
     // Windows names variables without case (`Path` is `PATH`): the upper-case name is
@@ -131,7 +207,9 @@ pub fn env_map() -> Value {
     }
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
     let m: HashMap<Str, Value> = pairs.into_iter().map(|(k, v)| (Str::from(k), v)).collect();
-    Value::Map(std::rc::Rc::new(std::cell::RefCell::new(m)))
+    let m = std::rc::Rc::new(std::cell::RefCell::new(m));
+    ENV_MAPS.with(|maps| maps.borrow_mut().push(std::rc::Rc::downgrade(&m)));
+    Value::Map(m)
 }
 
 /// `run(cmd, args = [], options = {cwd, env, input, timeout})` →
@@ -139,7 +217,7 @@ pub fn env_map() -> Value {
 pub fn run(a: &[Value]) -> Result<Value, String> {
     max_args(a, 3, "process.run")?;
     let cmd = str_arg(a, 0, "process.run")?;
-    let mut c = Command::new(&cmd);
+    let mut c = Command::new(program_for(&cmd, opt_arg(a, 2)));
     match opt_arg(a, 1) {
         None => {}
         Some(Value::List(l)) => {
@@ -156,6 +234,7 @@ pub fn run(a: &[Value]) -> Result<Value, String> {
     }
     let mut input: Option<Vec<u8>> = None;
     let mut timeout: Option<std::time::Duration> = None;
+    let mut hidden = false;
     match opt_arg(a, 2) {
         None => {}
         Some(Value::Map(m)) => {
@@ -163,9 +242,11 @@ pub fn run(a: &[Value]) -> Result<Value, String> {
             // an unknown option (`timeout`, a typo) stops the program instead of being ignored
             let mut keys: Vec<&str> = m.keys().map(|k| &**k).collect();
             keys.sort_unstable();
-            if let Some(k) = keys.into_iter().find(|k| !matches!(*k, "cwd" | "env" | "input" | "timeout")) {
-                return Err(format!("process.run: unknown option '{}' (expected cwd, env, input, timeout)", k));
+            if let Some(k) = keys.into_iter().find(|k| !matches!(*k, "cwd" | "env" | "input" | "timeout" | "hidden")) {
+                return Err(format!("process.run: unknown option '{}' (expected cwd, env, input, timeout, hidden)", k));
             }
+            // hidden: no console window on Windows (automatic when this process has no console)
+            hidden = m.get("hidden").is_some_and(Value::is_truthy);
             // timeout: the child is killed when it runs longer (`timedOut: true`, `ok: false`)
             match m.get("timeout") {
                 None | Some(Value::Nil) => {}
@@ -199,11 +280,12 @@ pub fn run(a: &[Value]) -> Result<Value, String> {
         }
         Some(other) => {
             return Err(format!(
-                "process.run: options must be a map {{cwd, env, input, timeout}}, got '{}'",
+                "process.run: options must be a map {{cwd, env, input, timeout, hidden}}, got '{}'",
                 other.type_name()
             ))
         }
     }
+    hide_window(&mut c, hidden);
     c.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

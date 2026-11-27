@@ -229,10 +229,17 @@ fn runtimeDir(lib) {
         fs.copy(path.join(lib, f), to)?
     }
     const toml = path.join(work, "Cargo.toml")
-    const srcPath = src.replace("\\", "/")
-    const cargo = fs.readText(toml)?
-    fs.writeText(toml, cargo.replace("path = \"../../../lang\"", `path = '${srcPath}'`))?
+    fs.writeText(toml, sourcesPaths(fs.readText(toml)?, src))?
     return work, nil
+}
+
+// runtime/Cargo.toml with its paths into lang/ (the `fogu` dependency, the
+// vendored crates of [patch.crates-io]) pointing at the Fogu sources `src`.
+export fn sourcesPaths(cargo: str, src: str) {
+    const srcPath = src.replace("\\", "/")
+    return cargo
+        .replace("path = \"../../../lang\"", `path = '${srcPath}'`)
+        .replace("path = \"../../../lang/vendor/socketioxide\"", `path = '${srcPath}/vendor/socketioxide'`)
 }
 
 // The fogu executable running this script (set by `fogu desktop …`), else the

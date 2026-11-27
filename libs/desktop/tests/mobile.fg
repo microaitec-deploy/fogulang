@@ -69,7 +69,7 @@ if Fogu.args.contains("--work") {
     const lib = path.absolute(Fogu.asset(""))
     const work = mobile.workCrate(lib, "dev.fogu.test.mobile", ["network", "database"], "android")?
     const cargo = fs.readText(path.join(work, "Cargo.toml"))?
-    print("work:", work.starts_with(Fogu.env.FOGU_HOME))
+    print("work:", work.starts_with(process.env("FOGU_HOME")))
     print("crate-type:", cargo.contains("crate-type = [\"staticlib\", \"cdylib\", \"rlib\"]"))
     print("features:", cargo.contains("default = [\"network\", \"database\", \"vendored-openssl\"]"))
     print("fogu path:", !cargo.contains("../../../lang"))
@@ -78,7 +78,7 @@ if Fogu.args.contains("--work") {
 }
 const home = path.join(fs.tempDir(), "fogu-desktop-mobile-" + str(clock()))
 const self = path.join(Fogu.asset(""), "tests", "mobile.fg")
-const r = process.run(Fogu.env.FOGU_BIN ?? "fogu", [self, "--work"], { env: { FOGU_HOME: home } })?
+const r = process.run(process.env("FOGU_BIN") ?? "fogu", [self, "--work"], { env: { FOGU_HOME: home } })?
 fs.removeAll(home)
 expect("the work crate: a library for the mobile toolchains, the app's features + vendored OpenSSL, the local Fogu sources", r.ok && !r.stdout.contains("false") && r.stdout.contains("crate-type: true"), r.stdout + r.stderr)
 

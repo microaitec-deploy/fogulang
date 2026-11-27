@@ -447,10 +447,20 @@ fn connect(args: &[Value]) -> Result<Value, String> {
     if let Some(p) = &protocols {
         req.headers_mut().insert("Sec-WebSocket-Protocol", p.parse().map_err(|_| "websocket.connect: invalid protocols")?);
     }
+    // wss:// to a server whose certificate the system does not trust: { ca } (PEM text or file)
+    let connector = match o.get("ca") {
+        None | Some(Value::Nil) => None,
+        Some(v) => {
+            let pem = crate::native::tls::pem_arg(v, "websocket.connect: ca")?;
+            let cert = native_tls::Certificate::from_pem(&pem).map_err(|e| format!("websocket.connect: ca: {}", e))?;
+            let c = native_tls::TlsConnector::builder().add_root_certificate(cert).build().map_err(|e| io_err!("websocket.connect: {}", e))?;
+            Some(tokio_tungstenite::Connector::NativeTls(c))
+        }
+    };
     let path = req.uri().path_and_query().map(|p| p.to_string()).unwrap_or_else(|| "/".into());
     let u = url.clone();
     let dialed = rt::block_on(async move {
-        tokio::time::timeout(timeout, tokio_tungstenite::connect_async_with_config(req, Some(config()), true)).await
+        tokio::time::timeout(timeout, tokio_tungstenite::connect_async_tls_with_config(req, Some(config()), true, connector)).await
     })?;
     let (ws, resp) = match dialed {
         Err(_) => return Err(io_err!("websocket: timed out connecting to {}", u)),
@@ -467,7 +477,7 @@ fn connect(args: &[Value]) -> Result<Value, String> {
 // Standalone server
 // ---------------------------------------------------------------------
 
-type AcceptedConn = (WebSocketStream<tokio::net::TcpStream>, String, Vec<(String, String)>);
+type AcceptedConn = (WebSocketStream<WsIo>, String, Vec<(String, String)>);
 
 #[derive(Default)]
 struct Accepted {
@@ -489,6 +499,15 @@ fn listen(args: &[Value]) -> Result<Value, String> {
         },
         _ => "127.0.0.1".into(),
     };
+    // wss://: { tls: { cert, key } } (PEM text or files, as fogu:http's servers)
+    let tls = match args.get(1) {
+        Some(Value::Map(m)) => match m.borrow().get("tls") {
+            None | Some(Value::Nil) => None,
+            Some(v) => Some(tokio_rustls::TlsAcceptor::from(crate::native::tls::server_config(v, "websocket.listen", &["http/1.1"])?)),
+        },
+        _ => None,
+    };
+    let secure = tls.is_some();
     let h = host.clone();
     let listener = rt::block_on(async move { tokio::net::TcpListener::bind((h.as_str(), port)).await })?
         .map_err(|e| io_err!("websocket: cannot listen on {}:{}: {}", host, port, e))?;
@@ -507,8 +526,16 @@ fn listen(args: &[Value]) -> Result<Value, String> {
             };
             tcp.set_nodelay(true).ok();
             let acc = Arc::clone(&acc);
+            let tls = tls.clone();
             // the handshake of one client must not hold the others
             tokio::spawn(async move {
+                let io: WsIo = match tls {
+                    None => Box::new(tcp),
+                    Some(t) => match tokio::time::timeout(Duration::from_secs(10), t.accept(tcp)).await {
+                        Ok(Ok(s)) => Box::new(s),
+                        _ => return,
+                    },
+                };
                 let mut path = String::new();
                 let mut headers = Vec::new();
                 let cb = |req: &tokio_tungstenite::tungstenite::handshake::server::Request, mut resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
@@ -524,7 +551,7 @@ fn listen(args: &[Value]) -> Result<Value, String> {
                     }
                     Ok(resp)
                 };
-                let hs = tokio_tungstenite::accept_hdr_async_with_config(tcp, cb, Some(config()));
+                let hs = tokio_tungstenite::accept_hdr_async_with_config(io, cb, Some(config()));
                 if let Ok(Ok(ws)) = tokio::time::timeout(Duration::from_secs(10), hs).await {
                     acc.lock().unwrap_or_else(|e| e.into_inner()).queue.push_back((ws, path, headers));
                     sched::wake();
@@ -532,13 +559,14 @@ fn listen(args: &[Value]) -> Result<Value, String> {
             });
         }
     });
-    Ok(NativeObjectRef::new(ServerValue { accepted, port, host }).to_value())
+    Ok(NativeObjectRef::new(ServerValue { accepted, port, host, secure }).to_value())
 }
 
 pub struct ServerValue {
     accepted: Arc<Mutex<Accepted>>,
     port: u16,
     host: String,
+    secure: bool,
 }
 
 impl FoguObject for ServerValue {
@@ -549,7 +577,7 @@ impl FoguObject for ServerValue {
     fn get(&self, field: &str) -> Option<Value> {
         Some(match field {
             "port" => Value::Int(self.port as i64),
-            "url" => Value::Str(format!("ws://{}:{}", self.host, self.port).into()),
+            "url" => Value::Str(format!("{}://{}:{}", if self.secure { "wss" } else { "ws" }, self.host, self.port).into()),
             _ => return None,
         })
     }

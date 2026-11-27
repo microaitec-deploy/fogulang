@@ -21,6 +21,7 @@
 //! host* that 1 and 2 reuse for every app: no Rust build per app.
 
 mod bridge;
+mod children;
 #[cfg(desktop)]
 mod menu;
 #[cfg(desktop)]
@@ -49,6 +50,77 @@ const HASH: &str = env!("FOGU_DESKTOP_HASH");
 pub(crate) const CLIENT_JS: &str = include_str!("../../client/fogu.js");
 /// The UI folder the `fogu://` protocol serves (bundle and dev modes).
 static UI_DIR: OnceLock<PathBuf> = OnceLock::new();
+/// The app's own icon (`icons/icon.png` or `icons/icon.ico` of the program),
+/// given to every window and as the default tray icon.
+static APP_ICON: OnceLock<tauri::image::Image<'static>> = OnceLock::new();
+
+/// The app's icon, when the program has one.
+pub(crate) fn app_icon() -> Option<tauri::image::Image<'static>> {
+    APP_ICON.get().cloned()
+}
+
+/// The icon file of the program in `dir`: icons/icon.png, else icons/icon.ico.
+fn icon_file(dir: &Path) -> Option<PathBuf> {
+    ["icon.png", "icon.ico"].iter().map(|f| dir.join("icons").join(f)).find(|p| p.is_file())
+}
+
+/// Windows groups task bar buttons (and names them in the Task Manager's
+/// "Apps") by AppUserModelID: the app's identifier, not the host's.
+/// Set before the first window opens.
+#[cfg(windows)]
+fn set_app_user_model_id(id: &str) {
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn SetCurrentProcessExplicitAppUserModelID(id: *const u16) -> i32;
+    }
+    // at most 128 characters, no spaces
+    let id: String = id.chars().filter(|c| !c.is_whitespace()).take(128).collect();
+    if id.is_empty() {
+        return;
+    }
+    let wide: Vec<u16> = id.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: a NUL-terminated UTF-16 string, copied by the call
+    let hr = unsafe { SetCurrentProcessExplicitAppUserModelID(wide.as_ptr()) };
+    if hr < 0 {
+        eprintln!("fogu-desktop: SetCurrentProcessExplicitAppUserModelID failed ({:#x})", hr);
+    }
+}
+
+/// macOS: the Dock shows the icon of the .app bundle; a host run outside one
+/// (`fogu desktop dev`, `dist/<name>`) would show the host's. On the main thread.
+#[cfg(target_os = "macos")]
+fn set_dock_icon(file: &Path) {
+    use std::ffi::{c_char, c_void, CStr};
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        fn objc_getClass(name: *const c_char) -> *mut c_void;
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
+    }
+    type Id = *mut c_void;
+    let Ok(bytes) = std::fs::read(file) else { return };
+    // SAFETY: objc_msgSend called through the exact signature of each message;
+    // the NSData copies the bytes; the NSImage is kept by NSApp (one reference leaks, once)
+    unsafe {
+        let send0: unsafe extern "C" fn(Id, Id) -> Id = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let send1: unsafe extern "C" fn(Id, Id, Id) -> Id = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let send_bytes: unsafe extern "C" fn(Id, Id, *const c_void, usize) -> Id = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let class = |n: &CStr| objc_getClass(n.as_ptr());
+        let sel = |n: &CStr| sel_registerName(n.as_ptr());
+        let data = send_bytes(class(c"NSData"), sel(c"dataWithBytes:length:"), bytes.as_ptr() as *const c_void, bytes.len());
+        if data.is_null() {
+            return;
+        }
+        let image = send1(send0(class(c"NSImage"), sel(c"alloc")), sel(c"initWithData:"), data);
+        if image.is_null() {
+            return;
+        }
+        let app = send0(class(c"NSApplication"), sel(c"sharedApplication"));
+        if !app.is_null() {
+            send1(app, sel(c"setApplicationIconImage:"), image);
+        }
+    }
+}
 
 #[tauri::command]
 async fn fogu_call(bridge: State<'_, Arc<Bridge>>, name: String, payload: Option<Value>) -> Result<Value, String> {
@@ -322,7 +394,7 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         Source::Dir(_) => Kind::Dir,
         _ => Kind::Other,
     };
-    let (man, program, entry, local, data, url) = match src {
+    let (man, program, entry, local, data, url, id) = match src {
         Source::Bundle { root, entry } => {
             let man = manifest_in(&root);
             let info = bundle_info(&root);
@@ -336,7 +408,7 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             let local = paths.local_data_dir()?.join(&id);
             let data = paths.data_dir()?.join(&id);
             window::set_base(window::Base::Fogu);
-            (man, root, entry, local, data, WebviewUrl::CustomProtocol(UI_URL.parse()?))
+            (man, root, entry, local, data, WebviewUrl::CustomProtocol(UI_URL.parse()?), id)
         }
         Source::Dir(dir) => {
             let man = manifest_in(&dir);
@@ -359,7 +431,7 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             let local = paths.local_data_dir()?.join(&id);
             let data = paths.data_dir()?.join(&id);
             let entry = dir.join(entry);
-            (man, dir, entry, local, data, url)
+            (man, dir, entry, local, data, url, id)
         }
         Source::Embedded => {
             let man = manifest_embedded();
@@ -369,7 +441,8 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             let entry = std::fs::read_to_string(program.join(".fogu-desktop-entry")).unwrap_or_else(|_| "main.fg".into());
             let entry = program.join(entry.trim());
             window::set_base(window::Base::App);
-            (man, program, entry, local, data, WebviewUrl::App("index.html".into()))
+            let id = handle.config().identifier.clone();
+            (man, program, entry, local, data, WebviewUrl::App("index.html".into()), id)
         }
     };
     let cfg = man.get("desktop").cloned().unwrap_or(Value::Null);
@@ -395,6 +468,22 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     window::set_webview_data(local.join("webview"));
     // closeToTray / minimizeToTray from fogu.json
     window::configure_app(&cfg);
+    // the app's identity for the system, before the first window: the task
+    // bar's grouping (Windows), the windows' and the Dock's icon
+    #[cfg(windows)]
+    set_app_user_model_id(&id);
+    #[cfg(not(windows))]
+    let _ = &id;
+    if let Some(file) = icon_file(&program) {
+        match tauri::image::Image::from_path(&file) {
+            Ok(img) => {
+                let _ = APP_ICON.set(img.to_owned());
+                #[cfg(target_os = "macos")]
+                set_dock_icon(&file);
+            }
+            Err(e) => bridge.log(&format!("the app icon {}: {}", file.display(), e)),
+        }
+    }
 
     // the main window (settings from fogu.json "desktop"; desktop.window(...) changes them later)
     let title = cfg
@@ -541,6 +630,13 @@ mod webview2_loader {
 /// entry point (`fogu desktop build --android/--ios` links this crate as a library).
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // ssh (fogu:ssh with a password) runs this executable as its SSH_ASKPASS
+    // program: answer and exit before anything else, or every prompt would
+    // start the app again (which would connect again…)
+    #[cfg(feature = "ops")]
+    if let Some(code) = fogu::native::ssh::askpass_reply() {
+        std::process::exit(code);
+    }
     #[cfg(all(windows, target_env = "gnu"))]
     webview2_loader::ensure();
     update::cleanup();

@@ -481,6 +481,8 @@ struct Ctx {
     last: i32,
     exited: bool,
     native: bool,
+    /// No console window for the programs started (Windows; see `process::hide_window`).
+    hidden: bool,
 }
 
 #[derive(Default)]
@@ -600,7 +602,7 @@ fn run_pipeline(cmds: &[Cmd], ctx: &mut Ctx, mode: Mode, stdin: Vec<u8>) -> Resu
 }
 
 fn write_file(ctx: &Ctx, w: &Word, data: &[u8], append: bool) -> Result<(), String> {
-    let mut c = Ctx { cwd: ctx.cwd.clone(), env: ctx.env.clone(), last: ctx.last, exited: false, native: ctx.native };
+    let mut c = Ctx { cwd: ctx.cwd.clone(), env: ctx.env.clone(), last: ctx.last, exited: false, native: ctx.native, hidden: ctx.hidden };
     let name = expand(w, &mut c)?.join(" ");
     let path = resolve(&ctx.cwd, &name);
     let mut f = std::fs::OpenOptions::new()
@@ -711,6 +713,7 @@ fn exec_one(args: &[String], ctx: &mut Ctx, stdin: Vec<u8>, inherit: bool) -> Re
     // ran a command or expanded a variable.
     let mut c = Command::new(&program);
     c.args(&args[1..]).current_dir(&ctx.cwd).env_clear().envs(&ctx.env);
+    crate::native::process::hide_window(&mut c, ctx.hidden);
     c.stdin(Stdio::piped());
     if inherit {
         c.stdout(Stdio::inherit()).stderr(Stdio::inherit());
@@ -738,17 +741,25 @@ fn find_program(name: &str) -> Option<PathBuf> {
     find_program_in(name, &env)
 }
 
-fn find_program_in(name: &str, env: &BTreeMap<String, String>) -> Option<PathBuf> {
-    let exts: Vec<String> = if cfg!(windows) {
-        let pathext = env
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case("PATHEXT"))
-            .map(|(_, v)| v.clone())
-            .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into());
-        std::iter::once(String::new()).chain(pathext.split(';').map(|e| e.to_lowercase())).collect()
-    } else {
-        vec![String::new()]
-    };
+/// The suffixes tried after a program name: on Windows each `PATHEXT` extension
+/// (`.COM;.EXE;.BAT;.CMD` by default), as cmd.exe does. The bare name comes first
+/// only when it already has an extension (`node.exe`); without one it is never
+/// tried: Windows cannot start an extension-less file (the `npm` shell script
+/// next to `npm.cmd` fails with os error 193).
+fn program_suffixes(name: &str, pathext: Option<&str>, windows: bool) -> Vec<String> {
+    if !windows {
+        return vec![String::new()];
+    }
+    let file = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let has_ext = file.rfind('.').is_some_and(|i| i > 0 && i + 1 < file.len());
+    let pathext = pathext.filter(|p| !p.trim().is_empty()).unwrap_or(".COM;.EXE;.BAT;.CMD");
+    let exts = pathext.split(';').map(str::trim).filter(|e| !e.is_empty()).map(|e| e.to_lowercase());
+    if has_ext { std::iter::once(String::new()).chain(exts).collect() } else { exts.collect() }
+}
+
+pub(crate) fn find_program_in(name: &str, env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    let pathext = env.iter().find(|(k, _)| k.eq_ignore_ascii_case("PATHEXT")).map(|(_, v)| v.as_str());
+    let exts = program_suffixes(name, pathext, cfg!(windows));
     let try_path = |p: PathBuf| -> Option<PathBuf> {
         for e in &exts {
             let candidate = if e.is_empty() { p.clone() } else { PathBuf::from(format!("{}{}", p.display(), e)) };
@@ -1356,7 +1367,7 @@ fn builtin(name: &str, args: &[String], ctx: &mut Ctx, stdin: Vec<u8>) -> Result
 // Fogu API
 // ---------------------------------------------------------------------
 
-/// `(command, { cwd, env, input, native })`
+/// `(command, { cwd, env, input, native, hidden })`
 fn run_args(a: &[Value], what: &str) -> Result<(Script, Ctx, Vec<u8>), String> {
     max_args(a, 2, what)?;
     let src = str_arg(a, 0, what)?;
@@ -1365,6 +1376,7 @@ fn run_args(a: &[Value], what: &str) -> Result<(Script, Ctx, Vec<u8>), String> {
     let mut cwd = shell_cwd();
     let mut input = Vec::new();
     let mut native = true;
+    let mut hidden = false;
     match a.get(1) {
         None | Some(Value::Nil) => {}
         Some(Value::Map(m)) => {
@@ -1386,10 +1398,12 @@ fn run_args(a: &[Value], what: &str) -> Result<(Script, Ctx, Vec<u8>), String> {
             if let Some(Value::Bool(b)) = m.get("native") {
                 native = *b;
             }
+            // no console window on Windows (automatic when this process has none)
+            hidden = m.get("hidden").is_some_and(Value::is_truthy);
         }
         Some(other) => return Err(format!("{}: options must be a map, got '{}'", what, other.type_name())),
     }
-    Ok((script, Ctx { cwd, env, last: 0, exited: false, native }, input))
+    Ok((script, Ctx { cwd, env, last: 0, exited: false, native, hidden }, input))
 }
 
 fn execute(a: &[Value], what: &str, mode: Mode) -> Result<Out, String> {
@@ -1414,7 +1428,7 @@ pub(crate) fn run_line(src: &str, cwd: Option<&Path>, env: &[(String, String)], 
     let script = parse(src)?;
     let mut vars: BTreeMap<String, String> = std::env::vars().collect();
     vars.extend(env.iter().cloned());
-    let mut ctx = Ctx { cwd: cwd.map(Path::to_path_buf).unwrap_or_else(shell_cwd), env: vars, last: 0, exited: false, native: true };
+    let mut ctx = Ctx { cwd: cwd.map(Path::to_path_buf).unwrap_or_else(shell_cwd), env: vars, last: 0, exited: false, native: true, hidden: false };
     let out = run_script(&script, &mut ctx, Mode::Capture, stdin)?;
     Ok((out.code, out.stdout, out.stderr))
 }
@@ -1446,6 +1460,7 @@ mod tests {
             last: 0,
             exited: false,
             native: true,
+            hidden: false,
         };
         let o = run_script(&script, &mut ctx, Mode::Capture, input.as_bytes().to_vec()).unwrap();
         (o.code, String::from_utf8_lossy(&o.stdout).into(), String::from_utf8_lossy(&o.stderr).into())
@@ -1486,5 +1501,17 @@ mod tests {
         assert!(parse("&& echo").is_err());
         assert_eq!(quote("it's"), "'it'\\''s'");
         assert_eq!(quote("plain-word"), "plain-word");
+    }
+
+    #[test]
+    fn windows_program_suffixes() {
+        // npm → npm.cmd before the extension-less shell script; never the bare name
+        assert_eq!(program_suffixes("npm", None, true), [".com", ".exe", ".bat", ".cmd"]);
+        assert_eq!(program_suffixes("C:/Program Files/nodejs/npm", Some(".EXE;.CMD"), true), [".exe", ".cmd"]);
+        // a name with an extension is tried as it is first
+        assert_eq!(program_suffixes("node.exe", Some(".EXE;.CMD"), true), ["", ".exe", ".cmd"]);
+        assert_eq!(program_suffixes("C:\\tools.d\\npm", Some(""), true), [".com", ".exe", ".bat", ".cmd"]);
+        assert_eq!(program_suffixes(".hidden", None, true).len(), 4);
+        assert_eq!(program_suffixes("npm", None, false), [""]);
     }
 }

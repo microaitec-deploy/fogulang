@@ -120,7 +120,7 @@ fn isWsl() {
     if Fogu.os != "linux" {
         return false
     }
-    if Fogu.env.WSL_DISTRO_NAME != nil {
+    if process.env("WSL_DISTRO_NAME") != nil {
         return true
     }
     const [v, _] = fs.readText("/proc/version")
@@ -350,8 +350,8 @@ fn startApp(exe) {
     // WSLENV: WSL passes a variable to a Windows program only when it is listed
     // there (the user's own list is kept)
     const wslenv = ["FOGU_DESKTOP_PROGRAM_DIR", "FOGU_DESKTOP_DEV_URL", "FOGU_DESKTOP_RELOAD", "FOGU_DESKTOP_UI_DIR"]
-    if (Fogu.env.WSLENV ?? "") != "" {
-        wslenv.push(Fogu.env.WSLENV)
+    if (process.env("WSLENV") ?? "") != "" {
+        wslenv.push(process.env("WSLENV"))
     }
     // the host itself watches the sources and reloads the program in place
     const reload = match watch && !restartOnChange {
@@ -392,9 +392,11 @@ fn stopApp(exe) {
     } else if Fogu.os == "windows" {
         process.run("taskkill", ["/F", "/T", "/IM", image])
     } else {
+        // its children first (ssh -N tunnels of fogu:ssh…): they would
+        // outlive it and keep their ports
         const pid = readPid(appPid)
         if pid != nil {
-            process.run("kill", ["-TERM", pid])
+            process.run("sh", ["-c", `pkill -TERM -P ${pid} 2>/dev/null; kill -TERM ${pid}`])
         }
     }
     let waited = 0

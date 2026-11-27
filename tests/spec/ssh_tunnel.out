@@ -1,0 +1,8 @@
+UserKnownHostsFile="/tmp/Application Support/kh"
+nil true fake@host: bind [127.0.0.1]:1: Address already in use; Could not request local forwarding.
+nil error: ssh.reverse: 2222:127.0.0.1:3000 via fake@host: Error: remote port forwarding failed for listen port 2222
+nil true
+remote 43210 43210 127.0.0.1 127.0.0.1:3000 true int
+false nil
+true true
+false

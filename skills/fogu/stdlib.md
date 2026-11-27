@@ -228,6 +228,7 @@ output:
 - `m.set(key, value) · m[key] = value` → map — `set` returns the map itself (chainable).
 - `m.remove(key)` → value — Removes and returns the value.
 - `m.merge(other)` → map — A new map; `other` wins on equal keys.
+- `m.clone()` → map — A new map with the same entries (a shallow copy: the values inside are shared).
 - `m.len() · m.clear()` → int · nil
 
 ```fogu
@@ -613,6 +614,7 @@ Files and folders. Failures (missing file, permission) are error values.
 - `fs.readText(path)` → str · error — Whole file as UTF-8 text.
 - `fs.readLines(path)` → list · error — Lines without line endings.
 - `fs.writeText(path, text)` → nil · error — Creates or replaces.
+- `fs.readBytes(path) · fs.writeBytes(path, data)` → buffer · nil · error — Binary files (an `.ico`, an image…): the whole file as a `buffer`; `writeBytes` takes a buffer, a str or a list of byte ints and creates or replaces.
 - `fs.append(path, text)` → nil · error — Adds to the end (creates the file).
 - `fs.exists(path) · fs.isFile(path) · fs.isDir(path)` → bool
 - `fs.mkdir(path)` → nil · error — Creates the folder and its parents.
@@ -726,7 +728,7 @@ import process from "fogu:process"
 
 A program that exits with a non-zero code is not an error: check `ok` and `code`. Not being able to start it is an error value. For pipes and Linux commands see [fogu:shell](#fogushell).
 
-- `process.run(cmd, args?, { cwd, env, input })` → map · error — `{ ok, code, stdout, stderr }`. `input` is a str or a buffer; a missing `cwd` folder or a program that cannot start → error value; an unknown option stops the program.
+- `process.run(cmd, args?, { cwd, env, input, timeout, hidden })` → map · error — `{ ok, code, stdout, stderr, timedOut }`. `input` is a str or a buffer; `timeout` kills the program when it runs longer (`timedOut: true`); a missing `cwd` folder or a program that cannot start → error value; an unknown option stops the program. On Windows a name without an extension is looked up with `PATHEXT` (`npm` → `npm.cmd`, run through cmd.exe with escaped arguments), and the program starts without a console window when this program has none (a GUI, the desktop host) or with `hidden: true`.
 - `process.shell(command)` → map — Through `sh -c` / `cmd /C`.
 - `process.env(name) · process.setEnv(name, value)` → str · nil
 - `process.cwd() · process.chdir(path)` → str · nil
@@ -2111,21 +2113,23 @@ Socket.IO (protocol v5) servers and clients, compatible with the official JavaSc
 
 ### Server
 
-- `socketio.server({ path = "/socket.io", pingInterval, pingTimeout, ackTimeout, maxPayload })` → SocketIoServer
+- `socketio.server({ path = "/socket.io", pingInterval, pingTimeout, ackTimeout, maxPayload, recovery, redis, redisPrefix })` → SocketIoServer · error — `redis: "redis://host:6379"`: the Redis adapter — several servers (processes, machines) share rooms and broadcasts: `io.to(room).emit` on one reaches the sockets of every server (`redisPrefix` names the channels, default `"socket.io"`; Redis 6 or later, RESP3). It speaks socketioxide's protocol, not the one of the JavaScript `@socket.io/redis-adapter`: do not mix with Node servers. A Redis that cannot be reached is an error value. `io.adapter`: `"local"` or `"redis"`.
+- `socketio.server({ recovery: true | { maxDisconnection = 2m, skipMiddlewares = true } })` → SocketIoServer — Connection state recovery, as the official servers' `connectionStateRecovery`: a client that lost its connection (network, transport closed, ping timeout) and comes back within `maxDisconnection` gets its rooms, its `socket.data` and the broadcasts it missed, and `socket.recovered` is true (the middlewares are skipped unless `skipMiddlewares: false`). Each broadcast then carries an offset as its last argument (the official clients and `socketio.connect` keep it; a handler with fewer parameters does not get it). `socket.id` is a new one. A client that left on purpose (`disconnect()`) starts over. Broadcasts are kept for `maxDisconnection`; with the Redis adapter, the broadcasts of the same server.
 - `io.on("connection", fn(socket)) · io.of("/ns").on("connection", fn)` → nil — Namespaces.
 - `io.use(fn(socket)) · io.of("/ns").use(fn)` → nil — Handshake middlewares, in order, before `connection`: check `socket.auth` (a token…) and keep what you found in `socket.data`. Returning an error refuses the socket: the client gets `connect_error` with its message (also the official JavaScript client). Without middlewares no connection waits for the program.
-- `io.listen(port | "host:port") · app.listen(port, { socketio: io })` → int · nil — Standalone, or on a fogu:web app (same port). An int port listens on 127.0.0.1; `"0.0.0.0:port"` for other machines.
+- `io.listen(port | "host:port", { tls: { cert, key } }) · app.listen(port, { socketio: io, tls })` → int · nil — Standalone, or on a fogu:web app (same port). An int port listens on 127.0.0.1; `"0.0.0.0:port"` for other machines. `tls` serves HTTPS and `wss://` (both ways).
 - `io.emit(event, ...args) · io.to(room).emit(…) · io.except(room) · io.of(ns).emit(…) · io.close()` — Several arguments travel as several arguments.
 - `socket.on(event, fn(...args, ack?)) · socket.on("disconnect", fn(reason)) · socket.off(event)` → nil — `ack` is passed when the client asked for one: `ack(value)`.
 - `socket.emit(event, ...args) · socket.emitWithAck(event, data, { timeout })` → nil · value
 - `socket.join(room) · leave(room) · to(room).emit(…) · broadcast.emit(…) · disconnect()` — `to`/`broadcast` exclude the socket itself.
-- `socket.id · ns · rooms · auth · data · handshake · connected` — `auth`: what the client sent; `data`: a map the program keeps for the socket (from `use` on); `handshake`: headers and query.
+- `socket.id · ns · rooms · auth · data · handshake · connected · recovered` — `recovered`: the session came back (`recovery`). `auth`: what the client sent; `data`: a map the program keeps for the socket (from `use` on); `handshake`: headers and query.
 
 ### Client
 
 - `socketio.connect(url, { namespace, auth, headers, path = "/socket.io", reconnect = true, timeout = 10s })` → SocketIoClient · error — Returns once connected. Like the JavaScript client, the url's path is the namespace (`http://host:3000/admin`). A refused connection (auth middleware) is an error value.
 - `c.on(event, fn(...args)) · c.on("connect" | "disconnect" | "error", fn) · c.off(event)` → nil — Handlers registered right after `connect` see the first messages.
 - `c.emit(event, ...args) · c.emitWithAck(event, data, { timeout = 5s }) · c.disconnect()`
+- `c.id · c.connected · c.recovered` → str · bool · bool — After a reconnection to a server with `recovery`, `c.recovered` says whether the session came back (the missed broadcasts arrive before the next ones).
 
 ```fogu
 import socketio from "fogu:socketio"
@@ -2276,7 +2280,7 @@ Security and network auditing: TLS and certificates (rustls, x509-parser, rcgen)
 
 - `security.tls(host, { port = 443, sni, ca, alpn, timeout = 5s })` → map · error — `{ valid, error, protocol, cipher, alpn, daysLeft, handshakeMs, chain }` — the chain is inspected even when it is not trusted.
 - `security.parseCert(pem | der) · security.selfSigned(names, { days = 365 })` → map · { cert, key } — `subject commonName issuer names serial notBefore notAfter daysLeft expired selfSigned ca signature keyType keyBits sha256`.
-- `security.scan(host, ports = "common", { timeout = 500ms, concurrency = 200, banner })` → list · error — Ports: an int, a list, a range or `"22,80,8000-8100"`. → `[{ port, service, banner }]`.
+- `security.scan(host, ports = "common", { timeout = 500ms, concurrency = 200, banner = false })` → list · error — TCP connect scan. Ports: an int, a list, a range (`1..1025`, end excluded), `"22,80,8000-8100"` (ends included) or `"common"` (about 50 well-known ports). `timeout`: per connection attempt (a duration or int ms); `concurrency`: attempts at a time (1–2000). A name with IPv4 and IPv6 addresses is scanned on IPv4. → only the open ports, ascending: `[{ port, service, banner }]` — `service` is the well-known name or nil, `banner` nil unless `banner: true` and the server sent something within 400 ms (first 256 bytes, trimmed). A name that does not resolve is an error value; closed or filtered ports are just left out.
 - `security.dns(name, type = "A", { server, timeout = 3s }) · security.reverseDns(ip, opts?)` → list · error — `A AAAA MX TXT NS CNAME SOA CAA SRV PTR…` → `[{ type, value, ttl }]`. Servers: `server`, `$FOGU_DNS`, the system's, then 1.1.1.1/8.8.8.8.
 - `security.headers(url, { timeout })` → map · error — HSTS, CSP, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy → `{ grade, score, present, missing, warnings }` (leaky `server`, unsafe CSP, cookies without Secure/HttpOnly/SameSite…).
 - `security.passwordStrength(pw, [userInputs])` → map — `{ score 0..4, guesses, bits, crackTime, crackTimeOnline, warning, suggestions, estimator }` (zxcvbn). The same as [`password.strength`](#fogupassword).
@@ -2340,8 +2344,8 @@ import websocket from "fogu:websocket"
 WebSocket client (`ws://`, `wss://`) and a standalone server; `fogu:ws` is the short name of the same module. The same connection object is used by `app.ws` in `fogu:web` and by `ws.upgrade` in an `http.serve` handler. Each connection runs on the shared runtime (no thread per connection): `next` and `accept` wait cooperatively and wake up when a message or a client arrives. A connection is a stream of its messages: `for m in ws`, `stream.from(ws)`, and `s.pipe(ws)` sends a [stream](#fogustream) or a channel into it.
 
 - `import ws from "fogu:ws"` — The short name of this module: the same functions and connections (`ws.connect`, `ws.listen`, `ws.upgrade`).
-- `websocket.connect(url, { headers, protocols, timeout })` → WebSocket · error — A rejected handshake (401, 404…) is an error value.
-- `websocket.listen(port, { host })` → Server · error — `port 0` picks a free port; `server.accept(timeout?)` → WebSocket, fields `port url`.
+- `websocket.connect(url, { headers, protocols, timeout, ca })` → WebSocket · error — A rejected handshake (401, 404…) is an error value. `ca`: a certificate (PEM text or file) to trust for `wss://`, besides the system's (a self-signed server).
+- `websocket.listen(port, { host, tls: { cert, key } })` → Server · error — `port 0` picks a free port; `server.accept(timeout?)` → WebSocket, fields `port url`. `tls` serves `wss://` (PEM text or files; `tls.selfSigned(["localhost"])` for development).
 - `ws.send(data)` → nil · error — str → text frame, [buffer](#values) or list of bytes → binary frame, other values → JSON text.
 - `ws.next(timeout?)` → Message · nil — `{ type: "text" | "binary", data, text, bytes, size, json() }`: `data` is a str for text frames and a buffer for binary ones, `text` always a str, `bytes` always a buffer. nil on timeout or when closed.
 - `for m in ws · for conn in server` — Every message until the connection closes (a network error ends the loop and stays in `ws.error`) · every client, as `accept()`.
@@ -3210,12 +3214,12 @@ import ssh from "fogu:ssh"
 
 Commands, file copies and tunnels over the system's OpenSSH client (key or password).
 
-- `ssh.connect("user@host:port" | { host, user, port, key, password, strictHostKey, knownHosts, timeout, options, jump })` → Ssh · error — Checks the connection; `strictHostKey` defaults to `accept-new`; `jump` (another connection or `"user@host"`) goes through a bastion with that connection's key and settings.
+- `ssh.connect("user@host:port" | { host, user, port, key, password, strictHostKey, knownHosts, timeout, options, jump })` → Ssh · error — Checks the connection; `strictHostKey` defaults to `accept-new`; `jump` (another connection or `"user@host"`) goes through a bastion with that connection's key and settings. `options`: extra `-o` settings (`{ ServerAliveInterval: 15 }`); values with spaces — a `knownHosts` in `Application Support` — are quoted for ssh. On Windows, in a program without a console (the desktop host), ssh starts without a console window.
 - `s.run(command, { input })` → { ok, code, stdout, stderr } · error — A non-zero exit code is not an error.
 - `s.upload(local, remote) · s.download(remote, local)` → nil · error — scp, folders included.
-- `s.forward(localPort | 0, host, port)` → Tunnel · error — `-L`: a local port that reaches `host:port` through the server.
-- `s.reverse(remotePort, host, localPort)` → Tunnel · error — `-R`: a port on the server that reaches a local service.
-- `tunnel.localPort · .remotePort · .alive() · .close()`
+- `s.forward(localPort | 0, host, port, { bind })` → Tunnel · error — `-L`: a local port that reaches `host:port` through the server. Returns once the local port accepts connections (other tasks keep running meanwhile); a local port already in use, or ssh exiting first, is an error value with ssh's message (`bind [127.0.0.1]:5433: Address already in use`…). `0` picks a free port. `bind`: the local address to listen on (default ssh's `localhost`; `"0.0.0.0"` or `"*"` for every interface).
+- `s.reverse(remotePort | 0, host, localPort, { bind })` → Tunnel · error — `-R`: a port on the server that reaches a local service. Returns once the server accepted the forward; a port the server refuses (already taken) is an error value. With `0` the server picks the port: `tunnel.port` is the one it allocated. `bind`: the address on the server (the server's `GatewayPorts` decides whether a non-loopback one is honoured; give `"127.0.0.1"` to avoid a forward that silently binds only `[::1]` when the IPv4 port is taken).
+- `tunnel.port · .localPort · .remotePort · .kind · .target · .via · .bind · .alive() · .pid() · .close()` — `kind` is `"local"` or `"remote"`; `pid()` is the ssh process (nil once closed; on macOS its small `sh` watcher: ending either ends the tunnel). A tunnel is closed by `close()`, when the value is dropped and when the program ends in any way (`process.exit`, an uncaught error, a closed window): Linux `PR_SET_PDEATHSIG`, macOS a watcher on a pipe, Windows a kill-on-close job. ssh's stdout is not inherited (`fogu x.fg | head` ends).
 - `s.mount(remote, local, { readonly, keep, options, tunnel, jump })` → Mount · error — Like sshfs: the remote folder appears as a local folder. Uses the connection's user, port, key (or password, sent on stdin), `knownHosts` and `strict`; `options` are extra `-o` sshfs options. Needs `sshfs` (Linux: `apt install sshfs`; macOS: macFUSE + sshfs; or `$FOGU_SSHFS`). `tunnel`: through an open `s.forward(…)`; `jump`: through a bastion. Unmounted when the program ends — also on Ctrl+C/SIGTERM — unless `keep`. Windows: SSHFS-Win (+ WinFsp), the local side is a drive letter (`"X:"`), only `%USERPROFILE%\.ssh\id_rsa` or a password, no `readonly`.
 - `mount.path · .remote · .host · .mounted · .unmount()` — A missing remote folder, a refused key or a busy mount point is an error value.
 - `s.shell({ pty, shell = "sh", cwd, env })` → SshShell · error — One persistent remote shell: `sh.run(cmd, { timeout })` → `{ ok, code, stdout, stderr }` keeps the working directory and variables between commands (one command at a time per shell).
@@ -3233,6 +3237,11 @@ s.upload("dist/app", "/srv/app")?
 const db = s.forward(0, "127.0.0.1", 5432)?          // the server's PostgreSQL, locally
 print("postgres://app@127.0.0.1:" + str(db.localPort) + "/app")
 db.close()
+const [_, busy] = s.forward(8080, "127.0.0.1", 80, { bind: "127.0.0.1" })
+print(busy)                                          // 8080 is taken on this machine
+const r = s.reverse(0, "127.0.0.1", 3000)?                 // the server picks the port
+print("server port", r.port, "pid", r.pid())
+r.close()
 const www = s.mount("/var/www", "./www", { readonly: true })?   // a local folder backed by the server
 print(fs.list("./www")?)
 www.unmount()?
@@ -3244,6 +3253,8 @@ output (with an SSH server):
 ```text
 Linux
 postgres://app@127.0.0.1:53110/app
+ssh.forward: local port 8080 (127.0.0.1) is already in use
+server port 41873 pid 23116
 [index.html, static]
 ```
 
@@ -3277,13 +3288,13 @@ import shell from "fogu:shell"
 
 A small POSIX-style shell: pipes, `&&` `||` `;`, redirections (`> >> 2>&1 &>`), `$VAR`, `$(…)`, quotes, globs and `~`. The usual Linux commands are built in, so scripts behave the same on Windows: `echo cat ls pwd cd mkdir rm cp mv touch grep head tail wc sort uniq cut tr tee basename dirname which env export true false exit sleep seq`. Other commands run as programs.
 
-- `shell.run(command, { cwd, env, input, native = true })` → { ok, code, stdout, stderr } — A non-zero exit is not an error; `native: false` uses system programs only.
+- `shell.run(command, { cwd, env, input, native = true, hidden })` → { ok, code, stdout, stderr } — A non-zero exit is not an error; `native: false` uses system programs only. On Windows a program name is looked up with `PATHEXT` (`npm` → `npm.cmd`; a `.cmd`/`.bat` runs through cmd.exe with its arguments escaped) and starts without a console window when this program has no console (a GUI) or with `hidden: true`.
 - `shell.exec(command, opts?)` → same — Output goes to the terminal as it happens.
 - `shell.text(command, opts?)` → str · error — stdout without the final newline; a failure is an error value.
 - `shell.lines(command, opts?) · shell.json(command, opts?)` → list · value
 - `shell.quote(text)` → str — Safe to interpolate into a command.
 - `shell.cd(dir) · shell.cwd()` → nil · str — The shell's own working folder.
-- `shell.which(program) · shell.builtins` → str · list
+- `shell.which(program) · shell.builtins` → str · list — `which`: the full path or nil; on Windows with the `PATHEXT` extension (`C:/Program Files/nodejs/npm.cmd`).
 
 ```fogu
 import shell from "fogu:shell"

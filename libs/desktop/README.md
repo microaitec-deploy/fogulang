@@ -948,7 +948,7 @@ The versions are pinned in `web/package.json` (`@heroui/react` 3.2.7,
 | `desktop.toWire(value)` · `desktop.fromWire(value)` | How values cross the page boundary: buffers ↔ `{ "$bytes": base64 }` (done for you in commands and events). |
 | `desktop.eval(js, label = "main")` | Runs JavaScript in the page of a window (`"*"`: every window). |
 | `desktop.quit(code = 0)` | Closes the application. |
-| `desktop.log(...values)` | Writes a line to the host's log: stderr and `<local data dir>/fogu-desktop.log`. A release build on Windows has no console, so `print` output goes nowhere. |
+| `desktop.log(...values)` | Writes a line to the host's log: stderr and `<local data dir>/<identifier>/fogu-desktop.log` (see [Logs](#logs-of-a-built-app)). A release build has no console, so `print` output goes nowhere: log with `desktop.log`. |
 | `desktop.dataDir()` → str | A per-user folder for the app's files (see [example 6](#6-saving-data-settings-and-the-window-size)). It always exists. |
 | `desktop.embedded` | `true` inside the executable, `false` under `fogu main.fg`. |
 | `desktop.call(name, payload?)` → value · error | Runs a command the way the page would (for tests, or running without a window). |
@@ -1208,7 +1208,14 @@ fn save() { desktop.keep("todos", todos) }     // call it after every change
 
 Kept values cross as JSON and last until the app quits (a new run starts
 empty). Trays, menus and shortcuts set by the new program replace the old
-ones. A change in a plain `ui/` folder reloads the pages; a Vite UI keeps
+ones.
+
+The old program is stopped **before** the new one starts: its runtime ends,
+its workers (`desktop.worker`) are stopped, and the processes it started that
+are still running — the `ssh -N` of a `fogu:ssh` tunnel, a command a task still waits for
+(`process.run`, `shell.exec`) — are ended (the web view's own processes are left alone).
+So the new program can listen on the same ports and open the same tunnels.
+With `--restart` the whole host stops, its child processes with it. A change in a plain `ui/` folder reloads the pages; a Vite UI keeps
 its HMR. `fogu desktop dev --restart` restarts the whole window instead.
 
 ### Self-update
@@ -1461,6 +1468,13 @@ for it:
 | **macOS** | `dist/<Title>.app`: `Contents/MacOS/<name>`, `Contents/Info.plist` (`CFBundleName`, `CFBundleDisplayName`, `CFBundleIdentifier`, `CFBundleExecutable`, `CFBundleIconFile`, the versions) and `Contents/Resources/<name>.icns` made from `icons/icon.png`. `dist/<name>` stays next to it. |
 | **Linux** | `dist/share/applications/<name>.desktop` (`Name=`, `Icon=`, `Exec=`) and `dist/share/icons/hicolor/<size>/apps/<name>.png` (32, 48, 128, 256). Copy `share/` over `~/.local/share` (or `/usr/share`) and the executable to a folder on the `PATH`. |
 
+At run time the host does the rest, for built apps and under `fogu desktop
+dev` alike: every window gets the app's icon (`icons/icon.png`, else
+`icons/icon.ico`: title bar, task bar button, Alt+Tab; also the default tray
+icon), on Windows the process' AppUserModelID is `desktop.identifier` (the
+task bar groups the app under its own name), and on macOS the Dock shows the
+app's icon also outside an `.app` bundle.
+
 The Windows part is done by `tools/pe.fg`, a resource editor for `.exe` files
 written in Fogu, so it works the same when the Windows app is built on Linux
 or macOS. You can use it on its own:
@@ -1532,6 +1546,24 @@ dropped: sign `dist/<name>.exe`, the final file.
   about 290 KB of text, of which the app uses `main.fg`, `update.fg` and
   `fogu.json` (46 KB). The library cannot leave the rest out: that needs a
   `"files"` / `"exclude"` list for packages in Fogu itself.
+
+### Logs of a built app
+
+A release build has no console: `print` goes nowhere (on Windows the
+executable has no console at all). Use `desktop.log(...)`: it writes to stderr
+and appends to the app's log file, together with the host's own messages and
+the program's runtime errors:
+
+| OS | Log file |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\<identifier>\fogu-desktop.log` |
+| macOS | `~/Library/Application Support/<identifier>/fogu-desktop.log` |
+| Linux | `~/.local/share/<identifier>/fogu-desktop.log` (`$XDG_DATA_HOME`) |
+
+`<identifier>` is `desktop.identifier` of `fogu.json` (an `--installer` build
+uses the same name). `fogu desktop dev` shows that file in the terminal as it
+grows when the host has no console, and `build --debug` gives the
+executable a console where `print` shows.
 
 ### Requirements per OS
 
@@ -1754,7 +1786,7 @@ above).
 | `client/fogu.js` | The page API (`window.fogu`), injected by the host into every page |
 | `client/fogu-desktop.js`, `client/fogu-desktop.d.ts` | The same API as an ES module with TypeScript types |
 | `update.fg` | Self-update: `import update from "desktop/update.fg"` |
-| `runtime/` | The host: a Rust crate on Tauri 2 that embeds the Fogu runtime (`src/lib.rs`: the app, the `fogu://` protocol, hot reload; `bridge.rs`: Fogu ⇄ host, workers; `window.rs`: windows, their events, dialogs, opacity, notifications; `tray.rs`: tray icons and menu items; `menu.rs`: menu bars; `shortcut.rs`: global shortcuts; `update.rs`: replacing the executable) |
+| `runtime/` | The host: a Rust crate on Tauri 2 that embeds the Fogu runtime (`src/lib.rs`: the app, the `fogu://` protocol, hot reload; `bridge.rs`: Fogu ⇄ host, workers; `window.rs`: windows, their events, dialogs, opacity, notifications; `tray.rs`: tray icons and menu items; `menu.rs`: menu bars; `shortcut.rs`: global shortcuts; `update.rs`: replacing the executable; `children.rs`: the processes a hot reload ends) |
 | `create.fg`, `dev.fg`, `build.fg`, `ci.fg`, `keygen.fg` | `fogu desktop create`, `dev`, `build` (also `--android`/`--ios`), `ci` and `keygen` |
 | `templates/` | The `create` templates: `vanilla`, `ts`, `react`, `vue`, `svelte`, `frameless` |
 | `tools/` | Shared code: `project.fg` (fogu.json, Vite detection, outDir/base, bun/npm), `build.fg` (the desktop build: finding the host, appending the app), `pe.fg` (the icon and version information of a Windows `.exe`), `package.fg` (`.app`, `.desktop` entry, `.zip`, NSIS) and `mobile.fg` (the Android/iOS build and its checks) |
@@ -1793,24 +1825,44 @@ start (a syntax error, a failed import, an error reaching `?` at the top
 level). Run `fogu check main.fg` and `fogu main.fg` in the terminal to see the
 full error.
 
-**`print` shows nothing.** A release build on Windows has no console. Use
-`desktop.log(...)`, which writes to `<local data dir>/fogu-desktop.log`, or
-build with `--debug` to get a console.
+**`print` shows nothing.** A release build has no console (on Windows it has
+none at all; elsewhere only when it was started from a terminal). Use
+`desktop.log(...)`, which writes to the log file (see
+[Logs of a built app](#logs-of-a-built-app)), or build with `--debug` to get
+a console.
 
 **`unknown built-in module: 'fogu:sql'` in the window or the log.** The host
 has only the standard library areas of `"desktop.features"` (default:
-`network`). `dev` and `build` name the area in a warning; add it to
-`fogu.json`: `"desktop": { "features": ["network", "database"] }`.
+`network`). `dev` and `build` name the area in a warning, and the host adds a
+line to the error (`fogu:sql is in the 'database' area, which this desktop
+host was built without: add "database" to "desktop.features"…`); add it to
+`fogu.json`: `"desktop": { "features": ["network", "database"] }`. `dev` and
+`build` both read `desktop.features` (`--features` overrides it).
 
 **"the desktop host must be compiled … and cargo is not installed".** There is
 no prebuilt host for that platform and set of areas, or you asked for a
 compiled one (`--debug`, `--cargo`, `--rebuild-host`). The message lists the
 prebuilt hosts; see [Where the host comes from](#where-the-host-comes-from).
 
-**The `.exe` has the right icon in Explorer but the window and the task bar
-button show the Fogu icon.** The file's icon is in the executable; the icon
-of a window is set by the host, which still uses its own (see
-[Limitations](#limitations)).
+**The window or the task bar button shows the Fogu icon.** Since 0.7.1 the
+host gives every window the app's `icons/icon.png` (or `icons/icon.ico`) and,
+on Windows, sets the AppUserModelID to `desktop.identifier`, so the task bar
+groups and names the app, also under `fogu desktop dev`. An app built with an
+older host keeps the Fogu icon: update the library (`fogu desktop update`)
+and build again. Without an `icons/` folder the host's own icon stays.
+
+**`fogu:ssh` with a password starts the app again and again.** OpenSSH asks
+for the password by running the `SSH_ASKPASS` program, which `fogu:ssh` sets
+to the running executable — the app itself. Hosts before 0.7.1 did not answer
+that request, so each prompt opened a new copy of the app, which connected
+again. The 0.7.1 host answers it and exits at once (a host built with the
+`ops` area, the one `fogu:ssh` needs): update and build again.
+
+**`fogu desktop dev`: after a hot reload, "address already in use" for a
+tunnel's port.** Hosts before 0.7.1 left the processes of the old program
+running (`ssh -N` of `s.forward(...)`). Since 0.7.1 a reload stops the old
+program first and ends the processes it started (see
+[Hot reload](#hot-reload-and-kept-state)).
 
 **`dist/<name>.exe.old` appeared.** The app was running during the build; see
 [Building and shipping](#notes). Delete it after closing the app.
@@ -1892,13 +1944,12 @@ What is left, and why:
   without a prebuilt one (it needs the WebKitGTK dev packages). `fogu desktop
   ci` writes a GitHub Actions workflow that builds all three on GitHub's
   runners.
-- **The window icon and the task bar identity are still the host's.** The
-  build gives the *file* its icon and name. The icon of the window (title
-  bar, task bar button, Alt+Tab) is set by the host from the icon compiled
-  into it, and the host sets no AppUserModelID, so Windows groups the task
-  bar button by executable. Both need a change in the host (`runtime/`): take
-  the window icon from the app's `icons/icon.png` and set the AppUserModelID
-  from the identifier before the first window opens.
+- **The task bar's pinned shortcut keeps the executable's icon.** The window
+  icon (title bar, task bar button, Alt+Tab) and the AppUserModelID come from
+  the app since 0.7.1, but a Windows shortcut (pinned, Start menu) takes its
+  icon from the file: from the stamped `.exe` with `fogu desktop build`, from
+  the host with `fogu desktop dev` outside WSL (dev under WSL runs a stamped
+  copy).
 - **The main window exists before the program runs**, so an app defined in
   code cannot give it `transparent` or another `url`, and its identifier must
   be in `fogu.json` (see [The app in code](#the-app-in-code)).
@@ -1912,6 +1963,15 @@ What is left, and why:
   the user cannot write (Program Files by an `--installer` setup) cannot
   update itself this way, and on macOS replacing the binary inside a signed
   `.app` breaks its signature: ship those through their installer.
+- **What has been run where (0.7.1):** on Windows 11, with hosts cross-built
+  from Linux (WSL): a built app (`VersionInfo` from PowerShell, the window's
+  big and small icons read back with `WM_GETICON`); the unstamped host running
+  an app folder as `fogu desktop dev` does (the app's icon on the window, a
+  hot reload ending the old program's child process, the area hint for
+  `fogu:ssh` on a host without `ops`); an `ops` host answering an
+  `SSH_ASKPASS` prompt and exiting. The macOS Dock icon and the process
+  cleanup of a hot reload on macOS/Linux have not been compiled or run (no
+  Mac SDK, no GTK on that machine).
 - **What has been run where (0.6.0):** a Windows app built on Linux (WSL)
   from a prebuilt host with no Rust involved — its icon and version
   information checked on Windows 11 (Explorer's icon, `VersionInfo`), the

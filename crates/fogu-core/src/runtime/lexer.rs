@@ -467,6 +467,25 @@ impl Lexer {
         }
     }
 
+    /// `\u{FEFF}`: a character by its code point (1 to 6 hex digits), after the `\u`.
+    fn unicode_escape(&mut self) -> Result<char, String> {
+        if self.advance() != Some('{') {
+            return self.err("invalid escape: \\u must be followed by {hex digits}, as in \\u{FEFF}".to_string());
+        }
+        let mut hex = String::new();
+        loop {
+            match self.advance() {
+                Some('}') => break,
+                Some(c) if c.is_ascii_hexdigit() && hex.len() < 6 => hex.push(c),
+                _ => return self.err("invalid escape: \\u{...} takes 1 to 6 hex digits, as in \\u{FEFF}".to_string()),
+            }
+        }
+        match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+            Some(c) if !hex.is_empty() => Ok(c),
+            _ => self.err(format!("invalid escape: \\u{{{}}} is not a character", hex)),
+        }
+    }
+
     fn read_string(&mut self, quote: char) -> Result<Token, String> {
         let (l, c0) = (self.line, self.col);
         self.advance();
@@ -485,6 +504,7 @@ impl Lexer {
                     Some('\\') => s.push('\\'),
                     Some('\'') => s.push('\''),
                     Some('"') => s.push('"'),
+                    Some('u') => s.push(self.unicode_escape()?),
                     Some(other) => return self.err(format!("invalid escape: \\{}", other)),
                     None => break,
                 }
@@ -571,6 +591,7 @@ impl Lexer {
                     Some('r') => lit.push('\r'),
                     Some('0') => lit.push('\0'),
                     Some(e @ ('\\' | '`' | '$' | '\'' | '"')) => lit.push(e),
+                    Some('u') => lit.push(self.unicode_escape()?),
                     Some(other) => return self.err(format!("invalid escape: \\{}", other)),
                     None => {}
                 },

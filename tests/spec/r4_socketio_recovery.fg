@@ -1,0 +1,83 @@
+// socketio recovery: a client that loses its connection gets back its rooms,
+// its socket.data and the broadcasts it missed (Socket.IO's connection state
+// recovery: a pid in CONNECT, an offset as each broadcast's last argument)
+import socketio from "fogu:socketio"
+import websocket from "fogu:websocket"
+import json from "fogu:json"
+import time from "fogu:time"
+
+const io = socketio.server({ recovery: { maxDisconnection: 10s } })
+const gone = chan(1)
+const conns = chan(4)
+io.on("connection", (socket) => {
+    const seen = "connection: recovered " + str(socket.recovered) + " data " + str(socket.data) + " in r " + str(socket.rooms.contains("r"))
+    if !socket.recovered {
+        socket.join("r")
+        socket.data.user = "ana"
+    }
+    conns <- seen
+    socket.on("ready", () => { io.to("r").emit("n", 1) })
+    socket.on("disconnect", (reason) => { gone <- reason })
+})
+const port = io.listen(0)?
+
+// a client written by hand, to see the packets
+fn frame(ws) {
+    while true {
+        const m = ws.next(2s)?
+        if m.data != "2" { return m.data }
+        ws.send("3") // a ping: the pong
+    }
+}
+fn dial() {
+    const ws = websocket.connect("ws://127.0.0.1:" + str(port) + "/socket.io/?EIO=4&transport=websocket")?
+    print("open", frame(ws)?.starts_with("0{"))
+    return ws
+}
+let ws = dial()?
+ws.send("40")
+const hello = json.parse(frame(ws)?.slice(2))?
+print("pid given", typeof(hello.pid) == "str")
+print(<-conns)
+ws.send("42[\"ready\"]")
+const first = json.parse(frame(ws)?.slice(2))?
+print("broadcast", first[0], first[1], "offset", typeof(first[2]))
+ws.close()
+print("server saw:", <-gone)
+
+// meanwhile: what the room and everyone get, and one for another room
+io.to("r").emit("n", 2)
+io.emit("all", "x")
+io.to("other").emit("n", 99)
+time.delay(50ms)
+
+ws = dial()?
+ws.send("40" + json.stringify({ pid: hello.pid, offset: first[2] }))
+const back = json.parse(frame(ws)?.slice(2))?
+print("same pid", back.pid == hello.pid, "new sid", back.sid != hello.sid)
+print(<-conns)
+for _ in 0..2 {
+    const p = json.parse(frame(ws)?.slice(2))?
+    print("missed", p[0], p[1])
+}
+const more = ws.next(200ms)?
+print("nothing else", more == nil || more.data == "2")
+
+// an unknown pid: a fresh session
+const ws2 = dial()?
+ws2.send("40" + json.stringify({ pid: "nope", offset: first[2] }))
+print("fresh pid", json.parse(frame(ws2)?.slice(2))?.pid != "nope")
+print(<-conns)
+
+// the fogu client leaves the offset out of a handler that does not take it
+const got = chan(2)
+const c = socketio.connect("http://127.0.0.1:" + str(port))?
+print("client id", typeof(c.id), "recovered", c.recovered)
+print(<-conns)
+c.on("n", (v) => { got <- v })
+c.emit("ready")
+print("client got", <-got)
+c.close()
+ws.close()
+ws2.close()
+io.close()

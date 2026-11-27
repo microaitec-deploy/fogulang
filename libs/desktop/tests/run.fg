@@ -28,7 +28,7 @@ import project from "../tools/project.fg"
 
 const root = Fogu.asset("")
 const dir = path.join(root, "tests")
-const bin = Fogu.env.FOGU_BIN ?? Fogu.execPath ?? "fogu"
+const bin = process.env("FOGU_BIN") ?? Fogu.execPath ?? "fogu"
 let failed = 0
 
 fn check(label, r) {
@@ -69,7 +69,9 @@ for t in ["vanilla", "ts", "react", "vue", "svelte", "frameless"] {
         const leftovers = Fogu.glob(path.join(a, "**", "*")).filter((f) => fs.isFile(f) && fs.readText(f)?.contains("{{title}}"))
         ok = merr == nil && uerr == nil && ui.kind == "vite" && len(missing) == 0 && len(leftovers) == 0 && m.desktop.ui == "web"
         if t == "frameless" {
-            ok = ok && m.desktop.decorations == false && m.desktop.transparent == true
+            // transparent in fogu.json (the main window is transparent from its
+            // creation); no decorations in main.fg (app.createBrowser)
+            ok = ok && m.desktop.transparent == true && fs.readText(path.join(a, "main.fg"))?.contains("decorations: false")
         }
         why = `manifest: ${merr} ui: ${uerr} missing: ${missing} placeholders left: ${leftovers}`
     }

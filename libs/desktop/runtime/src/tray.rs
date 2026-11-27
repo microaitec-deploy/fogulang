@@ -73,7 +73,8 @@ fn icon(app: &AppHandle, o: &Value) -> Result<Option<Image<'static>>, String> {
     match text(o, "icon") {
         // relative paths: the program's folder (the host's working directory)
         Some(p) => Image::from_path(&p).map(Some).map_err(|e| format!("desktop.tray: icon {}: {}", p, e)),
-        None => Ok(app.default_window_icon().map(|i| i.clone().to_owned())),
+        // the app's icon, else the one compiled into the host
+        None => Ok(crate::app_icon().or_else(|| app.default_window_icon().map(|i| i.clone().to_owned()))),
     }
 }
 

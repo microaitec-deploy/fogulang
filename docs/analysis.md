@@ -630,7 +630,40 @@ answers; Socket.IO `io.use`; `fogu:image` off the interpreter's thread; the lang
 value, computed keys, `_` in `for`, `slice` bounds kept in range, `f()?.x` on a tuple, `error(msg,
 { data })`); nested local packages and `link:`.
 
-Still open: Socket.IO connection state recovery and a Redis adapter (socketioxide 0.18 has neither;
-the official client's recovery needs a session offset in the CONNECT packet); a handler cannot start
-on the first bytes of an upload (it gets the body once it arrived, on disk past `bodyToDisk`); a
-minimal linux-x64 runtime for `--compile`.
+Still open after 0.8.5: a handler cannot start on the first bytes of an upload (it gets the body
+once it arrived, on disk past `bodyToDisk`); a minimal linux-x64 runtime for `--compile`.
+
+## 0.8.6 — Socket.IO across servers, and the FoguOne / MicroAITec reports
+
+Socket.IO:
+- **Redis adapter** (`socketio.server({ redis })`, socketioxide-redis 0.4): the server code is generic
+  over the adapter (`Kind`: opening a namespace, the service type). Checked with two Fogu processes
+  over a RESP3 stand-in, and in `tests/spec/r4_socketio_redis.fg` (two servers, one process, a Redis
+  written in fogu:net). Not compatible with the JavaScript `@socket.io/redis-adapter` (socketioxide's
+  own protocol).
+- **Connection state recovery** (`recovery`): socketioxide's CONNECT packet only carried `sid`, so
+  `vendor/socketioxide` is 0.18.9 with one patch (`Socket::set_recovery_pid`, the `pid` in CONNECT;
+  `vendor/socketioxide/FOGU.md`). The rest is ours (`Recovery` in socketio.rs): a log of broadcasts
+  with offsets (the last argument, as Socket.IO does), sessions kept for `maxDisconnection` after a
+  disconnection the client did not ask for (rooms read on the network side before the socket leaves
+  them, `socket.data` filled in by the program's task), and the missed broadcasts replayed after the
+  CONNECT. Checked with the official socket.io-client 4.8 (transport dropped mid-stream:
+  `recovered=true`, no gap) and a hand-written client in `tests/spec/r4_socketio_recovery.fg`.
+  Differences from Node: `socket.id` is a new one after a recovery; with the Redis adapter only the
+  broadcasts of the same server are replayed. Off by default: a server without it does the same
+  work as before.
+- TLS for the standalone servers: `io.listen(port, { tls })`, `websocket.listen(port, { tls })`
+  (`wss://`), and `websocket.connect(url, { ca })` to trust a server's own certificate.
+
+Language and library: `\u{...}` escapes in strings and templates; `map.clone()`;
+`fs.readBytes` / `fs.writeBytes`; `fogu build --compile` leaves out a package's `tests/`,
+`examples/`, `bench/`, `docs/`, `*.test.fg` and what its fogu.json lists in `"exclude"`, unless an
+import reaches the file (8 → 5 files for a small package; `tests/cli.rs`).
+
+Not changed, on purpose: memory stays reference counted, without a cycle collector — a map that
+refers back to its parent through another map is never freed (measured by FoguOne: 200,000 cycles
+kept 147 MB); per-request data must not hold such cycles. The SQL pool stays at one connection by
+default (`pool: 8` for PostgreSQL/MySQL servers: with more than one connection, a manual `BEGIN` or a
+session `SET` could land on another one). Unknown members of native objects still give a bound
+method until called (making the access fail needs every native type's `methods()` to be complete).
+

@@ -144,6 +144,32 @@ pub fn set_opacity(_w: &WebviewWindow, _alpha: f64) -> Result<(), String> {
     Err("desktop: window opacity is not supported on this platform".into())
 }
 
+/// Windows: Tauri's `set_icon` sets only the small icon (title bar); the big
+/// one (task bar button, Alt+Tab) would stay the executable's. One HICON for
+/// every window, made once from the app's icon (kept for the process).
+#[cfg(windows)]
+fn set_big_icon(w: &WebviewWindow, icon: &tauri::image::Image<'_>) {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateIcon, PostMessageW, ICON_BIG, WM_SETICON};
+    static BIG: OnceLock<usize> = OnceLock::new();
+    let h = *BIG.get_or_init(|| {
+        let (width, height) = (icon.width() as i32, icon.height() as i32);
+        // CreateIcon takes BGRA rows and a 1-bit AND mask (rows of whole 16-bit words)
+        let bgra: Vec<u8> = icon.rgba().chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], p[3]]).collect();
+        let mask = vec![0u8; (((width + 15) / 16) * 2 * height) as usize];
+        // SAFETY: buffers of the sizes CreateIcon reads for a width × height 32-bit icon
+        unsafe { CreateIcon(std::ptr::null_mut(), width, height, 1, 32, mask.as_ptr(), bgra.as_ptr()) as usize }
+    });
+    if h == 0 {
+        return;
+    }
+    if let Ok(hwnd) = w.hwnd() {
+        // posted: the window's thread applies it (no waiting on the main thread)
+        // SAFETY: a live window of this process and an icon that is never freed
+        unsafe { PostMessageW(hwnd.0 as HWND, WM_SETICON, ICON_BIG as usize, h as isize) };
+    }
+}
+
 /// Who wants which window events, and who decides when a window may close.
 #[derive(Default)]
 struct Watch {
@@ -250,6 +276,15 @@ pub fn build(app: &AppHandle, label: &str, url: WebviewUrl, opts: &Value) -> Res
     let _ = opts;
     record_limits(label, opts);
     let win = w.build().map_err(|e| format!("cannot open the window '{}': {}", label, e))?;
+    // the app's icon (title bar, task bar button, Alt+Tab), not the host's
+    #[cfg(desktop)]
+    if let Some(icon) = crate::app_icon() {
+        #[cfg(windows)]
+        set_big_icon(&win, &icon);
+        if let Err(e) = win.set_icon(icon) {
+            eprintln!("fogu-desktop: the window icon: {}", e);
+        }
+    }
     #[cfg(desktop)]
     if let Some(a) = num(opts, "opacity") {
         if let Err(e) = set_opacity(&win, a) {

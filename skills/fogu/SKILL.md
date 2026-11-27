@@ -80,7 +80,7 @@ fn total(...xs) { return xs.reduce((a, b) => a + b, 0) }    // variadic
   Missing map keys read as `nil`; `a?.b?.c` stops at `nil`; `x ?? default` replaces `nil`.
 - Lists: `push pop shift unshift insert remove first last contains index_of join
   reverse slice concat sort map filter each find any all reduce`, `xs[-1]`, `len(xs)`.
-  Maps: `keys values entries has get set remove merge`; add a key with `m.k = v`.
+  Maps: `keys values entries has get set remove merge clone`; add a key with `m.k = v`.
   `m.has(k)` is always the method, even when the map has a key `"has"`: a key hides
   a method of the same name only when it holds a **function** (a map used as a
   namespace, `api.get(id)`). Read such a key with `m["has"]` or `m.has` (no call).
@@ -191,7 +191,7 @@ panic`, and the `Fogu` object: `Fogu.file(path).text()/.json()/.write(str or buf
 | time, scheduling, events | `fogu:time` `fogu:cron` `fogu:events` |
 | HTTP client/server (uploads: `multipart` + `http.file`), web framework, WebSocket, TCP/UDP | `fogu:http` `fogu:web` `fogu:websocket` (= `fogu:ws`; `for m in ws`, `stream.from(ws)`, `s.pipe(ws)`, `ws.upgrade(req, fn)` in `http.serve`) `fogu:net` (`conn.read()` → buffer, `readLine()` → str, both `nil` at end of stream) |
 | interactive server-rendered UIs (signals, shards, procedures; Topcoat UI / shadcn-rs kits, Tailwind) | `fogu:topcoat` with `fogu:web` |
-| Socket.IO (server, also on a `fogu:web` port; client), gRPC (streams both ways, interceptors `srv.use`, health, reflection, mTLS) | `fogu:socketio` `fogu:grpc` (+ `fogu:protobuf` schemas) |
+| Socket.IO (server, also on a `fogu:web` port; client; `redis` adapter for several servers, `recovery` of lost connections), gRPC (streams both ways, interceptors `srv.use`, health, reflection, mTLS) | `fogu:socketio` `fogu:grpc` (+ `fogu:protobuf` schemas) |
 | WebRTC data channels, peer to peer with Fogu or browsers (signaling rooms on a `fogu:web` app, browser client at `/rtc/client.js`) | `fogu:webrtc` (`webrtc.connect(url, room)?.channel("data")`; `send`, `recv`, `for msg in ch`) |
 | TLS/cert checks, port scan, DNS, security headers, passwords, TOTP, secret scanning, signatures, rate limits | `fogu:security` |
 | TLS sockets (client, server, mTLS, STARTTLS) and HTTPS servers; self-signed certs for development | `fogu:tls` (`tls.connect(addr, { ca })`, `tls.listen(addr, { cert, key })` — same methods as `fogu:net`; HTTPS: `app.listen(port, { tls: tls.selfSigned(["localhost"])? })`) |
@@ -319,6 +319,8 @@ toContain toHaveLength toBeGreaterThan toBeLessThan toBeCloseTo`, each with `.no
 | `app.listen(port)` as the last line | add `Fogu.signal.wait()` after it |
 | `if x return y` (no braces) | `if x { return y }` — braces are always required |
 | `"\d+"` in a regex (invalid escape) | `"\\d+"` — write backslashes twice in strings |
+| `"\uFEFF"` | `"\u{FEFF}"` (1 to 6 hex digits in braces) |
+| `fs.readFile` for binary data | `fs.readBytes(path)` → buffer, `fs.writeBytes(path, buf)` |
 | `int(userInput)` on untrusted text | validate first (`regex.test`) — `int` stops the program on bad input |
 
 When unsure, write a three-line probe and run it with `fogu -e` or a scratch

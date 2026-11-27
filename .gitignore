@@ -14,3 +14,4 @@ bench/.venv/
 
 # Windows download marks (alternate data streams copied as files)
 *:Zone.Identifier
+tests/spec/*.tmp/

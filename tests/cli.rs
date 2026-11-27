@@ -919,3 +919,28 @@ fn nested_local_packages_and_link_mode() {
     let o = fogu(&app2, &["install"]);
     assert!(o.status.success(), "{}", text(&o));
 }
+
+#[test]
+fn build_compile_leaves_out_package_tests_and_excludes() {
+    let dir = TempDir::new("bundle-exclude");
+    dir.write("lib/fogu.json", "{\"name\":\"lib\",\"version\":\"1.0.0\",\"main\":\"index.fg\",\"exclude\":[\"tools/\",\"build.fg\"]}\n");
+    dir.write("lib/index.fg", "import { helper } from \"./tools/used.fg\"\nexport fn hi() { return \"hi \" + helper() }\n");
+    dir.write("lib/tools/used.fg", "export fn helper() { return \"there\" }\n");
+    dir.write("lib/tools/unused.fg", "print(1)\n");
+    dir.write("lib/build.fg", "print(1)\n");
+    dir.write("lib/tests/a.fg", "print(1)\n");
+    dir.write("lib/a.test.fg", "print(1)\n");
+    dir.write("lib/extra.fg", "print(1)\n");
+    dir.write("app/fogu.json", "{\"name\":\"app\",\"version\":\"0.1.0\",\"entry\":\"main.fg\",\"dependencies\":{\"lib\":\"file:../lib\"}}\n");
+    dir.write("app/main.fg", "import { hi } from \"lib\"\nprint(hi())\n");
+    let app = dir.path().join("app");
+    let o = fogu(&app, &["install"]);
+    assert!(o.status.success(), "{}", text(&o));
+    let o = fogu(&app, &["build", "--compile", "-o", "out"]);
+    assert!(o.status.success(), "{}", text(&o));
+    // main.fg, fogu.json, lib/fogu.json, lib/index.fg, lib/tools/used.fg (imported), lib/extra.fg
+    assert!(text(&o).contains("6 file(s)"), "{}", text(&o));
+    let exe = app.join("out").join(if cfg!(windows) { "app.exe" } else { "app" });
+    let o = Command::new(&exe).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "hi there", "{}", text(&o));
+}

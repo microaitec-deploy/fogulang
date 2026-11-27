@@ -1,0 +1,21 @@
+// websocket.listen(port, { tls: { cert, key } }) serves wss://; websocket.connect
+// trusts a certificate of its own with { ca }
+import websocket from "fogu:websocket"
+import tls from "fogu:tls"
+
+const c = tls.selfSigned(["localhost", "127.0.0.1"])
+const server = websocket.listen(0, { tls: c })?
+print(server.url.starts_with("wss://127.0.0.1:"))
+fg fn() {
+    const conn = server.accept()?
+    const m = conn.next(5s)?
+    conn.send("secure " + m.data)
+}()
+const ws = websocket.connect(server.url, { ca: c.cert })?
+ws.send("hello")
+print(ws.next(5s)?.data)
+ws.close()
+
+// without the ca, the self-signed certificate is refused
+const [_, refused] = websocket.connect(server.url, { timeout: 3s })
+print(typeof(refused))

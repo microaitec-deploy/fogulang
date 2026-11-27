@@ -1,0 +1,17 @@
+open true
+pid given true
+connection: recovered false data {} in r false
+broadcast n 1 offset str
+server saw: client gracefully closed the connection
+open true
+same pid true new sid true
+connection: recovered true data {user: ana} in r true
+missed n 2
+missed all x
+nothing else true
+open true
+fresh pid true
+connection: recovered false data {} in r false
+client id str recovered false
+connection: recovered false data {} in r false
+client got 1

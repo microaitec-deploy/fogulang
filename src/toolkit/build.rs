@@ -1050,9 +1050,10 @@ fn collect(entry_arg: Option<&str>, extra_embed: &[String]) -> Result<Bundle, St
         }
     }
 
-    // packages: copied whole into fogu_modules/<name>/ (vendoring layout)
+    // packages: copied into fogu_modules/<name>/ (vendoring layout), all but their
+    // tests, examples and what their fogu.json excludes — unless an import reaches it
     for (pname, pdir) in &packages {
-        copy_package(pdir, &format!("fogu_modules/{}", pname), &mut files)?;
+        copy_package(pdir, &format!("fogu_modules/{}", pname), &seen, &mut files)?;
     }
 
     // a manifest makes the extracted folder a project root (vendored packages)
@@ -1188,25 +1189,65 @@ fn virtual_path(p: &Path) -> String {
         .join("/")
 }
 
-fn copy_package(dir: &Path, prefix: &str, files: &mut BTreeMap<String, String>) -> Result<(), String> {
-    fn walk(base: &Path, dir: &Path, prefix: &str, files: &mut BTreeMap<String, String>) -> Result<(), String> {
+/// Folders of a package a program does not run: left out of a bundle (unless imported).
+const PACKAGE_SKIP_DIRS: &[&str] = &["tests", "test", "examples", "example", "bench", "benches", "docs"];
+
+/// The `"exclude"` list of a package's fogu.json: paths relative to the package
+/// (`"build.fg"`, `"tools/"`, `"*.test.fg"`, `"tools/*"`).
+fn package_excludes(dir: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(dir.join(MANIFEST)) else { return Vec::new() };
+    let Ok(j) = serde_json::from_str::<Json>(&text) else { return Vec::new() };
+    j.get("exclude").and_then(Json::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.trim_start_matches("./").to_string())).collect()).unwrap_or_default()
+}
+
+/// Whether `rel` (a package-relative path with `/`) matches an exclude pattern: a file,
+/// a folder (`"tools"`, `"tools/"`) or a glob (`*` within a name, `**` across folders).
+fn excluded(rel: &str, patterns: &[String]) -> bool {
+    fn glob(p: &[u8], s: &[u8]) -> bool {
+        match p.first() {
+            None => s.is_empty(),
+            Some(b'*') if p.get(1) == Some(&b'*') => (0..=s.len()).any(|i| glob(&p[2..], &s[i..])),
+            Some(b'*') => (0..=s.len()).take_while(|&i| i == 0 || s[i - 1] != b'/').any(|i| glob(&p[1..], &s[i..])),
+            Some(c) => s.first() == Some(c) && glob(&p[1..], &s[1..]),
+        }
+    }
+    patterns.iter().any(|p| {
+        let p = p.trim_end_matches('/');
+        if p.contains('*') {
+            // a pattern without a folder matches a name anywhere ("*.test.fg")
+            glob(p.as_bytes(), rel.as_bytes()) || (!p.contains('/') && rel.rsplit('/').next().is_some_and(|n| glob(p.as_bytes(), n.as_bytes())))
+        } else {
+            rel == p || rel.starts_with(&format!("{}/", p))
+        }
+    })
+}
+
+fn copy_package(dir: &Path, prefix: &str, reached: &HashSet<PathBuf>, files: &mut BTreeMap<String, String>) -> Result<(), String> {
+    fn walk(base: &Path, dir: &Path, prefix: &str, skip: &[String], reached: &HashSet<PathBuf>, files: &mut BTreeMap<String, String>) -> Result<(), String> {
         let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
         for ent in entries.flatten() {
             let p = ent.path();
             let name = ent.file_name().to_string_lossy().to_string();
             if p.is_dir() {
                 if !SKIP_DIRS.contains(&name.as_str()) && !name.starts_with('.') {
-                    walk(base, &p, prefix, files)?;
+                    walk(base, &p, prefix, skip, reached, files)?;
                 }
             } else if name.ends_with(".fg") || name == MANIFEST {
-                let rel = p.strip_prefix(base).map_err(|e| e.to_string())?;
+                let rel = virtual_path(p.strip_prefix(base).map_err(|e| e.to_string())?);
+                let first = rel.split('/').next().unwrap_or("");
+                let unused = name != MANIFEST
+                    && ((rel.contains('/') && PACKAGE_SKIP_DIRS.contains(&first)) || name.ends_with(".test.fg") || excluded(&rel, skip));
+                if unused && !reached.contains(&p.canonicalize().unwrap_or_else(|_| p.clone())) {
+                    continue;
+                }
                 let src = std::fs::read_to_string(&p).map_err(|e| format!("{}: {}", p.display(), e))?;
-                files.insert(format!("{}/{}", prefix, virtual_path(rel)), src);
+                files.insert(format!("{}/{}", prefix, rel), src);
             }
         }
         Ok(())
     }
-    walk(dir, dir, prefix, files)
+    let skip = package_excludes(dir);
+    walk(dir, dir, prefix, &skip, reached, files)
 }
 
 /// Copies the runtime (without any previous bundle) and appends the bundle.
@@ -1462,6 +1503,19 @@ fn extract(payload: &[u8], memory: bool) -> Result<Embedded, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn package_excludes_match() {
+        let p: Vec<String> = ["build.fg", "tools/", "*.test.fg", "ci/**", "x/*.fg"].iter().map(|s| s.to_string()).collect();
+        assert!(excluded("build.fg", &p));
+        assert!(!excluded("src/build.fg", &p));
+        assert!(excluded("tools/stamp.fg", &p));
+        assert!(excluded("a/b/c.test.fg", &p));
+        assert!(excluded("ci/a/b.fg", &p));
+        assert!(excluded("x/y.fg", &p));
+        assert!(!excluded("x/z/y.fg", &p));
+        assert!(!excluded("main.fg", &p));
+    }
 
     #[test]
     fn finds_an_appended_bundle() {

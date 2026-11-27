@@ -138,12 +138,12 @@ print(call("resources/read", { uri: "notes://today" }).result.contents[0].text)
         "blocks": [
             {
                 "api": [
-                    ("ssh.connect(\"user@host:port\" | { host, user, port, key, password, strictHostKey, knownHosts, timeout, options, jump })", "Ssh · error", "Checks the connection; <code>strictHostKey</code> defaults to <code>accept-new</code>; <code>jump</code> (another connection or <code>\"user@host\"</code>) goes through a bastion with that connection's key and settings."),
+                    ("ssh.connect(\"user@host:port\" | { host, user, port, key, password, strictHostKey, knownHosts, timeout, options, jump })", "Ssh · error", "Checks the connection; <code>strictHostKey</code> defaults to <code>accept-new</code>; <code>jump</code> (another connection or <code>\"user@host\"</code>) goes through a bastion with that connection's key and settings. <code>options</code>: extra <code>-o</code> settings (<code>{ ServerAliveInterval: 15 }</code>); values with spaces — a <code>knownHosts</code> in <code>Application Support</code> — are quoted for ssh. On Windows, in a program without a console (the desktop host), ssh starts without a console window."),
                     ("s.run(command, { input })", "{ ok, code, stdout, stderr } · error", "A non-zero exit code is not an error."),
                     ("s.upload(local, remote) · s.download(remote, local)", "nil · error", "scp, folders included."),
-                    ("s.forward(localPort | 0, host, port)", "Tunnel · error", "<code>-L</code>: a local port that reaches <code>host:port</code> through the server."),
-                    ("s.reverse(remotePort, host, localPort)", "Tunnel · error", "<code>-R</code>: a port on the server that reaches a local service."),
-                    ("tunnel.localPort · .remotePort · .alive() · .close()", "", ""),
+                    ("s.forward(localPort | 0, host, port, { bind })", "Tunnel · error", "<code>-L</code>: a local port that reaches <code>host:port</code> through the server. Returns once the local port accepts connections (other tasks keep running meanwhile); a local port already in use, or ssh exiting first, is an error value with ssh's message (<code>bind [127.0.0.1]:5433: Address already in use</code>…). <code>0</code> picks a free port. <code>bind</code>: the local address to listen on (default ssh's <code>localhost</code>; <code>\"0.0.0.0\"</code> or <code>\"*\"</code> for every interface)."),
+                    ("s.reverse(remotePort | 0, host, localPort, { bind })", "Tunnel · error", "<code>-R</code>: a port on the server that reaches a local service. Returns once the server accepted the forward; a port the server refuses (already taken) is an error value. With <code>0</code> the server picks the port: <code>tunnel.port</code> is the one it allocated. <code>bind</code>: the address on the server (the server's <code>GatewayPorts</code> decides whether a non-loopback one is honoured; give <code>\"127.0.0.1\"</code> to avoid a forward that silently binds only <code>[::1]</code> when the IPv4 port is taken)."),
+                    ("tunnel.port · .localPort · .remotePort · .kind · .target · .via · .bind · .alive() · .pid() · .close()", "", "<code>kind</code> is <code>\"local\"</code> or <code>\"remote\"</code>; <code>pid()</code> is the ssh process (nil once closed; on macOS its small <code>sh</code> watcher: ending either ends the tunnel). A tunnel is closed by <code>close()</code>, when the value is dropped and when the program ends in any way (<code>process.exit</code>, an uncaught error, a closed window): Linux <code>PR_SET_PDEATHSIG</code>, macOS a watcher on a pipe, Windows a kill-on-close job. ssh's stdout is not inherited (<code>fogu x.fg | head</code> ends)."),
                     ("s.mount(remote, local, { readonly, keep, options, tunnel, jump })", "Mount · error", "Like sshfs: the remote folder appears as a local folder. Uses the connection's user, port, key (or password, sent on stdin), <code>knownHosts</code> and <code>strict</code>; <code>options</code> are extra <code>-o</code> sshfs options. Needs <code>sshfs</code> (Linux: <code>apt install sshfs</code>; macOS: macFUSE + sshfs; or <code>$FOGU_SSHFS</code>). <code>tunnel</code>: through an open <code>s.forward(…)</code>; <code>jump</code>: through a bastion. Unmounted when the program ends — also on Ctrl+C/SIGTERM — unless <code>keep</code>. Windows: SSHFS-Win (+ WinFsp), the local side is a drive letter (<code>\"X:\"</code>), only <code>%USERPROFILE%\\.ssh\\id_rsa</code> or a password, no <code>readonly</code>."),
                     ("mount.path · .remote · .host · .mounted · .unmount()", "", "A missing remote folder, a refused key or a busy mount point is an error value."),
                     ("s.shell({ pty, shell = \"sh\", cwd, env })", "SshShell · error", "One persistent remote shell: <code>sh.run(cmd, { timeout })</code> → <code>{ ok, code, stdout, stderr }</code> keeps the working directory and variables between commands (one command at a time per shell)."),
@@ -161,12 +161,17 @@ s.upload("dist/app", "/srv/app")?
 const db = s.forward(0, "127.0.0.1", 5432)?          // the server's PostgreSQL, locally
 print("postgres://app@127.0.0.1:" + str(db.localPort) + "/app")
 db.close()
+const [_, busy] = s.forward(8080, "127.0.0.1", 80, { bind: "127.0.0.1" })
+print(busy)                                          // 8080 is taken on this machine
+const r = s.reverse(0, "127.0.0.1", 3000)?                 // the server picks the port
+print("server port", r.port, "pid", r.pid())
+r.close()
 const www = s.mount("/var/www", "./www", { readonly: true })?   // a local folder backed by the server
 print(fs.list("./www")?)
 www.unmount()?
 s.close()
 ''',
-                "output": "Linux\npostgres://app@127.0.0.1:53110/app\n[index.html, static]",
+                "output": "Linux\npostgres://app@127.0.0.1:53110/app\nssh.forward: local port 8080 (127.0.0.1) is already in use\nserver port 41873 pid 23116\n[index.html, static]",
                 "output_title": "output (with an SSH server)",
             },
             {
@@ -200,13 +205,13 @@ print(t.expect("\\$ ")?.contains("restart"))
         "blocks": [
             {
                 "api": [
-                    ("shell.run(command, { cwd, env, input, native = true })", "{ ok, code, stdout, stderr }", "A non-zero exit is not an error; <code>native: false</code> uses system programs only."),
+                    ("shell.run(command, { cwd, env, input, native = true, hidden })", "{ ok, code, stdout, stderr }", "A non-zero exit is not an error; <code>native: false</code> uses system programs only. On Windows a program name is looked up with <code>PATHEXT</code> (<code>npm</code> → <code>npm.cmd</code>; a <code>.cmd</code>/<code>.bat</code> runs through cmd.exe with its arguments escaped) and starts without a console window when this program has no console (a GUI) or with <code>hidden: true</code>."),
                     ("shell.exec(command, opts?)", "same", "Output goes to the terminal as it happens."),
                     ("shell.text(command, opts?)", "str · error", "stdout without the final newline; a failure is an error value."),
                     ("shell.lines(command, opts?) · shell.json(command, opts?)", "list · value", ""),
                     ("shell.quote(text)", "str", "Safe to interpolate into a command."),
                     ("shell.cd(dir) · shell.cwd()", "nil · str", "The shell's own working folder."),
-                    ("shell.which(program) · shell.builtins", "str · list", ""),
+                    ("shell.which(program) · shell.builtins", "str · list", "<code>which</code>: the full path or nil; on Windows with the <code>PATHEXT</code> extension (<code>C:/Program Files/nodejs/npm.cmd</code>)."),
                 ],
                 "example": r'''
 import shell from "fogu:shell"

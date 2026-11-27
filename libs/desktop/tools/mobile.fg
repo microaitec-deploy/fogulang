@@ -15,6 +15,7 @@
 import fs from "fogu:fs"
 import json from "fogu:json"
 import path from "fogu:path"
+import process from "fogu:process"
 import regex from "fogu:regex"
 import shell from "fogu:shell"
 import project from "./project.fg"
@@ -28,7 +29,7 @@ export const IOS_TARGETS = { aarch64: "aarch64-apple-ios", "aarch64-sim": "aarch
 export fn probe() {
     return {
         os: Fogu.os,
-        env: Fogu.env,
+        env: process.env(),
         which: fn(tool) {
             const found = shell.which(tool)
             if project.usableTool(found, Fogu.os) {
@@ -232,7 +233,7 @@ export fn workCrate(lib, identifier, features, platform) {
     }
     const src = tools.sources(lib)?
     let cargo = fs.readText(path.join(work, "Cargo.toml"))?
-    cargo = cargo.replace("path = \"../../../lang\"", `path = '${src.replace("\\", "/")}'`)
+    cargo = tools.sourcesPaths(cargo, src)
     cargo = cargo.replace("name = \"fogu_desktop_lib\"\n", "name = \"fogu_desktop_lib\"\ncrate-type = [\"staticlib\", \"cdylib\", \"rlib\"]\n")
     // the features of the app; Android has no system OpenSSL for the Fogu runtime
     const list = (features ?? ["network"]).map((f) => `"${f}"`)
@@ -284,7 +285,7 @@ export fn build(opts) {
 
     const tauriConfig = { productName: p.desk.title ?? p.name, version: p.version, identifier: p.identifier }
     if platform == "ios" {
-        const team = p.desk.ios?.developmentTeam ?? Fogu.env.APPLE_DEVELOPMENT_TEAM
+        const team = p.desk.ios?.developmentTeam ?? process.env("APPLE_DEVELOPMENT_TEAM")
         if team != nil {
             tauriConfig.bundle = { iOS: { developmentTeam: team } }
         }
