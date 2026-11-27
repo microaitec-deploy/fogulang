@@ -1148,10 +1148,13 @@ fn topcoat_response(resp: Value, ctx: &Value, rerun: bool) -> Value {
     resp
 }
 
-/// Calls a Fogu function, or the `handle` method of a native middleware.
+/// Calls a Fogu function, or the `handle` method of a native middleware
+/// (which may wait cooperatively, e.g. jwt fetching its keys).
 /// A runtime error comes back as `Err(error value)`.
 fn invoke(interp: &Interpreter, env: &Rc<RefCell<Environment>>, f: &Value, args: Vec<Value>) -> Result<Value, Value> {
     let r = match f {
+        // only jwt's may wait (for its keys): the others stay on the direct call
+        Value::Object(o) if o.with_name(|n| n == "JwtMiddleware") => interp.call_native_method(o, "handle", &args),
         Value::Object(o) => o.call("handle", &args),
         _ => interp.call_value(f.clone(), args, Rc::clone(env)),
     };

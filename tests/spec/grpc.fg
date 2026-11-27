@@ -59,7 +59,7 @@ const [_, late] = c.call("SayHello", { name: "slow" }, { timeout: 50ms })
 print(late)
 
 // handlers run concurrently: five slow calls take about as long as one
-const t0 = clock()
+const t0 = time.monotonic()
 const results = []
 const done = []
 for i in 0..5 {
@@ -69,7 +69,7 @@ for i in 0..5 {
     }()
 }
 while done.len() < 5 { time.delay(10ms) }
-print(results.len(), clock() - t0 < 1.2)
+print(results.len(), time.monotonic() - t0 < 1.2)
 
 srv.close()
 const [_, closed] = c.call("SayHello", { name: "x" }, { timeout: 2s })

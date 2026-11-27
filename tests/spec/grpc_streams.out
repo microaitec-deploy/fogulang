@@ -1,0 +1,29 @@
+{text: echo hi}
+{text: echo again}
+nil true 2 2
+running 5
+running 15
+running 35
+{total: 3}
+{total: 10}
+count 0
+count 1
+count 2
+[0, 10, 20, 30]
+2
+upper A
+upper B
+[echo x, echo y, echo z]
+fail got 1
+grpc: ABORTED: stopped after one
+error: grpc: UNAUTHENTICATED: bad token
+the secret is 42
+true true
+SERVING SERVING
+NOT_SERVING
+error: grpc: NOT_FOUND: unknown service nope.Svc
+[demo.Chat, grpc.health.v1.Health, grpc.reflection.v1.ServerReflection]
+1
+{errorCode: 5, errorMessage: no symbol no.Such}
+true
+error: grpc: the client is closed

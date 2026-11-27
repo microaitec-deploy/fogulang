@@ -19,6 +19,8 @@ pub mod web;
 #[cfg(not(target_family = "wasm"))]
 pub mod topcoat;
 pub mod jwt;
+#[cfg(not(target_family = "wasm"))]
+pub mod keys;
 pub mod html;
 #[cfg(not(target_family = "wasm"))]
 pub mod mail;

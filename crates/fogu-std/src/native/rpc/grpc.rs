@@ -14,6 +14,9 @@
 //! srv.handle("Count", fn(req, call) {                       // server streaming
 //!     for i in 0..req.n { call.send({ n: i }) }
 //! })
+//! srv.handle("Chat", fn(msgs, call) {                       // bidirectional
+//!     for m in msgs { call.send({ text: "echo " + m.text }) }
+//! })
 //! srv.listen(50051)?
 //! fg srv.serve()                                            // until srv.close()
 //!
@@ -21,23 +24,35 @@
 //! const c = grpc.connect("http://localhost:50051", schema)?
 //! print(c.call("SayHello", { name: "Ana" })?)               // { message: Hello, Ana }
 //! print(c.call("Count", { n: 3 })?)                         // a list for server streaming
-//! const s = c.stream("Count", { n: 3 })?                    // or one message at a time
-//! for (let m = s.next()?; m != nil; m = s.next()?) { print(m) }
+//! for m in c.stream("Count", { n: 3 })? { print(m) }        // or one message at a time
+//! const chat = c.stream("Chat")?                            // requests one at a time too
+//! chat.send({ text: "hi" })
+//! print(chat.next()?)                                       // { text: echo hi }
+//! chat.end()
 //! ```
 //!
 //! - Methods are named `"pkg.Service/Method"`, `"pkg.Service.Method"` or
 //!   just `"Method"` when it is unique in the schema.
-//! - Client-streaming methods take a list of requests (the handler receives
-//!   the list); server-streaming ones answer with `call.send(msg)` (or by
-//!   returning a list). Bidirectional methods combine both; the requests are
-//!   all received before the handler runs.
+//! - Server-streaming methods answer with `call.send(msg)` (or by returning a
+//!   list or a stream). The handler of a client-streaming or bidirectional
+//!   method gets its requests as a `GrpcStream`, while they arrive: `for m in
+//!   msgs`, `msgs.next()`, `stream.from(msgs)`, `msgs.toList()`.
+//! - On the client, `call` takes a list of requests for those methods;
+//!   `stream(method)` without one opens the call: `send(msg)` each request,
+//!   `end()` when there are no more, and `next()` / `for` the responses. A
+//!   `GrpcStream` is a `fogu:stream` source, and `pipe` sends into it.
 //! - A handler fails the call by returning an error: `return nil,
 //!   grpc.status("NOT_FOUND", "no such user")` (or `error("NOT_FOUND: ...")`);
 //!   any other error is `UNKNOWN`. On the client a failed call is an error
-//!   value `"grpc: NOT_FOUND: no such user"`.
-//! - `https://` URLs use TLS (system roots, or `{ ca: "ca.pem" }`);
-//!   `listen(port, { cert, key })` serves TLS. Metadata travels in
-//!   `{ metadata: { key: value } }` and arrives as `call.metadata`.
+//!   value `"grpc: NOT_FOUND: no such user"`. `srv.use(fn(call))` runs before
+//!   every handler and fails the call the same way (authentication).
+//! - The server answers `grpc.health.v1.Health/Check` (`srv.health(service,
+//!   status)`; off with `{ health: false }`) and, with `{ reflection: true }`,
+//!   server reflection (`grpcurl list`).
+//! - `https://` URLs use TLS (system roots, or `{ ca: "ca.pem" }`, and `{ cert,
+//!   key }` for a client certificate); `listen(port, { cert, key })` serves
+//!   TLS, and `clientCa` makes clients prove who they are (mTLS). Metadata
+//!   travels in `{ metadata: { key: value } }` and arrives as `call.metadata`.
 
 use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
@@ -49,7 +64,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::{Buf, BufMut};
-use prost_reflect::{DescriptorPool, MessageDescriptor};
+use prost::Message as _;
+use prost_reflect::{DescriptorPool, DynamicMessage, MessageDescriptor};
 use tonic::codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder};
 use tonic::{Code, Status};
 
@@ -92,12 +108,8 @@ fn status_err(s: &Status) -> String {
 
 pub fn build() -> ModuleValue {
     let mut e: HashMap<String, Value> = HashMap::new();
-    // server(schema) → GrpcServer
-    e.insert("server".into(), nfn_var("server", 1, |a| {
-        max_args(a, 1, "grpc.server")?;
-        let pool = pool_of(&a[0]).map_err(|e| format!("grpc.server: {}", e))?;
-        Ok(NativeObjectRef::new(GrpcServer::new(pool)).to_value())
-    }));
+    // server(schema, { health, reflection }) → GrpcServer
+    e.insert("server".into(), nfn_var("server", 1, new_server));
     // connect(url, schema, { timeout, metadata, ca }) → GrpcClient (connects on the first call)
     e.insert("connect".into(), nfn_var("connect", 2, connect));
     // status(code, message) → an error value a handler returns to fail the call
@@ -247,7 +259,10 @@ type Reply = tokio::sync::mpsc::UnboundedSender<Result<Vec<u8>, Status>>;
 /// A request received by the network side, waiting for its Fogu handler.
 struct Job {
     path: String,
+    /// The request of a unary or server-streaming method.
     messages: Vec<Vec<u8>>,
+    /// The requests of a client-streaming or bidirectional method, still arriving.
+    incoming: Option<tonic::Streaming<Vec<u8>>>,
     metadata: Vec<(String, String)>,
     peer: String,
     reply: Reply,
@@ -256,14 +271,25 @@ struct Job {
 #[derive(Default)]
 struct Shared {
     jobs: Mutex<VecDeque<Job>>,
-    /// Paths with a handler (others answer UNIMPLEMENTED right away).
-    known: Mutex<HashSet<String>>,
+    /// Paths with a handler (others answer UNIMPLEMENTED right away) → whether
+    /// the client streams its requests.
+    known: Mutex<HashMap<String, bool>>,
     closed: AtomicBool,
+    /// The schema, for server reflection.
+    pool: DescriptorPool,
+    /// `grpc.health.v1.Health/Check` (on unless `{ health: false }`) and the
+    /// statuses set with `srv.health(service, status)`.
+    health_on: AtomicBool,
+    health: Mutex<HashMap<String, i32>>,
+    /// `grpc.reflection.v1` (and v1alpha), with `{ reflection: true }`.
+    reflection: AtomicBool,
 }
 
 pub struct GrpcServer {
     pool: DescriptorPool,
     handlers: HashMap<String, (Value, Method)>,
+    /// `srv.use(fn(call))`: run before every handler, in order.
+    interceptors: Vec<Value>,
     shared: Arc<Shared>,
     task: Option<tokio::task::JoinHandle<()>>,
     port: Option<u16>,
@@ -272,26 +298,42 @@ pub struct GrpcServer {
     serving: bool,
 }
 
-impl GrpcServer {
-    fn new(pool: DescriptorPool) -> GrpcServer {
-        GrpcServer {
-            pool,
-            handlers: HashMap::new(),
-            shared: Arc::new(Shared::default()),
-            task: None,
-            port: None,
-            host: String::new(),
-            tls: false,
-            serving: false,
-        }
-    }
+fn new_server(a: &[Value]) -> Result<Value, String> {
+    max_args(a, 2, "grpc.server")?;
+    let pool = pool_of(&a[0]).map_err(|e| format!("grpc.server: {}", e))?;
+    let o = opts_map(opt_arg(a, 1), "grpc.server")?;
+    let flag = |k: &str, default: bool| o.get(k).map_or(default, Value::is_truthy);
+    let shared = Shared {
+        pool: pool.clone(),
+        health_on: AtomicBool::new(flag("health", true)),
+        reflection: AtomicBool::new(flag("reflection", false)),
+        ..Default::default()
+    };
+    Ok(NativeObjectRef::new(GrpcServer {
+        pool,
+        handlers: HashMap::new(),
+        interceptors: Vec::new(),
+        shared: Arc::new(shared),
+        task: None,
+        port: None,
+        host: String::new(),
+        tls: false,
+        serving: false,
+    })
+    .to_value())
+}
 
+fn is_function(f: &Value) -> bool {
+    matches!(f, Value::Fn(_) | Value::NativeFn(_) | Value::BoundMethod(_) | Value::StructBoundMethod(_))
+}
+
+impl GrpcServer {
     fn add(&mut self, name: &str, f: Value) -> Result<(), String> {
-        if !matches!(f, Value::Fn(_) | Value::NativeFn(_) | Value::BoundMethod(_) | Value::StructBoundMethod(_)) {
+        if !is_function(&f) {
             return Err(format!("handle: the handler of '{}' must be a function, got '{}'", name, f.type_name()));
         }
         let m = find_method(&self.pool, name)?;
-        self.shared.known.lock().unwrap_or_else(|e| e.into_inner()).insert(m.path.clone());
+        self.shared.known.lock().unwrap_or_else(|e| e.into_inner()).insert(m.path.clone(), m.client_streaming);
         self.handlers.insert(m.path.clone(), (f, m));
         Ok(())
     }
@@ -305,11 +347,13 @@ impl GrpcServer {
             Some(Value::Int(p)) => format!("127.0.0.1:{}", p), // like app.listen: the network only when asked ("0.0.0.0:port")
             Some(Value::Str(s)) if s.starts_with(':') => format!("127.0.0.1{}", s),
             Some(Value::Str(s)) => s.to_string(),
-            _ => return Err("listen(port | \"host:port\", { cert, key })".into()),
+            _ => return Err("listen(port | \"host:port\", { cert, key, clientCa })".into()),
         };
         let o = opts_map(args.get(1), "listen")?;
+        let client_ca = o.get("clientCa").filter(|v| !matches!(v, Value::Nil)).map(Value::to_display_string);
         let tls = match (o.get("cert"), o.get("key")) {
-            (Some(c), Some(k)) => Some(tls_acceptor(&c.to_display_string(), &k.to_display_string())?),
+            (Some(c), Some(k)) => Some(tls_acceptor(&c.to_display_string(), &k.to_display_string(), client_ca.as_deref())?),
+            (None, None) if client_ca.is_some() => return Err("listen: 'clientCa' needs TLS ('cert' and 'key')".into()),
             (None, None) => None,
             _ => return Err("listen: TLS needs both 'cert' and 'key'".into()),
         };
@@ -348,11 +392,16 @@ impl Drop for GrpcServer {
     }
 }
 
-fn tls_acceptor(cert: &str, key: &str) -> Result<tokio_rustls::TlsAcceptor, String> {
-    let certs: Vec<_> = {
-        let data = std::fs::read(cert).map_err(|e| io_err!("grpc: cert {}: {}", cert, e))?;
-        <rustls::pki_types::CertificateDer as rustls::pki_types::pem::PemObject>::pem_slice_iter(&data).collect::<Result<_, _>>().map_err(|e| io_err!("grpc: cert {}: {}", cert, e))?
-    };
+fn read_pem_certs(path: &str, what: &str) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>, String> {
+    let data = std::fs::read(path).map_err(|e| io_err!("grpc: {} {}: {}", what, path, e))?;
+    <rustls::pki_types::CertificateDer as rustls::pki_types::pem::PemObject>::pem_slice_iter(&data)
+        .collect::<Result<_, _>>()
+        .map_err(|e| io_err!("grpc: {} {}: {}", what, path, e))
+}
+
+/// TLS for a server; with `client_ca`, clients must present a certificate it signed (mTLS).
+fn tls_acceptor(cert: &str, key: &str, client_ca: Option<&str>) -> Result<tokio_rustls::TlsAcceptor, String> {
+    let certs = read_pem_certs(cert, "cert")?;
     let key = {
         let data = std::fs::read(key).map_err(|e| io_err!("grpc: key {}: {}", key, e))?;
         <rustls::pki_types::PrivateKeyDer as rustls::pki_types::pem::PemObject>::from_pem_slice(&data).map_err(|e| match e {
@@ -361,12 +410,23 @@ fn tls_acceptor(cert: &str, key: &str) -> Result<tokio_rustls::TlsAcceptor, Stri
         })?
     };
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let mut cfg = rustls::ServerConfig::builder_with_provider(provider)
+    let builder = rustls::ServerConfig::builder_with_provider(Arc::clone(&provider))
         .with_safe_default_protocol_versions()
-        .map_err(|e| io_err!("grpc: TLS: {}", e))?
-        .with_no_client_auth()
-        .with_single_cert(certs, key)
         .map_err(|e| io_err!("grpc: TLS: {}", e))?;
+    let builder = match client_ca {
+        None => builder.with_no_client_auth(),
+        Some(ca) => {
+            let mut roots = rustls::RootCertStore::empty();
+            for c in read_pem_certs(ca, "clientCa")? {
+                roots.add(c).map_err(|e| io_err!("grpc: clientCa {}: {}", ca, e))?;
+            }
+            let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider)
+                .build()
+                .map_err(|e| io_err!("grpc: clientCa {}: {}", ca, e))?;
+            builder.with_client_cert_verifier(verifier)
+        }
+    };
+    let mut cfg = builder.with_single_cert(certs, key).map_err(|e| io_err!("grpc: TLS: {}", e))?;
     cfg.alpn_protocols = vec![b"h2".to_vec()];
     Ok(tokio_rustls::TlsAcceptor::from(Arc::new(cfg)))
 }
@@ -410,11 +470,16 @@ async fn dispatch(shared: Arc<Shared>, peer: String, req: http::Request<hyper::b
     if shared.closed.load(Ordering::SeqCst) {
         return Status::unavailable("the server is closing").into_http();
     }
-    if !shared.known.lock().unwrap_or_else(|e| e.into_inner()).contains(&path) {
+    let client_streaming = shared.known.lock().unwrap_or_else(|e| e.into_inner()).get(&path).copied();
+    let Some(client_streaming) = client_streaming else {
+        // health checking and reflection answer from here, without Fogu code
+        if let Some(f) = builtin(&shared, &path) {
+            return tonic::server::Grpc::new(RawCodec).streaming(Builtin { shared, f }, req).await;
+        }
         return Status::unimplemented(format!("unknown method {}", path)).into_http();
-    }
+    };
     // every kind of RPC is a stream of messages each way on the wire
-    tonic::server::Grpc::new(RawCodec).streaming(Handler { shared, path, peer }, req).await
+    tonic::server::Grpc::new(RawCodec).streaming(Handler { shared, path, peer, client_streaming }, req).await
 }
 
 #[derive(Clone)]
@@ -422,6 +487,7 @@ struct Handler {
     shared: Arc<Shared>,
     path: String,
     peer: String,
+    client_streaming: bool,
 }
 
 type ReplyStream = tokio_stream::wrappers::UnboundedReceiverStream<Result<Vec<u8>, Status>>;
@@ -440,19 +506,259 @@ impl tonic::codegen::Service<tonic::Request<tonic::Streaming<Vec<u8>>>> for Hand
         Box::pin(async move {
             let metadata = metadata_pairs(&req.metadata().clone().into_headers());
             let mut stream = req.into_inner();
-            let mut messages = Vec::new();
-            while let Some(m) = stream.message().await? {
-                messages.push(m);
-            }
+            // a streaming client's requests reach the handler as they arrive; the
+            // others are read first (one message)
+            let (messages, incoming) = if me.client_streaming {
+                (Vec::new(), Some(stream))
+            } else {
+                let mut messages = Vec::new();
+                while let Some(m) = stream.message().await? {
+                    messages.push(m);
+                }
+                (messages, None)
+            };
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
             me.shared.jobs.lock().unwrap_or_else(|e| e.into_inner()).push_back(Job {
                 path: me.path,
                 messages,
+                incoming,
                 metadata,
                 peer: me.peer,
                 reply: tx,
             });
             sched::wake();
+            Ok(tonic::Response::new(ReplyStream::new(rx)))
+        })
+    }
+}
+
+// ---------------------------------------------------------------------
+// health checking and server reflection
+// ---------------------------------------------------------------------
+
+const HEALTH_PROTO: &str = r#"syntax = "proto3";
+package grpc.health.v1;
+message HealthCheckRequest { string service = 1; }
+message HealthCheckResponse {
+  enum ServingStatus { UNKNOWN = 0; SERVING = 1; NOT_SERVING = 2; SERVICE_UNKNOWN = 3; }
+  ServingStatus status = 1;
+}
+service Health {
+  rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+  rpc Watch(HealthCheckRequest) returns (stream HealthCheckResponse);
+}
+"#;
+
+const REFLECTION_PROTO: &str = r#"syntax = "proto3";
+package grpc.reflection.v1;
+message ServerReflectionRequest {
+  string host = 1;
+  oneof message_request {
+    string file_by_filename = 3;
+    string file_containing_symbol = 4;
+    ExtensionRequest file_containing_extension = 5;
+    string all_extension_numbers_of_type = 6;
+    string list_services = 7;
+  }
+}
+message ExtensionRequest { string containing_type = 1; int32 extension_number = 2; }
+message ServerReflectionResponse {
+  string valid_host = 1;
+  ServerReflectionRequest original_request = 2;
+  oneof message_response {
+    FileDescriptorResponse file_descriptor_response = 4;
+    ExtensionNumberResponse all_extension_numbers_response = 5;
+    ListServiceResponse list_services_response = 6;
+    ErrorResponse error_response = 7;
+  }
+}
+message FileDescriptorResponse { repeated bytes file_descriptor_proto = 1; }
+message ExtensionNumberResponse { string base_type_name = 1; repeated int32 extension_number = 2; }
+message ListServiceResponse { repeated ServiceResponse service = 1; }
+message ServiceResponse { string name = 1; }
+message ErrorResponse { int32 error_code = 1; string error_message = 2; }
+service ServerReflection {
+  rpc ServerReflectionInfo(stream ServerReflectionRequest) returns (stream ServerReflectionResponse);
+}
+"#;
+
+const HEALTH_SERVICE: &str = "grpc.health.v1.Health";
+const REFLECTION_SERVICE: &str = "grpc.reflection.v1.ServerReflection";
+
+/// The protocols of health checking and reflection, compiled once.
+fn builtin_pool() -> &'static DescriptorPool {
+    static POOL: std::sync::OnceLock<DescriptorPool> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        let mut src = HashMap::new();
+        src.insert("grpc/health/v1/health.proto".to_string(), HEALTH_PROTO.to_string());
+        src.insert("grpc/reflection/v1/reflection.proto".to_string(), REFLECTION_PROTO.to_string());
+        src.insert(
+            "fogu/grpc_builtin.proto".to_string(),
+            "syntax = \"proto3\";\nimport \"grpc/health/v1/health.proto\";\nimport \"grpc/reflection/v1/reflection.proto\";\n".to_string(),
+        );
+        crate::native::protobuf::compile_sources(src, "fogu/grpc_builtin.proto").expect("the built-in gRPC protocols compile")
+    })
+}
+
+fn builtin_message(name: &str) -> MessageDescriptor {
+    builtin_pool().get_message_by_name(name).expect("a built-in gRPC message")
+}
+
+type BuiltinFn = fn(&Shared, &[u8]) -> Result<Vec<u8>, Status>;
+
+/// A method the server answers itself, unless the program handles it.
+fn builtin(shared: &Shared, path: &str) -> Option<BuiltinFn> {
+    match path {
+        "/grpc.health.v1.Health/Check" if shared.health_on.load(Ordering::Relaxed) => Some(health_check),
+        "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo" | "/grpc.reflection.v1alpha.ServerReflection/ServerReflectionInfo"
+            if shared.reflection.load(Ordering::Relaxed) =>
+        {
+            Some(reflect)
+        }
+        _ => None,
+    }
+}
+
+/// Whether a handler serves a method of `service` ("pkg.Service").
+fn serves(shared: &Shared, service: &str) -> bool {
+    shared
+        .known
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .keys()
+        .any(|p| p.strip_prefix('/').and_then(|r| r.rsplit_once('/')).is_some_and(|(s, _)| s == service))
+}
+
+fn bad_request(e: String) -> Status {
+    Status::invalid_argument(e.trim_start_matches(crate::runtime::value::ERR_VALUE_PREFIX).to_string())
+}
+
+/// `grpc.health.v1.Health/Check`: SERVING for "" and every service with a
+/// handler, unless `srv.health(service, status)` said otherwise.
+fn health_check(shared: &Shared, data: &[u8]) -> Result<Vec<u8>, Status> {
+    let req = decode_message(builtin_message("grpc.health.v1.HealthCheckRequest"), data).map_err(bad_request)?;
+    let service = req.get_field_by_name("service").and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+    let set = shared.health.lock().unwrap_or_else(|e| e.into_inner()).get(&service).copied();
+    let status = match set {
+        Some(s) => s,
+        None if service.is_empty() || serves(shared, &service) => 1,
+        None => return Err(Status::not_found(format!("unknown service {}", service))),
+    };
+    let mut resp = DynamicMessage::new(builtin_message("grpc.health.v1.HealthCheckResponse"));
+    resp.set_field_by_name("status", prost_reflect::Value::EnumNumber(status));
+    Ok(encode_message(&resp))
+}
+
+/// The file that declares a service, method, message or enum.
+fn symbol_file(pool: &DescriptorPool, sym: &str) -> Option<prost_reflect::FileDescriptor> {
+    let sym = sym.trim_start_matches('.');
+    pool.get_service_by_name(sym)
+        .map(|s| s.parent_file())
+        .or_else(|| pool.get_message_by_name(sym).map(|m| m.parent_file()))
+        .or_else(|| pool.get_enum_by_name(sym).map(|e| e.parent_file()))
+        .or_else(|| sym.rsplit_once('.').and_then(|(svc, _)| pool.get_service_by_name(svc)).map(|s| s.parent_file()))
+}
+
+/// A file and every file it imports, encoded, the file first.
+fn with_imports(fd: prost_reflect::FileDescriptor) -> Vec<prost_reflect::Value> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let mut todo = vec![fd];
+    while let Some(f) = todo.pop() {
+        if !seen.insert(f.name().to_string()) {
+            continue;
+        }
+        out.push(prost_reflect::Value::Bytes(f.file_descriptor_proto().encode_to_vec().into()));
+        todo.extend(f.dependencies());
+    }
+    out
+}
+
+/// `grpc.reflection.v1.ServerReflection/ServerReflectionInfo`: one answer per request.
+fn reflect(shared: &Shared, data: &[u8]) -> Result<Vec<u8>, Status> {
+    use prost_reflect::Value as P;
+    let req = decode_message(builtin_message("grpc.reflection.v1.ServerReflectionRequest"), data).map_err(bad_request)?;
+    let text = |f: &str| if req.has_field_by_name(f) { req.get_field_by_name(f).and_then(|v| v.as_str().map(str::to_string)) } else { None };
+    let mut resp = DynamicMessage::new(builtin_message("grpc.reflection.v1.ServerReflectionResponse"));
+    resp.set_field_by_name("valid_host", P::String(text("host").unwrap_or_default()));
+    resp.set_field_by_name("original_request", P::Message(req.clone()));
+    let pools = [&shared.pool, builtin_pool()];
+    let file = if let Some(name) = text("file_by_filename") {
+        Some(pools.iter().find_map(|p| p.get_file_by_name(&name)).ok_or_else(|| format!("no file named {}", name)))
+    } else {
+        text("file_containing_symbol").map(|sym| pools.iter().find_map(|p| symbol_file(p, &sym)).ok_or_else(|| format!("no symbol {}", sym)))
+    };
+    let error = |code: i32, msg: &str| {
+        let mut e = DynamicMessage::new(builtin_message("grpc.reflection.v1.ErrorResponse"));
+        e.set_field_by_name("error_code", P::I32(code));
+        e.set_field_by_name("error_message", P::String(msg.to_string()));
+        P::Message(e)
+    };
+    match file {
+        Some(Ok(fd)) => {
+            let mut r = DynamicMessage::new(builtin_message("grpc.reflection.v1.FileDescriptorResponse"));
+            r.set_field_by_name("file_descriptor_proto", P::List(with_imports(fd)));
+            resp.set_field_by_name("file_descriptor_response", P::Message(r));
+        }
+        Some(Err(msg)) => resp.set_field_by_name("error_response", error(Code::NotFound as i32, &msg)),
+        None if req.has_field_by_name("list_services") => {
+            let mut names: Vec<String> = shared.pool.services().map(|s| s.full_name().to_string()).collect();
+            if shared.health_on.load(Ordering::Relaxed) {
+                names.push(HEALTH_SERVICE.into());
+            }
+            names.push(REFLECTION_SERVICE.into());
+            let services = names
+                .into_iter()
+                .map(|n| {
+                    let mut s = DynamicMessage::new(builtin_message("grpc.reflection.v1.ServiceResponse"));
+                    s.set_field_by_name("name", P::String(n));
+                    P::Message(s)
+                })
+                .collect();
+            let mut r = DynamicMessage::new(builtin_message("grpc.reflection.v1.ListServiceResponse"));
+            r.set_field_by_name("service", P::List(services));
+            resp.set_field_by_name("list_services_response", P::Message(r));
+        }
+        None if req.has_field_by_name("all_extension_numbers_of_type") => {
+            // proto3 schemas declare no extensions
+            let mut r = DynamicMessage::new(builtin_message("grpc.reflection.v1.ExtensionNumberResponse"));
+            r.set_field_by_name("base_type_name", P::String(text("all_extension_numbers_of_type").unwrap_or_default()));
+            resp.set_field_by_name("all_extension_numbers_response", P::Message(r));
+        }
+        None => resp.set_field_by_name("error_response", error(Code::Unimplemented as i32, "extensions are not supported")),
+    }
+    Ok(encode_message(&resp))
+}
+
+#[derive(Clone)]
+struct Builtin {
+    shared: Arc<Shared>,
+    f: BuiltinFn,
+}
+
+impl tonic::codegen::Service<tonic::Request<tonic::Streaming<Vec<u8>>>> for Builtin {
+    type Response = tonic::Response<ReplyStream>;
+    type Error = Status;
+    type Future = Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Status>> + Send>>;
+
+    fn poll_ready(&mut self, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Status>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: tonic::Request<tonic::Streaming<Vec<u8>>>) -> Self::Future {
+        let me = self.clone();
+        Box::pin(async move {
+            let mut stream = req.into_inner();
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(async move {
+                while let Ok(Some(m)) = stream.message().await {
+                    let r = (me.f)(&me.shared, &m);
+                    let failed = r.is_err();
+                    if tx.send(r).is_err() || failed {
+                        break;
+                    }
+                }
+            });
             Ok(tonic::Response::new(ReplyStream::new(rx)))
         })
     }
@@ -502,6 +808,29 @@ impl FoguObject for GrpcServer {
                 }
                 Ok(Value::Nil)
             }
+            // use(fn(call)): runs before every handler; returning an error fails the call with it
+            "use" => {
+                max_args(args, 1, "use")?;
+                match args.first() {
+                    Some(f) if is_function(f) => self.interceptors.push(f.clone()),
+                    other => return Err(format!("use: expects a function, got '{}'", other.map_or("nothing", |v| v.type_name()))),
+                }
+                Ok(Value::Nil)
+            }
+            // health(service, "SERVING" | "NOT_SERVING" | "UNKNOWN"): what grpc.health.v1 answers ("" = the server)
+            "health" => {
+                max_args(args, 2, "health")?;
+                let svc = str_arg(args, 0, "health")?;
+                let st = str_arg(args, 1, "health")?.to_ascii_uppercase();
+                let n = match st.as_str() {
+                    "UNKNOWN" => 0,
+                    "SERVING" => 1,
+                    "NOT_SERVING" => 2,
+                    _ => return Err(format!("health: unknown status '{}' (SERVING NOT_SERVING UNKNOWN)", st)),
+                };
+                self.shared.health.lock().unwrap_or_else(|e| e.into_inner()).insert(svc, n);
+                Ok(Value::Nil)
+            }
             "listen" => self.listen(args),
             "close" => {
                 self.close();
@@ -513,7 +842,7 @@ impl FoguObject for GrpcServer {
     }
 
     fn methods(&self) -> Vec<&'static str> {
-        vec!["handle", "service", "listen", "serve", "close"]
+        vec!["handle", "service", "use", "health", "listen", "serve", "close"]
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -555,10 +884,11 @@ impl FoguObject for GrpcCall {
 
     fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
         match method {
-            "send" => {
-                max_args(args, 1, "send")?;
+            // send(msg) (write: the same, for pipe)
+            "send" | "write" => {
+                max_args(args, 1, method)?;
                 if !self.streaming {
-                    return Err(format!("send: '{}' is not a server-streaming method (return the response instead)", self.method));
+                    return Err(format!("{}: '{}' is not a server-streaming method (return the response instead)", method, self.method));
                 }
                 let bytes = encode(&self.output, args.first().unwrap_or(&Value::Nil))?;
                 match &self.reply {
@@ -569,12 +899,18 @@ impl FoguObject for GrpcCall {
                     _ => Err(io_err!("grpc: the client went away")),
                 }
             }
-            other => Err(format!("method '{}' does not exist on GrpcCall (send)", other)),
+            // end(): no more messages (the call ends when the handler returns)
+            "end" => {
+                max_args(args, 0, "end")?;
+                self.streaming = false;
+                Ok(Value::Nil)
+            }
+            other => Err(format!("method '{}' does not exist on GrpcCall (send end)", other)),
         }
     }
 
     fn methods(&self) -> Vec<&'static str> {
-        vec!["send"]
+        vec!["send", "end"]
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -619,15 +955,15 @@ pub fn serve(receiver: &NativeObjectRef, args: &[Value], interp: &Interpreter, e
             let Some(job) = job else { return Ok(()) };
             let handler = {
                 let b = inner.borrow();
-                b.as_any().downcast_ref::<GrpcServer>().and_then(|s| s.handlers.get(&job.path).cloned())
+                b.as_any().downcast_ref::<GrpcServer>().and_then(|s| s.handlers.get(&job.path).cloned().map(|h| (h, s.interceptors.clone())))
             };
-            let Some((f, m)) = handler else {
+            let Some(((f, m), interceptors)) = handler else {
                 let _ = job.reply.send(Err(Status::unimplemented(format!("unknown method {}", job.path))));
                 continue;
             };
             let env = Rc::clone(&env);
             interp.spawn_task(Box::new(move |it| {
-                run_handler(it, env, f, m, job);
+                run_handler(it, env, f, m, job, interceptors);
                 Ok(())
             }))?;
         }
@@ -639,26 +975,44 @@ pub fn serve(receiver: &NativeObjectRef, args: &[Value], interp: &Interpreter, e
     result.map(|_| Value::Nil)
 }
 
-fn run_handler(it: &Interpreter, env: Rc<RefCell<Environment>>, f: Value, m: Method, job: Job) {
+fn clean(e: &str) -> String {
+    e.trim_start_matches(crate::runtime::value::ERR_VALUE_PREFIX).to_string()
+}
+
+fn send_one(m: &Method, reply: &Reply, item: &Value) -> Result<(), Status> {
+    let b = encode(&m.output, item).map_err(|e| Status::internal(format!("bad response: {}", clean(&e))))?;
+    reply.send(Ok(b)).map_err(|_| Status::cancelled("the client went away"))
+}
+
+/// A handler that returns a stream (`fogu:stream`, the requests, a readable):
+/// each value is a response, and an error of the stream fails the call.
+fn send_stream(it: &Interpreter, o: &NativeObjectRef, m: &Method, reply: &Reply) -> Result<(), Status> {
+    while let Some(item) = it.stream_next(o).map_err(|e| status_of(&e))? {
+        send_one(m, reply, &item)?;
+    }
+    match o.get("error") {
+        Some(Value::Str(e)) => Err(status_of(&e)),
+        Some(Value::Error(e)) => Err(status_of(&e.message)),
+        _ => Ok(()),
+    }
+}
+
+fn run_handler(it: &Interpreter, env: Rc<RefCell<Environment>>, f: Value, m: Method, job: Job, interceptors: Vec<Value>) {
     let reply = job.reply.clone();
     let fail = |s: Status| {
         let _ = reply.send(Err(s));
     };
-    // the request(s)
-    let mut reqs = Vec::new();
-    for raw in &job.messages {
-        match decode(&m.input, raw) {
-            Ok(v) => reqs.push(v),
-            Err(e) => return fail(Status::invalid_argument(e.trim_start_matches(crate::runtime::value::ERR_VALUE_PREFIX).to_string())),
-        }
-    }
-    let arg = if m.client_streaming {
-        list(reqs)
-    } else {
-        match reqs.into_iter().next() {
-            Some(v) => v,
+    // the request, or a stream of them
+    let reader = job.incoming.map(|s| {
+        NativeObjectRef::new(GrpcStream::new(read_messages(async move { Ok(s) }), m.input.clone(), None))
+    });
+    let arg = match &reader {
+        Some(r) => r.to_value(),
+        None => match job.messages.first().map(|raw| decode(&m.input, raw)) {
+            Some(Ok(v)) => v,
+            Some(Err(e)) => return fail(Status::invalid_argument(clean(&e))),
             None => return fail(Status::invalid_argument("no request message")),
-        }
+        },
     };
     let call = NativeObjectRef::new(GrpcCall {
         method: m.path.trim_start_matches('/').to_string(),
@@ -669,44 +1023,47 @@ fn run_handler(it: &Interpreter, env: Rc<RefCell<Environment>>, f: Value, m: Met
         reply: Some(job.reply),
         sent: 0,
     });
-    let r = it.call_value(f, vec![arg, call.to_value()], env);
-    // the call object may outlive the handler (kept in a variable): close the stream now
-    let close = || {
-        if let Some(c) = call.inner().borrow_mut().as_any_mut().downcast_mut::<GrpcCall>() {
-            c.reply = None;
-        }
-    };
-    let out = match r {
+    let outcome = |r: Result<Value, String>| match r {
         Err(e) => Err(status_of(&e)),
         // `return reply, nil` / `return nil, error(...)`
         Ok(v) => v.into_result().map_err(|e| status_of(&e.message)),
     };
-    match out {
-        Err(s) => fail(s),
-        Ok(v) if m.server_streaming => {
-            // returning a list (or a message) also streams it
-            let items = match v {
-                Value::Nil => Vec::new(),
-                Value::List(l) => l.borrow().clone(),
-                v => vec![v],
-            };
-            for item in items {
-                match encode(&m.output, &item) {
-                    Ok(b) => {
-                        let _ = reply.send(Ok(b));
-                    }
-                    Err(e) => return { close(); fail(Status::internal(e.trim_start_matches(crate::runtime::value::ERR_VALUE_PREFIX).to_string())) },
-                }
-            }
+    let mut out = Ok(Value::Nil);
+    for ic in interceptors {
+        out = outcome(it.call_value(ic, vec![call.to_value()], Rc::clone(&env)));
+        if out.is_err() {
+            break;
         }
-        Ok(v) => match encode(&m.output, &v) {
-            Ok(b) => {
-                let _ = reply.send(Ok(b));
-            }
-            Err(e) => fail(Status::internal(format!("bad response: {}", e.trim_start_matches(crate::runtime::value::ERR_VALUE_PREFIX)))),
-        },
     }
-    close();
+    if out.is_ok() {
+        out = outcome(it.call_value(f, vec![arg, call.to_value()], env));
+    }
+    let sent = match out {
+        Err(s) => Err(s),
+        Ok(v) if m.server_streaming => match v {
+            // returning a list, a message or a stream also streams it
+            Value::Nil => Ok(()),
+            Value::List(l) => {
+                let items = l.borrow().clone();
+                items.iter().try_for_each(|item| send_one(&m, &reply, item))
+            }
+            Value::Object(o) if crate::runtime::interpreter::is_stream(&o) || fogu_core::native::vstream::is_value_stream(&o) => {
+                send_stream(it, &o, &m, &reply)
+            }
+            v => send_one(&m, &reply, &v),
+        },
+        Ok(v) => send_one(&m, &reply, &v),
+    };
+    if let Err(s) = sent {
+        fail(s);
+    }
+    // the call and the requests may outlive the handler (kept in a variable): close them now
+    if let Some(c) = call.inner().borrow_mut().as_any_mut().downcast_mut::<GrpcCall>() {
+        c.reply = None;
+    }
+    if let Some(r) = reader {
+        let _ = r.call("close", &[]);
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -715,7 +1072,8 @@ fn run_handler(it: &Interpreter, env: Rc<RefCell<Environment>>, f: Value, m: Met
 
 pub struct GrpcClient {
     pool: DescriptorPool,
-    channel: tonic::transport::Channel,
+    /// `None` after `close()`: the connection goes once its calls end.
+    channel: Option<tonic::transport::Channel>,
     url: String,
     timeout: Option<Duration>,
     metadata: Vec<(String, String)>,
@@ -742,26 +1100,40 @@ fn connect(a: &[Value]) -> Result<Value, String> {
         if let Some(d) = o.get("domain") {
             tls = tls.domain_name(d.to_display_string());
         }
+        // { cert, key }: a client certificate, for servers that ask for one (mTLS)
+        match (o.get("cert"), o.get("key")) {
+            (Some(c), Some(k)) => {
+                let read = |v: &Value, what: &str| std::fs::read(v.to_display_string()).map_err(|e| io_err!("grpc.connect: {} {}: {}", what, v.to_display_string(), e));
+                tls = tls.identity(tonic::transport::Identity::from_pem(read(c, "cert")?, read(k, "key")?));
+            }
+            (None, None) => {}
+            _ => return Err("grpc.connect: a client certificate needs both 'cert' and 'key'".into()),
+        }
         ep = ep.tls_config(tls).map_err(|e| io_err!("grpc.connect: TLS: {}", e))?;
+    } else if o.contains_key("cert") || o.contains_key("key") {
+        return Err("grpc.connect: 'cert' and 'key' need an https:// URL".into());
     }
     let channel = {
         let _g = crate::native::rt::tokio().enter();
         ep.connect_lazy()
     };
-    Ok(NativeObjectRef::new(GrpcClient { pool, channel, url, timeout, metadata }).to_value())
+    Ok(NativeObjectRef::new(GrpcClient { pool, channel: Some(channel), url, timeout, metadata }).to_value())
 }
 
 /// One call: the request messages → a stream of response messages.
-async fn start_call(
+async fn start_call<S>(
     channel: tonic::transport::Channel,
     path: String,
-    msgs: Vec<Vec<u8>>,
+    msgs: S,
     metadata: Vec<(String, String)>,
     timeout: Option<Duration>,
-) -> Result<tonic::Streaming<Vec<u8>>, String> {
+) -> Result<tonic::Streaming<Vec<u8>>, String>
+where
+    S: tokio_stream::Stream<Item = Vec<u8>> + Send + 'static,
+{
     let mut grpc = tonic::client::Grpc::new(channel);
     grpc.ready().await.map_err(|e| io_err!("grpc: UNAVAILABLE: {}", e))?;
-    let mut req = tonic::Request::new(tokio_stream::iter(msgs));
+    let mut req = tonic::Request::new(msgs);
     for (k, v) in metadata {
         // `-bin` keys carry binary values (base64 on the wire); a bad key or
         // value is an error value of the call, not the end of the program
@@ -792,19 +1164,29 @@ async fn with_deadline<T>(timeout: Option<Duration>, fut: impl std::future::Futu
     }
 }
 
+/// The encoded request(s) of a call; `None`: a client-streaming call opened
+/// without them, whose requests go one at a time with `send`.
+type Requests = Option<Vec<Vec<u8>>>;
+
 impl GrpcClient {
     /// The method, the encoded request(s) and the call options.
-    fn prepare(&self, args: &[Value], what: &str) -> Result<(Method, Vec<Vec<u8>>, Vec<(String, String)>, Option<Duration>), String> {
+    fn prepare(&self, args: &[Value], what: &str) -> Result<(Method, Requests, Vec<(String, String)>, Option<Duration>), String> {
         max_args(args, 3, what)?;
         let m = find_method(&self.pool, &str_arg(args, 0, what)?)?;
-        let req = args.get(1).cloned().unwrap_or(Value::Map(Default::default()));
-        let msgs = if m.client_streaming {
-            match &req {
-                Value::List(l) => l.borrow().iter().map(|v| encode(&m.input, v)).collect::<Result<_, _>>()?,
-                other => return Err(format!("{}: '{}' is client-streaming: pass a list of requests, got '{}'", what, m.path, other.type_name())),
+        let msgs = match args.get(1) {
+            Some(Value::List(l)) if m.client_streaming => Some(l.borrow().iter().map(|v| encode(&m.input, v)).collect::<Result<_, _>>()?),
+            None | Some(Value::Nil) if m.client_streaming && what == "stream" => None,
+            Some(other) if m.client_streaming => {
+                return Err(format!(
+                    "{}: '{}' is client-streaming: pass a list of requests{}, got '{}'",
+                    what,
+                    m.path,
+                    if what == "stream" { " (or nil, to send them one at a time)" } else { "" },
+                    other.type_name()
+                ))
             }
-        } else {
-            vec![encode(&m.input, &req)?]
+            None if m.client_streaming => return Err(format!("call: '{}' is client-streaming: pass a list of requests, or use stream() to send them one at a time", m.path)),
+            req => Some(vec![encode(&m.input, req.unwrap_or(&Value::Map(Default::default())))?]),
         };
         let o = opts_map(args.get(2), what)?;
         let mut md = self.metadata.clone();
@@ -814,6 +1196,10 @@ impl GrpcClient {
             None => self.timeout,
         };
         Ok((m, msgs, md, timeout))
+    }
+
+    fn channel(&self) -> Result<tonic::transport::Channel, String> {
+        self.channel.clone().ok_or_else(|| io_err!("grpc: the client is closed"))
     }
 }
 
@@ -825,6 +1211,7 @@ impl FoguObject for GrpcClient {
     fn get(&self, field: &str) -> Option<Value> {
         match field {
             "url" => Some(Value::Str(self.url.clone().into())),
+            "closed" => Some(Value::Bool(self.channel.is_none())),
             "methods" => Some(list(
                 self.pool.services().flat_map(|s| s.methods().map(|m| Value::Str(format!("{}/{}", s.full_name(), m.name()).into())).collect::<Vec<_>>()).collect(),
             )),
@@ -837,11 +1224,12 @@ impl FoguObject for GrpcClient {
             // call(method, request, { timeout, metadata }) → response (a list for server streaming)
             "call" => Some((|| {
                 let (m, msgs, md, timeout) = self.prepare(args, "call")?;
-                let channel = self.channel.clone();
+                let msgs = msgs.unwrap_or_default();
+                let channel = self.channel()?;
                 let path = m.path.clone();
                 let pending = crate::native::rt::spawn(async move {
                     let call = async {
-                        let mut s = start_call(channel, path, msgs, md, timeout).await?;
+                        let mut s = start_call(channel, path, tokio_stream::iter(msgs), md, timeout).await?;
                         let mut out = Vec::new();
                         while let Some(msg) = s.message().await.map_err(|s| status_err(&s))? {
                             out.push(msg);
@@ -869,39 +1257,28 @@ impl FoguObject for GrpcClient {
 
     fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
         match method {
-            // stream(method, request, opts) → GrpcStream (next() one message at a time)
+            // stream(method, request, opts) → GrpcStream: its responses one at a time (next, for,
+            // fogu:stream); a client-streaming method opened without requests sends them with send()
             "stream" => {
                 let (m, msgs, md, timeout) = self.prepare(args, "stream")?;
-                let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
-                let channel = self.channel.clone();
+                let channel = self.channel()?;
                 let path = m.path.clone();
-                let guard = IoGuard::new();
-                let task = crate::native::rt::tokio().spawn(async move {
-                    let _guard = guard;
-                    match with_deadline(timeout, start_call(channel, path, msgs, md, timeout)).await {
-                        Err(e) => {
-                            let _ = tx.send(Err(e));
-                        }
-                        Ok(mut s) => loop {
-                            match s.message().await {
-                                Ok(Some(b)) => {
-                                    if tx.send(Ok(b)).is_err() {
-                                        break;
-                                    }
-                                    sched::wake();
-                                }
-                                Ok(None) => break,
-                                Err(st) => {
-                                    let _ = tx.send(Err(status_err(&st)));
-                                    break;
-                                }
-                            }
-                        },
+                let (reading, sender) = match msgs {
+                    Some(msgs) => (read_messages(async move { with_deadline(timeout, start_call(channel, path, tokio_stream::iter(msgs), md, timeout)).await }), None),
+                    None => {
+                        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+                        let requests = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+                        (read_messages(async move { with_deadline(timeout, start_call(channel, path, requests, md, timeout)).await }), Some((tx, m.input.clone())))
                     }
-                });
-                Ok(NativeObjectRef::new(GrpcStream { rx: Rc::new(RefCell::new(Some(rx))), output: m.output, task: Some(task), received: Rc::new(std::cell::Cell::new(0)) }).to_value())
+                };
+                Ok(NativeObjectRef::new(GrpcStream::new(reading, m.output, sender)).to_value())
             }
-            "close" => Ok(Value::Nil),
+            // close(): no new calls; the connection goes once the open ones end
+            "close" => {
+                max_args(args, 0, "close")?;
+                self.channel = None;
+                Ok(Value::Nil)
+            }
             other => Err(format!("method '{}' does not exist on GrpcClient ({})", other, self.methods().join(" "))),
         }
     }
@@ -913,16 +1290,109 @@ impl FoguObject for GrpcClient {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
-type StreamRx = Rc<RefCell<Option<std::sync::mpsc::Receiver<Result<Vec<u8>, String>>>>>;
+// ---------------------------------------------------------------------
+// streams of messages
+// ---------------------------------------------------------------------
 
-/// The responses of a streaming call, read one at a time with `next()`.
+type StreamRx = std::sync::mpsc::Receiver<Result<Vec<u8>, String>>;
+
+/// Reads the messages of `start`'s stream on the tokio runtime, for `next()`.
+fn read_messages<F>(start: F) -> (StreamRx, tokio::task::JoinHandle<()>)
+where
+    F: std::future::Future<Output = Result<tonic::Streaming<Vec<u8>>, String>> + Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
+    // the reader waits for the network: not a deadlock
+    let guard = IoGuard::new();
+    let task = crate::native::rt::tokio().spawn(async move {
+        match start.await {
+            Err(e) => {
+                let _ = tx.send(Err(e));
+            }
+            Ok(mut s) => loop {
+                match s.message().await {
+                    Ok(Some(b)) => {
+                        if tx.send(Ok(b)).is_err() {
+                            break;
+                        }
+                        sched::wake();
+                    }
+                    Ok(None) => break,
+                    Err(st) => {
+                        let _ = tx.send(Err(status_err(&st)));
+                        break;
+                    }
+                }
+            },
+        }
+        // the end must be visible before the scheduler wakes: the sender goes
+        // first, then the guard (whose drop wakes it to see `Disconnected`)
+        drop(tx);
+        drop(guard);
+    });
+    (rx, task)
+}
+
+#[derive(Default)]
+struct StreamState {
+    rx: Option<StreamRx>,
+    received: i64,
+    /// The error that ended the stream (`s.error`, and what `fogu:stream` fails with).
+    error: Option<String>,
+}
+
+/// The messages of a streaming call, one at a time: the responses on the
+/// client (`c.stream`), the requests in a client-streaming handler. It is a
+/// stream (`for m in s`, `stream.from(s)`), and a client stream opened
+/// without requests also sends them (`send`, `end`, or `pipe` into it).
 pub struct GrpcStream {
-    rx: StreamRx,
+    state: Rc<RefCell<StreamState>>,
+    /// What `next()` decodes.
     output: MessageDescriptor,
     task: Option<tokio::task::JoinHandle<()>>,
-    received: Rc<std::cell::Cell<i64>>,
+    /// The requests still to send, and their type.
+    sender: Option<(tokio::sync::mpsc::UnboundedSender<Vec<u8>>, MessageDescriptor)>,
+    sends: bool,
+    sent: i64,
+}
+
+impl GrpcStream {
+    fn new(
+        (rx, task): (StreamRx, tokio::task::JoinHandle<()>),
+        output: MessageDescriptor,
+        sender: Option<(tokio::sync::mpsc::UnboundedSender<Vec<u8>>, MessageDescriptor)>,
+    ) -> GrpcStream {
+        let state = StreamState { rx: Some(rx), ..Default::default() };
+        GrpcStream { state: Rc::new(RefCell::new(state)), output, task: Some(task), sends: sender.is_some(), sender, sent: 0 }
+    }
+}
+
+/// One step of reading: `None` while nothing arrived.
+fn poll_message(state: &RefCell<StreamState>, out: &MessageDescriptor) -> Option<Result<Option<Value>, String>> {
+    let mut st = state.borrow_mut();
+    let r = st.rx.as_ref()?.try_recv();
+    match r {
+        Ok(Ok(b)) => {
+            st.received += 1;
+            Some(decode(out, &b).map(Some))
+        }
+        Ok(Err(e)) => {
+            st.rx = None;
+            st.error = Some(clean(&e));
+            Some(Err(e))
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => None,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            st.rx = None;
+            Some(Ok(None))
+        }
+    }
 }
 
 impl FoguObject for GrpcStream {
@@ -931,63 +1401,103 @@ impl FoguObject for GrpcStream {
     }
 
     fn get(&self, field: &str) -> Option<Value> {
+        let st = self.state.borrow();
         match field {
-            "done" => Some(Value::Bool(self.rx.borrow().is_none())),
-            "received" => Some(Value::Int(self.received.get())),
+            "done" => Some(Value::Bool(st.rx.is_none())),
+            "received" => Some(Value::Int(st.received)),
+            "sent" => Some(Value::Int(self.sent)),
+            "error" => Some(st.error.as_ref().map_or(Value::Nil, |e| Value::Str(e.clone().into()))),
             _ => None,
         }
     }
 
-    // next() → the next message, nil at the end, or the call's error
+    // next() → the next message, nil at the end, or the call's error · toList() → the rest
     fn start_async(&mut self, method: &str, args: &[Value]) -> Option<Result<Poller, String>> {
-        if method != "next" {
+        if !matches!(method, "next" | "toList") {
             return None;
         }
-        if let Err(e) = max_args(args, 0, "next") {
+        if let Err(e) = max_args(args, 0, method) {
             return Some(Err(e));
         }
-        let received = Rc::clone(&self.received);
-        let rx = Rc::clone(&self.rx);
+        let state = Rc::clone(&self.state);
         let out = self.output.clone();
-        Some(Ok(Box::new(move || {
-            let mut slot = rx.borrow_mut();
-            let Some(r) = slot.as_ref() else { return Some(Ok(Value::Nil)) };
-            match r.try_recv() {
-                Ok(Ok(b)) => {
-                    received.set(received.get() + 1);
-                    Some(decode(&out, &b))
+        if method == "next" {
+            return Some(Ok(Box::new(move || {
+                if state.borrow().rx.is_none() {
+                    return Some(Ok(Value::Nil));
                 }
-                Ok(Err(e)) => {
-                    *slot = None;
-                    Some(Err(e))
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => None,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    *slot = None;
-                    Some(Ok(Value::Nil))
-                }
+                poll_message(&state, &out).map(|r| r.map(|v| v.unwrap_or(Value::Nil)))
+            })));
+        }
+        let mut items = Vec::new();
+        Some(Ok(Box::new(move || loop {
+            if state.borrow().rx.is_none() {
+                return Some(Ok(list(std::mem::take(&mut items))));
+            }
+            match poll_message(&state, &out)? {
+                Ok(Some(v)) => items.push(v),
+                Ok(None) => return Some(Ok(list(std::mem::take(&mut items)))),
+                Err(e) => return Some(Err(e)),
             }
         })))
     }
 
-    fn call(&mut self, method: &str, _args: &[Value]) -> Result<Value, String> {
+    fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
         match method {
+            // send(msg) (write: the same, for pipe): one more request
+            "send" | "write" => {
+                max_args(args, 1, method)?;
+                let Some((tx, input)) = &self.sender else {
+                    return Err(if self.sends {
+                        format!("{}: the requests of this stream have ended", method)
+                    } else {
+                        format!("{}: this stream does not send (open a client-streaming method with c.stream(method) to send requests)", method)
+                    });
+                };
+                let bytes = encode(input, args.first().unwrap_or(&Value::Nil))?;
+                tx.send(bytes).map_err(|_| io_err!("grpc: the call has ended"))?;
+                self.sent += 1;
+                Ok(Value::Nil)
+            }
+            // end(): no more requests; the responses go on
+            "end" => {
+                max_args(args, 0, "end")?;
+                self.sender = None;
+                Ok(Value::Nil)
+            }
+            // close(): stops the call
             "close" => {
-                self.rx.borrow_mut().take();
+                self.sender = None;
+                self.state.borrow_mut().rx = None;
                 if let Some(t) = self.task.take() {
                     t.abort();
                 }
                 Ok(Value::Nil)
             }
-            other => Err(format!("method '{}' does not exist on GrpcStream (next close)", other)),
+            // a `for` loop or a fogu:stream that met the error records it
+            "__fail" => {
+                if let Some(v) = args.first() {
+                    let msg = match v {
+                        Value::Error(e) => e.message.to_string(),
+                        v => v.to_display_string(),
+                    };
+                    self.state.borrow_mut().error.get_or_insert(clean(&msg));
+                }
+                Ok(Value::Nil)
+            }
+            other => Err(format!("method '{}' does not exist on GrpcStream (next send end close toList)", other)),
         }
     }
 
     fn methods(&self) -> Vec<&'static str> {
-        vec!["next", "close"]
+        vec!["next", "send", "end", "close", "toList"]
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
 }
@@ -1010,5 +1520,11 @@ mod tests {
         assert_eq!(status_of("NOT_FOUND: no user").message(), "no user");
         assert_eq!(status_of("boom").code(), Code::Unknown);
         assert_eq!(code_name(Code::Unauthenticated), "UNAUTHENTICATED");
+    }
+
+    #[test]
+    fn builtin_protocols_compile() {
+        assert!(builtin_pool().get_service_by_name(HEALTH_SERVICE).is_some());
+        assert!(builtin_pool().get_service_by_name(REFLECTION_SERVICE).is_some());
     }
 }

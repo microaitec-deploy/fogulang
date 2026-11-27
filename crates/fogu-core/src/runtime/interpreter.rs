@@ -2108,7 +2108,7 @@ impl Interpreter {
     /// The next item of a readable stream for `for x in stream`: `None` at the
     /// end, and also after an error value, which the stream keeps in its
     /// `error` field (errors are values: the loop does not raise it).
-    pub(crate) fn stream_next(&self, o: &NativeObjectRef) -> Result<Option<Value>, String> {
+    pub fn stream_next(&self, o: &NativeObjectRef) -> Result<Option<Value>, String> {
         // a stream of values (`fogu:stream`): pulled through its chain
         if crate::native::vstream::is_value_stream(o) {
             return crate::native::vstream::for_next(self, o);
@@ -2131,7 +2131,7 @@ impl Interpreter {
 
     /// A native method called by the interpreter itself (`for conn in
     /// listener`): asynchronous ones wait cooperatively.
-    pub(crate) fn call_native_method(&self, receiver: &NativeObjectRef, method: &str, args: &[Value]) -> Result<Value, String> {
+    pub fn call_native_method(&self, receiver: &NativeObjectRef, method: &str, args: &[Value]) -> Result<Value, String> {
         match self.poll_async(receiver, method, args) {
             Some(r) => r,
             None => receiver.call(method, args),
@@ -3646,9 +3646,9 @@ fn array_equal(a: &Value, b: &Value) -> bool {
 }
 
 /// Is `o` a readable stream (`for x in o` reads it a piece at a time)? A
-/// WebSocket is one too: its messages until it closes.
-pub(crate) fn is_stream(o: &NativeObjectRef) -> bool {
-    o.with_name(|n| matches!(n, "ReadStream" | "HttpStream" | "Stream" | "WebSocket"))
+/// WebSocket is one too: its messages until it closes, and so is a gRPC stream.
+pub fn is_stream(o: &NativeObjectRef) -> bool {
+    o.with_name(|n| matches!(n, "ReadStream" | "HttpStream" | "Stream" | "WebSocket" | "GrpcStream"))
 }
 
 /// The message of a value a sized list cannot hold.

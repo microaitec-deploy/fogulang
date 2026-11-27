@@ -100,6 +100,8 @@ rcgen = { version = "0.14.10", optional = true }
 rsa = { version = "0.9", features = ["getrandom"], optional = true }
 zxcvbn = { version = "3.1.1", optional = true }
 ed25519-dalek = { version = "3.0.0", optional = true }
+# crypto.sign/verify and fogu:jwt with public keys (RSA, ECDSA, Ed25519): already linked through rustls
+ring = { version = "0.17", optional = true }
 ipnet = { version = "2.12.2", optional = true }
 subtle = { version = "2.6.1", optional = true }
 socketioxide = { version = "0.18.7", optional = true }
@@ -116,7 +118,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 # Standard library areas (src/native/<area>); `base` and `io` are always built.
 # `cargo build --release --no-default-features --features network` builds a small binary.
 default = ["network", "database", "messaging", "ops", "ai", "media", "rpc"]
-network = ["dep:ammonia", "dep:tokio-rustls", "dep:ed25519-dalek", "dep:ego-tree", "dep:engineioxide", "dep:futures-lite", "dep:futures-util", "dep:http-body-util", "dep:httparse", "dep:hyper", "dep:hyper-util", "dep:ipnet", "dep:minijinja", "dep:rcgen", "dep:rsa", "dep:scraper", "dep:socketioxide", "dep:socketioxide-core", "dep:tokio-tungstenite", "dep:x509-parser", "dep:zxcvbn", "dep:subtle", "dep:rustls", "dep:rustls-native-certs", "dep:bytes", "dep:http", "dep:str0m"]
+network = ["dep:ammonia", "dep:ring", "dep:tokio-rustls", "dep:ed25519-dalek", "dep:ego-tree", "dep:engineioxide", "dep:futures-lite", "dep:futures-util", "dep:http-body-util", "dep:httparse", "dep:hyper", "dep:hyper-util", "dep:ipnet", "dep:minijinja", "dep:rcgen", "dep:rsa", "dep:scraper", "dep:socketioxide", "dep:socketioxide-core", "dep:tokio-tungstenite", "dep:x509-parser", "dep:zxcvbn", "dep:subtle", "dep:rustls", "dep:rustls-native-certs", "dep:bytes", "dep:http", "dep:str0m"]
 database = ["rpc", "dep:async-trait", "dep:scylla", "dep:redb", "dep:surrealkv", "dep:sqlx", "dep:tonic", "dep:tokio-stream", "dep:prost-reflect", "dep:http"]
 messaging = ["dep:bullmq-rs", "dep:redis", "dep:rskafka", "dep:redb", "dep:surrealkv", "dep:bytes", "dep:rustls", "dep:rustls-native-certs", "dep:subtle"]
 ops = []

@@ -15,6 +15,10 @@
 //! print(crypto.base64("olá"), crypto.fromBase64("b2zDoQ=="))
 //! print(crypto.hashFile("sha256", "app.exe"))                // a file's digest (hex)
 //! crypto.encryptFile("photo.jpg", "photo.jpg.enc", "my password")?   // and decryptFile(enc, out, key)
+//! const k = crypto.generateKeyPair("p256")
+//! const sig = crypto.sign("ES256", k.privateKey, "message")?           // RS* PS* ES256 ES384 EdDSA
+//! print(crypto.verify("ES256", k.publicKey, "message", sig)?)          // true (PEM or JWK keys)
+//! print(crypto.jwk(k.publicKey, { kid: "k1" }))                        // { kty: EC, crv: P-256, x, y, kid }
 //! ```
 
 use std::cell::RefCell;
@@ -56,6 +60,13 @@ pub fn build() -> ModuleValue {
     // generateKeyPair("ed25519" | "p256" | "p384" | "rsa", { bits }) → { algorithm, bits, privateKey, publicKey } (PEM)
     #[cfg(all(feature = "network", not(target_family = "wasm")))]
     f("generateKeyPair", 0, generate_key_pair);
+    // sign(alg, privateKey, data) → buffer · verify(alg, publicKey, data, signature) → bool · jwk(key, { kid, alg, use }) → map
+    #[cfg(all(feature = "network", not(target_family = "wasm")))]
+    {
+        f("sign", 3, sign);
+        f("verify", 4, verify);
+        f("jwk", 1, jwk);
+    }
     // uuid(version = 4, namespace?, name?) · uuidv4() · uuidv5(namespace, name) · uuidv7()
     f("uuid", 0, |a| {
         max_args(a, 3, "uuid")?;
@@ -99,10 +110,12 @@ pub fn build() -> ModuleValue {
         max_args(a, 2, "fromBase64")?;
         let s = str_arg(a, 0, "fromBase64")?;
         let clean: String = s.trim().chars().filter(|c| !c.is_whitespace()).collect();
+        // with or without the `=` padding (JWTs and URLs leave it out)
+        let clean = clean.trim_end_matches('=');
         let bytes = if clean.contains(['-', '_']) {
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(clean.trim_end_matches('='))
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(clean)
         } else {
-            base64::engine::general_purpose::STANDARD.decode(&clean)
+            base64::engine::general_purpose::STANDARD_NO_PAD.decode(clean)
         }
         .map_err(|e| io_err!("crypto.fromBase64: {}", e))?;
         as_text_or_bytes(bytes, a.get(1))
@@ -560,4 +573,86 @@ fn key_pair_value(algorithm: &str, bits: i64, private: String, public: String) -
         ("privateKey", Value::Str(private.into())),
         ("publicKey", Value::Str(public.into())),
     ])
+}
+
+// ---------------------------------------------------------------------
+// public-key signatures (network/keys.rs)
+// ---------------------------------------------------------------------
+
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
+use crate::native::network::keys;
+
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
+fn sig_alg(a: &[Value], what: &str) -> Result<keys::SigAlg, String> {
+    let name = str_arg(a, 0, what)?;
+    keys::SigAlg::parse(&name).ok_or_else(|| format!("{}: unknown algorithm '{}' ({})", what, name, keys::SigAlg::NAMES))
+}
+
+/// A public key argument: PEM (public key, certificate or private key) or a JWK map.
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
+pub(crate) fn public_key_arg(v: &Value, what: &str) -> Result<keys::PublicKey, String> {
+    match v {
+        Value::Str(s) => keys::public_from_pem(s).map_err(|e| io_err!("{}: {}", what, e)),
+        Value::Map(_) => {
+            let json: serde_json::Value = serde_json::from_str(&crate::native::json::stringify_value(v)).map_err(|e| format!("{}: {}", what, e))?;
+            keys::jwk_from_json(&json).map(|k| k.key).map_err(|e| io_err!("{}: {}", what, e))
+        }
+        other => Err(format!("{}: the key must be PEM text or a JWK map, got '{}'", what, other.type_name())),
+    }
+}
+
+/// A signature: a buffer, or base64 / base64url text.
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
+fn signature_arg(v: &Value, what: &str) -> Result<Vec<u8>, String> {
+    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+    match v {
+        Value::Buffer(_) => crate::native::util::bytes_of(v, what),
+        Value::Str(s) => {
+            let t = s.trim().trim_end_matches('=');
+            URL_SAFE_NO_PAD.decode(t).or_else(|_| STANDARD.decode(s.trim())).map_err(|_| io_err!("{}: the signature is not base64", what))
+        }
+        other => Err(format!("{}: the signature must be a buffer or base64 text, got '{}'", what, other.type_name())),
+    }
+}
+
+/// `crypto.sign(alg, privateKey, data)` → the signature (a buffer; ECDSA as `r || s`).
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
+fn sign(a: &[Value]) -> Result<Value, String> {
+    max_args(a, 3, "crypto.sign")?;
+    let alg = sig_alg(a, "crypto.sign")?;
+    let key = str_arg(a, 1, "crypto.sign")?;
+    let data = crate::native::util::bytes_of(&a[2], "crypto.sign")?;
+    let out = keys::sign(alg, &key, &data).map_err(|e| io_err!("crypto.sign: {}", e))?;
+    Ok(Value::buffer(out))
+}
+
+/// `crypto.verify(alg, publicKey, data, signature)` → bool (an error value for a key that cannot be used).
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
+fn verify(a: &[Value]) -> Result<Value, String> {
+    max_args(a, 4, "crypto.verify")?;
+    let alg = sig_alg(a, "crypto.verify")?;
+    let key = public_key_arg(&a[1], "crypto.verify")?;
+    let data = crate::native::util::bytes_of(&a[2], "crypto.verify")?;
+    let sig = signature_arg(&a[3], "crypto.verify")?;
+    keys::verify(alg, &key, &data, &sig).map(Value::Bool).map_err(|e| io_err!("crypto.verify: {}", e))
+}
+
+/// `crypto.jwk(key, { kid, alg, use })` → the public JWK of a key (PEM or JWK).
+#[cfg(all(feature = "network", not(target_family = "wasm")))]
+fn jwk(a: &[Value]) -> Result<Value, String> {
+    max_args(a, 2, "crypto.jwk")?;
+    let key = public_key_arg(&a[0], "crypto.jwk")?;
+    let mut members: Vec<(&str, Value)> = keys::jwk_members(&key).into_iter().map(|(k, v)| (k, Value::Str(v.into()))).collect();
+    match a.get(1) {
+        None | Some(Value::Nil) => {}
+        Some(Value::Map(o)) => {
+            for k in ["kid", "alg", "use"] {
+                if let Some(v) = o.borrow().get(k).filter(|v| !matches!(v, Value::Nil)) {
+                    members.push((k, Value::Str(v.to_display_string().into())));
+                }
+            }
+        }
+        Some(other) => return Err(format!("crypto.jwk: options must be a map, got '{}'", other.type_name())),
+    }
+    Ok(map(members))
 }

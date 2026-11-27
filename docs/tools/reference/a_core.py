@@ -883,12 +883,15 @@ print(regex.findAll("v1.2 and v3.10", "\\d+\\.\\d+").map((x) => x.text))
                     ("crypto.verifyPassword(password, hash)", "bool · error", "Any hash <code>password.verify</code> understands; a malformed hash → error value."),
                     ("crypto.randomBytes(n) · crypto.randomHex(n)", "buffer · str", "Secure random."),
                     ("crypto.generateKeyPair(algorithm = \"ed25519\", { bits }?)", "{ algorithm, bits, privateKey, publicKey }", "A new key pair as PEM text (private: PKCS#8, public: SPKI — what OpenSSL, JWT libraries and <code>fogu:tls</code> read). Algorithms: <code>ed25519</code>, <code>p256</code> (ECDSA, also <code>es256</code>), <code>p384</code> (<code>es384</code>) and <code>rsa</code> with <code>bits</code> 2048 (default), 3072 or 4096 (also written <code>\"rsa-4096\"</code>; big RSA keys take a moment). Certificates: <code>tls.selfSigned</code>."),
+                    ("crypto.sign(alg, privateKey, data)", "buffer · error", "A signature with a PEM private key (PKCS#8 or <code>RSA PRIVATE KEY</code>): <code>RS256 RS384 RS512</code> (RSA PKCS#1 v1.5), <code>PS256 PS384 PS512</code> (RSA-PSS), <code>ES256 ES384</code> (ECDSA, as <code>r || s</code>), <code>EdDSA</code> (Ed25519). Constant-time (ring)."),
+                    ("crypto.verify(alg, publicKey, data, signature)", "bool · error", "<code>publicKey</code>: PEM (<code>PUBLIC KEY</code>, <code>RSA PUBLIC KEY</code>, a certificate, or a private key's public half) or a JWK map. <code>signature</code>: a buffer or base64 / base64url text; ECDSA as <code>r || s</code> or DER. A key of another type, or RSA under 2048 bits, is an error value."),
+                    ("crypto.jwk(key, { kid, alg, use })", "map · error", "The public JWK of a key (PEM or JWK): <code>{ kty, n, e }</code>, <code>{ kty: EC, crv, x, y }</code>, <code>{ kty: OKP, crv: Ed25519, x }</code> — to publish a JWK set."),
                     ("crypto.randomInt(min, max)", "int", "Inclusive, unbiased."),
                     ("crypto.uuid(version = 4, namespace?, name?)", "str", "<code>uuid()</code> / <code>uuid(4)</code> random, <code>uuid(7)</code> time-ordered, <code>uuid(5, namespace, name)</code> name-based."),
                     ("crypto.uuidv4() · crypto.uuidv7()", "str", "v4: random. v7: the creation time in milliseconds followed by random bits — sorts by creation time (also within the same millisecond), good for database keys."),
                     ("crypto.uuidv5(namespace, name)", "str", "SHA-1 of a namespace and a name: the same inputs always give the same UUID. <code>namespace</code>: <code>\"dns\"</code>, <code>\"url\"</code>, <code>\"oid\"</code>, <code>\"x500\"</code> or a UUID; <code>name</code>: str or bytes."),
                     ("crypto.uuidInfo(text)", "map · error", "<code>{ version, variant, time }</code>; <code>time</code> is the creation time in ms since the epoch for v1/v6/v7, else nil. Text that is not a UUID → error value."),
-                    ("crypto.base64(data, { url }) · crypto.fromBase64(text, { bytes })", "str", "<code>data</code>: str or list of bytes."),
+                    ("crypto.base64(data, { url }) · crypto.fromBase64(text, { bytes })", "str", "<code>data</code>: str or list of bytes. <code>fromBase64</code> reads both alphabets, with or without <code>=</code> padding."),
                     ("crypto.hex(data) · crypto.fromHex(text, { bytes })", "str", ""),
                     ("crypto.equal(a, b)", "bool", "Constant-time comparison."),
                 ],
@@ -908,6 +911,10 @@ const a = crypto.uuidv7()
 const b = crypto.uuidv7()
 print(a < b, crypto.uuidInfo(a)?.version, crypto.uuidInfo(crypto.uuidv4())?.time, crypto.uuidInfo(a)?.time > 0)
 print(crypto.uuidInfo("not-a-uuid"))
+const k = crypto.generateKeyPair("p256")
+const sig = crypto.sign("ES256", k.privateKey, "pay 10 to ana")?
+print(crypto.verify("ES256", k.publicKey, "pay 10 to ana", sig)?, crypto.verify("ES256", k.publicKey, "pay 99 to ana", sig)?)
+print(crypto.verify("ES256", crypto.jwk(k.publicKey), "pay 10 to ana", sig)?, crypto.jwk(k.publicKey).crv)
 ''',
                 "run": True,
             }

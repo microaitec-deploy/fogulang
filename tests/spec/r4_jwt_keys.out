@@ -1,0 +1,29 @@
+RS256 buffer true true false RSA k1
+PS384 buffer true true false RSA k1
+ES256 buffer true true false EC k1
+ES384 buffer true true false EC k1
+EdDSA buffer true true false OKP k1
+error: crypto.verify: an RSA key cannot verify ES256
+RSA true
+error: crypto.verify: not a PEM key (no -----BEGIN line)
+alice
+[chat-user]
+error: jwt: algorithm RS256 not allowed
+error: jwt: invalid signature
+error: jwt: unsigned tokens (alg none) are not accepted
+error: jwt: an HS256 token cannot be verified with a public key
+error: jwt: invalid signature
+error: jwt: RS256 needs a public key, not a secret
+{alg: ES256, kid: ec1, typ: JWT} 42
+ed
+ps
+42
+error: jwt: unknown key id 'zzz'
+42 [ec1] 1
+rotated [ec1, ed2] 2
+alice http://127.0.0.1:18451
+error: jwt: invalid issuer
+error: jwt.oidc: http://127.0.0.1:18451/other/.well-known/openid-configuration names another issuer
+me alice
+401 invalid audience
+hello hello

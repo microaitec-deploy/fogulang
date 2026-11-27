@@ -1494,6 +1494,21 @@ export const REFERENCE: Record<string, RefData> = {
       "A new key pair as PEM text (private: PKCS#8, public: SPKI — what OpenSSL, JWT libraries and <code>fogu:tls</code> read). Algorithms: <code>ed25519</code>, <code>p256</code> (ECDSA, also <code>es256</code>), <code>p384</code> (<code>es384</code>) and <code>rsa</code> with <code>bits</code> 2048 (default), 3072 or 4096 (also written <code>\"rsa-4096\"</code>; big RSA keys take a moment). Certificates: <code>tls.selfSigned</code>."
      ],
      [
+      "crypto.sign(alg, privateKey, data)",
+      "buffer · error",
+      "A signature with a PEM private key (PKCS#8 or <code>RSA PRIVATE KEY</code>): <code>RS256 RS384 RS512</code> (RSA PKCS#1 v1.5), <code>PS256 PS384 PS512</code> (RSA-PSS), <code>ES256 ES384</code> (ECDSA, as <code>r || s</code>), <code>EdDSA</code> (Ed25519). Constant-time (ring)."
+     ],
+     [
+      "crypto.verify(alg, publicKey, data, signature)",
+      "bool · error",
+      "<code>publicKey</code>: PEM (<code>PUBLIC KEY</code>, <code>RSA PUBLIC KEY</code>, a certificate, or a private key's public half) or a JWK map. <code>signature</code>: a buffer or base64 / base64url text; ECDSA as <code>r || s</code> or DER. A key of another type, or RSA under 2048 bits, is an error value."
+     ],
+     [
+      "crypto.jwk(key, { kid, alg, use })",
+      "map · error",
+      "The public JWK of a key (PEM or JWK): <code>{ kty, n, e }</code>, <code>{ kty: EC, crv, x, y }</code>, <code>{ kty: OKP, crv: Ed25519, x }</code> — to publish a JWK set."
+     ],
+     [
       "crypto.randomInt(min, max)",
       "int",
       "Inclusive, unbiased."
@@ -1521,7 +1536,7 @@ export const REFERENCE: Record<string, RefData> = {
      [
       "crypto.base64(data, { url }) · crypto.fromBase64(text, { bytes })",
       "str",
-      "<code>data</code>: str or list of bytes."
+      "<code>data</code>: str or list of bytes. <code>fromBase64</code> reads both alphabets, with or without <code>=</code> padding."
      ],
      [
       "crypto.hex(data) · crypto.fromHex(text, { bytes })",
@@ -1534,8 +1549,8 @@ export const REFERENCE: Record<string, RefData> = {
       "Constant-time comparison."
      ]
     ],
-    "example": "import crypto from \"fogu:crypto\"\nprint(crypto.hash(\"sha256\", \"abc\"))\nprint(crypto.hmac(\"sha256\", \"key\", \"The quick brown fox jumps over the lazy dog\"))\nconst box = crypto.encrypt(\"card 4242\", \"my secret\")\nprint(crypto.decrypt(box, \"my secret\")?)\nconst [_, err] = crypto.decrypt(box, \"wrong\")\nprint(err)\nconst h = crypto.hashPassword(\"hunter2\")\nprint(crypto.verifyPassword(\"hunter2\", h), crypto.verifyPassword(\"hunter3\", h))\nprint(crypto.base64(\"olá\"), crypto.fromBase64(\"b2zDoQ==\"), crypto.hex(\"hi\"), len(crypto.uuid()))\nprint(crypto.uuidv5(\"dns\", \"example.com\"), crypto.uuidv5(\"url\", \"https://fogu.dev\") == crypto.uuid(5, \"url\", \"https://fogu.dev\"))\nconst a = crypto.uuidv7()\nconst b = crypto.uuidv7()\nprint(a < b, crypto.uuidInfo(a)?.version, crypto.uuidInfo(crypto.uuidv4())?.time, crypto.uuidInfo(a)?.time > 0)\nprint(crypto.uuidInfo(\"not-a-uuid\"))",
-    "output": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\nf7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8\ncard 4242\nerror: crypto.decrypt: wrong key or corrupted data\ntrue false\nb2zDoQ== olá 6869 36\ncfbff0d1-9375-5685-968c-48ce8b15ae17 true\ntrue 7 nil true\nerror: uuidInfo: 'not-a-uuid' is not a UUID: invalid character: found `n` at 0",
+    "example": "import crypto from \"fogu:crypto\"\nprint(crypto.hash(\"sha256\", \"abc\"))\nprint(crypto.hmac(\"sha256\", \"key\", \"The quick brown fox jumps over the lazy dog\"))\nconst box = crypto.encrypt(\"card 4242\", \"my secret\")\nprint(crypto.decrypt(box, \"my secret\")?)\nconst [_, err] = crypto.decrypt(box, \"wrong\")\nprint(err)\nconst h = crypto.hashPassword(\"hunter2\")\nprint(crypto.verifyPassword(\"hunter2\", h), crypto.verifyPassword(\"hunter3\", h))\nprint(crypto.base64(\"olá\"), crypto.fromBase64(\"b2zDoQ==\"), crypto.hex(\"hi\"), len(crypto.uuid()))\nprint(crypto.uuidv5(\"dns\", \"example.com\"), crypto.uuidv5(\"url\", \"https://fogu.dev\") == crypto.uuid(5, \"url\", \"https://fogu.dev\"))\nconst a = crypto.uuidv7()\nconst b = crypto.uuidv7()\nprint(a < b, crypto.uuidInfo(a)?.version, crypto.uuidInfo(crypto.uuidv4())?.time, crypto.uuidInfo(a)?.time > 0)\nprint(crypto.uuidInfo(\"not-a-uuid\"))\nconst k = crypto.generateKeyPair(\"p256\")\nconst sig = crypto.sign(\"ES256\", k.privateKey, \"pay 10 to ana\")?\nprint(crypto.verify(\"ES256\", k.publicKey, \"pay 10 to ana\", sig)?, crypto.verify(\"ES256\", k.publicKey, \"pay 99 to ana\", sig)?)\nprint(crypto.verify(\"ES256\", crypto.jwk(k.publicKey), \"pay 10 to ana\", sig)?, crypto.jwk(k.publicKey).crv)",
+    "output": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\nf7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8\ncard 4242\nerror: crypto.decrypt: wrong key or corrupted data\ntrue false\nb2zDoQ== olá 6869 36\ncfbff0d1-9375-5685-968c-48ce8b15ae17 true\ntrue 7 nil true\nerror: uuidInfo: 'not-a-uuid' is not a UUID: invalid character: found `n` at 0\ntrue false\ntrue P-256",
     "outputTitle": "output"
    }
   ]
@@ -2743,19 +2758,29 @@ export const REFERENCE: Record<string, RefData> = {
   "group": "Web & network",
   "title": "fogu:jwt",
   "import": "import jwt from \"fogu:jwt\"",
-  "intro": "JSON Web Tokens with HMAC (HS256/HS384/HS512). A token that fails verification is an error value.",
+  "intro": "JSON Web Tokens signed with HMAC (HS256/HS384/HS512) or a public key (RS256/384/512, PS256/384/512, ES256/384, EdDSA), with JWK sets fetched from a URL or found by OpenID Connect discovery (Keycloak, Auth0, Entra ID, Google…). A token that fails verification is an error value. The key decides the algorithms: a secret accepts only HS*, a public key only those of its type (and a JWK's own <code>alg</code>); <code>alg: none</code> is never accepted.",
   "blocks": [
    {
     "api": [
      [
-      "jwt.sign(payload, secret, { algorithm, expiresIn, notBefore, issuer, audience, subject, jwtid, header, noTimestamp })",
+      "jwt.sign(payload, key, { algorithm, keyid, expiresIn, notBefore, issuer, audience, subject, jwtid, header, noTimestamp })",
       "str",
-      "<code>iat</code> is added; durations or seconds for times."
+      "<code>key</code>: a secret (HS256 by default) or a PEM private key (its own algorithm by default: RS256, ES256, ES384 or EdDSA). <code>keyid</code> goes in the header as <code>kid</code>. <code>iat</code> is added; durations or seconds for times."
      ],
      [
-      "jwt.verify(token, secret, { algorithms, issuer, audience, subject, leeway, maxAge, ignoreExpiration })",
+      "jwt.verify(token, key, { algorithms, issuer, audience, subject, leeway, maxAge, ignoreExpiration })",
       "map · error",
-      "The claims."
+      "The claims. <code>key</code>: a secret, a PEM public key or certificate, a JWK, a JWK set (<code>{ keys }</code> or a list: the token's <code>kid</code> picks the key; <code>use: enc</code> keys are skipped), or <code>jwt.jwks</code> / <code>jwt.oidc</code>."
+     ],
+     [
+      "jwt.jwks(url, { ttl = 10m, minRefresh = 30s, timeout = 5s, issuer })",
+      "Jwks",
+      "Keys fetched on first use (waiting cooperatively: other tasks go on), again after <code>ttl</code>, and when a token names a key id they lack (key rotation) — at most once per <code>minRefresh</code>. If a refresh fails the old keys stay in use. Fields: <code>url issuer kids size error</code>."
+     ],
+     [
+      "jwt.oidc(issuer, opts)",
+      "Jwks · error",
+      "OpenID Connect discovery: reads <code>issuer/.well-known/openid-configuration</code>, then its <code>jwks_uri</code>. Tokens must also carry <code>iss: issuer</code>."
      ],
      [
       "jwt.decode(token)",
@@ -2763,13 +2788,19 @@ export const REFERENCE: Record<string, RefData> = {
       "<code>{ header, payload }</code> without verifying."
      ],
      [
-      "jwt.middleware(secret, { property = \"user\", optional, …verify options })",
+      "jwt.middleware(key, { property = \"user\", optional, …verify options })",
       "middleware",
-      "For <code>fogu:web</code>: <code>Authorization: Bearer</code> → <code>ctx.user</code>, otherwise 401."
+      "For <code>fogu:web</code>: <code>Authorization: Bearer</code> → <code>ctx.user</code>, otherwise 401. Any <code>key</code> <code>verify</code> takes; with <code>jwt.jwks</code> the request waits for the keys without holding up the server."
      ]
     ],
     "example": "import jwt from \"fogu:jwt\"\nconst token = jwt.sign({ sub: \"42\", role: \"admin\" }, \"s3cret\", { expiresIn: 1h, issuer: \"fogu\" })\nconst claims = jwt.verify(token, \"s3cret\", { issuer: \"fogu\" })?\nprint(claims.sub, claims.role, claims.exp - claims.iat)\nprint(jwt.decode(token)?.header)\nconst [_, e1] = jwt.verify(token, \"wrong\")\nconst [_, e2] = jwt.verify(jwt.sign({ a: 1 }, \"s3cret\", { expiresIn: -10 }), \"s3cret\")\nprint(e1, e2)",
     "output": "42 admin 3600\n{alg: HS256, typ: JWT}\nerror: jwt: invalid signature error: jwt: token expired",
+    "outputTitle": "output"
+   },
+   {
+    "h3": "Public keys and key sets",
+    "example": "import jwt from \"fogu:jwt\"\nimport crypto from \"fogu:crypto\"\nconst k = crypto.generateKeyPair(\"p256\")\nconst token = jwt.sign({ sub: \"alice\", aud: \"chat\" }, k.privateKey, { keyid: \"k1\", expiresIn: 5m })\nprint(jwt.decode(token)?.header)\nprint(jwt.verify(token, k.publicKey, { audience: \"chat\" })?.sub)\nconst set = { keys: [crypto.jwk(k.publicKey, { kid: \"k1\", use: \"sig\" })] }\nprint(jwt.verify(token, set)?.sub)\n// an HMAC token never passes a public key (no algorithm confusion)\nprint(jwt.verify(jwt.sign({ sub: \"mallory\" }, \"a guessed secret\"), k.publicKey))",
+    "output": "{alg: ES256, kid: k1, typ: JWT}\nalice\nalice\nerror: jwt: an HS256 token cannot be verified with a public key",
     "outputTitle": "output"
    }
   ]
@@ -2856,29 +2887,39 @@ export const REFERENCE: Record<string, RefData> = {
   "group": "Web & network",
   "title": "fogu:grpc",
   "import": "import grpc from \"fogu:grpc\"",
-  "intro": "gRPC servers and clients without code generation: the messages are described by a <a class=\"underline\" href=\"#mod-protobuf\">fogu:protobuf</a> schema (<code>.proto</code> compiled at run time) and travel as maps. Unary, server streaming, client streaming and bidirectional methods (the requests of a bidirectional call are all received before the handler runs). Each request runs as its own <code>fg</code> task.",
+  "intro": "gRPC servers and clients without code generation: the messages are described by a <a class=\"underline\" href=\"#mod-protobuf\">fogu:protobuf</a> schema (<code>.proto</code> compiled at run time) and travel as maps. Unary, server streaming, client streaming and bidirectional methods, with each message handled as it arrives; a stream of messages is a <a class=\"underline\" href=\"#mod-stream\">fogu:stream</a> source and <code>pipe</code> sends into one. Each request runs as its own <code>fg</code> task. The server answers health checks (<code>grpc.health.v1</code>) and, when asked, server reflection, so <code>grpcurl</code> works without the <code>.proto</code>.",
   "blocks": [
    {
     "api": [
      [
-      "grpc.server(schema)",
+      "grpc.server(schema, { health = true, reflection = false })",
       "GrpcServer",
-      ""
+      "<code>health</code>: answer <code>grpc.health.v1.Health/Check</code>; <code>reflection</code>: serve <code>grpc.reflection.v1</code> (and v1alpha)."
      ],
      [
       "srv.handle(method, fn(req, call)) · srv.handle({ method: fn }) · srv.service(\"pkg.Service\", { Method: fn })",
       "nil",
-      "Methods: <code>\"pkg.Service/Method\"</code>, <code>\"pkg.Service.Method\"</code> or a unique <code>\"Method\"</code>. Client streaming: <code>req</code> is a list."
+      "Methods: <code>\"pkg.Service/Method\"</code>, <code>\"pkg.Service.Method\"</code> or a unique <code>\"Method\"</code>. Client streaming and bidirectional: <code>req</code> is a <code>GrpcStream</code> of the requests as they arrive (<code>for m in req</code>, <code>req.next()</code>, <code>stream.from(req)</code>, <code>req.toList()</code>)."
      ],
      [
-      "call.send(msg) · call.metadata · call.peer · call.method · call.cancelled",
+      "call.send(msg) · call.end() · call.metadata · call.peer · call.method · call.cancelled",
       "",
-      "<code>send</code> for server streaming (or return a list)."
+      "<code>send</code> for server streaming (or return a list or a stream; <code>s.pipe(call)</code> works too)."
      ],
      [
-      "srv.listen(port | \"host:port\", { cert, key })",
+      "srv.use(fn(call))",
+      "nil",
+      "Runs before every handler, in order; returning an error (<code>grpc.status(\"UNAUTHENTICATED\", …)</code>) fails the call."
+     ],
+     [
+      "srv.health(service, \"SERVING\" | \"NOT_SERVING\" | \"UNKNOWN\")",
+      "nil",
+      "What health checks answer for <code>service</code> (<code>\"\"</code>: the whole server). By default: <code>SERVING</code> for the server and every service with a handler, <code>NOT_FOUND</code> for others."
+     ],
+     [
+      "srv.listen(port | \"host:port\", { cert, key, clientCa })",
       "int · error",
-      "The port (an int port listens on 127.0.0.1; <code>\"0.0.0.0:port\"</code> for other machines). <code>cert</code>/<code>key</code>: PEM files for TLS."
+      "The port (an int port listens on 127.0.0.1; <code>\"0.0.0.0:port\"</code> for other machines). <code>cert</code>/<code>key</code>: PEM files for TLS; <code>clientCa</code>: clients must present a certificate it signed (mTLS)."
      ],
      [
       "srv.serve() · srv.close() · srv.port · srv.address · srv.methods",
@@ -2891,9 +2932,9 @@ export const REFERENCE: Record<string, RefData> = {
       "Fails the call with that code (any other error is <code>UNKNOWN</code>); <code>grpc.codes</code> lists them."
      ],
      [
-      "grpc.connect(url, schema, { timeout, metadata, ca, domain })",
+      "grpc.connect(url, schema, { timeout, metadata, ca, domain, cert, key })",
       "GrpcClient",
-      "<code>https://</code> uses TLS (system roots or <code>ca</code>). Connects on the first call."
+      "<code>https://</code> uses TLS (system roots or <code>ca</code>; <code>cert</code>/<code>key</code>: a client certificate). Connects on the first call."
      ],
      [
       "c.call(method, req, { timeout, metadata })",
@@ -2901,13 +2942,30 @@ export const REFERENCE: Record<string, RefData> = {
       "A list for server streaming; a list of requests for client streaming. Failures: <code>grpc: NOT_FOUND: msg</code>, <code>grpc: DEADLINE_EXCEEDED: …</code>."
      ],
      [
-      "c.stream(method, req, opts) → s.next() · s.close() · s.done · s.received",
+      "c.stream(method, req, opts) → s.next() · for m in s · s.toList() · s.close() · s.done · s.received · s.error",
       "GrpcStream",
-      "One message at a time (<code>nil</code> at the end)."
+      "The responses one at a time (<code>nil</code> at the end); a <code>fogu:stream</code> source. An error that ends the stream is <code>s.error</code> after a <code>for</code> loop."
+     ],
+     [
+      "c.stream(method) → s.send(msg) · s.end() · s.sent",
+      "GrpcStream",
+      "A client-streaming or bidirectional call opened without requests: each <code>send</code> goes out at once, <code>end()</code> says there are no more, and the responses arrive meanwhile. <code>stream.from(ch).pipe(s)</code> sends a channel."
+     ],
+     [
+      "c.close() · c.closed",
+      "",
+      "No new calls; the connection closes once the open ones end."
      ]
     ],
     "example": "import grpc from \"fogu:grpc\"\nimport protobuf from \"fogu:protobuf\"\nconst schema = protobuf.parse(\"syntax = \\\"proto3\\\"; package demo;\nmessage HelloRequest { string name = 1; }\nmessage HelloReply { string message = 1; }\nmessage Num { int32 n = 1; }\nservice Greeter {\n  rpc SayHello (HelloRequest) returns (HelloReply);\n  rpc Count (Num) returns (stream Num);\n}\")?\nconst srv = grpc.server(schema)\nsrv.handle(\"demo.Greeter/SayHello\", fn(req, call) {\n    if req.name == \"\" { return nil, grpc.status(\"INVALID_ARGUMENT\", \"name is required\") }\n    return { message: \"Hello, \" + req.name }\n})\nsrv.handle(\"Count\", fn(req, call) { for i in 0..req.n { call.send({ n: i }) } })\nconst port = srv.listen(\"127.0.0.1:0\")?\nfg srv.serve()\n\nconst c = grpc.connect(\"127.0.0.1:\" + str(port), schema)?\nprint(c.call(\"SayHello\", { name: \"Ana\" })?)\nprint(c.call(\"SayHello\", { name: \"\" }))\nprint(c.call(\"Count\", { n: 3 })?)\nsrv.close()",
     "output": "{message: Hello, Ana}\nerror: grpc: INVALID_ARGUMENT: name is required\n[{n: 0}, {n: 1}, {n: 2}]",
+    "outputTitle": "output"
+   },
+   {
+    "h3": "Streams in both directions",
+    "text": "A bidirectional handler reads each request as it arrives and can answer before the next one; the client sends with <code>send</code> and reads with <code>next</code> or <code>for</code>. Interceptors and health checks need no schema of their own.",
+    "example": "import grpc from \"fogu:grpc\"\nimport protobuf from \"fogu:protobuf\"\nimport stream from \"fogu:stream\"\nconst schema = protobuf.parse(\"syntax = \\\"proto3\\\"; package demo;\nmessage Num { int32 n = 1; }\nservice Calc { rpc Running (stream Num) returns (stream Num); }\")?\nconst srv = grpc.server(schema)\nsrv.use(fn(call) {\n    if call.metadata[\"token\"] != \"s3cret\" { return nil, grpc.status(\"UNAUTHENTICATED\", \"bad token\") }\n})\nsrv.handle(\"Running\", fn(nums, call) {\n    let total = 0\n    for x in nums {\n        total = total + x.n\n        call.send({ n: total })                 // goes out before the next request\n    }\n})\nconst port = srv.listen(\"127.0.0.1:0\")?\nfg srv.serve()\n\nconst c = grpc.connect(\"127.0.0.1:\" + str(port), schema, { metadata: { token: \"s3cret\" } })?\nconst s = c.stream(\"Running\")?\nfor n in [5, 10, 20] {\n    s.send({ n: n })\n    print(\"total\", s.next()?.n)\n}\ns.end()\n\n// a stream of requests, piped in; the responses as a stream\nconst s2 = c.stream(\"Running\")?\nstream.range(1, 5).map(fn(i) { return { n: i } }).pipe(s2)\nprint(stream.from(s2).map(fn(m) { return m.n }).toList())\nsrv.close()",
+    "output": "total 5\ntotal 15\ntotal 35\n[1, 3, 6, 10]",
     "outputTitle": "output"
    }
   ]

@@ -1033,12 +1033,15 @@ import crypto from "fogu:crypto"
 - `crypto.verifyPassword(password, hash)` → bool · error — Any hash `password.verify` understands; a malformed hash → error value.
 - `crypto.randomBytes(n) · crypto.randomHex(n)` → buffer · str — Secure random.
 - `crypto.generateKeyPair(algorithm = "ed25519", { bits }?)` → { algorithm, bits, privateKey, publicKey } — A new key pair as PEM text (private: PKCS#8, public: SPKI — what OpenSSL, JWT libraries and `fogu:tls` read). Algorithms: `ed25519`, `p256` (ECDSA, also `es256`), `p384` (`es384`) and `rsa` with `bits` 2048 (default), 3072 or 4096 (also written `"rsa-4096"`; big RSA keys take a moment). Certificates: `tls.selfSigned`.
+- `crypto.sign(alg, privateKey, data)` → buffer · error — A signature with a PEM private key (PKCS#8 or `RSA PRIVATE KEY`): `RS256 RS384 RS512` (RSA PKCS#1 v1.5), `PS256 PS384 PS512` (RSA-PSS), `ES256 ES384` (ECDSA, as `r || s`), `EdDSA` (Ed25519). Constant-time (ring).
+- `crypto.verify(alg, publicKey, data, signature)` → bool · error — `publicKey`: PEM (`PUBLIC KEY`, `RSA PUBLIC KEY`, a certificate, or a private key's public half) or a JWK map. `signature`: a buffer or base64 / base64url text; ECDSA as `r || s` or DER. A key of another type, or RSA under 2048 bits, is an error value.
+- `crypto.jwk(key, { kid, alg, use })` → map · error — The public JWK of a key (PEM or JWK): `{ kty, n, e }`, `{ kty: EC, crv, x, y }`, `{ kty: OKP, crv: Ed25519, x }` — to publish a JWK set.
 - `crypto.randomInt(min, max)` → int — Inclusive, unbiased.
 - `crypto.uuid(version = 4, namespace?, name?)` → str — `uuid()` / `uuid(4)` random, `uuid(7)` time-ordered, `uuid(5, namespace, name)` name-based.
 - `crypto.uuidv4() · crypto.uuidv7()` → str — v4: random. v7: the creation time in milliseconds followed by random bits — sorts by creation time (also within the same millisecond), good for database keys.
 - `crypto.uuidv5(namespace, name)` → str — SHA-1 of a namespace and a name: the same inputs always give the same UUID. `namespace`: `"dns"`, `"url"`, `"oid"`, `"x500"` or a UUID; `name`: str or bytes.
 - `crypto.uuidInfo(text)` → map · error — `{ version, variant, time }`; `time` is the creation time in ms since the epoch for v1/v6/v7, else nil. Text that is not a UUID → error value.
-- `crypto.base64(data, { url }) · crypto.fromBase64(text, { bytes })` → str — `data`: str or list of bytes.
+- `crypto.base64(data, { url }) · crypto.fromBase64(text, { bytes })` → str — `data`: str or list of bytes. `fromBase64` reads both alphabets, with or without `=` padding.
 - `crypto.hex(data) · crypto.fromHex(text, { bytes })` → str
 - `crypto.equal(a, b)` → bool — Constant-time comparison.
 
@@ -1058,6 +1061,10 @@ const a = crypto.uuidv7()
 const b = crypto.uuidv7()
 print(a < b, crypto.uuidInfo(a)?.version, crypto.uuidInfo(crypto.uuidv4())?.time, crypto.uuidInfo(a)?.time > 0)
 print(crypto.uuidInfo("not-a-uuid"))
+const k = crypto.generateKeyPair("p256")
+const sig = crypto.sign("ES256", k.privateKey, "pay 10 to ana")?
+print(crypto.verify("ES256", k.publicKey, "pay 10 to ana", sig)?, crypto.verify("ES256", k.publicKey, "pay 99 to ana", sig)?)
+print(crypto.verify("ES256", crypto.jwk(k.publicKey), "pay 10 to ana", sig)?, crypto.jwk(k.publicKey).crv)
 ```
 
 output:
@@ -1072,6 +1079,8 @@ b2zDoQ== olá 6869 36
 cfbff0d1-9375-5685-968c-48ce8b15ae17 true
 true 7 nil true
 error: uuidInfo: 'not-a-uuid' is not a UUID: invalid character: found `n` at 0
+true false
+true P-256
 ```
 
 ## fogu:password
@@ -2034,12 +2043,14 @@ swap true false
 import jwt from "fogu:jwt"
 ```
 
-JSON Web Tokens with HMAC (HS256/HS384/HS512). A token that fails verification is an error value.
+JSON Web Tokens signed with HMAC (HS256/HS384/HS512) or a public key (RS256/384/512, PS256/384/512, ES256/384, EdDSA), with JWK sets fetched from a URL or found by OpenID Connect discovery (Keycloak, Auth0, Entra ID, Google…). A token that fails verification is an error value. The key decides the algorithms: a secret accepts only HS*, a public key only those of its type (and a JWK's own `alg`); `alg: none` is never accepted.
 
-- `jwt.sign(payload, secret, { algorithm, expiresIn, notBefore, issuer, audience, subject, jwtid, header, noTimestamp })` → str — `iat` is added; durations or seconds for times.
-- `jwt.verify(token, secret, { algorithms, issuer, audience, subject, leeway, maxAge, ignoreExpiration })` → map · error — The claims.
+- `jwt.sign(payload, key, { algorithm, keyid, expiresIn, notBefore, issuer, audience, subject, jwtid, header, noTimestamp })` → str — `key`: a secret (HS256 by default) or a PEM private key (its own algorithm by default: RS256, ES256, ES384 or EdDSA). `keyid` goes in the header as `kid`. `iat` is added; durations or seconds for times.
+- `jwt.verify(token, key, { algorithms, issuer, audience, subject, leeway, maxAge, ignoreExpiration })` → map · error — The claims. `key`: a secret, a PEM public key or certificate, a JWK, a JWK set (`{ keys }` or a list: the token's `kid` picks the key; `use: enc` keys are skipped), or `jwt.jwks` / `jwt.oidc`.
+- `jwt.jwks(url, { ttl = 10m, minRefresh = 30s, timeout = 5s, issuer })` → Jwks — Keys fetched on first use (waiting cooperatively: other tasks go on), again after `ttl`, and when a token names a key id they lack (key rotation) — at most once per `minRefresh`. If a refresh fails the old keys stay in use. Fields: `url issuer kids size error`.
+- `jwt.oidc(issuer, opts)` → Jwks · error — OpenID Connect discovery: reads `issuer/.well-known/openid-configuration`, then its `jwks_uri`. Tokens must also carry `iss: issuer`.
 - `jwt.decode(token)` → map · error — `{ header, payload }` without verifying.
-- `jwt.middleware(secret, { property = "user", optional, …verify options })` → middleware — For `fogu:web`: `Authorization: Bearer` → `ctx.user`, otherwise 401.
+- `jwt.middleware(key, { property = "user", optional, …verify options })` → middleware — For `fogu:web`: `Authorization: Bearer` → `ctx.user`, otherwise 401. Any `key` `verify` takes; with `jwt.jwks` the request waits for the keys without holding up the server.
 
 ```fogu
 import jwt from "fogu:jwt"
@@ -2058,6 +2069,30 @@ output:
 42 admin 3600
 {alg: HS256, typ: JWT}
 error: jwt: invalid signature error: jwt: token expired
+```
+
+### Public keys and key sets
+
+```fogu
+import jwt from "fogu:jwt"
+import crypto from "fogu:crypto"
+const k = crypto.generateKeyPair("p256")
+const token = jwt.sign({ sub: "alice", aud: "chat" }, k.privateKey, { keyid: "k1", expiresIn: 5m })
+print(jwt.decode(token)?.header)
+print(jwt.verify(token, k.publicKey, { audience: "chat" })?.sub)
+const set = { keys: [crypto.jwk(k.publicKey, { kid: "k1", use: "sig" })] }
+print(jwt.verify(token, set)?.sub)
+// an HMAC token never passes a public key (no algorithm confusion)
+print(jwt.verify(jwt.sign({ sub: "mallory" }, "a guessed secret"), k.publicKey))
+```
+
+output:
+
+```text
+{alg: ES256, kid: k1, typ: JWT}
+alice
+alice
+error: jwt: an HS256 token cannot be verified with a public key
 ```
 
 ## fogu:socketio
@@ -2124,17 +2159,21 @@ output:
 import grpc from "fogu:grpc"
 ```
 
-gRPC servers and clients without code generation: the messages are described by a [fogu:protobuf](#foguprotobuf) schema (`.proto` compiled at run time) and travel as maps. Unary, server streaming, client streaming and bidirectional methods (the requests of a bidirectional call are all received before the handler runs). Each request runs as its own `fg` task.
+gRPC servers and clients without code generation: the messages are described by a [fogu:protobuf](#foguprotobuf) schema (`.proto` compiled at run time) and travel as maps. Unary, server streaming, client streaming and bidirectional methods, with each message handled as it arrives; a stream of messages is a [fogu:stream](#fogustream) source and `pipe` sends into one. Each request runs as its own `fg` task. The server answers health checks (`grpc.health.v1`) and, when asked, server reflection, so `grpcurl` works without the `.proto`.
 
-- `grpc.server(schema)` → GrpcServer
-- `srv.handle(method, fn(req, call)) · srv.handle({ method: fn }) · srv.service("pkg.Service", { Method: fn })` → nil — Methods: `"pkg.Service/Method"`, `"pkg.Service.Method"` or a unique `"Method"`. Client streaming: `req` is a list.
-- `call.send(msg) · call.metadata · call.peer · call.method · call.cancelled` — `send` for server streaming (or return a list).
-- `srv.listen(port | "host:port", { cert, key })` → int · error — The port (an int port listens on 127.0.0.1; `"0.0.0.0:port"` for other machines). `cert`/`key`: PEM files for TLS.
+- `grpc.server(schema, { health = true, reflection = false })` → GrpcServer — `health`: answer `grpc.health.v1.Health/Check`; `reflection`: serve `grpc.reflection.v1` (and v1alpha).
+- `srv.handle(method, fn(req, call)) · srv.handle({ method: fn }) · srv.service("pkg.Service", { Method: fn })` → nil — Methods: `"pkg.Service/Method"`, `"pkg.Service.Method"` or a unique `"Method"`. Client streaming and bidirectional: `req` is a `GrpcStream` of the requests as they arrive (`for m in req`, `req.next()`, `stream.from(req)`, `req.toList()`).
+- `call.send(msg) · call.end() · call.metadata · call.peer · call.method · call.cancelled` — `send` for server streaming (or return a list or a stream; `s.pipe(call)` works too).
+- `srv.use(fn(call))` → nil — Runs before every handler, in order; returning an error (`grpc.status("UNAUTHENTICATED", …)`) fails the call.
+- `srv.health(service, "SERVING" | "NOT_SERVING" | "UNKNOWN")` → nil — What health checks answer for `service` (`""`: the whole server). By default: `SERVING` for the server and every service with a handler, `NOT_FOUND` for others.
+- `srv.listen(port | "host:port", { cert, key, clientCa })` → int · error — The port (an int port listens on 127.0.0.1; `"0.0.0.0:port"` for other machines). `cert`/`key`: PEM files for TLS; `clientCa`: clients must present a certificate it signed (mTLS).
 - `srv.serve() · srv.close() · srv.port · srv.address · srv.methods` — `serve` runs until `close` (start it with `fg`).
 - `return nil, grpc.status("NOT_FOUND", "msg")` — Fails the call with that code (any other error is `UNKNOWN`); `grpc.codes` lists them.
-- `grpc.connect(url, schema, { timeout, metadata, ca, domain })` → GrpcClient — `https://` uses TLS (system roots or `ca`). Connects on the first call.
+- `grpc.connect(url, schema, { timeout, metadata, ca, domain, cert, key })` → GrpcClient — `https://` uses TLS (system roots or `ca`; `cert`/`key`: a client certificate). Connects on the first call.
 - `c.call(method, req, { timeout, metadata })` → value · error — A list for server streaming; a list of requests for client streaming. Failures: `grpc: NOT_FOUND: msg`, `grpc: DEADLINE_EXCEEDED: …`.
-- `c.stream(method, req, opts) → s.next() · s.close() · s.done · s.received` → GrpcStream — One message at a time (`nil` at the end).
+- `c.stream(method, req, opts) → s.next() · for m in s · s.toList() · s.close() · s.done · s.received · s.error` → GrpcStream — The responses one at a time (`nil` at the end); a `fogu:stream` source. An error that ends the stream is `s.error` after a `for` loop.
+- `c.stream(method) → s.send(msg) · s.end() · s.sent` → GrpcStream — A client-streaming or bidirectional call opened without requests: each `send` goes out at once, `end()` says there are no more, and the responses arrive meanwhile. `stream.from(ch).pipe(s)` sends a channel.
+- `c.close() · c.closed` — No new calls; the connection closes once the open ones end.
 
 ```fogu
 import grpc from "fogu:grpc"
@@ -2169,6 +2208,55 @@ output:
 {message: Hello, Ana}
 error: grpc: INVALID_ARGUMENT: name is required
 [{n: 0}, {n: 1}, {n: 2}]
+```
+
+### Streams in both directions
+
+A bidirectional handler reads each request as it arrives and can answer before the next one; the client sends with `send` and reads with `next` or `for`. Interceptors and health checks need no schema of their own.
+
+```fogu
+import grpc from "fogu:grpc"
+import protobuf from "fogu:protobuf"
+import stream from "fogu:stream"
+const schema = protobuf.parse("syntax = \"proto3\"; package demo;
+message Num { int32 n = 1; }
+service Calc { rpc Running (stream Num) returns (stream Num); }")?
+const srv = grpc.server(schema)
+srv.use(fn(call) {
+    if call.metadata["token"] != "s3cret" { return nil, grpc.status("UNAUTHENTICATED", "bad token") }
+})
+srv.handle("Running", fn(nums, call) {
+    let total = 0
+    for x in nums {
+        total = total + x.n
+        call.send({ n: total })                 // goes out before the next request
+    }
+})
+const port = srv.listen("127.0.0.1:0")?
+fg srv.serve()
+
+const c = grpc.connect("127.0.0.1:" + str(port), schema, { metadata: { token: "s3cret" } })?
+const s = c.stream("Running")?
+for n in [5, 10, 20] {
+    s.send({ n: n })
+    print("total", s.next()?.n)
+}
+s.end()
+
+// a stream of requests, piped in; the responses as a stream
+const s2 = c.stream("Running")?
+stream.range(1, 5).map(fn(i) { return { n: i } }).pipe(s2)
+print(stream.from(s2).map(fn(m) { return m.n }).toList())
+srv.close()
+```
+
+output:
+
+```text
+total 5
+total 15
+total 35
+[1, 3, 6, 10]
 ```
 
 ## fogu:security

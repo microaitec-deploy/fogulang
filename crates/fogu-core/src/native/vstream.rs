@@ -555,8 +555,9 @@ pub fn method(it: &Interpreter, o: &NativeObjectRef, name: &str, args: &[Value])
                 }
                 ended(&n, Value::Int(k))
             }
-            // pipe(dest, { end = true }): every value into a channel, a WebSocket (`send`)
-            // or a writable (`write`); then `dest` is closed, unless `end: false`.
+            // pipe(dest, { end = true }): every value into a channel, a WebSocket or a gRPC
+            // stream / call (`send`) or a writable (`write`); then `dest` is closed (a gRPC
+            // one ended), unless `end: false`.
             // Returns how many values went; an error of `dest` ends the stream with it.
             "pipe" => return pipe(it, &n, args),
             "forEach" => {
@@ -645,7 +646,12 @@ fn pipe(it: &Interpreter, n: &Rc<Node>, args: &[Value]) -> Result<Value, String>
             }
         }
         Some(Value::Object(o)) => {
-            let write = if o.with_name(|name| name == "WebSocket") { "send" } else { "write" };
+            // a gRPC stream or call ends its side with `end`: closing would cancel the call
+            let (write, finish) = o.with_name(|name| match name {
+                "WebSocket" => ("send", "close"),
+                "GrpcStream" | "GrpcCall" => ("send", "end"),
+                _ => ("write", "close"),
+            });
             while let Some(v) = pull(it, n)? {
                 let failed = match it.call_native_method(o, write, &[v]) {
                     Ok(Value::Error(e)) => Some(e),
@@ -663,11 +669,11 @@ fn pipe(it: &Interpreter, n: &Rc<Node>, args: &[Value]) -> Result<Value, String>
                 sent += 1;
             }
             if end {
-                let _ = it.call_native_method(o, "close", &[]);
+                let _ = it.call_native_method(o, finish, &[]);
             }
         }
-        Some(other) => return Err(format!("pipe: expects a chan, a WebSocket or a writable stream, got '{}'", other.type_name())),
-        None => return Err("pipe: expects where the values go (a chan, a WebSocket or a writable stream)".into()),
+        Some(other) => return Err(format!("pipe: expects a chan, a WebSocket, a gRPC stream or a writable stream, got '{}'", other.type_name())),
+        None => return Err("pipe: expects where the values go (a chan, a WebSocket, a gRPC stream or a writable stream)".into()),
     }
     Ok(ended(n, Value::Int(sent)))
 }
@@ -685,7 +691,7 @@ fn from(args: &[Value]) -> Result<Value, String> {
         Some(Value::Str(s)) => Kind::Items(s.chars().map(|c| Value::Str(c.into())).collect::<Vec<_>>().into_iter()),
         Some(Value::Object(o)) if is_value_stream(o) => return Ok(Value::Object(o.clone())),
         Some(Value::Object(o)) if crate::runtime::interpreter::is_stream(o) => Kind::Readable(o.clone()),
-        Some(other) => return Err(format!("stream.from: expects a list, a range, a chan, a text, a readable or a WebSocket, got '{}'", other.type_name())),
+        Some(other) => return Err(format!("stream.from: expects a list, a range, a chan, a text, a readable, a WebSocket or a gRPC stream, got '{}'", other.type_name())),
         None => Kind::Items(Vec::new().into_iter()),
     };
     Ok(value(Node::new(kind, None)))

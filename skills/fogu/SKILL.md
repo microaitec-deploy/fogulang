@@ -186,7 +186,7 @@ panic`, and the `Fogu` object: `Fogu.file(path).text()/.json()/.write(str or buf
 | time, scheduling, events | `fogu:time` `fogu:cron` `fogu:events` |
 | HTTP client/server (uploads: `multipart` + `http.file`), web framework, WebSocket, TCP/UDP | `fogu:http` `fogu:web` `fogu:websocket` (= `fogu:ws`; `for m in ws`, `stream.from(ws)`, `s.pipe(ws)`, `ws.upgrade(req, fn)` in `http.serve`) `fogu:net` (`conn.read()` → buffer, `readLine()` → str, both `nil` at end of stream) |
 | interactive server-rendered UIs (signals, shards, procedures; Topcoat UI / shadcn-rs kits, Tailwind) | `fogu:topcoat` with `fogu:web` |
-| Socket.IO (server, also on a `fogu:web` port; client), gRPC | `fogu:socketio` `fogu:grpc` (+ `fogu:protobuf` schemas) |
+| Socket.IO (server, also on a `fogu:web` port; client), gRPC (streams both ways, interceptors `srv.use`, health, reflection, mTLS) | `fogu:socketio` `fogu:grpc` (+ `fogu:protobuf` schemas) |
 | WebRTC data channels, peer to peer with Fogu or browsers (signaling rooms on a `fogu:web` app, browser client at `/rtc/client.js`) | `fogu:webrtc` (`webrtc.connect(url, room)?.channel("data")`; `send`, `recv`, `for msg in ch`) |
 | TLS/cert checks, port scan, DNS, security headers, passwords, TOTP, secret scanning, signatures, rate limits | `fogu:security` |
 | TLS sockets (client, server, mTLS, STARTTLS) and HTTPS servers; self-signed certs for development | `fogu:tls` (`tls.connect(addr, { ca })`, `tls.listen(addr, { cert, key })` — same methods as `fogu:net`; HTTPS: `app.listen(port, { tls: tls.selfSigned(["localhost"])? })`) |
@@ -195,7 +195,7 @@ panic`, and the `Fogu` object: `Fogu.file(path).text()/.json()/.write(str or buf
 | an embedded message broker (KV, channels, pub/sub, RPC, clusters) | `fogu:broker` (`broker.start(addr)`, inline `b.client()`, web admin `b.admin(port)`) |
 | cloud, mail, LLMs, SSH | `fogu:s3` `fogu:mail` `fogu:ai` `fogu:ssh` |
 | MCP servers (tools/resources/prompts for Claude) and MCP clients | `fogu:ai` (`ai.mcpServer`, `ai.mcpClient`) |
-| regex, crypto, JWT, logging | `fogu:regex` `fogu:crypto` `fogu:jwt` `fogu:log` |
+| regex, crypto (also `sign`/`verify` with RSA, ECDSA, Ed25519 keys), JWT (HMAC or public keys, JWKS, `jwt.oidc(issuer)`), logging | `fogu:regex` `fogu:crypto` `fogu:jwt` `fogu:log` |
 | store and check passwords (argon2id, bcrypt, scrypt, PBKDF2), upgrade old hashes, random passwords | `fogu:password` (`password.hash(pw)`, `password.verify(pw, h)?`, `password.needsRehash(h)`, `password.generate(20)`) |
 | terminal UI and argument parsing | `fogu:cli` |
 | run Fogu code at run time (also concurrently: `vm.spawn`), native C libraries | `fogu:vm` `fogu:ffi` |

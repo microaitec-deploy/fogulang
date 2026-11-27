@@ -1,0 +1,94 @@
+// fogu:crypto sign/verify/jwk and fogu:jwt with public keys, JWK sets, JWKS URLs and OIDC discovery
+import crypto from "fogu:crypto"
+import jwt from "fogu:jwt"
+import http from "fogu:http"
+import web from "fogu:web"
+
+// crypto.sign / verify with every key type, PEM and JWK
+for pair in [["RS256", "rsa"], ["PS384", "rsa"], ["ES256", "p256"], ["ES384", "p384"], ["EdDSA", "ed25519"]] {
+    const alg = pair[0]
+    const kind = pair[1]
+    const k = crypto.generateKeyPair(kind)
+    const s = crypto.sign(alg, k.privateKey, "message")?
+    const j = crypto.jwk(k.publicKey, { kid: "k1" })
+    print(alg, typeof(s), crypto.verify(alg, k.publicKey, "message", s)?, crypto.verify(alg, j, "message", s)?,
+          crypto.verify(alg, k.publicKey, "messagE", s)?, j.kty, j.kid)
+}
+const rsa = crypto.generateKeyPair("rsa")
+const ec = crypto.generateKeyPair("p256")
+print(crypto.verify("ES256", rsa.publicKey, "m", bytes([1, 2])))        // the wrong key type is an error
+print(crypto.jwk(rsa.privateKey).kty, crypto.jwk(rsa.privateKey).n == crypto.jwk(rsa.publicKey).n)
+print(crypto.verify("RS256", "not a key", "m", bytes([1])))
+
+// tokens signed by OpenSSL (RS256 and PS256, RSA-2048)
+const opensslKey = "-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsI6YPsx/xsrXiEa81M4D
+OfL4WDrLie5WW5DIudad9ieqRtnDChOrkOVvdDjmsVetQNzs76SKzZt5AWYGAsOY
+/SEsVMnaStkQq0B4mH8kSFMvZRtcU42How344thd9wB+AGK4J7orUrTDlmFwBgEC
+hTejUdawe7mnNrqqQ/9VgUrBGHarPOXE66xqSgv/IFpL84zpU82j8W8HVHqSN5UV
+YPhkkIcjrHVQP+k0R106eIbCjngKw6nWA06nBbu8bqpC3k30YakIBcHNaA2NpgvY
+iVipTgSmPrfaZBP+pcFUA54qcdyf7DvQXH2ayrqZE1FMazDsNptaPSeGnz8wPN99
+AwIDAQAB
+-----END PUBLIC KEY-----"
+const rs = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Im9zc2wifQ.eyJzdWIiOiJhbGljZSIsImlzcyI6Imh0dHBzOi8vaWRwLnRlc3QiLCJhdWQiOiJjaGF0IiwiZXhwIjo0MTAyNDQ0ODAwLCJyb2xlcyI6WyJjaGF0LXVzZXIiXX0.IomRAssfdEVgpEyRZ12XY5ZCM8gHMWJTBHZR_3tQ-ZZ6oOfmG7VNQh38Vp0mrovfrfIwdiUviqZyyytaU7ElbRbCDjDjC5tWDu5AUC8k6OZPwMctmMZC5UWpRrGDiRJefeLBNWBEVo6GeEtRrKu6QlGa6D13aDhgU7ExlT6KdCNGGUDoaKtV67M-B-ldp3ebCsGtram0gauZieTVr9WqpeeAsXa2yFz8SOZriypn_5F-ED52o47Sio0HNiWt_2Bcy3ZOU6WUWFADEcOxG9QqqAGj_bmzk3vGtW_lJmyyy6q77vPtWq8P4I1vlbTDdI0pDTJpD-oavjj-sZGch4vn4w"
+const ps = "eyJhbGciOiJQUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Im9zc2wifQ.eyJzdWIiOiJhbGljZSIsImlzcyI6Imh0dHBzOi8vaWRwLnRlc3QiLCJhdWQiOiJjaGF0IiwiZXhwIjo0MTAyNDQ0ODAwLCJyb2xlcyI6WyJjaGF0LXVzZXIiXX0.DGpIHO8rGxefvFZP4cVVo86QEklWioCt4BeujeP1WEyUrvZQ5jyeeSKX5NfQI2QrXtEq3gu9788yoBMvf3TsPayTIFkbHLzW8Mpa2Ll7xDPUBRGOyEb-cnjF0PSABq0fT3_prME9dtJo9bknQzlDIlYNcyImtE5o30zXRtSSYGStDidLOg4pOwliz2Dp_2bBZCKOFsJLW2iKvedi1F1-xzIV0TOdqqzFQJFwRIq00gU8srskfeyiaEscexYnWIMLgZPcxMzT6COmDlV1yIyOWWEIzxJloav9m52zVnkZiULAI1jBb7AFh5rEgnq_GgenS3yhy2YiCKaLK8PU18Q3eQ"
+print(jwt.verify(rs, opensslKey, { issuer: "https://idp.test", audience: "chat" })?.sub)
+print(jwt.verify(ps, crypto.jwk(opensslKey, { kid: "ossl" }))?.roles)
+print(jwt.verify(rs, opensslKey, { algorithms: ["ES256"] }))
+
+// attacks: a tampered payload, alg none, HS256 with the public key as the secret, a wrong key
+const parts = rs.split(".")
+const forged = parts[0] + "." + crypto.base64("{\"sub\":\"mallory\",\"exp\":4102444800}", { url: true }) + "." + parts[2]
+print(jwt.verify(forged, opensslKey))
+print(jwt.verify(crypto.base64("{\"alg\":\"none\"}", { url: true }) + "." + parts[1] + ".", opensslKey))
+print(jwt.verify(jwt.sign({ sub: "mallory" }, "a secret long enough"), opensslKey))
+print(jwt.verify(rs, rsa.publicKey))
+print(jwt.verify(rs, "a secret long enough"))
+
+// jwt.sign with private keys: the algorithm follows the key, kid in the header
+const t1 = jwt.sign({ sub: "42" }, ec.privateKey, { keyid: "ec1", expiresIn: 1h })
+print(jwt.decode(t1)?.header, jwt.verify(t1, ec.publicKey)?.sub)
+const ed = crypto.generateKeyPair("ed25519")
+print(jwt.verify(jwt.sign({ sub: "ed" }, ed.privateKey), ed.publicKey)?.sub)
+print(jwt.verify(jwt.sign({ sub: "ps" }, rsa.privateKey, { algorithm: "PS512" }), rsa.publicKey)?.sub)
+
+// a JWK set: the token's kid picks the key; keys for encryption are ignored
+const set = { keys: [crypto.jwk(rsa.publicKey, { kid: "a", use: "sig" }), crypto.jwk(ec.publicKey, { kid: "ec1" }),
+                     { kty: "oct", k: "c2VjcmV0" }, crypto.jwk(ed.publicKey, { kid: "enc", use: "enc" })] }
+print(jwt.verify(t1, set)?.sub)
+print(jwt.verify(jwt.sign({ sub: "x" }, rsa.privateKey, { keyid: "zzz" }), set))
+
+// JWKS from a URL and OIDC discovery; a rotation is fetched when a token names a new key
+let current = { keys: [crypto.jwk(ec.publicKey, { kid: "ec1" })] }
+let fetches = 0
+http.serve(18451, (req) => {
+    if req.path == "/.well-known/openid-configuration" {
+        return { issuer: "http://127.0.0.1:18451", jwks_uri: "http://127.0.0.1:18451/jwks" }
+    }
+    fetches += 1
+    return current
+}, { quiet: true })?
+const remote = jwt.jwks("http://127.0.0.1:18451/jwks", { minRefresh: 0 })
+print(jwt.verify(t1, remote)?.sub, remote.kids, fetches)
+current = { keys: [crypto.jwk(ec.publicKey, { kid: "ec1" }), crypto.jwk(ed.publicKey, { kid: "ed2" })] }
+const t2 = jwt.sign({ sub: "rotated" }, ed.privateKey, { keyid: "ed2" })
+print(jwt.verify(t2, remote)?.sub, remote.kids, fetches)
+
+const idp = jwt.oidc("http://127.0.0.1:18451")?
+const good = jwt.sign({ sub: "alice", aud: "chat" }, ec.privateKey, { keyid: "ec1", issuer: "http://127.0.0.1:18451" })
+print(jwt.verify(good, idp)?.sub, idp.issuer)
+print(jwt.verify(jwt.sign({ sub: "bob" }, ec.privateKey, { keyid: "ec1", issuer: "https://evil" }), idp))
+print(jwt.oidc("http://127.0.0.1:18451/other"))
+
+// fogu:web middleware with keys from a URL (fetched while the server keeps serving)
+const app = web.app()
+app.use("/api", jwt.middleware(jwt.jwks("http://127.0.0.1:18451/jwks"), { audience: "chat" }))
+app.get("/api/me", (ctx) => "me " + ctx.user.sub)
+app.listen(18452, { quiet: true })?
+const auth = (t) => ({ headers: { authorization: "Bearer " + t } })
+print(http.get("http://127.0.0.1:18452/api/me", auth(good))?.text)
+const denied = http.get("http://127.0.0.1:18452/api/me", auth(t1))?
+print(denied.status, denied.json()?.error)
+
+// base64 with or without its padding
+print(crypto.fromBase64("aGVsbG8"), crypto.fromBase64("aGVsbG8="))

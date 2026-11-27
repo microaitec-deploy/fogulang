@@ -1,0 +1,148 @@
+// fogu:grpc — real bidirectional streaming, streams and channels, interceptors,
+// health checking, reflection and client.close()
+import grpc from "fogu:grpc"
+import protobuf from "fogu:protobuf"
+import stream from "fogu:stream"
+
+const schema = protobuf.parse("syntax = \"proto3\"; package demo;
+message Msg { string text = 1; }
+message Num { int32 n = 1; }
+message Sum { int32 total = 1; }
+service Chat {
+  rpc Talk (stream Msg) returns (stream Msg);
+  rpc Running (stream Num) returns (stream Sum);
+  rpc Add (stream Num) returns (Sum);
+  rpc Count (Num) returns (stream Num);
+  rpc Upper (stream Msg) returns (stream Msg);
+  rpc Fail (Num) returns (stream Num);
+  rpc Secret (Msg) returns (Msg);
+}")?
+
+const srv = grpc.server(schema, { reflection: true })
+srv.service("demo.Chat", {
+    // each answer goes out before the next request arrives
+    Talk: fn(msgs, call) {
+        for m in msgs { call.send({ text: "echo " + m.text }) }
+    },
+    // an answer that depends on the requests before it
+    Running: fn(nums, call) {
+        let t = 0
+        for x in nums {
+            t = t + x.n
+            call.send({ total: t })
+        }
+    },
+    Add: fn(nums, call) {
+        const all = nums.toList()?
+        return { total: all.map(fn(x) { return x.n }).reduce(fn(a, b) { return a + b }, 0) }
+    },
+    Count: fn(req, call) {
+        for i in 0..req.n { call.send({ n: i }) }
+    },
+    // a handler may return a stream, and pipe into the call
+    Upper: fn(msgs, call) {
+        return stream.from(msgs).map(fn(m) { return { text: m.text.upper() } })
+    },
+    Fail: fn(req, call) {
+        call.send({ n: 1 })
+        return nil, grpc.status("ABORTED", "stopped after one")
+    },
+    Secret: fn(req, call) { return { text: "the secret is " + req.text } },
+})
+// interceptors run before every handler
+const seen = []
+srv.use(fn(call) {
+    seen.push(call.method)
+    if call.method == "demo.Chat/Secret" && call.metadata["token"] != "s3cret" {
+        return nil, grpc.status("UNAUTHENTICATED", "bad token")
+    }
+})
+const port = srv.listen("127.0.0.1:0")?
+fg srv.serve()
+
+const c = grpc.connect("127.0.0.1:" + str(port), schema)?
+
+// bidirectional, one message at a time
+const talk = c.stream("Talk")?
+talk.send({ text: "hi" })
+print(talk.next()?)
+talk.send({ text: "again" })
+print(talk.next()?)
+talk.end()
+print(talk.next()?, talk.done, talk.sent, talk.received)
+
+const run = c.stream("Running")?
+for n in [5, 10, 20] {
+    run.send({ n: n })
+    print("running", run.next()?.total)
+}
+run.end()
+
+// client streaming: a list, or one request at a time
+print(c.call("Add", [{ n: 1 }, { n: 2 }])?)
+const add = c.stream("Add")?
+for n in 1..5 { add.send({ n: n }) }
+add.end()
+print(add.next()?)
+
+// streams: for, fogu:stream sources, pipe
+for m in c.stream("Count", { n: 3 })? { print("count", m.n) }
+print(stream.from(c.stream("Count", { n: 4 })?).map(fn(m) { return m.n * 10 }).toList())
+const up = c.stream("Upper")?
+print(stream.of({ text: "a" }, { text: "b" }).pipe(up))
+for m in up { print("upper", m.text) }
+
+// a channel, written by a task, piped into a call
+const ch = chan(4)
+fg fn() {
+    for w in ["x", "y", "z"] { ch <- { text: w } }
+    close(ch)
+}()
+const t2 = c.stream("Talk")?
+stream.from(ch).pipe(t2)
+print(t2.toList()?.map(fn(m) { return m.text }))
+
+// an error after a message: the loop ends, the stream keeps the error
+const f = c.stream("Fail", { n: 0 })?
+for m in f { print("fail got", m.n) }
+print(f.error)
+
+// interceptors
+const [_, denied] = c.call("Secret", { text: "x" })
+print(denied)
+print(c.call("Secret", { text: "42" }, { metadata: { token: "s3cret" } })?.text)
+print(seen.len() > 5, seen.contains("demo.Chat/Talk"))
+
+// health checking (grpc.health.v1), answered by the server itself
+const hs = protobuf.parse("syntax = \"proto3\"; package grpc.health.v1;
+message HealthCheckRequest { string service = 1; }
+message HealthCheckResponse { enum ServingStatus { UNKNOWN = 0; SERVING = 1; NOT_SERVING = 2; SERVICE_UNKNOWN = 3; } ServingStatus status = 1; }
+service Health { rpc Check(HealthCheckRequest) returns (HealthCheckResponse); }")?
+const h = grpc.connect("127.0.0.1:" + str(port), hs)?
+print(h.call("Check", { service: "" })?.status, h.call("Check", { service: "demo.Chat" })?.status)
+srv.health("demo.Chat", "NOT_SERVING")
+print(h.call("Check", { service: "demo.Chat" })?.status)
+const [_, unknown] = h.call("Check", { service: "nope.Svc" })
+print(unknown)
+
+// server reflection (grpc.reflection.v1)
+const rs = protobuf.parse("syntax = \"proto3\"; package grpc.reflection.v1;
+message ServerReflectionRequest { string host = 1; oneof message_request { string file_by_filename = 3; string file_containing_symbol = 4; string list_services = 7; } }
+message ServerReflectionResponse { string valid_host = 1; oneof message_response { FileDescriptorResponse file_descriptor_response = 4; ListServiceResponse list_services_response = 6; ErrorResponse error_response = 7; } }
+message FileDescriptorResponse { repeated bytes file_descriptor_proto = 1; }
+message ListServiceResponse { repeated ServiceResponse service = 1; }
+message ServiceResponse { string name = 1; }
+message ErrorResponse { int32 error_code = 1; string error_message = 2; }
+service ServerReflection { rpc ServerReflectionInfo(stream ServerReflectionRequest) returns (stream ServerReflectionResponse); }")?
+const r = grpc.connect("127.0.0.1:" + str(port), rs)?
+const answers = r.call("ServerReflectionInfo", [{ listServices: "" }, { fileContainingSymbol: "demo.Chat" }, { fileContainingSymbol: "no.Such" }])?
+print(answers[0].listServicesResponse.service.map(fn(s) { return s.name }))
+print(answers[1].fileDescriptorResponse.fileDescriptorProto.len())
+print(answers[2].errorResponse)
+
+// close(): no new calls
+c.close()
+print(c.closed)
+const [_, gone] = c.call("Count", { n: 1 })
+print(gone)
+srv.close()

@@ -140,6 +140,39 @@ direct HTTP server below. No benchmark of `bench/` is slower than in 0.8.3.
   and a socket into a channel with `stream.from(ws).pipe(ch)`. `ws.upgrade(req, (ws, req) => …)`
   answers a WebSocket upgrade from an `http.serve` handler, as `app.ws` does in `fogu:web` (both
   run the same code, on the direct and the hyper server).
+- **`fogu:grpc` streams in both directions, message by message.** The handler of a
+  client-streaming or bidirectional method gets its requests as a `GrpcStream` while they arrive
+  (`for m in msgs`, `msgs.next()`, `stream.from(msgs)`, `msgs.toList()`), and can answer each one
+  before the next; `c.stream(method)` without requests opens the call on the client: `send(msg)`,
+  `end()`, and `next()` / `for` for the responses. A `GrpcStream` is a `fogu:stream` source,
+  `pipe` sends a stream or a channel into a call (`stream.from(ch).pipe(s)`, `s.pipe(call)`), and
+  a server-streaming handler may return a stream. Also:
+  - `srv.use(fn(call))`: interceptors run before every handler; an error fails the call
+    (`grpc.status("UNAUTHENTICATED", …)`).
+  - Health checking: the server answers `grpc.health.v1.Health/Check` itself (`srv.health(service,
+    status)`; `grpc.server(schema, { health: false })` turns it off).
+  - Server reflection with `grpc.server(schema, { reflection: true })` (`grpc.reflection.v1` and
+    v1alpha): `grpcurl list`, `describe` and calls work without the `.proto` (checked with grpcurl
+    1.9: unary, bidirectional, health).
+  - mTLS: `listen(port, { cert, key, clientCa })` asks clients for a certificate signed by
+    `clientCa`; `grpc.connect(url, schema, { cert, key })` presents one.
+  - `c.close()` closes the client (it did nothing): no new calls, the connection goes when the open
+    ones end; `c.closed`.
+- **Public-key signatures**: `crypto.sign(alg, privateKey, data)`, `crypto.verify(alg, publicKey,
+  data, signature)` and `crypto.jwk(key, { kid, alg, use })` — RS256/384/512, PS256/384/512,
+  ES256/384 and EdDSA, keys as PEM (public key, PKCS#1, certificate, PKCS#8) or JWK, computed by
+  `ring` (already linked through rustls; constant-time signing). RSA keys under 2048 bits are
+  refused.
+- **`fogu:jwt` with public keys and OpenID Connect**: `jwt.sign` with a PEM private key (`keyid`
+  → `kid`), `jwt.verify` / `jwt.middleware` with a PEM key, a JWK, a JWK set (the token's `kid`
+  picks the key; `use: enc` keys are skipped), `jwt.jwks(url, { ttl, minRefresh })` (fetched on
+  first use, after `ttl` and on key rotation, at most once per `minRefresh`; the old keys stay if a
+  refresh fails) and `jwt.oidc(issuer)` (discovery; tokens must carry `iss: issuer`). The key
+  decides the algorithms: a secret accepts only HS*, a public key only those of its type, `alg:
+  none` never — an HS256 token made with the public key as its secret is refused. Fetching waits
+  cooperatively, in `jwt.verify` and in the middleware (`fogu:web` now lets a native middleware
+  wait). Tokens made by OpenSSL (RS256, PS256) verify; a native verification takes tens of
+  microseconds (a pure-Fogu RS256 took ~47 ms on the interpreter's thread).
 
 ### Not changed, and why
 
@@ -205,6 +238,14 @@ direct HTTP server below. No benchmark of `bench/` is slower than in 0.8.3.
 
 ### Fixed
 
+- `fogu:grpc`: the last `next()` of `c.stream(...)` could wait for ever (about 1 run in 20 of
+  `tests/spec/grpc.fg`): the reading task woke the scheduler before it dropped its sender, so the
+  end of the stream could arrive after the scheduler looked and went back to sleep. The sender
+  goes first now. (Present in 0.8.3.)
+- `crypto.fromBase64` reads text without its `=` padding in the standard alphabet too
+  (`"aGVsbG8"` was "Invalid padding").
+- `tests/spec/grpc.fg` timed its concurrency check with `clock()`, the wall clock, which can jump
+  (it went backwards on WSL); it uses `time.monotonic()`.
 - `fogu:net` (Linux): a read could wait for ever at the end of a stream when the peer's last
   bytes and its close arrived together — the receive that took the bytes looked like one that
   emptied the socket, and no further event announced the end. The reactor now remembers a

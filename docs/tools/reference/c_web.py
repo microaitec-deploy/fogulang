@@ -297,14 +297,19 @@ print(call({ method: "POST", path: "/_tc/p/double", headers: { "x-topcoat": "pro
         "group": W,
         "title": "fogu:jwt",
         "import": 'import jwt from "fogu:jwt"',
-        "intro": "JSON Web Tokens with HMAC (HS256/HS384/HS512). A token that fails verification is an error value.",
+        "intro": "JSON Web Tokens signed with HMAC (HS256/HS384/HS512) or a public key (RS256/384/512, PS256/384/512, ES256/384, EdDSA), "
+        "with JWK sets fetched from a URL or found by OpenID Connect discovery (Keycloak, Auth0, Entra ID, Google…). A token that fails "
+        "verification is an error value. The key decides the algorithms: a secret accepts only HS*, a public key only those of its type "
+        "(and a JWK's own <code>alg</code>); <code>alg: none</code> is never accepted.",
         "blocks": [
             {
                 "api": [
-                    ("jwt.sign(payload, secret, { algorithm, expiresIn, notBefore, issuer, audience, subject, jwtid, header, noTimestamp })", "str", "<code>iat</code> is added; durations or seconds for times."),
-                    ("jwt.verify(token, secret, { algorithms, issuer, audience, subject, leeway, maxAge, ignoreExpiration })", "map · error", "The claims."),
+                    ("jwt.sign(payload, key, { algorithm, keyid, expiresIn, notBefore, issuer, audience, subject, jwtid, header, noTimestamp })", "str", "<code>key</code>: a secret (HS256 by default) or a PEM private key (its own algorithm by default: RS256, ES256, ES384 or EdDSA). <code>keyid</code> goes in the header as <code>kid</code>. <code>iat</code> is added; durations or seconds for times."),
+                    ("jwt.verify(token, key, { algorithms, issuer, audience, subject, leeway, maxAge, ignoreExpiration })", "map · error", "The claims. <code>key</code>: a secret, a PEM public key or certificate, a JWK, a JWK set (<code>{ keys }</code> or a list: the token's <code>kid</code> picks the key; <code>use: enc</code> keys are skipped), or <code>jwt.jwks</code> / <code>jwt.oidc</code>."),
+                    ("jwt.jwks(url, { ttl = 10m, minRefresh = 30s, timeout = 5s, issuer })", "Jwks", "Keys fetched on first use (waiting cooperatively: other tasks go on), again after <code>ttl</code>, and when a token names a key id they lack (key rotation) — at most once per <code>minRefresh</code>. If a refresh fails the old keys stay in use. Fields: <code>url issuer kids size error</code>."),
+                    ("jwt.oidc(issuer, opts)", "Jwks · error", "OpenID Connect discovery: reads <code>issuer/.well-known/openid-configuration</code>, then its <code>jwks_uri</code>. Tokens must also carry <code>iss: issuer</code>."),
                     ("jwt.decode(token)", "map · error", "<code>{ header, payload }</code> without verifying."),
-                    ("jwt.middleware(secret, { property = \"user\", optional, …verify options })", "middleware", "For <code>fogu:web</code>: <code>Authorization: Bearer</code> → <code>ctx.user</code>, otherwise 401."),
+                    ("jwt.middleware(key, { property = \"user\", optional, …verify options })", "middleware", "For <code>fogu:web</code>: <code>Authorization: Bearer</code> → <code>ctx.user</code>, otherwise 401. Any <code>key</code> <code>verify</code> takes; with <code>jwt.jwks</code> the request waits for the keys without holding up the server."),
                 ],
                 "example": r'''
 import jwt from "fogu:jwt"
@@ -317,7 +322,23 @@ const [_, e2] = jwt.verify(jwt.sign({ a: 1 }, "s3cret", { expiresIn: -10 }), "s3
 print(e1, e2)
 ''',
                 "run": True,
-            }
+            },
+            {
+                "h3": "Public keys and key sets",
+                "example": r'''
+import jwt from "fogu:jwt"
+import crypto from "fogu:crypto"
+const k = crypto.generateKeyPair("p256")
+const token = jwt.sign({ sub: "alice", aud: "chat" }, k.privateKey, { keyid: "k1", expiresIn: 5m })
+print(jwt.decode(token)?.header)
+print(jwt.verify(token, k.publicKey, { audience: "chat" })?.sub)
+const set = { keys: [crypto.jwk(k.publicKey, { kid: "k1", use: "sig" })] }
+print(jwt.verify(token, set)?.sub)
+// an HMAC token never passes a public key (no algorithm confusion)
+print(jwt.verify(jwt.sign({ sub: "mallory" }, "a guessed secret"), k.publicKey))
+''',
+                "run": True,
+            },
         ],
     },
     {
@@ -386,20 +407,26 @@ io.close()
         "import": 'import grpc from "fogu:grpc"',
         "intro": "gRPC servers and clients without code generation: the messages are described by a "
         "<a class=\"underline\" href=\"#mod-protobuf\">fogu:protobuf</a> schema (<code>.proto</code> compiled at run time) and "
-        "travel as maps. Unary, server streaming, client streaming and bidirectional methods (the requests of a "
-        "bidirectional call are all received before the handler runs). Each request runs as its own <code>fg</code> task.",
+        "travel as maps. Unary, server streaming, client streaming and bidirectional methods, with each message handled as "
+        "it arrives; a stream of messages is a <a class=\"underline\" href=\"#mod-stream\">fogu:stream</a> source and "
+        "<code>pipe</code> sends into one. Each request runs as its own <code>fg</code> task. The server answers health checks "
+        "(<code>grpc.health.v1</code>) and, when asked, server reflection, so <code>grpcurl</code> works without the <code>.proto</code>.",
         "blocks": [
             {
                 "api": [
-                    ("grpc.server(schema)", "GrpcServer", ""),
-                    ("srv.handle(method, fn(req, call)) · srv.handle({ method: fn }) · srv.service(\"pkg.Service\", { Method: fn })", "nil", "Methods: <code>\"pkg.Service/Method\"</code>, <code>\"pkg.Service.Method\"</code> or a unique <code>\"Method\"</code>. Client streaming: <code>req</code> is a list."),
-                    ("call.send(msg) · call.metadata · call.peer · call.method · call.cancelled", "", "<code>send</code> for server streaming (or return a list)."),
-                    ("srv.listen(port | \"host:port\", { cert, key })", "int · error", "The port (an int port listens on 127.0.0.1; <code>\"0.0.0.0:port\"</code> for other machines). <code>cert</code>/<code>key</code>: PEM files for TLS."),
+                    ("grpc.server(schema, { health = true, reflection = false })", "GrpcServer", "<code>health</code>: answer <code>grpc.health.v1.Health/Check</code>; <code>reflection</code>: serve <code>grpc.reflection.v1</code> (and v1alpha)."),
+                    ("srv.handle(method, fn(req, call)) · srv.handle({ method: fn }) · srv.service(\"pkg.Service\", { Method: fn })", "nil", "Methods: <code>\"pkg.Service/Method\"</code>, <code>\"pkg.Service.Method\"</code> or a unique <code>\"Method\"</code>. Client streaming and bidirectional: <code>req</code> is a <code>GrpcStream</code> of the requests as they arrive (<code>for m in req</code>, <code>req.next()</code>, <code>stream.from(req)</code>, <code>req.toList()</code>)."),
+                    ("call.send(msg) · call.end() · call.metadata · call.peer · call.method · call.cancelled", "", "<code>send</code> for server streaming (or return a list or a stream; <code>s.pipe(call)</code> works too)."),
+                    ("srv.use(fn(call))", "nil", "Runs before every handler, in order; returning an error (<code>grpc.status(\"UNAUTHENTICATED\", …)</code>) fails the call."),
+                    ("srv.health(service, \"SERVING\" | \"NOT_SERVING\" | \"UNKNOWN\")", "nil", "What health checks answer for <code>service</code> (<code>\"\"</code>: the whole server). By default: <code>SERVING</code> for the server and every service with a handler, <code>NOT_FOUND</code> for others."),
+                    ("srv.listen(port | \"host:port\", { cert, key, clientCa })", "int · error", "The port (an int port listens on 127.0.0.1; <code>\"0.0.0.0:port\"</code> for other machines). <code>cert</code>/<code>key</code>: PEM files for TLS; <code>clientCa</code>: clients must present a certificate it signed (mTLS)."),
                     ("srv.serve() · srv.close() · srv.port · srv.address · srv.methods", "", "<code>serve</code> runs until <code>close</code> (start it with <code>fg</code>)."),
                     ("return nil, grpc.status(\"NOT_FOUND\", \"msg\")", "", "Fails the call with that code (any other error is <code>UNKNOWN</code>); <code>grpc.codes</code> lists them."),
-                    ("grpc.connect(url, schema, { timeout, metadata, ca, domain })", "GrpcClient", "<code>https://</code> uses TLS (system roots or <code>ca</code>). Connects on the first call."),
+                    ("grpc.connect(url, schema, { timeout, metadata, ca, domain, cert, key })", "GrpcClient", "<code>https://</code> uses TLS (system roots or <code>ca</code>; <code>cert</code>/<code>key</code>: a client certificate). Connects on the first call."),
                     ("c.call(method, req, { timeout, metadata })", "value · error", "A list for server streaming; a list of requests for client streaming. Failures: <code>grpc: NOT_FOUND: msg</code>, <code>grpc: DEADLINE_EXCEEDED: …</code>."),
-                    ("c.stream(method, req, opts) → s.next() · s.close() · s.done · s.received", "GrpcStream", "One message at a time (<code>nil</code> at the end)."),
+                    ("c.stream(method, req, opts) → s.next() · for m in s · s.toList() · s.close() · s.done · s.received · s.error", "GrpcStream", "The responses one at a time (<code>nil</code> at the end); a <code>fogu:stream</code> source. An error that ends the stream is <code>s.error</code> after a <code>for</code> loop."),
+                    ("c.stream(method) → s.send(msg) · s.end() · s.sent", "GrpcStream", "A client-streaming or bidirectional call opened without requests: each <code>send</code> goes out at once, <code>end()</code> says there are no more, and the responses arrive meanwhile. <code>stream.from(ch).pipe(s)</code> sends a channel."),
+                    ("c.close() · c.closed", "", "No new calls; the connection closes once the open ones end."),
                 ],
                 "example": r'''
 import grpc from "fogu:grpc"
@@ -428,7 +455,48 @@ print(c.call("Count", { n: 3 })?)
 srv.close()
 ''',
                 "run": True,
-            }
+            },
+            {
+                "h3": "Streams in both directions",
+                "text": "A bidirectional handler reads each request as it arrives and can answer before the next one; the client "
+                "sends with <code>send</code> and reads with <code>next</code> or <code>for</code>. Interceptors and health checks need no schema of their own.",
+                "example": r'''
+import grpc from "fogu:grpc"
+import protobuf from "fogu:protobuf"
+import stream from "fogu:stream"
+const schema = protobuf.parse("syntax = \"proto3\"; package demo;
+message Num { int32 n = 1; }
+service Calc { rpc Running (stream Num) returns (stream Num); }")?
+const srv = grpc.server(schema)
+srv.use(fn(call) {
+    if call.metadata["token"] != "s3cret" { return nil, grpc.status("UNAUTHENTICATED", "bad token") }
+})
+srv.handle("Running", fn(nums, call) {
+    let total = 0
+    for x in nums {
+        total = total + x.n
+        call.send({ n: total })                 // goes out before the next request
+    }
+})
+const port = srv.listen("127.0.0.1:0")?
+fg srv.serve()
+
+const c = grpc.connect("127.0.0.1:" + str(port), schema, { metadata: { token: "s3cret" } })?
+const s = c.stream("Running")?
+for n in [5, 10, 20] {
+    s.send({ n: n })
+    print("total", s.next()?.n)
+}
+s.end()
+
+// a stream of requests, piped in; the responses as a stream
+const s2 = c.stream("Running")?
+stream.range(1, 5).map(fn(i) { return { n: i } }).pipe(s2)
+print(stream.from(s2).map(fn(m) { return m.n }).toList())
+srv.close()
+''',
+                "run": True,
+            },
         ],
     },
     {
