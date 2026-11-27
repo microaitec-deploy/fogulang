@@ -48,3 +48,8 @@ const s = http.client({ baseUrl: "http://127.0.0.1:18502" })
 print(s.get("/")?.text, s.get("/")?.text, s.cookies)
 const off = http.client({ baseUrl: "http://127.0.0.1:18502", cookies: false })
 print(off.get("/")?.text, off.get("/")?.text)
+
+// a cookie named in the request wins over the jar's
+const t = http.client({ baseUrl: "http://127.0.0.1:18501" })
+t.post("/login")?
+print(t.get("/me", { cookies: { theme: "light" } })?.json()?.req)

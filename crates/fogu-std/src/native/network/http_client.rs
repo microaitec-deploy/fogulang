@@ -741,7 +741,17 @@ fn send_session(mut p: Plan, jar: Option<SharedJar>, follow: bool) -> Result<Got
         let url = reqwest::Url::parse(&p.url).map_err(|e| io_err!("http: invalid URL '{}': {}", p.url, e))?;
         let mut hop = p.clone();
         if let Some(j) = &jar {
-            if let Some(c) = lock(j).header_for(&url) {
+            // what the request names itself (`cookies: { … }` or a Cookie header) wins over the jar
+            let own: Vec<String> = hop
+                .cookies
+                .iter()
+                .map(|(k, _)| k.clone())
+                .chain(hop.headers.iter().filter(|(k, _)| k.eq_ignore_ascii_case("cookie")).flat_map(|(_, v)| crate::native::cookies::parse_header(v).into_iter().map(|(k, _)| k)))
+                .collect();
+            let jar_header = lock(j).header_for(&url).map(|h| {
+                h.split("; ").filter(|p| !own.iter().any(|n| p.split_once('=').is_some_and(|(k, _)| k == n))).collect::<Vec<_>>().join("; ")
+            });
+            if let Some(c) = jar_header.filter(|c| !c.is_empty()) {
                 match hop.headers.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case("cookie")) {
                     Some((_, v)) => *v = format!("{}; {}", c, v),
                     None => hop.headers.push(("cookie".into(), c)),
