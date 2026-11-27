@@ -1,0 +1,22 @@
+// fogu:image: decoding, resizing, blurring and encoding run off the
+// interpreter's thread when other tasks could run (a timer keeps ticking)
+import image from "fogu:image"
+import time from "fogu:time"
+
+const big = image.new(3000, 3000, "#3366cc")
+let ticks = 0
+let running = true
+fg fn() {
+    while running {
+        time.delay(2ms)
+        ticks += 1
+    }
+}()
+const png = big.encode("png")
+const small = big.resize(300).blur(1.5).thumbnail(100)
+const back = image.decode(png)
+running = false
+print(small.width, small.height, back.width, back.height, typeof(png))
+print("the timer ran meanwhile:", ticks > 3)
+// alone (no other task), the same operations run inline
+print(image.new(10, 10, "red").resize(5).width, len(image.new(4, 4).encode("png")) > 0)

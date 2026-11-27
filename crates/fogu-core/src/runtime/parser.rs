@@ -642,6 +642,33 @@ impl Parser {
         })
     }
 
+    /// `if cond { a } else { b }` used as a value: each branch is one
+    /// expression, and `else` is required. Written as `match !!(cond) { true
+    /// => a, _ => b }`, which every engine already runs.
+    fn parse_if_expr(&mut self) -> Result<Expr, String> {
+        self.advance();
+        let cond = self.parse_expr()?;
+        let then = self.parse_branch_expr()?;
+        if !self.matches(&Token::Else) {
+            return self.fail("an 'if' used as a value needs an 'else' branch");
+        }
+        let other = if self.check(&Token::If) { self.parse_if_expr()? } else { self.parse_branch_expr()? };
+        let truthy = Expr::Unary { op: UnaryOp::Not, right: Box::new(Expr::Unary { op: UnaryOp::Not, right: Box::new(cond) }) };
+        Ok(Expr::Match {
+            subject: Box::new(truthy),
+            arms: vec![MatchArm { pattern: Pattern::Literal(Expr::Bool(true)), body: then }, MatchArm { pattern: Pattern::Wildcard, body: other }],
+        })
+    }
+
+    fn parse_branch_expr(&mut self) -> Result<Expr, String> {
+        self.expect(Token::LBrace, "expected '{' (an 'if' used as a value has one expression in each branch)")?;
+        self.skip_semicolons();
+        let e = self.parse_expr()?;
+        self.skip_semicolons();
+        self.expect(Token::RBrace, "expected '}': an 'if' used as a value has one expression in each branch")?;
+        Ok(e)
+    }
+
     fn parse_while(&mut self) -> Result<Stmt, String> {
         self.advance();
         let cond = self.parse_expr()?;
@@ -663,11 +690,19 @@ impl Parser {
         })
     }
 
+    /// A loop variable: a name, or `_` for one that is not used.
+    fn loop_var(&mut self) -> Result<String, String> {
+        if self.matches(&Token::Underscore) {
+            return Ok("_".to_string());
+        }
+        self.expect_ident("an identifier")
+    }
+
     fn parse_for(&mut self) -> Result<Stmt, String> {
         self.advance();
-        let var = self.expect_ident("an identifier")?;
+        let var = self.loop_var()?;
         let var2 = if self.matches(&Token::Comma) {
-            Some(self.expect_ident("an identifier")?)
+            Some(self.loop_var()?)
         } else {
             None
         };
@@ -1526,6 +1561,10 @@ impl Parser {
             return self.parse_match_expr();
         }
 
+        if self.check(&Token::If) {
+            return self.parse_if_expr();
+        }
+
         // import("./mod.fg"): a module loaded at run time
         if self.check(&Token::Import) && matches!(self.peek_n(1), Token::LParen) {
             self.advance();
@@ -1657,7 +1696,25 @@ impl Parser {
 
             Token::LBrace => {
                 let mut entries: Vec<(super::fstr::Str, Expr)> = Vec::new();
+                // `{ [expr]: value }`: computed keys (then the map is built from pairs at run time)
+                let mut pairs: Vec<Expr> = Vec::new();
+                let mut computed = false;
                 while !self.check(&Token::RBrace) {
+                    if self.matches(&Token::LBracket) {
+                        let k = self.parse_expr()?;
+                        self.expect(Token::RBracket, "expected ']' after a computed key")?;
+                        self.expect(Token::Colon, "expected ':'")?;
+                        let value = self.parse_expr()?;
+                        if !computed {
+                            computed = true;
+                            pairs.extend(entries.drain(..).map(|(k, v)| Expr::List(vec![Expr::Str(k), v])));
+                        }
+                        pairs.push(Expr::List(vec![k, value]));
+                        if !self.matches(&Token::Comma) {
+                            break;
+                        }
+                        continue;
+                    }
                     let key = match self.peek().clone() {
                         Token::Ident(s) | Token::Str(s) => {
                             self.advance();
@@ -1674,12 +1731,20 @@ impl Parser {
                     };
                     self.expect(Token::Colon, "expected ':'")?;
                     let value = self.parse_expr()?;
-                    entries.push((key.into(), value));
+                    if computed {
+                        pairs.push(Expr::List(vec![Expr::Str(key.into()), value]));
+                    } else {
+                        entries.push((key.into(), value));
+                    }
                     if !self.matches(&Token::Comma) {
                         break;
                     }
                 }
                 self.expect(Token::RBrace, "expected '}'")?;
+                if computed {
+                    // the keys and values in the order written (a later key wins)
+                    return Ok(Expr::Call { callee: Box::new(Expr::Ident(Name::new(MAP_OF.to_string()))), args: vec![Expr::List(pairs)] });
+                }
                 Ok(Expr::Map(entries))
             }
 
@@ -1690,6 +1755,9 @@ impl Parser {
         }
     }
 }
+
+/// The native behind a map literal with computed keys (a name no program can write).
+pub const MAP_OF: &str = "{map}";
 
 /// The source text of a keyword token (`None` for other tokens).
 fn keyword_text(t: &Token) -> Option<&'static str> {

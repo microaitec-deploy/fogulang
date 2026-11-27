@@ -1333,6 +1333,10 @@ fn text_response(out: &mut Vec<u8>, code: u16, msg: &str) {
 mod tests {
     use super::*;
 
+    fn test_reader(kind: &BodyKind, max: usize) -> BodyReader {
+        BodyReader::new(kind, &ServerOptions { max_body: max, ..Default::default() })
+    }
+
     fn head(text: &str) -> Parsed {
         parse_head(text.as_bytes(), &ServerOptions::default())
     }
@@ -1369,16 +1373,16 @@ mod tests {
 
     #[test]
     fn bodies() {
-        let mut r = BodyReader::new(&BodyKind::Len(5), 100);
+        let mut r = test_reader(&BodyKind::Len(5), 100);
         assert_eq!(r.feed(b"ab").unwrap(), (2, false));
         assert_eq!(r.feed(b"cdeNEXT").unwrap(), (3, true));
         assert_eq!(r.body, b"abcde");
         // chunked, fed a byte at a time and in one piece
         let text = b"4\r\nWiki\r\n6;ext=1\r\npedia \r\nE\r\nin \r\n\r\nchunks.\r\n0\r\nX-T: 1\r\n\r\nNEXT";
-        let mut whole = BodyReader::new(&BodyKind::Chunked, 100);
+        let mut whole = test_reader(&BodyKind::Chunked, 100);
         assert_eq!(whole.feed(text).unwrap(), (text.len() - 4, true));
         assert_eq!(whole.body, b"Wikipedia in \r\n\r\nchunks.");
-        let mut bytes = BodyReader::new(&BodyKind::Chunked, 100);
+        let mut bytes = test_reader(&BodyKind::Chunked, 100);
         let mut done = false;
         for b in &text[..text.len() - 4] {
             assert!(!done);
@@ -1387,10 +1391,10 @@ mod tests {
         assert!(done);
         assert_eq!(bytes.body, whole.body);
         // too large, and broken framing
-        assert_eq!(BodyReader::new(&BodyKind::Chunked, 3).feed(b"4\r\nWiki\r\n").unwrap_err().0, 413);
-        assert_eq!(BodyReader::new(&BodyKind::Chunked, 100).feed(b"zz\r\n").unwrap_err().0, 400);
-        assert_eq!(BodyReader::new(&BodyKind::Chunked, 100).feed(b"1\r\nab").unwrap_err().0, 400);
-        assert_eq!(BodyReader::new(&BodyKind::Chunked, 100).feed(b"\r\n").unwrap_err().0, 400);
+        assert_eq!(test_reader(&BodyKind::Chunked, 3).feed(b"4\r\nWiki\r\n").unwrap_err().0, 413);
+        assert_eq!(test_reader(&BodyKind::Chunked, 100).feed(b"zz\r\n").unwrap_err().0, 400);
+        assert_eq!(test_reader(&BodyKind::Chunked, 100).feed(b"1\r\nab").unwrap_err().0, 400);
+        assert_eq!(test_reader(&BodyKind::Chunked, 100).feed(b"\r\n").unwrap_err().0, 400);
     }
 
     #[test]

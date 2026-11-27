@@ -270,6 +270,9 @@ fn extract_tarball(bytes: &[u8], dest: &Path) -> Result<(), String> {
 
 const SKIP: &[&str] = &[".git", "fogu_modules", "node_modules", "target"];
 
+/// The `commit` of a `link:` dependency in `fogu.lock`: the package is its folder.
+pub const LINK_COMMIT: &str = "link";
+
 fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     std::fs::create_dir_all(to).map_err(|e| e.to_string())?;
     for ent in std::fs::read_dir(from).map_err(|e| format!("{}: {}", from.display(), e))?.flatten() {
@@ -358,6 +361,37 @@ impl Ctx<'_> {
             return Ok(());
         }
         self.visited.insert(name.to_string(), spec.to_string());
+
+        // `link:../lib`: the folder itself, not a copy — edits show at the next run,
+        // without `fogu update` (for developing a library next to its program)
+        if let Some(path) = spec.strip_prefix("link:") {
+            let base = local_base.unwrap_or(&self.root);
+            let p = base.join(path);
+            let p = p.canonicalize().map(crate::plain_path).map_err(|e| format!("{}: linked folder '{}': {}", name, p.display(), e))?;
+            if !p.is_dir() {
+                return Err(format!("{}: 'link:' needs a folder, got '{}'", name, p.display()));
+            }
+            let mut sub: Vec<(String, String)> = Vec::new();
+            let mut version = String::new();
+            if let Ok(m) = Manifest::load(&p.join(MANIFEST)) {
+                version = m.str_field("version").unwrap_or_default();
+                sub = m.deps();
+            }
+            let entry = LockEntry {
+                spec: spec.to_string(),
+                resolved: p.display().to_string(),
+                commit: LINK_COMMIT.to_string(),
+                version: version.clone(),
+                dependencies: sub.iter().cloned().collect::<BTreeMap<_, _>>(),
+                ..Default::default()
+            };
+            self.report.packages.push(Installed { name: name.to_string(), version, commit: LINK_COMMIT.to_string(), fresh: false });
+            self.new.packages.insert(name.to_string(), entry);
+            for (dn, ds) in sub {
+                self.install(&dn, &ds, Some(&p))?;
+            }
+            return Ok(());
+        }
 
         let (src, _) = source::parse(spec).map_err(|e| format!("{}: {}", name, e))?;
         let locked = self.old.packages.get(name).filter(|e| e.spec == spec && !self.wants_refresh(name)).cloned();
@@ -497,6 +531,11 @@ impl Ctx<'_> {
             sub = m.deps();
         }
         entry.dependencies = sub.iter().cloned().collect::<BTreeMap<_, _>>();
+        // a local package's own local dependencies are found from its folder
+        let local_dir = match &src {
+            Source::Local { .. } => Some(PathBuf::from(&entry.resolved)).filter(|p| p.is_dir()),
+            _ => None,
+        };
         self.report.packages.push(Installed {
             name: name.to_string(),
             version: entry.version.clone(),
@@ -506,10 +545,13 @@ impl Ctx<'_> {
         self.new.packages.insert(name.to_string(), entry);
 
         for (dn, ds) in sub {
-            if matches!(source::parse(&ds), Ok((Source::Local { .. }, _))) {
-                return Err(format!("'{}' depends on '{}' through a local path ({}), which is not portable", name, dn, ds));
+            let local = ds.starts_with("link:") || matches!(source::parse(&ds), Ok((Source::Local { .. }, _)));
+            match (&local_dir, local) {
+                // a local path inside a package from git or an archive: it means nothing elsewhere
+                (None, true) => return Err(format!("'{}' depends on '{}' through a local path ({}), which is not portable", name, dn, ds)),
+                (Some(d), true) => self.install(&dn, &ds, Some(d))?,
+                _ => self.install(&dn, &ds, None)?,
             }
-            self.install(&dn, &ds, None)?;
         }
         Ok(())
     }

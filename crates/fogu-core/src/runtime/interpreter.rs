@@ -1638,6 +1638,15 @@ impl Interpreter {
     fn eval_opt_access(&self, target: &Expr, field: &str, env: Rc<RefCell<Environment>>) -> Result<Value, String> {
         match self.eval(target, env.clone())? {
         Value::Nil => Err(OPT_NIL.into()),
+        // `f()?.x` where `f` returns `value, error`: the `?` of the error (propagated)
+        // and then the value's field — a tuple has no fields of its own
+        t @ Value::Tuple(_) => match self.propagate(t)? {
+            Value::Nil => Err(OPT_NIL.into()),
+            v => {
+                self.check_private(&v, field, &env)?;
+                self.eval_access(v, field)
+            }
+        },
         t => {
             self.check_private(&t, field, &env)?;
             self.eval_access(t, field)
@@ -2932,7 +2941,9 @@ impl Interpreter {
             }
             Value::Error(e) => match field {
                 "message" => Ok(Value::Str(e.message.clone().into())),
-                "cause" => Ok(e.cause.clone()),
+                // the second argument of error(): a cause (an error) or data (a map)
+                "cause" => Ok(if matches!(e.cause, Value::Map(_)) { Value::Nil } else { e.cause.clone() }),
+                "data" => Ok(if matches!(e.cause, Value::Map(_)) { e.cause.clone() } else { Value::Nil }),
                 "trace" => Ok(Value::List(Rc::new(RefCell::new(
                     e.trace.iter().map(|t| Value::Str(t.clone().into())).collect(),
                 )))),

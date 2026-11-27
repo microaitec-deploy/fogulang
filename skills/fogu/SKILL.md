@@ -85,6 +85,11 @@ fn total(...xs) { return xs.reduce((a, b) => a + b, 0) }    // variadic
   a method of the same name only when it holds a **function** (a map used as a
   namespace, `api.get(id)`). Read such a key with `m["has"]` or `m.has` (no call).
   Strings: `split upper lower trim replace starts_with ends_with repeat lines chars slice`.
+  `slice` keeps out-of-range bounds within the value (no error). Computed keys:
+  `{ [k]: v }`. A conditional value: `if c { a } else { b }` (one expression per branch,
+  `else` required; there is no `a ? b : c`). `for k, _ in m` skips a value.
+  `error(msg, { status: 404 })` carries data (`e.data`); `f()?.x` on a `value, error`
+  function propagates the error.
 - Binary data is a `buffer` (mutable bytes), made with `bytes(...)`; network, zip,
   image, protobuf, serial and USB functions return buffers:
 

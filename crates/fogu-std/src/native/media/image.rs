@@ -35,7 +35,7 @@ use resvg::usvg;
 use crate::runtime::value::Str;
 use crate::runtime::value::{ModuleValue, Value};
 
-use crate::native::object::{FoguObject, NativeObjectRef};
+use crate::native::object::{FoguObject, NativeObjectRef, Poller};
 use crate::native::util::{duration_arg, list, max_args, nfn_var, opt_arg, path_str, str_arg};
 
 pub fn build() -> ModuleValue {
@@ -53,15 +53,16 @@ pub fn build() -> ModuleValue {
     e.insert("open".into(), nfn_var("open", 1, |a| {
         max_args(a, 1, "image.open")?;
         let path = str_arg(a, 0, "image.open")?;
-        let img = image::open(&path).map_err(|e| io_err!("image.open: {}: {}", path, e))?;
-        Ok(wrap(img.to_rgba8()))
+        // decoding is CPU work: off the interpreter's thread when other tasks could run
+        let img = crate::native::rt::offload(move || image::open(&path).map(|i| i.to_rgba8()).map_err(|e| io_err!("image.open: {}: {}", path, e)))??;
+        Ok(wrap(img))
     }));
     // image.decode(bytes | base64 | data URL)
     e.insert("decode".into(), nfn_var("decode", 1, |a| {
         max_args(a, 1, "image.decode")?;
         let bytes = input_bytes(&a[0], "image.decode")?;
-        let img = image::load_from_memory(&bytes).map_err(|e| io_err!("image.decode: {}", e))?;
-        Ok(wrap(img.to_rgba8()))
+        let img = crate::native::rt::offload(move || image::load_from_memory(&bytes).map(|i| i.to_rgba8()).map_err(|e| io_err!("image.decode: {}", e)))??;
+        Ok(wrap(img))
     }));
     // image.fromSvg(svg, { width, height, scale, background })
     e.insert("fromSvg".into(), nfn_var("fromSvg", 1, |a| {
@@ -496,17 +497,34 @@ pub fn format_of(name: &str) -> Result<ImageFormat, String> {
     ImageFormat::from_extension(&ext).ok_or_else(|| io_err!("image: unknown image format '{}' (png jpg webp gif bmp ico tiff)", name))
 }
 
+/// What `encode` / `save` read of their options (sendable to another thread).
+#[derive(Clone, Copy)]
+pub struct EncodeOpts {
+    quality: u8,
+    background: Rgba<u8>,
+}
+
+fn encode_opts(o: &HashMap<Str, Value>) -> Result<EncodeOpts, String> {
+    let quality = match o.get("quality") {
+        Some(Value::Int(q)) if (1..=100).contains(q) => *q as u8,
+        Some(other) => return Err(format!("image: 'quality' must be an int in 1..100, got {}", other.to_display_string())),
+        None => 85,
+    };
+    let background = o.get("background").map(color).transpose()?.unwrap_or(Rgba([255, 255, 255, 255]));
+    Ok(EncodeOpts { quality, background })
+}
+
 pub fn encode(img: &RgbaImage, fmt: ImageFormat, o: &HashMap<Str, Value>) -> Result<Vec<u8>, String> {
+    encode_with(img, fmt, encode_opts(o)?)
+}
+
+fn encode_with(img: &RgbaImage, fmt: ImageFormat, eo: EncodeOpts) -> Result<Vec<u8>, String> {
     let mut out = Cursor::new(Vec::new());
     match fmt {
         ImageFormat::Jpeg => {
-            let q = match o.get("quality") {
-                Some(Value::Int(q)) if (1..=100).contains(q) => *q as u8,
-                Some(other) => return Err(format!("image: 'quality' must be an int in 1..100, got {}", other.to_display_string())),
-                None => 85,
-            };
+            let q = eo.quality;
             // JPEG has no alpha: flatten over `background` (white)
-            let bg = o.get("background").map(color).transpose()?.unwrap_or(Rgba([255, 255, 255, 255]));
+            let bg = eo.background;
             let rgb = flatten(img, bg);
             image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, q)
                 .encode_image(&rgb)
@@ -524,6 +542,109 @@ fn flatten(img: &RgbaImage, bg: Rgba<u8>) -> image::RgbImage {
         let mix = |c: u8, b: u8| ((c as u32 * a + b as u32 * (255 - a)) / 255) as u8;
         image::Rgb([mix(p[0], bg.0[0]), mix(p[1], bg.0[1]), mix(p[2], bg.0[2])])
     })
+}
+
+/// `resize`'s arguments: (width, height, fit, filter).
+fn resize_params(img: &RgbaImage, a: &[Value]) -> Result<(u32, u32, String, FilterType), String> {
+    let (w, h) = img.dimensions();
+    max_args(a, 3, "resize")?;
+    let o = opts(opt_arg(a, 2), "resize")?;
+    let filter = match o.get("filter").map(|v| v.to_display_string()).as_deref() {
+        None | Some("lanczos") => FilterType::Lanczos3,
+        Some("nearest") => FilterType::Nearest,
+        Some("linear") | Some("triangle") => FilterType::Triangle,
+        Some("cubic") => FilterType::CatmullRom,
+        Some("gaussian") => FilterType::Gaussian,
+        Some(other) => return Err(format!("resize: unknown filter '{}' (nearest linear cubic gaussian lanczos)", other)),
+    };
+    let tw = match opt_arg(a, 0) { Some(v) => Some(dim(v, "resize")?), None => None };
+    let th = match opt_arg(a, 1) { Some(v) => Some(dim(v, "resize")?), None => None };
+    let (tw, th) = match (tw, th) {
+        (Some(x), Some(y)) => (x, y),
+        (Some(x), None) => (x, ((h as f64 * x as f64 / w as f64).round() as u32).max(1)),
+        (None, Some(y)) => (((w as f64 * y as f64 / h as f64).round() as u32).max(1), y),
+        (None, None) => return Err("resize: give a width, a height or both".into()),
+    };
+    let fit = match o.get("fit") { Some(Value::Str(s)) => s.to_string(), _ => "fill".into() };
+    if !matches!(fit.as_str(), "fill" | "contain" | "cover") {
+        return Err(format!("resize: unknown fit '{}' (fill contain cover)", fit));
+    }
+    Ok((tw, th, fit, filter))
+}
+
+fn do_resize(img: &RgbaImage, (tw, th, fit, filter): (u32, u32, String, FilterType)) -> RgbaImage {
+    let dynimg = || DynamicImage::ImageRgba8(img.clone());
+    match fit.as_str() {
+        "contain" => dynimg().resize(tw, th, filter).to_rgba8(),
+        "cover" => dynimg().resize_to_fill(tw, th, filter).to_rgba8(),
+        _ => image::imageops::resize(img, tw, th, filter),
+    }
+}
+
+/// What an operation done off the interpreter's thread gives back.
+enum Done {
+    Img(RgbaImage),
+    Bytes(Vec<u8>, ImageFormat),
+    Saved,
+}
+
+impl Image {
+    /// `resize`, `thumbnail`, `blur`, `encode`, `save`… on the blocking pool: the
+    /// arguments are read here, the pixels are worked on a copy elsewhere.
+    fn offloaded(&self, method: &str, a: &[Value]) -> Result<Poller, String> {
+        let img = self.img.clone();
+        let work: Box<dyn FnOnce() -> Result<Done, String> + Send> = match method {
+            "resize" => {
+                let p = resize_params(&self.img, a)?;
+                Box::new(move || Ok(Done::Img(do_resize(&img, p))))
+            }
+            "thumbnail" => {
+                max_args(a, 2, "thumbnail")?;
+                let tw = dim(a.first().unwrap_or(&Value::Nil), "thumbnail")?;
+                let th = match opt_arg(a, 1) { Some(v) => dim(v, "thumbnail")?, None => tw };
+                Box::new(move || Ok(Done::Img(DynamicImage::ImageRgba8(img).thumbnail(tw, th).to_rgba8())))
+            }
+            "blur" => {
+                max_args(a, 1, "blur")?;
+                let sigma = match a.first() { Some(v) => num(v, "blur")?, None => 2.0 };
+                Box::new(move || Ok(Done::Img(image::imageops::fast_blur(&img, sigma.max(0.1)))))
+            }
+            "save" => {
+                max_args(a, 2, "save")?;
+                let path = str_arg(a, 0, "save")?;
+                let (fmt, eo) = (format_of(&path)?, encode_opts(&opts(opt_arg(a, 1), "save")?)?);
+                Box::new(move || {
+                    let data = encode_with(&img, fmt, eo)?;
+                    if let Some(dir) = std::path::Path::new(&path).parent().filter(|d| !d.as_os_str().is_empty()) {
+                        let _ = std::fs::create_dir_all(dir);
+                    }
+                    std::fs::write(&path, data).map_err(|e| io_err!("image.save: {}: {}", path_str(std::path::Path::new(&path)), e))?;
+                    Ok(Done::Saved)
+                })
+            }
+            _ => {
+                max_args(a, 2, method)?;
+                let fmt_name = match opt_arg(a, 0) { Some(v) => str_arg(std::slice::from_ref(v), 0, method)?, None => "png".into() };
+                let (fmt, eo) = (format_of(&fmt_name)?, encode_opts(&opts(opt_arg(a, 1), method)?)?);
+                Box::new(move || encode_with(&img, fmt, eo).map(|d| Done::Bytes(d, fmt)))
+            }
+        };
+        let pending = crate::native::rt::spawn_blocking(work);
+        let method = method.to_string();
+        Ok(Box::new(move || {
+            pending.try_take().map(|r| {
+                r.map(|done| match done {
+                    Done::Img(i) => wrap(i),
+                    Done::Saved => Value::Nil,
+                    Done::Bytes(data, fmt) => match method.as_str() {
+                        "encode" => bytes_value(data),
+                        "toBase64" => Value::Str(base64::engine::general_purpose::STANDARD.encode(data).into()),
+                        _ => Value::Str(format!("data:{};base64,{}", fmt.to_mime_type(), base64::engine::general_purpose::STANDARD.encode(data)).into()),
+                    },
+                })
+            })
+        }))
+    }
 }
 
 // ================= THE IMAGE OBJECT =================
@@ -655,6 +776,15 @@ impl FoguObject for Image {
         "Image"
     }
 
+    // CPU-heavy operations go to the blocking pool when other tasks could run
+    // meanwhile (an HTTP server making thumbnails keeps answering); alone, inline
+    fn start_async(&mut self, method: &str, a: &[Value]) -> Option<Result<Poller, String>> {
+        if !matches!(method, "resize" | "thumbnail" | "blur" | "encode" | "toBase64" | "toDataUrl" | "save") || !crate::native::rt::concurrent() {
+            return None;
+        }
+        Some(self.offloaded(method, a))
+    }
+
     fn get(&self, field: &str) -> Option<Value> {
         Some(match field {
             "width" => Value::Int(self.img.width() as i64),
@@ -671,32 +801,8 @@ impl FoguObject for Image {
             "clone" => new(self.img.clone()),
             // resize(width, height?, { fit = "fill" | "contain" | "cover", filter })
             "resize" => {
-                max_args(a, 3, "resize")?;
-                let o = opts(opt_arg(a, 2), "resize")?;
-                let filter = match o.get("filter").map(|v| v.to_display_string()).as_deref() {
-                    None | Some("lanczos") => FilterType::Lanczos3,
-                    Some("nearest") => FilterType::Nearest,
-                    Some("linear") | Some("triangle") => FilterType::Triangle,
-                    Some("cubic") => FilterType::CatmullRom,
-                    Some("gaussian") => FilterType::Gaussian,
-                    Some(other) => return Err(format!("resize: unknown filter '{}' (nearest linear cubic gaussian lanczos)", other)),
-                };
-                let tw = match opt_arg(a, 0) { Some(v) => Some(dim(v, "resize")?), None => None };
-                let th = match opt_arg(a, 1) { Some(v) => Some(dim(v, "resize")?), None => None };
-                let (tw, th) = match (tw, th) {
-                    (Some(x), Some(y)) => (x, y),
-                    (Some(x), None) => (x, ((h as f64 * x as f64 / w as f64).round() as u32).max(1)),
-                    (None, Some(y)) => (((w as f64 * y as f64 / h as f64).round() as u32).max(1), y),
-                    (None, None) => return Err("resize: give a width, a height or both".into()),
-                };
-                let fit = match o.get("fit") { Some(Value::Str(s)) => s.clone(), _ => "fill".into() };
-                let dynimg = DynamicImage::ImageRgba8(self.img.clone());
-                new(match fit.as_str() {
-                    "fill" => image::imageops::resize(&self.img, tw, th, filter),
-                    "contain" => dynimg.resize(tw, th, filter).to_rgba8(),
-                    "cover" => dynimg.resize_to_fill(tw, th, filter).to_rgba8(),
-                    other => return Err(format!("resize: unknown fit '{}' (fill contain cover)", other)),
-                })
+                let p = resize_params(&self.img, a)?;
+                new(do_resize(&self.img, p))
             }
             "thumbnail" => {
                 max_args(a, 2, "thumbnail")?;

@@ -2458,9 +2458,9 @@ export const REFERENCE: Record<string, RefData> = {
     "title": "server.fg",
     "api": [
      [
-      "http.serve(port | \"ip:port\", fn(req), { tls: { cert, key }, quiet, reusePort, maxBody, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout }?)",
+      "http.serve(port | \"ip:port\", fn(req), { tls: { cert, key }, quiet, reusePort, maxBody, maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout, bodyToDisk, maxDiskBody, bodyDir }?)",
       "nil",
-      "<code>tls</code> serves HTTPS (see <a class=\"underline\" href=\"#mod-tls\">fogu:tls</a>). <code>reusePort: true</code> lets several servers share the port: one per <code>sync.Worker</code> serves on several cores (the kernel spreads the connections). On Linux a plain HTTP server runs on the interpreter's own thread, one <code>fg</code> task per connection. The handler returns a response (<code>http.text/json/html</code>), a str (text), any other value (JSON), nil (404) or an <code>error</code> (logged; the client gets a 500). Limits (defaults): <code>maxBody</code> (10 MB, 413), <code>maxHeaderBytes</code> (64 KB for the request line and headers, 431), <code>headerTimeout</code> (30s to send the headers; also closes idle keep-alive connections), <code>readTimeout</code> (60s for the body, 408), <code>handlerTimeout</code> (60s for the program's answer, 504; <code>0</code> = none). The request path is made canonical once, before static files, middlewares and routes see it: decoded once (<code>+</code> stays <code>+</code>), repeated slashes collapsed, <code>.</code>/<code>..</code> resolved; an encoded <code>/</code> or <code>\\</code>, a raw <code>\\</code>, a control character or a <code>..</code> above the root is a 400. A Rust panic in a handler answers that request with a 500 and the server goes on. Several servers may run in one program. Requests are answered as soon as they arrive while the program is alive — waiting in <code>Fogu.signal.wait()</code>, <code>time.delay</code>, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or <code>\"0.0.0.0:8080\"</code>, <code>\"[::1]:8080\"</code>, <code>\":8080\"</code>. <code>maxBody</code> (10 MB, 413 beyond it) and <code>maxHeaderBytes</code> are a number of <b>bytes</b> or a size written out: <code>\"512kb\"</code>, <code>\"10mb\"</code>, <code>\"1gb\"</code>."
+      "<code>bodyToDisk: \"1mb\"</code>: a request body bigger than that is written to a temporary file as it arrives (memory stays at that size; a 200 MB upload kept the server at 26 MB), up to <code>maxDiskBody</code> (2 GB by default, 413 beyond it), in <code>bodyDir</code> (the system's temporary folder). Read it with <code>req.stream()</code>, <code>req.save(path)</code> or <code>req.form({ toDisk })</code>; <code>req.body</code> still works but reads the file into memory. The file goes with the request unless saved. <code>tls</code> serves HTTPS (see <a class=\"underline\" href=\"#mod-tls\">fogu:tls</a>). <code>reusePort: true</code> lets several servers share the port: one per <code>sync.Worker</code> serves on several cores (the kernel spreads the connections). On Linux a plain HTTP server runs on the interpreter's own thread, one <code>fg</code> task per connection. The handler returns a response (<code>http.text/json/html/bytes</code>), a str (text), a buffer (bytes, <code>application/octet-stream</code>), any other value (JSON), nil (404) or an <code>error</code> (logged; the client gets a 500). Limits (defaults): <code>maxBody</code> (10 MB, 413), <code>maxHeaderBytes</code> (64 KB for the request line and headers, 431), <code>headerTimeout</code> (30s to send the headers; also closes idle keep-alive connections), <code>readTimeout</code> (60s for the body, 408), <code>handlerTimeout</code> (60s for the program's answer, 504; <code>0</code> = none). The request path is made canonical once, before static files, middlewares and routes see it: decoded once (<code>+</code> stays <code>+</code>), repeated slashes collapsed, <code>.</code>/<code>..</code> resolved; an encoded <code>/</code> or <code>\\</code>, a raw <code>\\</code>, a control character or a <code>..</code> above the root is a 400. A Rust panic in a handler answers that request with a 500 and the server goes on. Several servers may run in one program. Requests are answered as soon as they arrive while the program is alive — waiting in <code>Fogu.signal.wait()</code>, <code>time.delay</code>, on a channel… — and each handler runs in its own task, so one that waits does not hold the others. The address is an int port (on 127.0.0.1) or <code>\"0.0.0.0:8080\"</code>, <code>\"[::1]:8080\"</code>, <code>\":8080\"</code>. <code>maxBody</code> (10 MB, 413 beyond it) and <code>maxHeaderBytes</code> are a number of <b>bytes</b> or a size written out: <code>\"512kb\"</code>, <code>\"10mb\"</code>, <code>\"1gb\"</code>."
      ],
      [
       "req.method · req.path · req.query · req.headers · req.body",
@@ -2468,14 +2468,19 @@ export const REFERENCE: Record<string, RefData> = {
       "<code>query</code> is the raw query string."
      ],
      [
-      "req.header(name) · req.json() · req.form() · req.bytes() · req.protobuf(schema, message)",
+      "req.header(name) · req.json() · req.form({ toDisk }) · req.bytes() · req.protobuf(schema, message)",
       "",
-      "<code>form()</code>: urlencoded and multipart bodies."
+      "<code>form()</code>: urlencoded and multipart bodies. <code>form({ toDisk: dir })</code> — and any body that went to disk — reads a multipart body in 64 KiB blocks and writes each file part into <code>dir</code> as it is read (an <code>UploadedFile</code> with <code>path</code>; <code>save</code> moves it); text fields stay in memory (1 MiB each)."
      ],
      [
-      "http.text(body, opts?) · http.json(value, opts?) · http.html(body, opts?)",
+      "req.stream({ lines }) · req.save(path) · req.size · req.spooled · req.bodyPath",
+      "ReadStream · str",
+      "The body as a stream (<code>for chunk in req.stream()</code>, <code>read</code>, <code>pipe</code>), or into a file (a body on disk is moved there). <code>spooled</code>: whether it went to disk (<code>bodyToDisk</code>)."
+     ],
+     [
+      "http.text(body, opts?) · http.json(value, opts?) · http.html(body, opts?) · http.bytes(buffer, opts?)",
       "Response",
-      "<code>opts: { status, headers }</code>."
+      "<code>opts: { status, headers }</code>; <code>bytes</code> also takes <code>type</code> (the content type, <code>application/octet-stream</code> by default) and sends the bytes as they are."
      ]
     ],
     "example": "import http from \"fogu:http\"\n\nhttp.serve(8080, (req) => {\n    if req.path == \"/hello\" {\n        return http.json({ hello: \"world\", method: req.method })\n    }\n    return http.text(\"not found\", { status: 404 })\n})\nFogu.signal.wait()    // serves requests until Ctrl+C / SIGTERM"
@@ -2545,9 +2550,9 @@ export const REFERENCE: Record<string, RefData> = {
       "Shared state (<code>ctx.store</code>)."
      ],
      [
-      "app.listen(port | \"ip:port\", { host = \"127.0.0.1\", maxBody = \"10mb\", maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout, quiet, reusePort, tls: { cert, key } })",
+      "app.listen(port | \"ip:port\", { host = \"127.0.0.1\", maxBody = \"10mb\", maxHeaderBytes, headerTimeout, readTimeout, handlerTimeout, quiet, reusePort, bodyToDisk, maxDiskBody, bodyDir, tls: { cert, key } })",
       "nil · error",
-      "Limits, <code>reusePort</code> and the canonical path as in <code>http.serve</code>; an unknown option stops the program. <code>tls</code> serves HTTPS: PEM text or file paths (<code>tls.selfSigned([\"localhost\"])</code> for development; options as <code>tls.listen</code>). <code>app.listen(\"0.0.0.0:3000\")</code> (or <code>host: \"0.0.0.0\"</code>) accepts other machines; IPv6 as <code>\"[::1]:3000\"</code>. A host in the string wins over <code>host</code>."
+      "Limits, <code>reusePort</code>, bodies on disk and the canonical path as in <code>http.serve</code>; an unknown option stops the program. <code>tls</code> serves HTTPS: PEM text or file paths (<code>tls.selfSigned([\"localhost\"])</code> for development; options as <code>tls.listen</code>). <code>app.listen(\"0.0.0.0:3000\")</code> (or <code>host: \"0.0.0.0\"</code>) accepts other machines; IPv6 as <code>\"[::1]:3000\"</code>. A host in the string wins over <code>host</code>."
      ],
      [
       "app.handler()",
@@ -2591,9 +2596,9 @@ export const REFERENCE: Record<string, RefData> = {
       "A str (text or HTML), any value (JSON), a response, or nil (204)."
      ],
      [
-      "web.json/text/html(body, { status, headers })",
+      "web.json/text/html(body, { status, headers }) · web.bytes(buffer, { status, headers, type })",
       "Response",
-      ""
+      "A handler may also return a buffer (sent as <code>application/octet-stream</code>). With <code>bodyToDisk</code> on <code>app.listen</code>, a body that went to disk is empty in <code>ctx.body</code>: read it with <code>ctx.req.stream()</code>, <code>ctx.req.save(path)</code> or <code>ctx.req.form({ toDisk })</code>."
      ],
      [
       "web.redirect(url, status = 302)",
@@ -2836,6 +2841,11 @@ export const REFERENCE: Record<string, RefData> = {
       "Namespaces."
      ],
      [
+      "io.use(fn(socket)) · io.of(\"/ns\").use(fn)",
+      "nil",
+      "Handshake middlewares, in order, before <code>connection</code>: check <code>socket.auth</code> (a token…) and keep what you found in <code>socket.data</code>. Returning an error refuses the socket: the client gets <code>connect_error</code> with its message (also the official JavaScript client). Without middlewares no connection waits for the program."
+     ],
+     [
       "io.listen(port | \"host:port\") · app.listen(port, { socketio: io })",
       "int · nil",
       "Standalone, or on a fogu:web app (same port). An int port listens on 127.0.0.1; <code>\"0.0.0.0:port\"</code> for other machines."
@@ -2861,9 +2871,9 @@ export const REFERENCE: Record<string, RefData> = {
       "<code>to</code>/<code>broadcast</code> exclude the socket itself."
      ],
      [
-      "socket.id · ns · rooms · auth · handshake · connected",
+      "socket.id · ns · rooms · auth · data · handshake · connected",
       "",
-      "<code>auth</code>: what the client sent; <code>handshake</code>: headers and query."
+      "<code>auth</code>: what the client sent; <code>data</code>: a map the program keeps for the socket (from <code>use</code> on); <code>handshake</code>: headers and query."
      ]
     ]
    },

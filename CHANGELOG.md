@@ -64,6 +64,25 @@ S3), and gRPC streams.
   `req.protobuf(schema, message)` decode one.
 - Buffers cross a `sync.Worker` as their bytes and arrive as buffers (they arrived as lists of
   ints).
+- **Request bodies to disk as they arrive**: `bodyToDisk: "1mb"` on `http.serve` / `app.listen`
+  writes a bigger body to a temporary file while it is received (on the direct and the hyper
+  server), up to `maxDiskBody` (2 GB), in `bodyDir`: a 200 MB upload kept the server at 26 MB.
+  `req.stream()`, `req.save(path)` (moves the file), `req.form({ toDisk: dir })` (multipart read
+  in 64 KiB blocks, file parts written to disk, `UploadedFile.path`), `req.spooled`,
+  `req.bodyPath`. Off by default: the usual path is unchanged.
+- Binary answers: `http.bytes(buffer, { status, headers, type })`, `web.bytes`, and a buffer
+  returned by a handler (`application/octet-stream`).
+- `fogu:socketio`: `io.use(fn(socket))` / `io.of(ns).use(fn)` handshake middlewares — an error
+  refuses the socket and the client gets `connect_error` with its message (also the official
+  JavaScript client) — and `socket.data`.
+- **Language**: `if c { a } else { b }` as a value (one expression per branch, `else` required;
+  the parser writes it as a `match`, so every engine runs it); computed map keys `{ [k]: v }`;
+  `_` as a loop variable (`for k, _ in m`); `error(msg, { data })` and `e.data`.
+- Packages: a local package may depend on another local one (paths relative to its folder), and
+  `link:../folder` uses a library in place — edits show at the next run, without `fogu update`.
+- `fogu:image`: `open`, `decode`, `resize`, `thumbnail`, `blur`, `encode`, `save` run off the
+  interpreter's thread when other tasks could run meanwhile (a server making thumbnails keeps
+  answering).
 
 ### Changed
 
@@ -77,6 +96,11 @@ S3), and gRPC streams.
 - The handler of a client-streaming gRPC method gets a `GrpcStream` of its requests instead of a
   list: `for m in req` works as before, `req.toList()` gives the list.
 - `store.getBytes` returns a buffer (it returned a list of ints).
+- **`slice` keeps its bounds in range** (as Python and JavaScript do): `s.slice(0, 99)` on a short
+  text gives the text, `xs.slice(-9, 1)` the first element. An index from outside — a request's
+  `?limit=` — stopped the program ("index out of bounds").
+- `f()?.field` where `f` returns `value, error` propagates the error as `?` does and reads the
+  value's field (it was optional chaining on the tuple: "access not applicable to 'tuple'").
 - A native `fogu:web` middleware may wait cooperatively (only `jwt.middleware` does; the others
   keep the direct call).
 
@@ -102,11 +126,10 @@ S3), and gRPC streams.
 
 ### Known gaps
 
-- An `http.serve` / `fogu:web` response body is text: a binary answer (an image, a protobuf
-  message that is not UTF-8) needs `web.file`. HTTP request bodies are still read whole
-  (`maxBody`); streaming request bodies, Socket.IO `io.use` and connection state recovery, the
-  language items of the Chat report (`f()?.x` on a tuple, `slice` bounds, a conditional
-  expression, computed keys, `_` in `for`) and nested `file:` packages are for the next releases.
+- Socket.IO connection state recovery and a Redis adapter: socketioxide 0.18 has neither; the
+  recovery of the official client needs the server's CONNECT packet to carry a session offset.
+- A request body is still handed to the handler once it has arrived (on disk past `bodyToDisk`):
+  a handler cannot start on the first bytes of an upload.
 - Not checked against a live server here: PostgreSQL (the NULL rewriting is unit-tested), S3
   services (tested against an S3 stand-in that records the requests; the signatures against the
   AWS documentation's examples) and ScyllaDB.

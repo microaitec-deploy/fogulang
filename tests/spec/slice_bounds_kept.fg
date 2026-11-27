@@ -1,0 +1,6 @@
+// slice keeps its bounds in range (0.8.5: an index from outside used to stop
+// the program with "index out of bounds"); a negative one counts from the end.
+const a = [1, 2, 3]
+print(a.slice(-9, 1), a.slice(1, 99), a.slice(99))
+const sized: list<u8> = [1, 2, 3]
+print("abc".slice(-9, 1), "abc".slice(1, 99), sized.slice(-2, 9))

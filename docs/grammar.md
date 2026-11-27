@@ -264,7 +264,8 @@ block         = "{" { ";" } { statement { ";" } } "}" ;
 if_stmt       = "if" expr block [ "else" ( if_stmt | block ) ] ;
 while_stmt    = "while" expr block ;
 loop_stmt     = "loop" block ;                /* same as: while true block */
-for_stmt      = "for" IDENT [ "," IDENT ] "in" expr block ;
+for_stmt      = "for" loop_var [ "," loop_var ] "in" expr block ;
+loop_var      = IDENT | "_" ;                          /* "_": a value not used (0.8.5) */
 
 match_stmt    = "match" expr match_body ;     /* match_body: section 7 */
 
@@ -356,11 +357,17 @@ primary       = INT | FLOAT | DURATION | STRING | TEMPLATE
               | chan_expr
               | fg_expr
               | match_expr
+              | if_expr
               | dyn_import ;
+
+if_expr       = "if" expr "{" expr "}" "else" ( if_expr | "{" expr "}" ) ;
+               /* an "if" in expression position (0.8.5): one expression per
+                  branch, "else" required; truthiness as in an if statement */
 
 list_lit      = "[" [ expr { "," expr } [ "," ] ] "]" ;
 map_lit       = "{" [ map_entry { "," map_entry } [ "," ] ] "}" ;
-map_entry     = ( IDENT | STRING | keyword ) ":" expr ;
+map_entry     = ( IDENT | STRING | keyword ) ":" expr
+              | "[" expr "]" ":" expr ;                /* a computed key (0.8.5) */
 
 fn_lit        = "fn" [ IDENT ] fn_tail ;              /* the name is ignored */
 arrow_fn      = param_list [ ":" type ] "=>" ( block | expr ) ;
@@ -524,8 +531,9 @@ the function in `parser.rs` (or `lexer.rs`) that implements it.
 ### Not part of the grammar
 
 Checked against the binary and rejected: `enum`, type aliases (`type T = ...`),
-`defer`, C-style `for`, `let` without an initializer, `if` as an expression,
-struct literals (`P { x: 1 }`; use `new P(...)`), slice syntax (`a[1:2]`;
+`defer`, C-style `for`, `let` without an initializer, the conditional operator
+`a ? b : c` (use `if a { b } else { c }`), statements inside the branches of an
+`if` used as a value, struct literals (`P { x: 1 }`; use `new P(...)`), slice syntax (`a[1:2]`;
 `a[0..2]` parses as an index by a range value), character literals (`'a'` is a
 string), size literals (`5kb`), float literals without a digit on both sides
 of the dot (`1.`, `.5`), range patterns in `match`, block bodies in `match`

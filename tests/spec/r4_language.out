@@ -1,0 +1,13 @@
+A B C
+some 2 zero is truthy
+6
+{id: 1, last: true, n2: 2, status: ok} ok 2
+{7: seven} {status: 2}
+[a, b] 3
+hello lo  he llo
+[2, 3] [1] []
+[user4, nil]
+error: not found
+nil
+not found 404 {id: 9, status: 404} nil
+not found nil

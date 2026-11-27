@@ -35,6 +35,11 @@ fails (integrity). Install scripts are never run.
 | `...#semver:^1.2.0` or `u/r@^1.2.0` | highest `vX.Y.Z` tag that satisfies |
 | `https://host/pkg.tar.gz` | archive (checksum of the file) |
 | `./folder` · `file:../folder` | local folder (copied into the store) |
+| `link:../folder` | local folder used in place: edits show at the next run, without `fogu update` (for a library developed next to its program; not checked against a checksum) |
+
+A local package may depend on another local one: its `file:` / `link:` paths are
+relative to its own folder (`keycloak` with `"oidc": "file:../oidc"`). A package
+from git or an archive cannot (the path would mean nothing on another machine).
 
 Ranges: `^1.2.0`, `~1.2.3`, `1.x`, `>=1.0.0 <2.0.0`, `*`.
 To use another name in the import: `fogu add alias@github:u/r`.

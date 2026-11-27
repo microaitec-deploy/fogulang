@@ -210,6 +210,25 @@ impl NativeContext {
 
         crate::native::collections::install(self);
 
+        // `{ [k]: v }`: a map from [key, value] pairs (the parser writes this call)
+        self.define_global(crate::runtime::parser::MAP_OF, 1, |args| {
+            let mut m = ahash::AHashMap::new();
+            if let Some(Value::List(pairs)) = args.first() {
+                for p in pairs.borrow().iter() {
+                    if let Value::List(kv) = p {
+                        let kv = kv.borrow();
+                        if let (Some(k), Some(v)) = (kv.first(), kv.get(1)) {
+                            let key: crate::runtime::value::Str = match k {
+                                Value::Str(s) => s.clone(),
+                                other => other.to_display_string().into(),
+                            };
+                            m.insert(key, v.clone());
+                        }
+                    }
+                }
+            }
+            Ok(Value::Map(std::rc::Rc::new(std::cell::RefCell::new(m))))
+        });
         self.define_global("clock", 0, |_| {
             let d = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

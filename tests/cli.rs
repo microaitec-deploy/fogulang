@@ -882,3 +882,40 @@ fn local_packages_from_an_archive_and_after_a_change() {
     assert!(t.contains("the local package 'lib' changed since fogu.lock was written"), "{}", t);
     assert!(t.contains("run `fogu update lib`"), "{}", t);
 }
+
+#[test]
+#[cfg(unix)]
+fn nested_local_packages_and_link_mode() {
+    let dir = TempDir::new("nested-local");
+    // keycloak depends on oidc through a path relative to its own folder
+    dir.write("libs/oidc/fogu.json", "{\"name\":\"oidc\",\"version\":\"1.0.0\",\"main\":\"index.fg\"}\n");
+    dir.write("libs/oidc/index.fg", "export fn verify() { return \"verified\" }\n");
+    dir.write(
+        "libs/keycloak/fogu.json",
+        "{\"name\":\"keycloak\",\"version\":\"1.0.0\",\"main\":\"index.fg\",\"dependencies\":{\"oidc\":\"file:../oidc\"}}\n",
+    );
+    dir.write("libs/keycloak/index.fg", "import { verify } from \"oidc\"\nexport fn login() { return \"login \" + verify() }\n");
+    dir.write("app/fogu.json", "{\"name\":\"app\",\"version\":\"0.1.0\",\"entry\":\"main.fg\",\"dependencies\":{\"keycloak\":\"file:../libs/keycloak\"}}\n");
+    dir.write("app/t.fg", "import { login } from \"keycloak\"\nprint(login())\n");
+    let app = dir.path().join("app");
+    let o = fogu(&app, &["install"]);
+    assert!(o.status.success(), "{}", text(&o));
+    let o = fogu(&app, &["t.fg"]);
+    assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "login verified", "{}", text(&o));
+
+    // link: the library's folder itself — an edit shows at the next run, no `fogu update`
+    dir.write("libs/mylib/fogu.json", "{\"name\":\"mylib\",\"version\":\"1.0.0\",\"main\":\"index.fg\"}\n");
+    dir.write("libs/mylib/index.fg", "export fn hi() { return \"hi\" }\n");
+    dir.write("app2/fogu.json", "{\"name\":\"app2\",\"version\":\"0.1.0\",\"entry\":\"main.fg\",\"dependencies\":{\"mylib\":\"link:../libs/mylib\"}}\n");
+    dir.write("app2/t.fg", "import { hi } from \"mylib\"\nprint(hi())\n");
+    let app2 = dir.path().join("app2");
+    let o = fogu(&app2, &["install"]);
+    assert!(o.status.success(), "{}", text(&o));
+    let o = fogu(&app2, &["t.fg"]);
+    assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "hi", "{}", text(&o));
+    fs::write(dir.path().join("libs/mylib/index.fg"), "export fn hi() { return \"HI\" }\n").unwrap();
+    let o = fogu(&app2, &["t.fg"]);
+    assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "HI", "{}", text(&o));
+    let o = fogu(&app2, &["install"]);
+    assert!(o.status.success(), "{}", text(&o));
+}

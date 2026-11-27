@@ -30,6 +30,19 @@ fn idx(v: &Value, len: usize, what: &str) -> Result<usize, String> {
     }
 }
 
+/// A `slice` bound: counted from the end when negative, then kept within
+/// `0..=len` (as in Python and JavaScript: an index from outside never stops
+/// the program).
+fn slice_idx(v: &Value, len: usize) -> Result<usize, String> {
+    match v {
+        Value::Int(given) => {
+            let i = if *given < 0 { given.saturating_add(len as i64) } else { *given };
+            Ok(i.clamp(0, len as i64) as usize)
+        }
+        o => Err(format!("slice: index must be int, got '{}'", o.type_name())),
+    }
+}
+
 fn need(args: &[Value], n: usize, name: &str) -> Result<(), String> {
     if args.len() < n {
         Err(format!("'{}' expects at least {} argument(s)", name, n))
@@ -214,8 +227,8 @@ fn array_method(
             "slice" => {
                 let b = a.borrow();
                 let n = b.len();
-                let x = match args.first() { Some(v) => idx(v, n, "slice")?, None => 0 };
-                let y = match args.get(1) { Some(v) => idx(v, n, "slice")?, None => n };
+                let x = match args.first() { Some(v) => slice_idx(v, n)?, None => 0 };
+                let y = match args.get(1) { Some(v) => slice_idx(v, n)?, None => n };
                 wrap(b.slice(x, y.max(x)))
             }
             _ => {
@@ -315,8 +328,8 @@ fn list_method(
             }
             "slice" => {
                 let n = l.borrow().len();
-                let a = match args.first() { Some(v) => idx(v, n, "slice")?, None => 0 };
-                let b = match args.get(1) { Some(v) => idx(v, n, "slice")?, None => n };
+                let a = match args.first() { Some(v) => slice_idx(v, n)?, None => 0 };
+                let b = match args.get(1) { Some(v) => slice_idx(v, n)?, None => n };
                 list(if a >= b { vec![] } else { l.borrow()[a..b].to_vec() })
             }
             "concat" => {
@@ -544,8 +557,8 @@ fn str_method(s: &str, name: &str, args: &[Value]) -> Option<Result<Value, Strin
             },
             "slice" => {
                 let cs: Vec<char> = s.chars().collect();
-                let a = match args.first() { Some(v) => idx(v, cs.len(), "slice")?, None => 0 };
-                let b = match args.get(1) { Some(v) => idx(v, cs.len(), "slice")?, None => cs.len() };
+                let a = match args.first() { Some(v) => slice_idx(v, cs.len())?, None => 0 };
+                let b = match args.get(1) { Some(v) => slice_idx(v, cs.len())?, None => cs.len() };
                 Value::Str(if a >= b { String::new().into() } else { cs[a..b].iter().collect::<String>().into() })
             }
             _ => return Err(String::from("\u{0}nomethod")),
@@ -573,15 +586,15 @@ pub fn install(ctx: &mut NativeContext) {
         "starts_with", "ends_with", "replace", "repeat"
     );
 
-    // error(msg, cause?) — spec §29.
+    // error(msg, cause?) — spec §29 · error(msg, { data }): what the error carries (`e.data`)
     ctx.define_global_variadic("error", 1, |args| {
         if args.len() > 2 {
             return Err(format!("native function 'error' expects at most 2 arguments, got {}", args.len()));
         }
         let message = args[0].to_display_string();
         let cause = args.get(1).cloned().unwrap_or(Value::Nil);
-        if !matches!(cause, Value::Nil | Value::Error(_)) {
-            return Err(format!("error: the cause must be an error or nil, got '{}'", cause.type_name()));
+        if !matches!(cause, Value::Nil | Value::Error(_) | Value::Map(_)) {
+            return Err(format!("error: the second argument is the cause (an error) or the data (a map), got '{}'", cause.type_name()));
         }
         Ok(Value::Error(Rc::new(ErrorValue { message, cause, trace: Vec::new() })))
     });

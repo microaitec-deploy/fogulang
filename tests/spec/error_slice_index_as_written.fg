@@ -1,3 +1,0 @@
-// The slice error names the index the program wrote, not the normalized one (B17, 0.8.4).
-const a = [1, 2, 3]
-print(a.slice(-9, 1))

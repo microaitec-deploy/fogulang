@@ -1,0 +1,49 @@
+// 0.8.5 language: if as a value, computed map keys, _ in for, slice bounds kept
+// in range, `f()?.x` on a function that returns a value and an error, error data
+
+// if as a value (each branch one expression; else required)
+fn grade(n) { return if n >= 90 { "A" } else if n >= 70 { "B" } else { "C" } }
+print(grade(95), grade(75), grade(10))
+const items = []
+const label = if items { "some" } else { "none" }       // truthiness, as in a statement if
+print(label, if nil { 1 } else { 2 }, if 0 { "zero is truthy" } else { "no" })
+let total = 0
+for i in 0..6 { total += if i % 2 == 0 { i } else { 0 } }
+print(total)
+
+// computed keys
+const field = "status"
+const m = { id: 1, [field]: "ok", ["n" + str(2)]: 2, last: true }
+print(m, m.status, m.n2)
+const k = 7
+print({ [k]: "seven" }, { [field]: 1, [field]: 2 })
+
+// _ in for
+let keys = []
+for key, _ in { b: 2, a: 1 } { keys.push(key) }
+let count = 0
+for _ in 0..3 { count += 1 }
+print(keys, count)
+
+// slice: an index outside the text or the list is kept in range
+const s = "hello"
+print(s.slice(0, 99), s.slice(3, 99), s.slice(10, 20), s.slice(-99, 2), s.slice(-3))
+print([1, 2, 3].slice(1, 50), [1, 2, 3].slice(-9, 1), [1, 2, 3].slice(5))
+
+// f()?.x where f returns `value, error`: the error propagates, else the value's field
+fn find(id) {
+    if id == 0 { return nil, error("not found") }
+    return { name: "user" + str(id) }, nil
+}
+fn nameOf(id) { return find(id)?.name, nil }
+print(nameOf(4))
+const [_, e] = nameOf(0)
+print(e)
+fn maybe(id) { return nil, nil }
+print(maybe(1)?.name)
+
+// error(msg, { data })
+const err = error("not found", { status: 404, id: 9 })
+print(err.message, err.data.status, err.data, err.cause)
+const wrapped = error("load failed", err)
+print(wrapped.cause.message, wrapped.data)

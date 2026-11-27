@@ -322,6 +322,13 @@ fn locate_dir(name: &str, from_dir: &Path) -> Option<PathBuf> {
         }
         let lock = Lock::load(&r.join(LOCKFILE));
         if let Some(e) = lock.packages.get(name) {
+            // `link:`: the library's own folder
+            if e.commit == install::LINK_COMMIT {
+                let d = PathBuf::from(&e.resolved);
+                if d.is_dir() {
+                    return Some(d);
+                }
+            }
             let d = store_dir(name, &e.commit);
             if d.is_dir() {
                 return Some(d);

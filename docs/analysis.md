@@ -625,9 +625,12 @@ Fixed in 0.8.5:
   `libs/oidc` took ~47 ms on the interpreter's thread per cold token.
 - gRPC streams both ways; buffers across `sync.Worker`; `formData` and protobuf in the HTTP client.
 
-Still open (in "Known gaps" order of priority): request bodies read whole (`maxBody`) and binary
-response bodies of `http.serve`; Socket.IO `io.use`, connection state recovery and a Redis adapter;
-CPU-heavy natives (`fogu:image`) still run on the interpreter's thread; the language items
-(`f()?.x` on a tuple read as optional chaining, `slice` out of range stops the program, no
-conditional expression, no computed keys, no `_` in `for`, `error(msg, cause)` takes no data); nested
-`file:` packages and a link mode; a minimal linux-x64 runtime for `--compile`.
+Also in 0.8.5, after a second pass: request bodies to disk as they arrive (`bodyToDisk`) and binary
+answers; Socket.IO `io.use`; `fogu:image` off the interpreter's thread; the language items (`if` as a
+value, computed keys, `_` in `for`, `slice` bounds kept in range, `f()?.x` on a tuple, `error(msg,
+{ data })`); nested local packages and `link:`.
+
+Still open: Socket.IO connection state recovery and a Redis adapter (socketioxide 0.18 has neither;
+the official client's recovery needs a session offset in the CONNECT packet); a handler cannot start
+on the first bytes of an upload (it gets the body once it arrived, on disk past `bodyToDisk`); a
+minimal linux-x64 runtime for `--compile`.
