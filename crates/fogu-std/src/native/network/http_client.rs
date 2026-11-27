@@ -110,12 +110,14 @@ pub fn file(a: &[Value]) -> Result<Value, String> {
 // the request, as plain (Send) data
 // ---------------------------------------------------------------------
 
+#[derive(Clone)]
 enum Part {
     Text(String, String),
     File { field: String, path: String, filename: String, mime: String },
     Bytes { field: String, data: Vec<u8>, filename: String, mime: String },
 }
 
+#[derive(Clone)]
 enum Body {
     None,
     Raw { data: Vec<u8>, content_type: &'static str },
@@ -123,7 +125,14 @@ enum Body {
     Multipart(Vec<Part>),
 }
 
+#[derive(Clone)]
 struct Plan {
+    /// `cookies: { name: value }`: sent in the Cookie header
+    cookies: Vec<(String, String)>,
+    /// `cert` / `key`: a client certificate (mTLS), PEM
+    identity: Option<(Vec<u8>, Vec<u8>)>,
+    /// a session's own client (`http.client`)
+    client: Option<reqwest::blocking::Client>,
     method: reqwest::Method,
     url: String,
     headers: Vec<(String, String)>,
@@ -257,6 +266,9 @@ fn plan(method: &str, url: &Value, body: Option<&Value>, o: Option<&Value>) -> R
     };
     let method = reqwest::Method::from_bytes(method.to_ascii_uppercase().as_bytes()).map_err(|e| format!("http: bad method {}: {}", method, e))?;
     let mut p = Plan {
+        cookies: Vec::new(),
+        identity: None,
+        client: None,
         method,
         url: url.into_string(),
         headers: Vec::new(),
@@ -288,7 +300,7 @@ fn plan(method: &str, url: &Value, body: Option<&Value>, o: Option<&Value>) -> R
         Some(Value::Map(m)) => {
             let m = m.borrow();
             const KNOWN: &[&str] =
-                &["headers", "query", "json", "form", "multipart", "formData", "protobuf", "body", "timeout", "redirects", "basicAuth", "bearer", "method", "url", "ca", "insecure"];
+                &["headers", "query", "json", "form", "multipart", "formData", "protobuf", "body", "timeout", "redirects", "basicAuth", "bearer", "method", "url", "ca", "insecure", "cookies", "cert", "key"];
             for k in m.keys() {
                 if !KNOWN.contains(&k.as_str()) {
                     return Err(format!("{}: unknown option '{}' ({})", what, k, KNOWN.join(" ")));
@@ -334,6 +346,23 @@ fn plan(method: &str, url: &Value, body: Option<&Value>, o: Option<&Value>) -> R
             if let Some(i) = m.get("insecure") {
                 p.insecure = i.is_truthy();
             }
+            if let Some(c) = m.get("cookies") {
+                p.cookies = pairs(c, "cookies")?;
+            }
+            // { cert, key }: a client certificate for servers that ask for one (mTLS)
+            let pem = |k: &str| -> Result<Option<Vec<u8>>, String> {
+                match m.get(k) {
+                    None | Some(Value::Nil) => Ok(None),
+                    Some(Value::Str(s)) if s.contains("-----BEGIN") => Ok(Some(s.as_bytes().to_vec())),
+                    Some(Value::Str(s)) => std::fs::read(s.as_str()).map(Some).map_err(|e| io_err!("{}: {} {}: {}", what, k, s.as_str(), e)),
+                    Some(other) => bytes_of(other, &what).map(Some),
+                }
+            };
+            match (pem("cert")?, pem("key")?) {
+                (Some(c), Some(k)) => p.identity = Some((c, k)),
+                (None, None) => {}
+                _ => return Err(format!("{}: a client certificate needs both 'cert' and 'key'", what)),
+            }
             match m.get("ca") {
                 None | Some(Value::Nil) => {}
                 Some(Value::Str(s)) if s.contains("-----BEGIN") => p.ca = Some(s.as_bytes().to_vec()),
@@ -368,23 +397,33 @@ fn no_redirect_client() -> &'static reqwest::blocking::Client {
     })
 }
 
+/// A client of its own for a custom CA, `insecure` or a client certificate
+/// (the shared ones trust the system roots and present none).
+fn custom_client(ca: Option<&[u8]>, insecure: bool, identity: Option<&(Vec<u8>, Vec<u8>)>, redirects: bool, what: &str) -> Result<reqwest::blocking::Client, String> {
+    let mut b = reqwest::blocking::Client::builder().timeout(None).danger_accept_invalid_certs(insecure);
+    b = b.redirect(if redirects { crate::native::util::redirect_policy() } else { reqwest::redirect::Policy::none() });
+    if let Some(pem) = ca {
+        b = b.add_root_certificate(reqwest::Certificate::from_pem(pem).map_err(|e| io_err!("{}: ca: {}", what, e))?);
+    }
+    if let Some((cert, key)) = identity {
+        let id = reqwest::Identity::from_pkcs8_pem(cert, key).map_err(|e| io_err!("{}: client certificate: {} (the key must be PKCS#8 PEM)", what, e))?;
+        b = b.identity(id);
+    }
+    b.build().map_err(|e| io_err!("{}: {}", what, e))
+}
+
 fn send(p: Plan) -> Result<Got, String> {
     let what = format!("http.{}", p.method.as_str().to_ascii_lowercase());
-    // a custom CA or `insecure`: a client of its own (the shared ones trust the system roots)
-    let custom = if p.ca.is_some() || p.insecure {
-        let mut b = reqwest::blocking::Client::builder().timeout(None).danger_accept_invalid_certs(p.insecure);
-        b = b.redirect(if p.redirects { crate::native::util::redirect_policy() } else { reqwest::redirect::Policy::none() });
-        if let Some(pem) = &p.ca {
-            b = b.add_root_certificate(reqwest::Certificate::from_pem(pem).map_err(|e| io_err!("{}: ca: {}", what, e))?);
-        }
-        Some(b.build().map_err(|e| io_err!("{}: {}", what, e))?)
+    let custom = if p.client.is_none() && (p.ca.is_some() || p.insecure || p.identity.is_some()) {
+        Some(custom_client(p.ca.as_deref(), p.insecure, p.identity.as_ref(), p.redirects, &what)?)
     } else {
         None
     };
-    let client = match &custom {
-        Some(c) => c,
-        None if p.redirects => crate::native::http::blocking_client(),
-        None => no_redirect_client(),
+    let client = match (&p.client, &custom) {
+        (Some(c), _) => c,
+        (None, Some(c)) => c,
+        (None, None) if p.redirects => crate::native::http::blocking_client(),
+        (None, None) => no_redirect_client(),
     };
     let mut req = client.request(p.method, &p.url);
     if !p.query.is_empty() {
@@ -432,8 +471,22 @@ fn send(p: Plan) -> Result<Got, String> {
             req.multipart(form)
         }
     };
+    let mut cookie_header = String::new();
     for (k, v) in p.headers {
+        if k.eq_ignore_ascii_case("cookie") {
+            cookie_header = v;
+            continue;
+        }
         req = req.header(k, v);
+    }
+    for (k, v) in &p.cookies {
+        if !cookie_header.is_empty() {
+            cookie_header.push_str("; ");
+        }
+        cookie_header.push_str(&format!("{}={}", k, crate::native::cookies::encode(v)));
+    }
+    if !cookie_header.is_empty() {
+        req = req.header("cookie", cookie_header);
     }
     let mut resp = req.send().map_err(|e| io_err!("{}: {}", what, crate::native::http::error_chain(&e)))?;
     let status = resp.status().as_u16();
@@ -588,6 +641,270 @@ impl FoguObject for ClientResponse {
 
     fn methods(&self) -> Vec<&'static str> {
         vec!["json", "bytes", "protobuf", "header", "cookies"]
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+// ---------------------------------------------------------------------
+// http.client(): a session — defaults, a base URL and a cookie jar
+// ---------------------------------------------------------------------
+
+type SharedJar = std::sync::Arc<std::sync::Mutex<crate::native::cookies::Jar>>;
+
+/// `http.client({ baseUrl, cookies = true, headers, bearer, basicAuth, timeout, ca, insecure, cert, key, redirects })`.
+/// Its requests share one connection pool, the defaults, and the cookies the
+/// servers set (kept per domain and path, sent back where they apply, also
+/// across the redirects it follows itself).
+pub struct HttpSession {
+    base: Option<reqwest::Url>,
+    defaults: HashMap<Str, Value>,
+    jar: Option<SharedJar>,
+    client: reqwest::blocking::Client,
+    follow: bool,
+}
+
+fn lock(j: &SharedJar) -> std::sync::MutexGuard<'_, crate::native::cookies::Jar> {
+    j.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+pub fn session(a: &[Value]) -> Result<Value, String> {
+    max_args(a, 1, "http.client")?;
+    let mut o: HashMap<Str, Value> = match a.first() {
+        None | Some(Value::Nil) => HashMap::new(),
+        Some(Value::Map(m)) => m.borrow().clone(),
+        Some(other) => return Err(format!("http.client: options must be a map, got '{}'", other.type_name())),
+    };
+    let base = match o.remove("baseUrl") {
+        None | Some(Value::Nil) => None,
+        Some(v) => {
+            let s = v.to_display_string();
+            let s = if s.ends_with('/') { s } else { format!("{}/", s) };
+            Some(reqwest::Url::parse(&s).map_err(|e| format!("http.client: invalid baseUrl '{}': {}", s, e))?)
+        }
+    };
+    // cookies: true (the default) / false, or a map of cookies to start with
+    let initial = match o.get("cookies") {
+        Some(Value::Map(m)) => Some(pairs(&Value::Map(m.clone()), "cookies")?),
+        _ => None,
+    };
+    let jar_on = !matches!(o.remove("cookies"), Some(Value::Bool(false)) | Some(Value::Nil));
+    let jar = jar_on.then(|| std::sync::Arc::new(std::sync::Mutex::new(crate::native::cookies::Jar::default())));
+    if let (Some(j), Some(cs), Some(b)) = (&jar, initial, &base) {
+        for (k, v) in cs {
+            lock(j).set(b, &k, &v);
+        }
+    }
+    // the TLS settings make the session's own client; the rest are defaults of every request
+    let probe = plan("GET", &Value::Str("http://localhost/".into()), None, Some(&Value::Map(Rc::new(std::cell::RefCell::new(o.clone())))))?;
+    let client = custom_client(probe.ca.as_deref(), probe.insecure, probe.identity.as_ref(), false, "http.client")?;
+    for k in ["ca", "insecure", "cert", "key", "redirects"] {
+        o.remove(k);
+    }
+    Ok(NativeObjectRef::new(HttpSession { base, defaults: o, jar, client, follow: probe.redirects }).to_value())
+}
+
+/// The defaults under a request's options (`headers`, `query` and `cookies` merge key by key).
+fn merged(defaults: &HashMap<Str, Value>, opts: Option<&Value>) -> Result<Value, String> {
+    let mut out = defaults.clone();
+    match opts {
+        None | Some(Value::Nil) => {}
+        Some(Value::Map(m)) => {
+            for (k, v) in m.borrow().iter() {
+                match (k.as_str(), out.get(k), v) {
+                    ("headers" | "query" | "cookies", Some(Value::Map(base)), Value::Map(extra)) => {
+                        let mut both = base.borrow().clone();
+                        for (kk, vv) in extra.borrow().iter() {
+                            both.insert(kk.clone(), vv.clone());
+                        }
+                        out.insert(k.clone(), Value::Map(Rc::new(std::cell::RefCell::new(both))));
+                    }
+                    _ => {
+                        out.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        Some(other) => return Err(format!("http.client: options must be a map, got '{}'", other.type_name())),
+    }
+    Ok(Value::Map(Rc::new(std::cell::RefCell::new(out))))
+}
+
+/// A request of the session: the jar's cookies go out, the answer's come in,
+/// and redirects are followed here so that each hop does both. Credentials
+/// stay with the host they were given for.
+fn send_session(mut p: Plan, jar: Option<SharedJar>, follow: bool) -> Result<Got, String> {
+    p.redirects = false;
+    for _ in 0..10 {
+        let url = reqwest::Url::parse(&p.url).map_err(|e| io_err!("http: invalid URL '{}': {}", p.url, e))?;
+        let mut hop = p.clone();
+        if let Some(j) = &jar {
+            if let Some(c) = lock(j).header_for(&url) {
+                match hop.headers.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case("cookie")) {
+                    Some((_, v)) => *v = format!("{}; {}", c, v),
+                    None => hop.headers.push(("cookie".into(), c)),
+                }
+            }
+        }
+        let g = send(hop)?;
+        if let Some(j) = &jar {
+            let mut j = lock(j);
+            for (k, v) in &g.headers {
+                if k.eq_ignore_ascii_case("set-cookie") {
+                    j.store(&url, v);
+                }
+            }
+        }
+        let location = g.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("location")).map(|(_, v)| v.clone());
+        match (follow, g.status, location) {
+            (true, 301 | 302 | 303 | 307 | 308, Some(loc)) => {
+                let Ok(next) = url.join(&loc) else { return Ok(g) };
+                if !matches!(next.scheme(), "http" | "https") {
+                    return Ok(g);
+                }
+                if g.status == 303 || (matches!(g.status, 301 | 302) && p.method != reqwest::Method::GET && p.method != reqwest::Method::HEAD) {
+                    p.method = reqwest::Method::GET;
+                    p.body = Body::None;
+                }
+                if next.host_str() != url.host_str() {
+                    p.bearer = None;
+                    p.basic = None;
+                    p.headers.retain(|(k, _)| !k.eq_ignore_ascii_case("authorization"));
+                }
+                p.url = next.to_string();
+            }
+            _ => return Ok(g),
+        }
+    }
+    Err(io_err!("http: more than 10 redirects"))
+}
+
+impl HttpSession {
+    fn plan_for(&self, method: &str, args: &[Value]) -> Result<Plan, String> {
+        let what = format!("client.{}", method.to_ascii_lowercase());
+        let (url, body, opts) = match method {
+            "REQUEST" => {
+                max_args(args, 1, &what)?;
+                let Some(Value::Map(m)) = args.first() else { return Err("client.request expects a map { method, url, ... }".into()) };
+                let (mth, url) = {
+                    let m = m.borrow();
+                    (m.get("method").map(|v| v.to_display_string()).unwrap_or_else(|| "GET".into()), m.get("url").cloned().unwrap_or(Value::Nil))
+                };
+                let mut o = m.borrow().clone();
+                o.remove("method");
+                o.remove("url");
+                let mut p = self.plan_url(&mth, &url, None, Some(&Value::Map(Rc::new(std::cell::RefCell::new(o)))))?;
+                p.client = Some(self.client.clone());
+                return Ok(p);
+            }
+            "POST" | "PUT" | "PATCH" => {
+                max_args(args, 3, &what)?;
+                (args.first().cloned().unwrap_or(Value::Nil), args.get(1), args.get(2))
+            }
+            _ => {
+                max_args(args, 2, &what)?;
+                (args.first().cloned().unwrap_or(Value::Nil), None, args.get(1))
+            }
+        };
+        let mut p = self.plan_url(method, &url, body, opts)?;
+        p.client = Some(self.client.clone());
+        Ok(p)
+    }
+
+    fn plan_url(&self, method: &str, url: &Value, body: Option<&Value>, opts: Option<&Value>) -> Result<Plan, String> {
+        let u = match url {
+            Value::Str(s) => s.to_string(),
+            other => return Err(format!("client.{}: url must be str, got '{}'", method.to_ascii_lowercase(), other.type_name())),
+        };
+        let full = match &self.base {
+            Some(b) if !u.contains("://") => b.join(u.trim_start_matches('/')).map_err(|e| format!("client: '{}': {}", u, e))?.to_string(),
+            _ => u,
+        };
+        plan(method, &Value::Str(full.into()), body, Some(&merged(&self.defaults, opts)?))
+    }
+
+    fn jar_url(&self, args: &[Value], i: usize) -> Result<reqwest::Url, String> {
+        let given = match args.get(i) {
+            Some(Value::Map(m)) => m.borrow().get("url").map(|v| v.to_display_string()),
+            _ => None,
+        };
+        match (given, &self.base) {
+            (Some(u), _) => reqwest::Url::parse(&u).map_err(|e| format!("client: invalid url '{}': {}", u, e)),
+            (None, Some(b)) => Ok(b.clone()),
+            (None, None) => Err("client: no baseUrl: give { url } for the cookie".into()),
+        }
+    }
+}
+
+impl FoguObject for HttpSession {
+    fn name(&self) -> &str {
+        "HttpClient"
+    }
+
+    fn get(&self, field: &str) -> Option<Value> {
+        match field {
+            "baseUrl" => Some(self.base.as_ref().map_or(Value::Nil, |b| Value::Str(b.to_string().into()))),
+            "cookies" => Some(match &self.jar {
+                Some(j) => crate::native::util::map(lock(j).values().iter().map(|(k, v)| (k.as_str(), Value::Str(v.clone().into()))).collect()),
+                None => crate::native::util::map(vec![]),
+            }),
+            _ => None,
+        }
+    }
+
+    // the requests wait off the interpreter's thread (other tasks go on)
+    fn start_async(&mut self, method: &str, args: &[Value]) -> Option<Result<crate::native::object::Poller, String>> {
+        let m = match method {
+            "get" | "delete" | "head" | "post" | "put" | "patch" | "request" => method.to_ascii_uppercase(),
+            _ => return None,
+        };
+        let p = match self.plan_for(&m, args) {
+            Ok(p) => p,
+            Err(e) => return Some(Err(e)),
+        };
+        let (jar, follow) = (self.jar.clone(), self.follow);
+        let pending = crate::native::rt::spawn_blocking(move || send_session(p, jar, follow));
+        Some(Ok(Box::new(move || {
+            pending.try_take().map(|r| {
+                r.map(|g| NativeObjectRef::new(ClientResponse { status: g.status as i64, url: g.url, headers: g.headers, body: Rc::new(g.body) }).to_value())
+            })
+        })))
+    }
+
+    fn call(&mut self, method: &str, args: &[Value]) -> Result<Value, String> {
+        match method {
+            // cookie(name) → its value (nil when the jar has none)
+            "cookie" => {
+                max_args(args, 1, "cookie")?;
+                let name = str_arg(args, 0, "cookie")?;
+                Ok(self.jar.as_ref().and_then(|j| lock(j).values().into_iter().find(|(k, _)| *k == name)).map_or(Value::Nil, |(_, v)| Value::Str(v.into())))
+            }
+            // setCookie(name, value, { url }): for baseUrl's host (or url's)
+            "setCookie" => {
+                max_args(args, 3, "setCookie")?;
+                let name = str_arg(args, 0, "setCookie")?;
+                let value = args.get(1).map(|v| v.to_display_string()).unwrap_or_default();
+                let url = self.jar_url(args, 2)?;
+                match &self.jar {
+                    Some(j) => lock(j).set(&url, &name, &value),
+                    None => return Err("setCookie: this client keeps no cookies ({ cookies: false })".into()),
+                }
+                Ok(Value::Nil)
+            }
+            "clearCookies" => {
+                if let Some(j) = &self.jar {
+                    lock(j).clear();
+                }
+                Ok(Value::Nil)
+            }
+            other => Err(format!("method '{}' does not exist on HttpClient ({})", other, self.methods().join(" "))),
+        }
+    }
+
+    fn methods(&self) -> Vec<&'static str> {
+        vec!["get", "post", "put", "patch", "delete", "head", "request", "cookie", "setCookie", "clearCookies"]
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

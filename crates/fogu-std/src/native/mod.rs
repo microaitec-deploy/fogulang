@@ -68,6 +68,9 @@ pub use network::http_direct;
 pub use network::http_client;
 #[cfg(feature = "network")]
 #[cfg(not(target_family = "wasm"))]
+pub use network::cookies;
+#[cfg(feature = "network")]
+#[cfg(not(target_family = "wasm"))]
 pub use network::websocket;
 #[cfg(feature = "network")]
 #[cfg(not(target_family = "wasm"))]

@@ -2422,14 +2422,19 @@ export const REFERENCE: Record<string, RefData> = {
       ""
      ],
      [
-      "opts: { headers, query, json, form, multipart | formData, protobuf, body, timeout, redirects = true, basicAuth: [user, pass], bearer, ca, insecure }",
+      "opts: { headers, query, json, form, multipart | formData, protobuf, body, timeout, redirects = true, basicAuth: [user, pass], bearer, cookies, ca, insecure, cert, key }",
       "",
-      "<code>ca</code>: a PEM certificate (or its path) trusted for HTTPS, e.g. a self-signed one; <code>insecure: true</code> accepts any certificate (development only). <code>form</code>: urlencoded fields. <code>multipart</code> (or <code>formData</code>): a map of fields — text values, <code>http.file(path)</code> (streamed from disk), <code>{ data, filename, type }</code> bytes, or a list (a repeated field). Map keys are sent in alphabetical order. <code>protobuf: { schema, message, value }</code>: the message encoded with a <a class=\"underline\" href=\"#mod-protobuf\">fogu:protobuf</a> schema (<code>application/x-protobuf</code>)."
+      "<code>cookies: { name: value }</code> goes in the <code>Cookie</code> header; <code>cert</code>/<code>key</code>: a client certificate for servers that ask for one (mTLS; PEM text or paths, the key PKCS#8). <code>ca</code>: a PEM certificate (or its path) trusted for HTTPS, e.g. a self-signed one; <code>insecure: true</code> accepts any certificate (development only). <code>form</code>: urlencoded fields. <code>multipart</code> (or <code>formData</code>): a map of fields — text values, <code>http.file(path)</code> (streamed from disk), <code>{ data, filename, type }</code> bytes, or a list (a repeated field). Map keys are sent in alphabetical order. <code>protobuf: { schema, message, value }</code>: the message encoded with a <a class=\"underline\" href=\"#mod-protobuf\">fogu:protobuf</a> schema (<code>application/x-protobuf</code>)."
      ],
      [
       "http.file(path, { filename, type })",
       "HttpFile · error",
       "A file to upload; the type comes from the extension."
+     ],
+     [
+      "http.client({ baseUrl, cookies = true, headers, bearer, basicAuth, timeout, ca, insecure, cert, key, redirects })",
+      "HttpClient",
+      "A session: <code>get post put patch delete head request</code> as in <code>http</code>, paths relative to <code>baseUrl</code>, the options as defaults (<code>headers</code>, <code>query</code>, <code>cookies</code> merge key by key), one connection pool, and a cookie jar — the cookies servers set are kept per domain and path (with <code>Max-Age</code>, <code>Expires</code>, <code>Secure</code>) and sent back where they apply, also across the redirects it follows; credentials are not sent to another host. <code>c.cookies</code> (a map), <code>c.cookie(name)</code>, <code>c.setCookie(name, value, { url })</code>, <code>c.clearCookies()</code>; <code>cookies: false</code> keeps none, a map starts with those."
      ],
      [
       "http.download(url, path, opts?)",
@@ -2466,6 +2471,11 @@ export const REFERENCE: Record<string, RefData> = {
       "req.method · req.path · req.query · req.headers · req.body",
       "",
       "<code>query</code> is the raw query string."
+     ],
+     [
+      "req.cookies · req.signedCookies(secret) · http.cookie(name, value, opts)",
+      "map · str",
+      "The request's cookies (values decoded); <code>signedCookies</code> keeps only those signed with <code>secret</code> (see <code>web.setCookie</code>). <code>http.cookie</code> makes a <code>Set-Cookie</code> line; several go out as a list: <code>headers: { \"set-cookie\": [a, b] }</code>."
      ],
      [
       "req.header(name) · req.json() · req.form({ toDisk }) · req.bytes() · req.protobuf(schema, message)",
@@ -2594,6 +2604,11 @@ export const REFERENCE: Record<string, RefData> = {
       "handler result",
       "",
       "A str (text or HTML), any value (JSON), a response, or nil (204)."
+     ],
+     [
+      "web.setCookie(ctx, name, value, { path = \"/\", domain, maxAge, expires, secure, httpOnly = true, sameSite = \"Lax\", partitioned, secret }) · web.clearCookie(ctx, name, opts) · web.cookies(ctx, { secret }) · web.cookie(name, value, opts)",
+      "nil · map · str",
+      "Cookies on the answer (several cookies, several <code>Set-Cookie</code> lines) and from the request. <code>secret</code> signs the value (HMAC-SHA256 over the name and the value): <code>web.cookies(ctx, { secret })</code> returns only the cookies whose signature holds, unsigned — a session id the client cannot forge. <code>sameSite: \"None\"</code> sets <code>Secure</code>, as browsers require. Values are percent-encoded."
      ],
      [
       "web.json/text/html(body, { status, headers }) · web.bytes(buffer, { status, headers, type })",

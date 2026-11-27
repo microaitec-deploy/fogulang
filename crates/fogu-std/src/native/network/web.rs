@@ -60,6 +60,48 @@ pub fn build() -> ModuleValue {
 
     // bytes(buffer, { status, headers, type }) — a binary answer
     exports.insert("bytes".into(), fogu_http::nfn_opts("bytes", fogu_http::bytes_response));
+    // cookies: cookie(name, value, opts) → Set-Cookie text · setCookie(ctx, name, value, opts) ·
+    // clearCookie(ctx, name, opts) · cookies(ctx | req, { secret }) → map
+    exports.insert("cookie".into(), crate::native::util::nfn_var("cookie", 2, fogu_http::cookie_fn));
+    exports.insert("setCookie".into(), crate::native::util::nfn_var("setCookie", 3, |a| {
+        crate::native::util::max_args(a, 4, "web.setCookie")?;
+        let name = crate::native::util::str_arg(a, 1, "web.setCookie")?;
+        let line = crate::native::cookies::set_cookie(&name, &a[2].to_display_string(), a.get(3), "web.setCookie")?;
+        add_set_cookie(&a[0], line, "web.setCookie")
+    }));
+    exports.insert("clearCookie".into(), crate::native::util::nfn_var("clearCookie", 2, |a| {
+        crate::native::util::max_args(a, 3, "web.clearCookie")?;
+        let name = crate::native::util::str_arg(a, 1, "web.clearCookie")?;
+        // the same path and domain as when it was set, and no age
+        let opts = match a.get(2) {
+            Some(Value::Map(m)) => m.borrow().clone(),
+            _ => HashMap::new(),
+        };
+        let mut o = opts;
+        o.insert("maxAge".into(), Value::Int(0));
+        o.remove("secret");
+        let line = crate::native::cookies::set_cookie(&name, "", Some(&Value::Map(Rc::new(RefCell::new(o)))), "web.clearCookie")?;
+        add_set_cookie(&a[0], line, "web.clearCookie")
+    }));
+    exports.insert("cookies".into(), crate::native::util::nfn_var("cookies", 1, |a| {
+        crate::native::util::max_args(a, 2, "web.cookies")?;
+        let header = match field_of(&a[0], "headers") {
+            Value::Map(h) => h.borrow().get("cookie").map(|v| v.to_display_string()).unwrap_or_default(),
+            _ => match &a[0] {
+                Value::Object(o) => match o.call("header", &[Value::Str("cookie".into())]) {
+                    Ok(Value::Str(s)) => s.to_string(),
+                    _ => String::new(),
+                },
+                _ => String::new(),
+            },
+        };
+        let secret = match a.get(1) {
+            Some(Value::Map(m)) => m.borrow().get("secret").map(|v| v.to_display_string()),
+            None | Some(Value::Nil) => None,
+            Some(other) => return Err(format!("web.cookies: options must be a map, got '{}'", other.type_name())),
+        };
+        Ok(crate::native::cookies::cookies_value(&header, secret.as_deref()))
+    }));
     // json/text/html(body, options?) — options: { status: 404, headers: {...} }
     exports.insert(
         "json".into(),
@@ -1298,6 +1340,17 @@ pub fn json_response(status: i64, body: &Value) -> Value {
 }
 
 /// `ctx.set.headers[name] = value` from native middleware.
+/// A `Set-Cookie` line into `ctx.set.headers` (several cookies stay several lines).
+fn add_set_cookie(ctx: &Value, line: String, what: &str) -> Result<Value, String> {
+    match field_of(&field_of(ctx, "set"), "headers") {
+        Value::Map(h) => {
+            crate::native::cookies::add_to(&mut h.borrow_mut(), line);
+            Ok(Value::Nil)
+        }
+        _ => Err(format!("{}: expects the ctx of a fogu:web handler", what)),
+    }
+}
+
 pub fn set_header(ctx: &Value, name: &str, value: &str) {
     if let Value::Map(h) = field_of(&field_of(ctx, "set"), "headers") {
         h.borrow_mut().insert(name.into(), Value::Str(value.to_string().into()));

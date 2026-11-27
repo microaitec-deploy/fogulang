@@ -1,0 +1,10 @@
+a=1; Path=/; HttpOnly; SameSite=Lax
+b=x%3By; Path=/app; Max-Age=600; Secure; SameSite=Lax
+2 true theme=dark%20mode; Path=/; SameSite=Strict
+dark mode true
+user-42 nil dark mode
+{} user-1.AAAA
+1
+nil dark mode
+seen none seen 1 {m: 2, n: 1}
+seen none seen none

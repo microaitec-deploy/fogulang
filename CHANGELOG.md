@@ -80,6 +80,15 @@ S3), and gRPC streams.
   `_` as a loop variable (`for k, _ in m`); `error(msg, { data })` and `e.data`.
 - Packages: a local package may depend on another local one (paths relative to its folder), and
   `link:../folder` uses a library in place — edits show at the next run, without `fogu update`.
+- **Cookies**: `web.setCookie(ctx, name, value, opts)` (`HttpOnly` and `SameSite=Lax` by default,
+  `secret` signs the value with HMAC-SHA256), `web.clearCookie`, `web.cookies(ctx, { secret })`,
+  `web.cookie` / `http.cookie` (a `Set-Cookie` line), `req.cookies`, `req.signedCookies(secret)`;
+  several `Set-Cookie` lines in one answer on both servers (`headers: { "set-cookie": [a, b] }`).
+- **`http.client({ baseUrl, cookies, headers, bearer, … })`**: a session with defaults, one
+  connection pool and a cookie jar (RFC 6265: domain, path, expiry, `Secure`), kept across the
+  redirects it follows; credentials are not sent to another host. Requests take
+  `cookies: { name: value }`, and `cert` / `key` for servers that ask for a client certificate
+  (mTLS, checked against `openssl s_server -Verify`).
 - `fogu:image`: `open`, `decode`, `resize`, `thumbnail`, `blur`, `encode`, `save` run off the
   interpreter's thread when other tasks could run meanwhile (a server making thumbnails keeps
   answering).

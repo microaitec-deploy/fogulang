@@ -1,0 +1,50 @@
+// Cookies: fogu:web reads and sets them (signed too), http.serve sends several,
+// and http.client keeps a jar across requests and redirects
+import http from "fogu:http"
+import web from "fogu:web"
+
+const secret = "change me"
+const app = web.app()
+app.post("/login", (ctx) => {
+    web.setCookie(ctx, "sid", "user-42", { secret: secret, maxAge: 1h })
+    web.setCookie(ctx, "theme", "dark mode", { httpOnly: false, sameSite: "Strict" })
+    return { ok: true }
+})
+app.get("/me", (ctx) => ({ all: web.cookies(ctx), signed: web.cookies(ctx, { secret: secret }), req: ctx.req.cookies.theme }))
+app.get("/hop", (ctx) => {
+    web.setCookie(ctx, "hop", "1")
+    return web.redirect("/me")
+})
+app.post("/logout", (ctx) => {
+    web.clearCookie(ctx, "sid")
+    return "bye"
+})
+app.listen(18501, { quiet: true })?
+
+// the Set-Cookie lines themselves
+print(web.cookie("a", "1"))
+print(web.cookie("b", "x;y", { secure: true, maxAge: 10m, path: "/app", httpOnly: false }))
+const raw = http.post("http://127.0.0.1:18501/login")?
+print(raw.cookies().len(), raw.cookies()[0].starts_with("sid=user-42."), raw.cookies()[1])
+
+// a session keeps them and sends them back
+const c = http.client({ baseUrl: "http://127.0.0.1:18501" })
+c.post("/login")?
+print(c.cookies.theme, c.cookie("sid").starts_with("user-42."))
+const me = c.get("/me")?.json()?
+print(me.signed.sid, me.signed.theme, me.req)
+// a forged signed cookie is not among the signed ones
+const forged = http.get("http://127.0.0.1:18501/me", { cookies: { sid: "user-1.AAAA", theme: "x" } })?.json()?
+print(forged.signed, forged.all.sid)
+// redirects: the cookie set on the first hop goes with the second
+print(c.get("/hop")?.json()?.all.hop)
+c.post("/logout")?
+print(c.cookie("sid"), c.cookies.theme)
+
+// http.serve: req.cookies, and several Set-Cookie lines from a list
+http.serve(18502, (req) => http.text("seen " + (req.cookies.n ?? "none"), {
+    headers: { "set-cookie": [http.cookie("n", "1"), http.cookie("m", "2")] } }), { quiet: true })?
+const s = http.client({ baseUrl: "http://127.0.0.1:18502" })
+print(s.get("/")?.text, s.get("/")?.text, s.cookies)
+const off = http.client({ baseUrl: "http://127.0.0.1:18502", cookies: false })
+print(off.get("/")?.text, off.get("/")?.text)

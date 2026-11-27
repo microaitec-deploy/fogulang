@@ -20,6 +20,8 @@ pub mod web;
 pub mod topcoat;
 pub mod jwt;
 #[cfg(not(target_family = "wasm"))]
+pub mod cookies;
+#[cfg(not(target_family = "wasm"))]
 pub mod keys;
 pub mod html;
 #[cfg(not(target_family = "wasm"))]

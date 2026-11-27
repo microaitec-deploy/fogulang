@@ -1276,6 +1276,18 @@ fn write_head(out: &mut Vec<u8>, status: i64, headers: &HashMap<String, String>,
     let mut dated = false;
     let mut given_len = None;
     for (k, v) in headers {
+        // several cookies: one Set-Cookie line each
+        if k.eq_ignore_ascii_case("set-cookie") && v.contains('\n') {
+            for line in crate::native::cookies::lines(k, v) {
+                if sendable(k, line) {
+                    out.extend_from_slice(k.as_bytes());
+                    out.extend_from_slice(b": ");
+                    out.extend_from_slice(line.as_bytes());
+                    out.extend_from_slice(b"\r\n");
+                }
+            }
+            continue;
+        }
         if !sendable(k, v) || k.eq_ignore_ascii_case("transfer-encoding") {
             continue;
         }

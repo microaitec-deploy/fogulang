@@ -502,6 +502,7 @@ pub fn plain_of(resp: Value) -> PlainResponse {
                     .iter()
                     .filter_map(|(k, v)| match v {
                         Value::Str(s) => Some((k.to_string(), s.to_string())),
+                        Value::List(_) => Some((k.to_string(), header_text(v))),
                         _ => None,
                     })
                     .collect(),
@@ -569,6 +570,21 @@ pub(crate) fn bytes_response(args: &[Value]) -> Result<Value, String> {
     Ok(NativeObjectRef::new(BytesResponse { status, headers, body }).to_value())
 }
 
+pub(crate) fn cookie_fn(a: &[Value]) -> Result<Value, String> {
+    crate::native::util::max_args(a, 3, "cookie")?;
+    let name = crate::native::util::str_arg(a, 0, "cookie")?;
+    let value = a[1].to_display_string();
+    crate::native::cookies::set_cookie(&name, &value, a.get(2), "cookie").map(|s| Value::Str(s.into()))
+}
+
+/// A header value: a list (several `Set-Cookie`) is one line per item.
+pub(crate) fn header_text(v: &Value) -> String {
+    match v {
+        Value::List(l) => l.borrow().iter().map(|x| x.to_display_string()).collect::<Vec<_>>().join("\n"),
+        v => v.to_display_string(),
+    }
+}
+
 /// Native function with 1 required argument and 1 optional one (options).
 pub(crate) fn nfn_opts(name: &str, f: fn(&[Value]) -> Result<Value, String>) -> Value {
     Value::NativeFn(Rc::new(NativeFnValue {
@@ -608,7 +624,7 @@ pub(crate) fn response_opts(content_type: &str, args: &[Value]) -> Result<(i64, 
                 None | Some(Value::Nil) => {}
                 Some(Value::Map(h)) => {
                     for (k, v) in h.borrow().iter() {
-                        headers.insert(k.to_lowercase(), v.to_display_string());
+                        headers.insert(k.to_lowercase(), header_text(v));
                     }
                 }
                 Some(other) => return Err(format!("headers must be a map, got '{}'", other.type_name())),
@@ -633,6 +649,8 @@ pub fn build() -> ModuleValue {
 
     // bytes(buffer, { status, headers, type }) — a binary answer
     exports.insert("bytes".into(), nfn_opts("bytes", bytes_response));
+    // cookie(name, value, { path, domain, maxAge, secure, httpOnly, sameSite, secret }) → Set-Cookie text
+    exports.insert("cookie".into(), crate::native::util::nfn_var("cookie", 2, cookie_fn));
     // text/json/html(body, options?) — options: { status: 404, headers: {...} }
     exports.insert(
         "text".into(),
@@ -673,6 +691,8 @@ pub fn build() -> ModuleValue {
     exports.insert("download".into(), crate::native::util::nfn_var("download", 2, hc::download));
     exports.insert("stream".into(), crate::native::util::nfn_var("stream", 1, hc::stream));
     exports.insert("file".into(), crate::native::util::nfn_var("file", 1, hc::file));
+    // client({ baseUrl, cookies, headers, bearer, … }) → a session with a cookie jar
+    exports.insert("client".into(), crate::native::util::nfn_var("client", 0, hc::session));
     exports.insert(
         "serve".into(),
         // serve(8080 | "ip:port", handler, { tls: { cert, key }, quiet, maxBody }?)
@@ -1059,8 +1079,10 @@ async fn handle_request(
     if resp.serve_static {
         if let Some(mut r) = serve_static(&opts.statics, &path, &kept, method == "HEAD", false).await {
             for (k, v) in &resp.headers {
-                if let (Ok(k), Ok(v)) = (hyper::header::HeaderName::from_bytes(k.as_bytes()), hyper::header::HeaderValue::from_str(v)) {
-                    r.headers_mut().insert(k, v);
+                for line in crate::native::cookies::lines(k, v) {
+                    if let (Ok(k), Ok(v)) = (hyper::header::HeaderName::from_bytes(k.as_bytes()), hyper::header::HeaderValue::from_str(line)) {
+                        r.headers_mut().append(k, v);
+                    }
                 }
             }
             return Ok(r);
@@ -1201,7 +1223,9 @@ async fn file_response(mut resp: PlainResponse, range: Option<(&str, Option<&str
     let (status, first, count) = file_plan(resp.status, &mut resp.headers, range, &meta);
     let mut builder = HyperResponse::builder().status(StatusCode::from_u16(status as u16).unwrap_or(StatusCode::OK));
     for (k, v) in &resp.headers {
-        builder = builder.header(k.as_str(), v.as_str());
+        for line in crate::native::cookies::lines(k, v) {
+            builder = builder.header(k.as_str(), line);
+        }
     }
     if !resp.headers.contains_key("content-type") {
         builder = builder.header("content-type", mime_of(&path));
@@ -1230,7 +1254,9 @@ async fn plain_response(resp: PlainResponse) -> HyperResponse<Body> {
     let code = StatusCode::from_u16(resp.status as u16).unwrap_or(StatusCode::OK);
     let mut builder = HyperResponse::builder().status(code);
     for (k, v) in &resp.headers {
-        builder = builder.header(k.as_str(), v.as_str());
+        for line in crate::native::cookies::lines(k, v) {
+            builder = builder.header(k.as_str(), line);
+        }
     }
     let body = if let Some(path) = &resp.file {
         // (file answers go through `file_response`; this is the same file, whole)
@@ -1588,6 +1614,8 @@ impl FoguObject for RequestValue {
             "body" => Some(Value::Str(String::from_utf8_lossy(&self.whole().unwrap_or_default()).into_owned().into())),
             "size" => Some(Value::Int(self.size() as i64)),
             "spooled" => Some(Value::Bool(self.spool.is_some())),
+            // the Cookie header as a map (values decoded)
+            "cookies" => Some(crate::native::cookies::cookies_value(self.headers.get("cookie").map_or("", |s| s.as_str()), None)),
             "bodyPath" => Some(self.spool.as_ref().map_or(Value::Nil, |s| Value::Str(crate::native::util::path_str(&s.path()).into()))),
             "upgrade" => Some(Value::Bool(self.upgrade)),
             "remote" => Some(Value::Str(self.remote.clone().into())),
@@ -1681,12 +1709,17 @@ impl FoguObject for RequestValue {
             }
             // protobuf(schema, message) → the body decoded as that message
             "protobuf" => crate::native::http_client::decode_protobuf(args, &self.whole()?),
+            // signedCookies(secret) → the cookies whose signature holds, with their values
+            "signedCookies" => {
+                let secret = crate::native::util::str_arg(args, 0, "signedCookies")?;
+                Ok(crate::native::cookies::cookies_value(self.headers.get("cookie").map_or("", |s| s.as_str()), Some(&secret)))
+            }
             other => Err(format!("method '{}' does not exist on Request (header json bytes form stream save protobuf)", other)),
         }
     }
 
     fn methods(&self) -> Vec<&'static str> {
-        vec!["header", "json", "bytes", "form", "stream", "save", "protobuf"]
+        vec!["header", "json", "bytes", "form", "stream", "save", "protobuf", "signedCookies"]
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
